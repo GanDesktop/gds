@@ -128,8 +128,6 @@ struct OpenTab {
     /// picker. It is applied together with the name filter so a directory read
     /// never replaces the narrowed list with the unfiltered one.
     picker: Option<picker::Projection>,
-    /// Each directory slot owns its sessions, including fixed Home and volume slots.
-    terminal: Option<terminal::Dock>,
 }
 
 impl OpenTab {
@@ -153,7 +151,6 @@ impl OpenTab {
             pinned,
             device: None,
             picker: None,
-            terminal: None,
         }
     }
 
@@ -312,6 +309,8 @@ pub struct Browser {
     keyboard_menu: Option<context_menu::OpenMenu>,
     volume_menu_focus: Option<FocusHandle>,
     settings_open: bool,
+    /// Sessions and selection belong to this window, never a file location.
+    terminal: Option<terminal::Dock>,
     terminal_visible: bool,
     terminal_maximized: bool,
     terminal_split: Entity<ui::split::State>,
@@ -487,6 +486,7 @@ impl Browser {
             keyboard_menu: None,
             volume_menu_focus: None,
             settings_open: false,
+            terminal: None,
             terminal_visible: false,
             terminal_maximized: false,
             terminal_split,
@@ -1055,7 +1055,7 @@ impl Browser {
         if !self.tabs.iter().any(|tab| tab.id == id) {
             return;
         }
-        self.request_terminal_close(terminal::CloseTarget::Tab(id), window, cx);
+        self.close_tab_approved(id, window, cx);
     }
 
     fn close_tab_approved(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
