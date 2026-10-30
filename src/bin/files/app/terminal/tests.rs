@@ -1,9 +1,10 @@
-use super::{CloseTarget, local_cwd};
-use crate::app::{HOME_TAB_ID, OpenTab};
-use std::path::{Path, PathBuf};
+use super::launch_cwd;
+use std::path::Path;
 
 #[test]
-fn cwd_never_uses_home_for_virtual_or_unavailable_locations() {
+fn terminal_launch_uses_real_available_directory_or_home() {
+    let home = tempfile::tempdir().expect("home fixture");
+    let local = tempfile::tempdir().expect("local fixture");
     for path in [
         "",
         ".",
@@ -12,29 +13,23 @@ fn cwd_never_uses_home_for_virtual_or_unavailable_locations() {
         "recent://",
         "~/project",
     ] {
-        assert_eq!(local_cwd(Path::new(path), true), None, "{path}");
+        assert_eq!(
+            launch_cwd(Some(Path::new(path)), true, home.path()),
+            home.path()
+        );
     }
-    let local = std::env::current_dir().expect("test working directory");
-    assert_eq!(local_cwd(&local, false), None);
-    assert_eq!(local_cwd(&local, true), Some(local));
-}
-
-#[test]
-fn home_and_volume_slots_remain_distinct_from_ordinary_tab_owners() {
-    let home = OpenTab::fixed(HOME_TAB_ID, PathBuf::from("/home/user"));
-    let ordinary = OpenTab::new(1, PathBuf::from("/home/user"), false);
-    let volume = OpenTab::fixed(2, PathBuf::from("/mnt/volume"));
-    let slots = [home, ordinary, volume];
-    assert!(
-        slots.iter().all(|slot| slot.terminal.is_none()),
-        "creating a file slot never spawns a shell"
+    assert_eq!(launch_cwd(None, true, home.path()), home.path());
+    assert_eq!(
+        launch_cwd(Some(local.path()), false, home.path()),
+        home.path()
     );
-    for slot in &slots {
-        assert!(CloseTarget::Window.includes(slot.id));
-        assert_eq!(CloseTarget::Tab(1).includes(slot.id), slot.id == 1);
-    }
-    assert!(
-        !CloseTarget::Tab(1).includes(HOME_TAB_ID),
-        "same cwd does not merge owners"
+    assert_eq!(
+        launch_cwd(Some(local.path()), true, home.path()),
+        local.path()
     );
+    let missing = local.path().join("missing");
+    assert_eq!(launch_cwd(Some(&missing), true, home.path()), home.path());
+    let file = local.path().join("file");
+    std::fs::write(&file, "fixture").expect("write file fixture");
+    assert_eq!(launch_cwd(Some(&file), true, home.path()), home.path());
 }

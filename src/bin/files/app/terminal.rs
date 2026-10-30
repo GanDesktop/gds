@@ -1,4 +1,4 @@
-//! Files owns terminal lifetime at the directory-slot boundary, not the window.
+//! The Files window owns terminal sessions independently of file locations.
 
 mod panel;
 
@@ -29,74 +29,57 @@ pub(super) struct Dock {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CloseTarget {
-    Tab(u64),
     Window,
 }
 
-impl CloseTarget {
-    fn includes(self, slot: u64) -> bool {
-        self == Self::Window || self == Self::Tab(slot)
-    }
+/// Only a real available directory is a local launch target.
+fn local_cwd(path: &Path, available: bool) -> Option<PathBuf> {
+    (available && path.is_absolute() && path.is_dir()).then(|| path.to_path_buf())
 }
 
-/// A virtual, unmounted or relative location must never borrow Home's cwd.
-fn local_cwd(path: &Path, available: bool) -> Option<PathBuf> {
-    (available && path.is_absolute()).then(|| path.to_path_buf())
+fn launch_cwd(path: Option<&Path>, available: bool, home: &Path) -> PathBuf {
+    path.and_then(|path| local_cwd(path, available))
+        .unwrap_or_else(|| home.to_path_buf())
 }
 
 impl Browser {
-    fn terminal_slots(&self) -> impl Iterator<Item = &OpenTab> {
-        std::iter::once(&self.home_tab)
-            .chain(self.tabs.iter())
-            .chain(self.volume_pages.entries.iter().map(|page| &page.slot))
-    }
-
     pub(super) fn terminal_visible(&self) -> bool {
-        self.terminal_visible
-            && self.picker.is_none()
-            && !self.settings_open
-            && self.active().is_some()
+        self.terminal_visible && self.picker.is_none() && !self.settings_open
     }
 
     pub(super) fn terminal_focused(&self, window: &Window, cx: &App) -> bool {
-        self.terminal_slots().any(|slot| {
-            slot.terminal
-                .as_ref()
-                .is_some_and(|dock| dock.panel.read(cx).contains_focus(window, cx))
-        })
+        self.terminal
+            .as_ref()
+            .is_some_and(|dock| dock.panel.read(cx).contains_focus(window, cx))
     }
 
     fn terminal_cwd(&self, cx: &App) -> Option<PathBuf> {
         if self.picker.is_some() {
             return None;
         }
-        let slot = self.active()?;
-        local_cwd(
-            slot.path(),
-            slot.tab.is_some()
-                && slot.files_available()
-                && self.device_path_available(slot.path(), cx),
-        )
+        let slot = self.active();
+        Some(launch_cwd(
+            slot.map(|slot| slot.path()),
+            slot.is_some_and(|slot| {
+                slot.tab.is_some()
+                    && slot.files_available()
+                    && self.device_path_available(slot.path(), cx)
+            }),
+            &self.home,
+        ))
     }
 
-    /// Creating the empty panel is not creating a shell. Home and volume pages
-    /// use exactly the same slot ownership as ordinary tabs.
+    /// Creating the window's empty panel does not start a shell.
     fn ensure_terminal(&mut self, cx: &mut Context<Self>) -> Option<Entity<Panel>> {
         if self.picker.is_some() {
             return None;
         }
-        let slot = self.active()?;
-        if self.terminal_closing
-            && self
-                .terminal_close_pending
-                .is_some_and(|target| target.includes(slot.id))
-        {
+        if self.terminal_closing {
             return None;
         }
-        if let Some(dock) = &slot.terminal {
+        if let Some(dock) = &self.terminal {
             return Some(dock.panel.clone());
         }
-        let owner = slot.id;
         let cwd = self.terminal_cwd(cx);
         let preferences = self.preferences.terminal.clone();
         let panel = cx.new(|cx| {
@@ -106,7 +89,7 @@ impl Browser {
             panel
         });
         let changes = cx.observe(&panel, |_, _, cx| cx.notify());
-        self.tab_slot_mut(owner)?.terminal = Some(Dock {
+        self.terminal = Some(Dock {
             panel: panel.clone(),
             cwd,
             _changes: changes,
@@ -136,23 +119,19 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.picker.is_some() || self.settings_open || self.collection.is_some() {
+        if self.picker.is_some() || self.settings_open {
             return;
         }
         let available = self.active().is_some_and(|slot| slot.files_available())
             && self.device_path_available(&cwd, cx);
-        let Some(cwd) = local_cwd(&cwd, available) else {
-            notifications::info(i18n::text("files-terminal-cwd-unavailable", cx), cx);
-            return;
-        };
+        let cwd = launch_cwd(Some(&cwd), available, &self.home);
         let Some(panel) = self.ensure_terminal(cx) else {
             return;
         };
         self.reset_tab_prefix();
         self.path_editing = false;
         self.terminal_visible = true;
-        // The single terminal validates cwd on its background startup path. A failed
-        // directory never changes this target or launches in a fallback folder.
+        // Each request starts a fresh session; existing PTYs are never redirected.
         panel.update(cx, |panel, cx| panel.open(cwd, window, cx));
         cx.notify();
     }
@@ -171,8 +150,8 @@ impl Browser {
                 let _ = owner.update(cx, |this, cx| {
                     if this.terminal_visible()
                         && this
-                            .active()
-                            .and_then(|slot| slot.terminal.as_ref())
+                            .terminal
+                            .as_ref()
                             .is_some_and(|dock| dock.panel == panel)
                         && panel.read(cx).needs_initial_reveal()
                     {
@@ -182,7 +161,7 @@ impl Browser {
             });
         }
         let cwd = self.terminal_cwd(cx);
-        let Some(dock) = self.active_mut().and_then(|slot| slot.terminal.as_mut()) else {
+        let Some(dock) = self.terminal.as_mut() else {
             return;
         };
         if dock.cwd != cwd {
@@ -228,7 +207,7 @@ impl Browser {
             return;
         };
         // Do not ensure/reveal here: this operation only targets an existing selection.
-        let Some(dock) = self.active().and_then(|slot| slot.terminal.as_ref()) else {
+        let Some(dock) = self.terminal.as_ref() else {
             return;
         };
         dock.panel
@@ -236,7 +215,7 @@ impl Browser {
     }
 
     fn maximize_terminal(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dock) = self.active().and_then(|slot| slot.terminal.as_ref()) else {
+        let Some(dock) = self.terminal.as_ref() else {
             return;
         };
         let panel = dock.panel.clone();
@@ -253,7 +232,7 @@ impl Browser {
         if !self.terminal_visible() {
             return workspace;
         }
-        let Some(dock) = self.active().and_then(|slot| slot.terminal.as_ref()) else {
+        let Some(dock) = self.terminal.as_ref() else {
             return workspace;
         };
         let panel = dock.panel.clone();
@@ -383,21 +362,18 @@ impl Browser {
     }
 
     pub(super) fn apply_terminal_preferences(&self, cx: &mut Context<Self>) {
-        let panels: Vec<_> = self
-            .terminal_slots()
-            .filter_map(|slot| slot.terminal.as_ref().map(|dock| dock.panel.clone()))
-            .collect();
-        for panel in panels {
+        if let Some(dock) = &self.terminal {
+            let panel = dock.panel.clone();
             panel.update(cx, |panel, cx| {
                 panel.set_preferences(self.preferences.terminal.clone(), cx)
             });
         }
     }
 
-    fn closing_panels(&self, target: CloseTarget) -> Vec<Entity<Panel>> {
-        self.terminal_slots()
-            .filter(|slot| target.includes(slot.id))
-            .filter_map(|slot| slot.terminal.as_ref().map(|dock| dock.panel.clone()))
+    fn closing_panels(&self, _: CloseTarget) -> Vec<Entity<Panel>> {
+        self.terminal
+            .iter()
+            .map(|dock| dock.panel.clone())
             .collect()
     }
 
@@ -465,11 +441,10 @@ impl Browser {
             for shutdown in shutdowns {
                 shutdown.await;
             }
-            if let Err(error) = this.update_in(cx, |this, window, cx| {
+            if let Err(error) = this.update_in(cx, |this, window, _cx| {
                 this.terminal_closing = false;
                 this.terminal_close_pending = None;
                 match target {
-                    CloseTarget::Tab(id) => this.close_tab_approved(id, window, cx),
                     CloseTarget::Window => window.remove_window(),
                 }
             }) {
