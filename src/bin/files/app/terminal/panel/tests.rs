@@ -3,6 +3,66 @@ use gpui_kit::{AppContext, TestAppContext, component::Root, px, size};
 use std::task::{Context as TaskContext, Poll, Waker};
 
 #[gpui_kit::test]
+async fn f2_from_terminal_input_confirms_and_cancels_instance_rename(cx: &mut TestAppContext) {
+    use gpui_kit::{component::WindowExt, test::TestWindowExt};
+    cx.executor().allow_parking();
+    let directory = tempfile::tempdir().expect("rename terminal directory");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::actions::register(cx);
+        gds::terminal::init(cx);
+        crate::i18n::install(gds::i18n::Language::English, cx).expect("rename translations");
+    });
+    let panel = cx.update(|cx| cx.new(Panel::new));
+    let window = cx.open_window(size(px(900.), px(500.)), |window, cx| {
+        Root::new(panel.clone(), window, cx)
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.preferences.shell = Some(directory.path().join("missing-shell"));
+            panel.open(directory.path().to_path_buf(), window, cx);
+        });
+        window.render_frame(cx);
+        window.press("f2", cx);
+        assert!(
+            window.has_active_dialog(cx),
+            "F2 must reach instance rename, not the PTY"
+        );
+    })
+    .expect("open rename dialog");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        for key in ["shift-b", "u", "i", "l", "d"] {
+            window.press(key, cx);
+        }
+        window.press("enter", cx);
+        assert!(!window.has_active_dialog(cx));
+        assert_eq!(
+            panel.read(cx).entries[0].custom_name.as_deref(),
+            Some("Build")
+        );
+        panel.update(cx, |panel, cx| panel.focus(window, cx));
+        window.render_frame(cx);
+        window.press("f2", cx);
+        assert!(window.has_active_dialog(cx));
+    })
+    .expect("confirm rename and reopen dialog");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.input("Discard", cx);
+        window.press("escape", cx);
+        assert!(!window.has_active_dialog(cx));
+        assert_eq!(
+            panel.read(cx).entries[0].custom_name.as_deref(),
+            Some("Build")
+        );
+    })
+    .expect("terminal rename keyboard workflow");
+    let shutdown = cx.update(|cx| panel.update(cx, |panel, cx| panel.shutdown(cx)));
+    shutdown.await;
+}
+
+#[gpui_kit::test]
 async fn revealing_an_empty_local_panel_starts_once_and_focuses_it(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("terminal test directory");

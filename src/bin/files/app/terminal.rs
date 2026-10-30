@@ -3,11 +3,7 @@
 mod panel;
 
 use super::*;
-use gpui_kit::{
-    assets::IconName,
-    component::{ActiveTheme, Icon},
-    prelude::*,
-};
+use gpui_kit::{assets::IconName, component::ActiveTheme, prelude::*};
 use panel::Panel;
 
 #[cfg(test)]
@@ -143,8 +139,8 @@ impl Browser {
             && let Some(panel) = self.ensure_terminal(cx)
             && panel.read(cx).needs_initial_reveal()
         {
-            // Rendering may discover a new directory owner, but never starts a PTY.
-            // Recheck presentation after the frame so hiding/switching cancels startup.
+            // Rendering only prepares the window panel. Defer PTY startup and
+            // recheck visibility so hiding the dock cancels initial startup.
             let owner = cx.entity().downgrade();
             window.defer(cx, move |window, cx| {
                 let _ = owner.update(cx, |this, cx| {
@@ -264,15 +260,14 @@ impl Browser {
             .min_w_0()
             .px(px(ui::SIDEBAR_PADDING))
             .text_color(cx.theme().muted_foreground)
-            .when(self.sidebar_collapsed, |this| {
-                let title = title.clone();
-                this.justify_center()
-                    .child(Icon::new(IconName::Terminal).size(px(ui::SIDEBAR_ICON_SIZE)))
-                    .tooltip(move |window, cx| ui::tooltip::view(title.clone(), window, cx))
-            })
             .when(!self.sidebar_collapsed, |this| {
-                this.child(ui::sidebar_section_title(title, cx).px(px(ui::SIDEBAR_SECTION_PADDING)))
-            });
+                this.child(
+                    ui::sidebar_section_title(title, cx)
+                        .flex_1()
+                        .px(px(ui::SIDEBAR_SECTION_PADDING)),
+                )
+            })
+            .child(panel.update(cx, |panel, cx| panel.new_button(cx)));
         let active_title = panel.read(cx).active_title(cx);
         let title_hint = panel
             .read(cx)
