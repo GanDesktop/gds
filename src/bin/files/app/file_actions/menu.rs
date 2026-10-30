@@ -14,7 +14,6 @@ enum MenuAction {
     Open,
     OpenWith,
     OpenDirectories,
-    NewFolder,
     Copy,
     Cut,
     Paste,
@@ -32,7 +31,6 @@ impl MenuAction {
             Self::Open => Some(Command::Open),
             Self::OpenWith => None,
             Self::OpenDirectories => Some(Command::OpenInNewTab),
-            Self::NewFolder => None,
             Self::Copy => Some(Command::Copy),
             Self::Cut => Some(Command::Cut),
             Self::Paste => Some(Command::Paste),
@@ -48,7 +46,6 @@ impl MenuAction {
         match self {
             Self::Open | Self::OpenWith => Some(IconName::ExternalLink),
             Self::OpenDirectories => Some(IconName::Folder),
-            Self::NewFolder => Some(IconName::FolderPlus),
             Self::Copy => Some(IconName::Copy),
             Self::Cut => Some(IconName::Scissors),
             Self::Paste => Some(IconName::ClipboardPaste),
@@ -162,11 +159,6 @@ impl Browser {
                 i18n::text("open-in-new-tab", cx),
             )
         });
-        let new_folder = directory.then(|| {
-            items
-                .item(MenuAction::NewFolder, i18n::text("new-folder", cx))
-                .disabled(self.file_operation_in_progress)
-        });
         let copy = items.item(MenuAction::Copy, i18n::text("copy-files", cx));
         let cut = items.item(MenuAction::Cut, i18n::text("cut-files", cx));
         let paste = items
@@ -200,7 +192,6 @@ impl Browser {
                 item: open;
                 @if (let Some(item) = open_with) item: item; @end;
                 @if (let Some(item) = open_in_tab) item: item; @end;
-                @if (let Some(item) = new_folder) item: item; @end;
                 separator;
                 item: copy; item: cut;
                 item: paste;
@@ -346,9 +337,6 @@ impl Browser {
                         }
                     }
                     MenuAction::OpenDirectories => this.open_directories(&selection, window, cx),
-                    MenuAction::NewFolder => {
-                        this.request_new_folder(selection.paths[0].clone(), window, cx)
-                    }
                     MenuAction::Copy => this.copy_files(false, window, cx),
                     MenuAction::Cut => this.copy_files(true, window, cx),
                     MenuAction::Paste => this.paste_files(selection.directory.clone(), window, cx),
