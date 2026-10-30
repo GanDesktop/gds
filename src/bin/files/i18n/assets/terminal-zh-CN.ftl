@@ -1,4 +1,5 @@
 files-terminal-new = 新建终端
+files-terminal-rename = 重命名终端
 files-terminal-switch-directory = 在新终端标签页打开当前文件夹
 files-terminal-end = 关闭终端
 files-terminal-end-title = 结束此终端会话？

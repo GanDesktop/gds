@@ -1,4 +1,5 @@
 files-terminal-new = New terminal
+files-terminal-rename = Rename terminal
 files-terminal-switch-directory = Open current folder in a new terminal tab
 files-terminal-end = Close terminal
 files-terminal-end-title = End this terminal session?

@@ -165,6 +165,8 @@ async fn folder_switch_opens_new_instance_and_preserves_existing_shells(cx: &mut
         panel.preferences.shell_args = vec!["-c".into(),
             r#"stty -echo; printf '\033]2;%s\007' "$PWD"; while IFS= read -r line; do eval "$line"; printf '\033]2;%s\007' "$PWD"; done"#.into()];
         panel.open(parent.path().to_owned(), window, cx);
+        let first = panel.active.expect("first terminal");
+        panel.rename_entry(first, " Build output ", cx);
         panel.open(parent.path().to_owned(), window, cx);
     })).expect("open two terminals");
     let deadline = Instant::now() + Duration::from_secs(8);
@@ -218,6 +220,21 @@ async fn folder_switch_opens_new_instance_and_preserves_existing_shells(cx: &mut
             assert_eq!(panel.entries.len(), 3);
             assert_eq!(panel.entries[0].terminal, originals[0]);
             assert_eq!(panel.entries[1].terminal, originals[1]);
+            assert_eq!(
+                Panel::title(&panel.entries[0], cx).as_ref(),
+                "Build output",
+                "custom instance name survives shell title updates and selection changes"
+            );
+            assert_eq!(
+                Panel::title(&panel.entries[1], cx).as_ref(),
+                parent.path().to_str().expect("UTF-8 path")
+            );
+            panel.rename_entry(panel.entries[0].id, "", cx);
+            assert_eq!(
+                Panel::title(&panel.entries[0], cx).as_ref(),
+                parent.path().to_str().expect("UTF-8 path"),
+                "clearing a custom name restores the shell title"
+            );
             assert_eq!(panel.active, Some(panel.entries[2].id));
             for original in &originals {
                 assert_eq!(
@@ -256,7 +273,7 @@ async fn row_close_is_hover_only_and_targets_its_own_terminal(cx: &mut TestAppCo
                 (panel.entries[0].id, panel.entries[1].id)
             });
             window.render_frame(cx);
-            window.hover("files-terminal-new", cx);
+            window.hover("files-terminal-tabs", cx);
             assert!(!window.find(("files-terminal-close", first)).visible());
             assert!(!window.find(("files-terminal-close", second)).visible());
             window.hover(("files-terminal-tab", first), cx);
@@ -265,7 +282,7 @@ async fn row_close_is_hover_only_and_targets_its_own_terminal(cx: &mut TestAppCo
             assert_eq!(panel.read(cx).active, Some(second));
             assert!(panel.read(cx).entries[0].closing);
             window.click(("files-terminal-tab", second), cx);
-            window.hover("files-terminal-new", cx);
+            window.hover("files-terminal-tabs", cx);
             window.dispatch_event(
                 ModifiersChangedEvent {
                     modifiers: Modifiers::control(),
