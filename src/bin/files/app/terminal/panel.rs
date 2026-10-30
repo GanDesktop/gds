@@ -318,9 +318,7 @@ impl Panel {
                 } [field]
             }
         });
-        window.on_next_frame(move |window, cx| {
-            focus_input.update(cx, |input, cx| input.focus(window, cx));
-        });
+        focus_input.update(cx, |input, cx| input.focus(window, cx));
     }
 
     fn on_close(&mut self, _: &CloseTerminal, window: &mut Window, cx: &mut Context<Self>) {
