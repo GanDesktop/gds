@@ -1,7 +1,9 @@
-//! Files' per-directory terminal collection, selection and tab-bar interactions.
+//! Files' window-level terminal collection, selection and tab-bar interactions.
 //! Process startup and shutdown races belong to the single shared Terminal.
 
 use std::path::PathBuf;
+
+use gds_uim::el;
 
 use gds::{
     i18n,
@@ -10,13 +12,13 @@ use gds::{
 };
 use gpui_kit::{
     assets::IconName,
-    component::{Disableable, Selectable, WindowExt},
+    component::{ActiveTheme, Disableable, Icon, Selectable, WindowExt, input::InputState},
     prelude::*,
     *,
 };
 
 use crate::actions::{
-    CloseTerminal, FocusTerminal, NewTerminal, NextTerminal, PreviousTerminal,
+    CloseTerminal, FocusTerminal, NewTerminal, NextTerminal, PreviousTerminal, RenameTerminal,
     TERMINAL_TABS_CONTEXT,
 };
 
@@ -26,6 +28,7 @@ mod tests;
 struct Entry {
     id: u64,
     terminal: Entity<Terminal>,
+    custom_name: Option<SharedString>,
     closing: bool,
     _subscription: Subscription,
 }
@@ -95,6 +98,7 @@ impl Panel {
         self.entries.push(Entry {
             id,
             terminal: terminal.clone(),
+            custom_name: None,
             closing: false,
             _subscription: subscription,
         });
@@ -128,6 +132,9 @@ impl Panel {
     }
 
     fn title(entry: &Entry, cx: &App) -> SharedString {
+        if let Some(name) = &entry.custom_name {
+            return name.clone();
+        }
         let terminal = entry.terminal.read(cx);
         terminal
             .title(cx)
@@ -244,6 +251,76 @@ impl Panel {
         {
             self.open(cwd, window, cx);
         }
+    }
+
+    pub fn new_button(&self, cx: &mut Context<Self>) -> ui::IconButton {
+        ui::IconButton::new("files-terminal-new")
+            .icon(IconName::Plus)
+            .label(i18n::text("files-terminal-new", cx))
+            .disabled(self.cwd.is_none() || self.sealed)
+            .on_click(cx.listener(|panel, _, window, cx| panel.on_new(&NewTerminal, window, cx)))
+    }
+
+    fn rename_entry(&mut self, id: u64, name: &str, cx: &mut Context<Self>) {
+        if self.sealed {
+            return;
+        }
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == id && !entry.closing)
+        {
+            entry.custom_name = (!name.trim().is_empty()).then(|| name.trim().to_owned().into());
+            cx.notify();
+        }
+    }
+
+    fn on_rename(&mut self, _: &RenameTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sealed || window.has_active_dialog(cx) {
+            return;
+        }
+        let Some(entry) = self.selected().filter(|entry| !entry.closing) else {
+            return;
+        };
+        let id = entry.id;
+        let name = Self::title(entry, cx);
+        let input = cx.new(|cx| {
+            let mut input = InputState::new(window, cx);
+            input.set_value(name, window, cx);
+            input.select_all(window, cx);
+            input
+        });
+        let panel = cx.entity().downgrade();
+        let focus_input = input.clone();
+        window.open_alert_dialog(cx, move |dialog, _, cx| {
+            let panel = panel.clone();
+            let input = input.clone();
+            let field = ui::field::input(&input, cx).w_full();
+            let footer = ui::DialogActions::new(
+                i18n::text("rename-confirm", cx),
+                IconName::Pencil,
+                i18n::text("operation-cancel", cx),
+            );
+            el! {
+                dialog {
+                    confirm; width: 480.0.px;
+                    bg: $(cx.theme().popover); text_color: $(cx.theme().popover_foreground);
+                    title: $(i18n::text("files-terminal-rename", cx));
+                    icon: IconName::TextCursor.Icon::new;
+                    footer: footer;
+                    on_ok: $(move |_, _, cx| {
+                        let name = input.read(cx).value().to_string();
+                        if let Err(error) = panel.update(cx, |panel, cx| panel.rename_entry(id, &name, cx)) {
+                            eprintln!("Terminal rename dialog outlived its panel: {error}");
+                        }
+                        true
+                    });
+                } [field]
+            }
+        });
+        window.on_next_frame(move |window, cx| {
+            focus_input.update(cx, |input, cx| input.focus(window, cx));
+        });
     }
 
     fn on_close(&mut self, _: &CloseTerminal, window: &mut Window, cx: &mut Context<Self>) {
@@ -413,6 +490,7 @@ impl Render for Panel {
         let collapsed = self.sidebar_width <= ui::COLLAPSED_SIDEBAR_WIDTH + 1.;
         let tabs = div()
             .id("files-terminal-tabs")
+            .test_support()
             .w(px(self.sidebar_width))
             .h_full()
             .flex_shrink_0()
@@ -435,30 +513,6 @@ impl Render for Panel {
                 self.entries
                     .iter()
                     .map(|entry| self.tab(entry, collapsed, window, cx)),
-            )
-            .child(
-                ui::NavItem::new(
-                    "files-terminal-new",
-                    IconName::Plus,
-                    i18n::text("files-terminal-new", cx),
-                )
-                .compact(collapsed)
-                .tooltip_text(i18n::text(
-                    if self.cwd.is_some() {
-                        "files-terminal-new"
-                    } else {
-                        "files-terminal-cwd-unavailable"
-                    },
-                    cx,
-                ))
-                .shortcut(ui::Shortcut::new(
-                    Box::new(NewTerminal),
-                    Some(TERMINAL_TABS_CONTEXT),
-                ))
-                .disabled(self.cwd.is_none() || self.sealed)
-                .on_click(
-                    cx.listener(|panel, _, window, cx| panel.on_new(&NewTerminal, window, cx)),
-                ),
             );
         let body = match self.selected() {
             Some(entry) => entry.terminal.clone().into_any_element(),
@@ -478,6 +532,7 @@ impl Render for Panel {
                 .into_any_element(),
         };
         div()
+            .on_action(cx.listener(Self::on_rename))
             .relative()
             .size_full()
             .min_h_0()

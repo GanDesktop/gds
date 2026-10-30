@@ -203,6 +203,7 @@ fn file_bindings_do_not_capture_terminal_input_or_terminal_tabs() {
             KeyContext::parse(terminal_context).expect("terminal context"),
         ];
         for stroke in [
+            "f2",
             "ctrl-c",
             "ctrl-d",
             "ctrl-n",
@@ -254,7 +255,8 @@ fn files_owns_terminal_capability_bindings_and_tab_navigation() {
     let keymap = Keymap::new(bindings());
     let inputs = context("Workspace GdsTerminal");
     let tabs = context("Workspace FilesTerminalTabs");
-    let input_actions: [(&str, Box<dyn gpui_kit::Action>); 7] = [
+    let input_actions: [(&str, Box<dyn gpui_kit::Action>); 8] = [
+        ("f2", Box::new(super::RenameTerminal)),
         ("ctrl-shift-c", Box::new(gds::terminal::Copy)),
         ("ctrl-shift-v", Box::new(gds::terminal::Paste)),
         ("shift-pageup", Box::new(gds::terminal::ScrollPageUp)),
@@ -269,7 +271,8 @@ fn files_owns_terminal_capability_bindings_and_tab_navigation() {
         assert_eq!(resolved.len(), 1);
         assert!(resolved[0].action().partial_eq(expected.as_ref()));
     }
-    let tab_actions: [(&str, Box<dyn gpui_kit::Action>); 6] = [
+    let tab_actions: [(&str, Box<dyn gpui_kit::Action>); 7] = [
+        ("f2", Box::new(super::RenameTerminal)),
         ("ctrl-n", Box::new(super::NewTerminal)),
         ("ctrl-w", Box::new(super::CloseTerminal)),
         ("up", Box::new(super::PreviousTerminal)),
@@ -282,7 +285,7 @@ fn files_owns_terminal_capability_bindings_and_tab_navigation() {
         assert!(!pending);
         assert_eq!(resolved.len(), 1);
         assert!(resolved[0].action().partial_eq(expected.as_ref()));
-        if stroke != "f6" {
+        if stroke != "f6" && stroke != "f2" {
             assert!(
                 keymap
                     .bindings_for_input(&[keystroke(stroke)], &inputs)
