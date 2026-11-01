@@ -1,10 +1,15 @@
 //! Shared buttons, fixed action-icon sizing and control cursor policy.
 
+mod icon;
+mod menu;
+pub use icon::IconButton;
+
 use std::rc::Rc;
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, CursorStyle, ElementId, InteractiveElement, Interactivity,
-    IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window,
+    IntoElement, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement,
+    StyleRefinement, Styled, Window,
     assets::IconName,
     component::{
         Disableable, Icon, Selectable, Sizable, Size,
@@ -32,7 +37,7 @@ impl Button {
         let id = id.into();
         Self {
             inner: ComponentButton::new(id.clone())
-                .text_size(super::SMALL)
+                .text_size(crate::appearance::tokens::SMALL)
                 .line_height(gpui_kit::relative(1.)),
             disabled: false,
             loading: false,
@@ -50,8 +55,8 @@ impl Button {
         Self::new(id)
             .ghost()
             .small()
-            .w(px(super::ICON_BUTTON_SIZE))
-            .h(px(super::ICON_BUTTON_SIZE))
+            .w(px(crate::appearance::tokens::ICON_BUTTON_SIZE))
+            .h(px(crate::appearance::tokens::ICON_BUTTON_SIZE))
             .p_0()
             .flex_shrink_0()
     }
@@ -175,7 +180,7 @@ impl Button {
                 .child(super::keytips::anchor(window, cx, self.id, shortcut));
         }
         if self.variant == ButtonVariant::Ghost {
-            let colors = crate::theme::Colors::current(cx);
+            let colors = crate::appearance::theme::Colors::current(cx);
             let selected = self.inner.is_selected();
             let variant = ButtonCustomVariant::new(cx)
                 .foreground(if selected {
@@ -196,11 +201,11 @@ impl Button {
             // density. A content icon retains the shared action-icon size.
             let artwork = if self.loading {
                 Spinner::new()
-                    .with_size(px(crate::design::ICON_SIZE))
+                    .with_size(px(crate::appearance::tokens::ICON_SIZE))
                     .into_any_element()
             } else {
                 Icon::new(icon)
-                    .size(px(crate::design::ICON_SIZE))
+                    .size(px(crate::appearance::tokens::ICON_SIZE))
                     .into_any_element()
             };
             self.inner = self.inner.child(artwork);
@@ -272,6 +277,8 @@ impl InteractiveElement for Button {
         self.inner.interactivity()
     }
 }
+
+impl StatefulInteractiveElement for Button {}
 
 impl gpui_kit::component::menu::DropdownMenu for Button {}
 

@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 1254 1254" fill="none">
+  <title>Files — desktop folder</title>
+  <desc>A slightly open, thick stock folder with a bowed cover, inset side fold and continuous bottom spine. All surfaces and lighting are editable vector paths and gradients.</desc>
+  <defs>
+    <!-- Keep the solid mark's lower-left cover, upper-right tab and sloping mouth. -->
+    <path id="files-back" d="M312 387L312 246C312 188 340 157 397 157L575 157C610 157 627 172 647 198L696 260C710 281 730 288 759 290L1055 308C1110 311 1137 340 1138 394C1141 556 1133 791 1117 929C1111 989 1089 1026 1041 1042L258 1003Z"/>
+    <path id="files-back-face" d="M320 388L320 247C320 191 345 165 398 165L574 165C606 165 621 179 641 205L690 267C707 290 729 296 759 298L1054 316C1104 319 1129 345 1130 395C1133 556 1125 790 1109 928C1103 983 1083 1017 1039 1034L266 997Z"/>
+    <path id="files-front" d="M195 416C350 447 686 505 934 563C966 571 984 591 989 628C1012 755 1044 897 1058 992C1067 1046 1044 1075 995 1071C778 1055 473 1028 247 1005C205 1001 184 982 177 941C153 811 125 641 111 492C106 439 135 404 195 416Z"/>
+    <path id="files-front-face" d="M195 422C350 453 684 511 932 569C963 577 978 595 983 629C1006 757 1038 898 1052 993C1060 1041 1039 1067 995 1064C777 1048 474 1021 248 998C211 994 191 978 184 940C160 810 132 640 118 491C113 443 139 411 195 422Z"/>
+    <path id="files-fold" d="M980 623C1006 634 1025 646 1042 644C1068 639 1097 582 1118 558L1111 894C1108 970 1090 1018 1041 1045L1006 999Z"/>
+    <path id="files-spine" d="M209 952C438 972 761 999 1034 1016L1100 980C1093 1020 1081 1042 1051 1060C1034 1071 1017 1080 992 1078L245 1012C212 1009 191 995 185 969Z"/>
+    <clipPath id="files-back-clip"><use href="#files-back-face"/></clipPath>
+    <clipPath id="files-front-clip"><use href="#files-front-face"/></clipPath>
+    <clipPath id="files-fold-clip"><use href="#files-fold"/></clipPath>
+    <clipPath id="files-spine-clip"><use href="#files-spine"/></clipPath>
+    <linearGradient id="files-card-edge" x1="425" y1="215" x2="1083" y2="999" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b8af9e"/><stop offset=".44" stop-color="#a89d88"/><stop offset="1" stop-color="#817866"/>
+    </linearGradient>
+    <linearGradient id="files-inside" x1="574" y1="174" x2="774" y2="945" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ddd7c9"/><stop offset=".35" stop-color="#c9c1ae"/><stop offset=".72" stop-color="#a59b86"/><stop offset="1" stop-color="#887c65"/>
+    </linearGradient>
+    <linearGradient id="files-tab-light" x1="542" y1="159" x2="541" y2="393" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fbf7ec" stop-opacity=".64"/><stop offset=".36" stop-color="#f4eee0" stop-opacity=".15"/><stop offset="1" stop-color="#f4eee0" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="files-back-rim" x1="710" y1="171" x2="710" y2="810" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fbf4e4" stop-opacity=".6"/><stop offset=".4" stop-color="#fbf4e4" stop-opacity=".26"/><stop offset="1" stop-color="#fbf4e4" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="files-cavity" x1="637" y1="417" x2="591" y2="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#958a73" stop-opacity="0"/><stop offset=".23" stop-color="#8b7e66" stop-opacity=".46"/><stop offset=".58" stop-color="#6a5c46" stop-opacity=".86"/><stop offset="1" stop-color="#796b55"/>
+    </linearGradient>
+    <linearGradient id="files-fold-tone" x1="991" y1="767" x2="1120" y2="786" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8e826c"/><stop offset=".22" stop-color="#c5b99f"/><stop offset=".47" stop-color="#a4987f"/><stop offset=".67" stop-color="#b4a88e"/><stop offset="1" stop-color="#776b55"/>
+    </linearGradient>
+    <linearGradient id="files-fold-ridge" x1="1033" y1="741" x2="1083" y2="738" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f1e7d2" stop-opacity="0"/><stop offset=".48" stop-color="#e7ddc6" stop-opacity=".18"/><stop offset="1" stop-color="#b3a68e" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="files-spine-tone" x1="629" y1="1000" x2="629" y2="1076" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9b8f77"/><stop offset=".46" stop-color="#b4a68c"/><stop offset=".77" stop-color="#8f8169"/><stop offset="1" stop-color="#b8ab92"/>
+    </linearGradient>
+    <radialGradient id="files-cover-tone" cx="404" cy="544" r="870" gradientUnits="userSpaceOnUse" gradientTransform="translate(404 544) rotate(11) scale(1 .92) translate(-404 -544)">
+      <stop stop-color="#e4dfd2"/><stop offset=".43" stop-color="#d8d0bf"/><stop offset=".77" stop-color="#c9bea7"/><stop offset="1" stop-color="#b7a98c"/>
+    </radialGradient>
+    <radialGradient id="files-cover-bow" cx="558" cy="726" r="555" gradientUnits="userSpaceOnUse" gradientTransform="translate(558 726) rotate(10) scale(1 .38) translate(-558 -726)">
+      <stop stop-color="#faf4e5" stop-opacity=".23"/><stop offset=".6" stop-color="#f5efdf" stop-opacity=".08"/><stop offset="1" stop-color="#f5efdf" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="files-front-rim" x1="551" y1="437" x2="507" y2="978" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff8e8" stop-opacity=".8"/><stop offset=".25" stop-color="#f5ecda" stop-opacity=".44"/><stop offset=".7" stop-color="#d1c3a7" stop-opacity=".04"/><stop offset="1" stop-color="#ecdfc4" stop-opacity=".2"/>
+    </linearGradient>
+    <linearGradient id="files-crease-shadow" x1="265" y1="953" x2="1029" y2="1027" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#71654f" stop-opacity="0"/><stop offset=".09" stop-color="#71654f" stop-opacity=".28"/><stop offset=".86" stop-color="#71654f" stop-opacity=".29"/><stop offset="1" stop-color="#71654f" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="files-soft-3" filterUnits="userSpaceOnUse" x="0" y="0" width="1254" height="1254"><feGaussianBlur stdDeviation="3"/></filter>
+    <filter id="files-soft-9" filterUnits="userSpaceOnUse" x="0" y="0" width="1254" height="1254"><feGaussianBlur stdDeviation="9"/></filter>
+    <filter id="files-soft-20" filterUnits="userSpaceOnUse" x="0" y="0" width="1254" height="1254"><feGaussianBlur stdDeviation="20"/></filter>
+  </defs>
+
+  <g id="files-rear-cover">
+    <use href="#files-back" fill="url(#files-card-edge)"/>
+    <use href="#files-back-face" fill="url(#files-inside)"/>
+    <g clip-path="url(#files-back-clip)">
+      <use href="#files-back-face" fill="url(#files-tab-light)"/>
+      <path d="M320 392C492 427 813 480 1062 537C1099 546 1116 569 1124 603L1124 1004L290 994Z" fill="url(#files-cavity)" filter="url(#files-soft-20)"/>
+      <!-- The bowed front casts a soft shadow onto the inside of the rear sheet. -->
+      <path d="M277 416C468 455 796 506 1019 563C1051 571 1066 594 1073 631" stroke="#5f513d" stroke-opacity=".33" stroke-width="36" stroke-linecap="round" filter="url(#files-soft-20)"/>
+      <use href="#files-back-face" stroke="url(#files-back-rim)" stroke-width="6"/>
+      <path d="M1120 393C1126 577 1119 798 1104 923" stroke="#6f624b" stroke-opacity=".25" stroke-width="10" filter="url(#files-soft-9)"/>
+    </g>
+  </g>
+
+  <!-- A recessed, slightly folded side joins the two covers. Its crease
+       follows the same perspective as the mouth and shared bottom spine. -->
+  <g id="files-side-fold">
+    <use href="#files-fold" fill="url(#files-fold-tone)"/>
+    <g clip-path="url(#files-fold-clip)">
+      <path d="M1030 596C1046 733 1061 868 1068 984L1051 1047L1099 1005C1094 874 1074 707 1062 580Z" fill="url(#files-fold-ridge)"/>
+      <path d="M1106 579C1101 755 1101 903 1078 978" stroke="#5c513e" stroke-opacity=".38" stroke-width="14" filter="url(#files-soft-9)"/>
+      <path d="M1016 635C1035 759 1054 916 1059 992" stroke="#f1e5cc" stroke-opacity=".28" stroke-width="7" filter="url(#files-soft-9)"/>
+    </g>
+  </g>
+  <g id="files-bottom-spine">
+    <use href="#files-spine" fill="url(#files-spine-tone)"/>
+    <g clip-path="url(#files-spine-clip)">
+      <path d="M232 1000C468 1024 785 1053 989 1068C1019 1070 1049 1051 1070 1035" stroke="#e6d9bf" stroke-opacity=".47" stroke-width="4" stroke-linecap="round" filter="url(#files-soft-3)"/>
+    </g>
+  </g>
+
+  <g id="files-front-cover">
+    <use href="#files-front" fill="url(#files-card-edge)"/>
+    <use href="#files-front-face" fill="url(#files-cover-tone)"/>
+    <g clip-path="url(#files-front-clip)">
+      <use href="#files-front-face" fill="url(#files-cover-bow)"/>
+      <!-- Broad edge shading describes flexible stock without a glass rim. -->
+      <path d="M156 449C137 459 140 505 144 540C159 679 183 830 207 939C216 970 226 976 253 981" stroke="#fcf4df" stroke-opacity=".5" stroke-width="18" stroke-linecap="round" filter="url(#files-soft-9)"/>
+      <path d="M971 614C990 737 1022 900 1034 985C1040 1029 1023 1043 995 1044" stroke="#77694e" stroke-opacity=".28" stroke-width="24" stroke-linecap="round" filter="url(#files-soft-20)"/>
+      <path d="M215 953C451 979 793 1010 1008 1027" stroke="url(#files-crease-shadow)" stroke-width="18" stroke-linecap="round" filter="url(#files-soft-9)"/>
+      <path d="M254 968C477 992 789 1019 1006 1035" stroke="#f7eacf" stroke-opacity=".27" stroke-width="6" stroke-linecap="round" filter="url(#files-soft-9)"/>
+      <!-- A continuous contour avoids hard-ended highlights at the corners. -->
+      <use href="#files-front-face" stroke="url(#files-front-rim)" stroke-width="8"/>
+      <path d="M169 438C186 438 208 443 232 448C424 488 716 537 928 587C950 592 961 605 967 627" stroke="#f8efdb" stroke-opacity=".4" stroke-width="8" stroke-linecap="round" filter="url(#files-soft-9)"/>
+    </g>
+  </g>
+</svg>

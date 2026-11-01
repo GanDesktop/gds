@@ -3,7 +3,8 @@
 use gds_uim::el;
 use gpui_kit::{component::menu::PopupMenu, prelude::*, *};
 
-use super::{SMALL, Shortcut, ShortcutBadge};
+use super::{Shortcut, ShortcutBadge};
+use crate::appearance::tokens::SMALL;
 
 pub const WIDTH: f32 = 320.;
 pub const MAX_WIDTH: f32 = 500.;
@@ -40,7 +41,7 @@ pub fn row(
             });
         el! {
             .div {
-                id: $(label.clone());
+                # $(label.clone());
                 test_support;
                 role: Role::Label;
                 aria_label: $(label.clone());
@@ -61,7 +62,7 @@ pub fn row(
 
 /// Regular windows host context menus in their own overlay, including at edges.
 pub fn overlay(menu: Entity<PopupMenu>, position: Point<Pixels>, window: &Window) -> AnyElement {
-    deferred(el! {
+    el! {
         .anchored [
             .div {
                 w: $(window.bounds().size.width);
@@ -72,10 +73,11 @@ pub fn overlay(menu: Entity<PopupMenu>, position: Point<Pixels>, window: &Window
                     position: position;
                     snap_to_window_with_margin: EDGE_MARGIN.px;
                     anchor: Anchor::TopLeft;
-                } [$(menu)],
+                } [menu],
             ],
-        ]
-    })
-    .with_priority(gpui_kit::base::POPUP_PRIORITY)
+        ].deferred {
+            with_priority: gpui_kit::base::POPUP_PRIORITY
+        }
+    }
     .into_any_element()
 }

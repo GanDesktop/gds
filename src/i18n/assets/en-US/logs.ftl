@@ -1,0 +1,11 @@
+logs-title = Debug logs
+logs-open-error = Cannot open debug logs
+logs-search = Search messages and targets…
+logs-all = All levels
+logs-level = Filter by level
+logs-target = Filter by tracing target
+logs-all-targets = All targets
+logs-close-detail = Close entry details
+logs-clear = Clear logs
+logs-copy-selected = Copy selected
+logs-count = { $visible } visible · { $retained } retained · { $evicted } evicted

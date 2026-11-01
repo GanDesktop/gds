@@ -1,195 +1,45 @@
-# Files · 卷管理与侧栏设计
+# Volumes and sidebar
 
-本文描述待实现的交互目标，不代表当前应用已具备这些能力。涉及侧栏分区与设备接入时，本文优先于历史概念原型。
+GDS Files uses UDisks2 on Linux to discover volumes and perform device operations. The volume view provides capacity, labels, default mount-point selection, browsing and explicit mount/unmount actions.
 
-## 1. 设计目标与边界
+## Sidebar layout
 
-当前界面以卷为组织单位，提供空间查看、默认挂载点选择、浏览和单卷挂载／卸载。物理设备的分组、整盘安全移除及弹出属于后续次要页面，本轮不在卷列表中展示这些入口。后文涉及这些操作的约束保留为后端及后续设备页的设计依据。
+The sidebar contains tabs, an optional volume group and location shortcuts. Locations stay at the bottom; tabs and volumes share the remaining height and scroll independently. The volume group is hidden by default and can be enabled in Files settings. Alt+V temporarily reveals and focuses it for the current session.
 
-- 用户面对的是可访问的卷，而不是块设备节点。
-- 插入设备不抢焦点，不自动打开窗口。
-- 设备操作异步进行，不阻塞文件浏览。
-- 侧栏同时容纳标签页、卷和位置，用户可按工作习惯分配高度。
-- 首先支持 NixOS / Linux / Wayland / Niri；平台相关操作与 Files 界面分离。
+A draggable horizontal divider adjusts the tab/volume height allocation and supports keyboard adjustment. The saved height is retained when a small window temporarily constrains the actual size. Collapsing the sidebar preserves row heights, group state and scroll positions; only horizontal presentation changes. See [sidebar anatomy](../../vistual-language/sidebar.md).
 
-本轮不包含分区、格式化、文件系统修复、光盘刻录、镜像写入和完整的磁盘健康诊断。
+Locations and volumes navigate within the current tab. Ctrl/Cmd+click opens another tab; browsing a volume does not create a separate kind of hidden tab. Back and forward use the same location history as ordinary folders and collections.
 
-## 2. 侧栏布局
+## Volume view
 
-### 2.1 三个分组、位置固定在底部
+The management page uses the common data table, with one row per volume. It shows the name, filesystem, available/total capacity and default mount point. System volumes have a small marker beside the name. Labels take precedence over fallback names.
 
-侧栏从上到下依次为：**标签页、卷、位置**。
+Single-click selects; arrow keys, Home and End move selection. Double-click or Enter opens the selected volume. Right-click and row menus act on their selected volume. Clicking table background clears selection and keyboard range state.
 
-位置组固定在侧栏最底部，按内容保留高度，不提供分组折叠。其余高度由标签页和卷组分配，两组之间的水平分界线可上下拖动。拖动不移动位置组。
+| Action | Availability |
+| --- | --- |
+| Open | Browses the selected default mount point when available |
+| Mount / Ctrl+M | Explicit operation for an eligible unmounted volume |
+| Unmount / Ctrl+Shift+M | Eligible mounted volume; running system volumes are protected |
+| Rename / F2 | Sets the filesystem label through UDisks2; unavailable for locked/read-only volumes |
+| Choose default mount point | Selects among the volume's existing mount points |
 
-```text
-┌────────────────────────┐
-│ 标签页               ＋ │
-│   文档                 │
-│   下载                 │
-│   项目                 │
-│   …                    │ ← 上半区独立滚动
-│                        │
-╞════════════════════════╡ ← 可上下拖动
-│ 卷                   ▾ │
-│   工作 U 盘             │
-│   数据盘               │
-│                        │ ← 卷区独立滚动
-│ 位置                   │ ← 固定在底部，不折叠
-│   主目录               │
-│   收藏                 │
-│   最近                 │
-│   回收站               │
-└────────────────────────┘
-```
+Clicking an unmounted volume displays its unmounted state; it does not mount automatically. Mount/unmount shortcuts apply only in the volume view or a volume directory. Duplicate operations are disabled while a request is running. An empty label clears the filesystem label; Files does not unmount a filesystem automatically to rename it.
 
-“位置”沿用应用已有的位置与集合入口；图中条目仅说明布局，不定义新的入口集合。
+Default mount-point choices use stable volume identity when available. Without a stable identity, a choice lasts for the attachment. The initial choice favors the shallowest path, with stable path ordering. A disappeared selected mount point stays unavailable until explicitly changed.
 
-### 2.2 高度分配与滚动
+Capacity is sampled in the background from filesystem statistics, not a directory scan. Available space means space available to the current user. Periodic refresh, manual refresh and completed file operations update it; unloading a volume clears its capacity. Unknown, loading and failed capacity states are distinct from zero free space.
 
-- 上半区标题与新建标签页入口保留，标签列表独立滚动。
-- 新建或激活普通标签时，标签列表自动滚动到该项，确保从固定位置／卷页打开的目录在标签区可见。
-- 卷列表独立滚动；位置组固定在底部，不与卷列表一起滚动。
-- 内容未溢出时不显示多余滚动条；两区均溢出时才分别滚动。
-- 不再用“标签页最多占整个侧栏 75%”的规则代替用户分配。
-- 初次使用时先为位置组保留完整高度，再按常用卷条目计算卷区默认高度，其余高度交给标签页。
-- 标签页和卷区均有最小可用高度，不能拖到完全不可访问。具体数值结合原生界面调试确定。
-- 可支持窗口的最小工作区高度应容纳位置组、标签页与卷区的最小高度以及分界线；内容过多通过滚动解决，不靠无限压缩行高解决。
+## Disconnects and authorization
 
-### 2.3 分界线交互与持久化
+An unplugged or unmounted volume leaves its tabs open with an unavailable state and hides the old file listing. Reconnection checks volume identity and the relative directory; reusing the same mount path does not identify the same device. A late operation result cannot navigate a tab that has since moved elsewhere.
 
-- 默认是一条低对比度细线，沿用连续侧栏材质，不渲染成厚重把手。
-- 悬浮或拖动时高亮，光标变为上下调整形态；命中区域比可见细线更宽。
-- 拖动只改变侧栏内部上下分配，不改变右侧文件区、侧栏宽度或底部终端高度。
-- 保存用户选择的上半区高度；重启恢复。窗口高度不足时只限制当前实际高度，不覆盖已保存偏好。
-- 调整窗口或终端面板高度时重新计算可用范围；空间恢复后尽可能恢复用户选择。
-- 支持键盘聚焦分界线，以方向键调整；不依赖鼠标才能使用。
+UDisks2 and polkit own authorization. A graphical session needs a working polkit agent for interactive requests. Missing services or denied actions produce an error while ordinary local browsing remains available. Insertion updates the volume list without stealing focus or opening a window. Encrypted volumes must be unlocked with a system tool; Files has no password-unlock interface.
 
-### 2.4 分组折叠与窄轨
+The backend also supports whole-device USB power-off and optical eject, but the current volume UI exposes single-volume mount/unmount and label operations. Whole-device removal and eject are not presented as completed UI features. The backend retains partial unmount results and reports busy or failed steps rather than claiming success.
 
-- 设备分组可折叠，并记住折叠状态；位置组不折叠。
-- 没有可展示卷或卷组已折叠时，不显示标签页与卷之间的高度分隔线；位置仍固定在底部。
-- 整个侧栏折叠为窄轨时仍保留上下分配与滚动，分组标题收起；悬浮提示提供完整名称和状态。
-- 折叠分组不等于卸载设备，折叠侧栏也不中断设备操作。
+## Implementation
 
-## 3. 卷展示模型
+Device discovery and operations belong to [`entities/location/api/volumes`](../../../bin/files/src/entities/location/api/volumes.rs), including the Linux backend, observation service, identity model and capacity sampling. The service subscribes to UDisks2 object/property changes and periodically reconciles state. Live device state is separate from saved locations and preferences.
 
-### 3.1 卷列表
-
-侧栏与管理页平铺展示卷，不按物理硬盘分组。卷名优先使用卷标，无卷标时回退到可辨认名称。已挂载的系统卷同样可浏览；运行中的系统卷禁用卸载，启动辅助分区继续遵循系统的 `HintIgnore` 提示。
-
-管理页复用文件列表的 Kit DataTable、字号、行高与悬停样式，每个卷一行，展示名称、文件系统格式、剩余／总空间、默认打开挂载点。系统卷在名称旁作轻量标记，不单独占列；容量条和文字整体在单元格内垂直居中，保持上下留白。本轮不展示挂载点树。
-
-单击只选中卷，双击、回车或右键“打开”在新普通标签中进入该卷的默认目录；卷列表本身是固定的虚拟位置页，保持原位置。`↑` / `↓` / `Home` / `End` 移动选择，不打开目录。点击列表空白取消选择并清除键盘光标，与文件、回收站、最近和收藏共用同一处理。选择按卷身份维护，刷新和顺序变化不改变操作对象，卷断开后清除选择。右键和行尾菜单先选中目标卷，默认挂载点选择器也选中其所在卷。
-
-管理页右上角提供作用于选中卷的挂载／卸载图标，复用文件页的按钮、悬浮说明和按住修饰键显示的快捷键 hint；未选中、状态不适用、系统卷或操作中时禁用相应动作，禁用动作不显示浮动 hint。挂载为 `Ctrl+M`，卸载为 `Ctrl+Shift+M`，仅在卷管理页或固定卷页生效，设置页列出这些快捷键。各处动作名统一为“挂载”“卸载”。固定卷目录页沿用普通文件页的标题栏，不添加额外卷菜单；侧栏卷菜单的打开项显示 `Enter`，打开菜单后默认定位到可用的打开项。侧栏右键菜单、管理页右键和行尾菜单提供相同操作；当快捷键的目标与菜单对象一致时，禁用项也保留快捷键键帽，随整项弱化显示，操作本身仍然禁用。
-
-### 3.2 空间与默认挂载点
-
-- 已挂载卷使用公共容量条与“剩余 / 总共”文字，填充部分表示已占用或保留的空间，剩余量使用当前用户可用空间。
-- 后台读取文件系统统计，不遍历目录；定期、手动刷新与文件操作完成后重新采样。
-- 手动刷新同时重新枚举 UDisks2 卷元数据，更新卷标、显示名称及挂载信息；不能只刷新容量。改名结果通过同一快照同步侧栏和管理表格。
-- 未挂载、读取中、读取失败有各自状态，不把未知剩余量当成零。
-- 管理页的默认挂载点单元格提供选择器，可从该卷当前挂载点中选择一个。按稳定卷身份保存；无稳定身份时仅保留本次连接期间的选择。
-- 未曾选择时，优先展示层级最浅且路径排序稳定的入口，通常为 `/`。用户可以直接修改。
-- 已选入口暂时消失时保留选择，显示不可用，不静默跳到另一个目录。
-- 容量按卷显示一次，不因挂载入口数而重复统计。
-
-## 4. 固定卷页与挂载操作
-
-目录导航由来源页面类型决定：固定位置页（含虚拟位置）打开目录时新建普通标签，普通标签打开目录时沿用当前标签。目标目录是否对应某个侧栏入口，不改变这条规则；点击侧栏入口本身才是切换固定页。
-
-侧栏卷条目是固定页签，具有独立目录状态，保留完整名称、容量条和容量文字的点击／选中热区。点击后打开默认挂载点，不新建普通页签，也不覆盖普通页签。在卷页中打开目录（双击、回车、路径栏或上一级）时新建普通页签，卷页始终保留默认挂载点；普通页签内继续原地浏览。
-
-| 状态 | 点击侧栏卷条目 | 菜单操作 |
-| --- | --- | --- |
-| 已挂载且默认入口有效 | 切换固定卷页并打开默认挂载点 | 卸载此卷（系统卷禁用） |
-| 未挂载 | 切换固定卷页，显示未挂载状态 | 挂载 |
-| 默认入口失效 | 显示默认挂载点不可用 | 在卷管理页重新选择入口 |
-| 正在操作 | 保留页面并展示进度 | 禁止重复发起操作 |
-| 已断开 | 从当前卷列表移除，原页面保留不可用状态 | 重连后再次选择该卷 |
-
-挂载由菜单、右上角动作或对应快捷键显式发起，不因点击未挂载卷或发现设备而自动挂载。成功后更新列表；如果此前存在该卷固定页，则加载其默认入口。异步结果不抢占后来切换到的普通页签、其他卷、管理页或设置页。卸载仅影响指定卷，不继续调用整盘断电或弹出。
-
-卷身份与挂载路径分离，不凭复用的设备节点或挂载路径恢复到另一块介质。加密卷的密码输入与解锁界面留待后续阶段。
-
-## 5. 卸载、安全移除与弹出
-
-三个操作具有不同语义，不用一个模糊动作覆盖。
-
-| 动作 | 作用范围 | 行为 |
-| --- | --- | --- |
-| 卸载 | 单个卷 | 取消该卷挂载，设备仍可保持连接 |
-| 安全移除 | 整个 USB 存储设备 | 卸载所属已挂载卷，再按后端能力请求断电或安全移除 |
-| 弹出 | 光盘等可弹出介质 | 卸载介质后请求弹出 |
-
-- 操作前检查 Files 自身是否有针对目标卷的传输任务；提供等待任务完成或取消移除的选择，不默默取消复制。
-- 多卷设备的安全移除作用于所有所属卷，界面需明确该范围。
-- 系统报告设备忙时展示简短原因，不默认强制卸载，也不自动终止外部进程。
-- 后端不支持断电时，不把“仅卸载成功”表述为“已断电”；只提供或报告实际支持、实际完成的操作。
-- 多卷操作部分成功时更新各卷状态，说明未完成部分，不提示整盘移除成功。
-- 安全移除完成后给出短通知；列表按系统报告的状态更新，不伪造物理拔出事件。
-
-## 6. 断开与已有标签
-
-设备主动卸载或意外拔出时，不关闭用户标签，也不突然跳回主目录。
-
-- 原标签保留位置，文件区显示“设备已断开”或“卷未挂载”，不将旧列表表现为仍可操作的实时目录。
-- 停止对该位置发起新的文件操作；正在进行的操作按实际结果报告失败或中断。
-- 同一卷重新出现后，提供重新连接或重试入口；确认卷身份与相对路径仍有效后才能恢复浏览。
-- 不仅凭相同挂载路径判断是同一个设备，避免另一块盘复用路径时错误恢复。
-- 重连后目标目录不存在时展示明确错误，不静默跳到其他位置。
-
-## 7. Linux 技术方案
-
-### 7.1 系统集成
-
-优先通过 **UDisks2 的系统 D-Bus API**完成设备枚举、解锁、挂载、卸载、断电与弹出，并订阅对象和属性变化更新界面。设备发现与挂载状态应反映系统现状，而不只是本应用发起的操作。
-
-不通过解析 `lsblk` 的人类可读输出建立主数据模型，不执行 `sudo mount`，也不自行编写提权服务。
-
-权限交给 UDisks2 / polkit。NixOS 环境需要启用 UDisks2；Niri 会话需要可用的 polkit 认证代理，授权需要交互时由其展示系统认证界面。服务不可用时，设备操作显示明确原因，普通目录浏览仍可使用。
-
-Files 的加密卷密码交互与 polkit 的系统授权交互是两件事，不混成同一种密码提示。
-
-### 7.2 模块职责
-
-- **公共存储模块**：设备、卷及能力模型；系统发现；状态事件；异步设备操作；Linux 后端。
-- **Files 应用层**：侧栏分组、加载与错误呈现、密码交互、目标标签导航、传输任务协调。
-- **公共 UI 层**：可复用的上下分割与拖动行为；Files 的区域内容不下沉为公共组件。
-
-设备服务维护应用级实时状态，不让每个标签页单独枚举设备。设备实时状态不写入收藏或最近位置数据；布局偏好与实时设备状态分开保存。
-
-非 Linux 平台后续按相同领域模型接入各自后端；首版不为尚未实现的平台补齐虚构能力。
-
-## 8. 交付顺序
-
-### 第一阶段：常用闭环
-
-- 三段侧栏与上下可拖动分区，包含滚动、折叠和布局恢复。
-- 设备枚举与热插拔更新，识别已有挂载。
-- 点击挂载并浏览。
-- 卸载、安全移除 USB 设备、弹出光盘。
-- 操作失败、设备忙和意外断开的可见反馈。
-
-### 后续阶段
-
-- 加密卷的密码解锁交互。
-- 可选自动挂载与自动打开策略。
-- 更完整的设备属性展示与其他平台后端。
-
-## 9. 验收重点
-
-1. 标签页多、设备多和窗口较矮时，两区仍可访问；拖动不影响右侧文件区与终端尺寸。
-2. 分界高度和卷组折叠状态可恢复；临时缩小窗口不破坏原有高度偏好，位置组始终可见且不提供折叠按钮。
-3. 插入 U 盘只更新列表；点击挂载后打开正确的发起标签，取消或失败不改变原目录。
-4. 多分区设备的单卷卸载与整盘安全移除范围明确；设备忙或部分失败时不误报成功。
-5. 有传输任务时移除操作不默默中断任务；意外拔出保留标签并显示断开状态。
-6. 光盘弹出与 USB 安全移除使用不同语义和后端操作。
-7. 系统服务或授权不可用时，设备操作给出原因，其他文件浏览不受影响。
-
-## 10. 相关设计
-
-- [Files 总体概念设计](concept.md)
-- [公共视觉语言](../../vistual-language/README.md)
-- [共享设置规则](../../settings/README.md)
+The workspace composes sidebar groups, volume tables, navigation and task coordination. Shared UI provides navigation rows, capacity bars and split behavior. Device-specific policy stays in Files. Partitioning, formatting, filesystem repair, automatic mounting and other platform backends are not implemented.

@@ -1,6 +1,11 @@
 //! Application messages use Fluent; component translations share the same locale.
 
-use fluent_bundle::{FluentArgs, FluentResource, concurrent::FluentBundle};
+mod translate;
+
+pub use crate::t;
+pub use fluent_bundle::FluentArgs;
+
+use fluent_bundle::{FluentResource, concurrent::FluentBundle};
 use gpui_kit::{App, Global, SharedString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -59,23 +64,31 @@ impl Catalog {
     /// Returns an error for invalid Fluent or duplicate message IDs.
     pub fn new(language: Language, application: &[&str]) -> Result<Self, Error> {
         let core = match language {
-            Language::English => include_str!("i18n/assets/core-en-US.ftl"),
-            Language::Chinese => include_str!("i18n/assets/core-zh-CN.ftl"),
+            Language::English => include_str!("i18n/assets/en-US/core.ftl"),
+            Language::Chinese => include_str!("i18n/assets/zh-CN/core.ftl"),
         };
         let time = match language {
-            Language::English => include_str!("i18n/assets/time-en-US.ftl"),
-            Language::Chinese => include_str!("i18n/assets/time-zh-CN.ftl"),
+            Language::English => include_str!("i18n/assets/en-US/time.ftl"),
+            Language::Chinese => include_str!("i18n/assets/zh-CN/time.ftl"),
         };
         let terminal = match language {
-            Language::English => include_str!("i18n/assets/terminal-en-US.ftl"),
-            Language::Chinese => include_str!("i18n/assets/terminal-zh-CN.ftl"),
+            Language::English => include_str!("i18n/assets/en-US/terminal.ftl"),
+            Language::Chinese => include_str!("i18n/assets/zh-CN/terminal.ftl"),
+        };
+        let logs = match language {
+            Language::English => include_str!("i18n/assets/en-US/logs.ftl"),
+            Language::Chinese => include_str!("i18n/assets/zh-CN/logs.ftl"),
+        };
+        let about = match language {
+            Language::English => include_str!("i18n/assets/en-US/about.ftl"),
+            Language::Chinese => include_str!("i18n/assets/zh-CN/about.ftl"),
         };
         let locale: LanguageIdentifier = language
             .locale()
             .parse()
             .expect("bundled locale identifiers are valid BCP 47");
         let mut bundle = FluentBundle::new_concurrent(vec![locale]);
-        let sources = [core, time, terminal]
+        let sources = [core, time, terminal, logs, about]
             .into_iter()
             .chain(application.iter().copied());
         let mut ids = Vec::new();
@@ -148,6 +161,12 @@ pub fn install_resources(
 
 pub fn text(id: &str, cx: &App) -> SharedString {
     format(id, None, cx)
+}
+
+/// Fix the deferred callback's input type before UIM checks its arguments.
+#[doc(hidden)]
+pub fn deferred(callback: impl FnOnce(&App) -> SharedString) -> impl FnOnce(&App) -> SharedString {
+    callback
 }
 
 pub fn language(cx: &App) -> Language {

@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 1254 1254" fill="none">
+  <title>Agents — CRT desktop icon</title>
+  <desc>Editable vector drawing traced from the approved CRT reference: a thick front enclosure, tapered rear case and a solid pedestal sharing the same perspective.</desc>
+  <defs>
+    <!-- Coordinates follow the 1254-square reference. The fascia has its own
+         front and rear contours; its depth is independent of the rear case. -->
+    <path id="agents-case" d="M226 205C382 171 645 145 835 147C915 142 965 183 980 253C993 318 995 655 985 835C981 917 973 967 943 990C919 1008 888 1015 849 1012C663 1014 340 991 180 975C119 969 91 945 87 895C76 750 86 493 105 354C117 267 139 224 226 205Z"/>
+    <path id="agents-face" d="M223 207C381 173 650 146 831 150C876 151 898 175 904 221C916 308 913 698 898 866C891 949 883 986 837 1000C769 1016 340 986 182 970C125 964 97 941 93 895C81 747 91 490 109 353C121 267 144 225 223 207Z"/>
+    <path id="agents-rear" d="M920 264C1011 322 1086 369 1142 410C1178 436 1187 467 1188 512L1191 792C1191 842 1173 872 1136 894L929 994C909 1004 884 997 884 974L889 355Z"/>
+    <path id="agents-glass" d="M267 299C397 274 616 263 739 271C784 274 805 289 809 328C817 458 813 684 799 818C796 859 782 880 745 884C608 896 363 886 239 870C202 865 187 845 183 807C173 678 181 477 199 370C207 325 224 307 267 299Z"/>
+    <path id="agents-socket" d="M263 291C397 264 617 252 742 261C792 264 815 285 818 328C827 460 822 686 808 820C804 868 789 890 746 895C606 907 361 896 237 880C193 874 176 849 173 808C163 677 171 475 190 367C198 318 218 300 263 291Z"/>
+    <path id="agents-foot" d="M408 960L843 977L883 1041C900 1066 893 1081 872 1087L785 1114C768 1119 752 1120 732 1117L377 1094C336 1091 324 1077 338 1053L378 987Z"/>
+    <clipPath id="agents-case-clip"><use href="#agents-case"/></clipPath>
+    <clipPath id="agents-face-clip"><use href="#agents-face"/></clipPath>
+    <clipPath id="agents-rear-clip"><use href="#agents-rear"/></clipPath>
+    <clipPath id="agents-glass-clip"><use href="#agents-glass"/></clipPath>
+    <clipPath id="agents-foot-clip"><use href="#agents-foot"/></clipPath>
+    <linearGradient id="agents-case-depth" x1="853" y1="590" x2="1003" y2="605" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e2dfd8"/><stop offset=".22" stop-color="#e9e6df"/><stop offset=".52" stop-color="#c1bfb9"/><stop offset=".86" stop-color="#979894"/><stop offset="1" stop-color="#b9bab4"/>
+    </linearGradient>
+    <radialGradient id="agents-face-tone" cx="365" cy="305" r="760" gradientUnits="userSpaceOnUse" gradientTransform="translate(0 -54) scale(1 1.16)">
+      <stop stop-color="#d5d2cc"/><stop offset=".5" stop-color="#bdbbb5"/><stop offset=".83" stop-color="#b0afa9"/><stop offset="1" stop-color="#ceccc5"/>
+    </radialGradient>
+    <linearGradient id="agents-rear-tone" x1="975" y1="554" x2="1194" y2="573" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#898b87"/><stop offset=".23" stop-color="#969995"/><stop offset=".7" stop-color="#aeb0aa"/><stop offset=".92" stop-color="#bbbdb6"/><stop offset="1" stop-color="#a4a8a1"/>
+    </linearGradient>
+    <linearGradient id="agents-top-light" x1="485" y1="155" x2="510" y2="330" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fffaf1" stop-opacity=".93"/><stop offset=".34" stop-color="#f4efe5" stop-opacity=".22"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="agents-inner-rim" x1="448" y1="261" x2="485" y2="906" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6d6b64"/><stop offset=".23" stop-color="#a7a49a"/><stop offset=".62" stop-color="#a8a69e"/><stop offset=".91" stop-color="#eee8db"/><stop offset="1" stop-color="#f9f1e3"/>
+    </linearGradient>
+    <radialGradient id="agents-glass-tone" cx="382" cy="369" r="636" gradientUnits="userSpaceOnUse" gradientTransform="translate(0 -40) scale(1 1.12)">
+      <stop stop-color="#636467"/><stop offset=".35" stop-color="#484b4e"/><stop offset=".72" stop-color="#363a3d"/><stop offset="1" stop-color="#252c30"/>
+    </radialGradient>
+    <radialGradient id="agents-glass-reflection" cx="296" cy="332" r="280" gradientUnits="userSpaceOnUse" gradientTransform="translate(296 332) rotate(-13) scale(1 .57) translate(-296 -332)">
+      <stop stop-color="#fffdf4" stop-opacity=".64"/><stop offset=".22" stop-color="#fffdf4" stop-opacity=".3"/><stop offset=".65" stop-color="#fffdf4" stop-opacity=".06"/><stop offset="1" stop-color="#fffdf4" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="agents-foot-front" x1="544" y1="972" x2="529" y2="1117" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#666866"/><stop offset=".26" stop-color="#8e8f8a"/><stop offset=".7" stop-color="#b7b6af"/><stop offset=".9" stop-color="#ceccc3"/><stop offset="1" stop-color="#a3a49b"/>
+    </linearGradient>
+    <linearGradient id="agents-foot-side" x1="760" y1="1048" x2="901" y2="1041" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#cbc9bf"/><stop offset=".19" stop-color="#bdbdb3"/><stop offset=".65" stop-color="#8c9088"/><stop offset="1" stop-color="#bdbeb3"/>
+    </linearGradient>
+    <linearGradient id="agents-foot-lip" x1="557" y1="1090" x2="556" y2="1119" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d5d2c6"/><stop offset=".38" stop-color="#bcbeb2"/><stop offset=".76" stop-color="#868b80"/><stop offset="1" stop-color="#b0b2a5"/>
+    </linearGradient>
+    <linearGradient id="agents-foot-edge-light" x1="540" y1="991" x2="540" y2="1108" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f7f5e9" stop-opacity="0"/><stop offset=".3" stop-color="#f7f5e9" stop-opacity=".12"/><stop offset=".68" stop-color="#f7f5e9" stop-opacity=".47"/><stop offset="1" stop-color="#f7f5e9" stop-opacity=".58"/>
+    </linearGradient>
+    <linearGradient id="agents-foot-corner-light" x1="790" y1="1000" x2="790" y2="1106" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff9e9" stop-opacity="0"/><stop offset=".38" stop-color="#fff9e9" stop-opacity=".28"/><stop offset=".7" stop-color="#fff9e9" stop-opacity=".28"/><stop offset="1" stop-color="#fff9e9" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="agents-socket-glint" x1="485" y1="610" x2="485" y2="902" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff4dc" stop-opacity="0"/><stop offset=".3" stop-color="#fff4dc" stop-opacity=".08"/><stop offset=".64" stop-color="#fff4dc" stop-opacity=".42"/><stop offset="1" stop-color="#fff4dc" stop-opacity=".7"/>
+    </linearGradient>
+    <linearGradient id="agents-rim-light" x1="179" y1="240" x2="890" y2="978" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fffdf5"/><stop offset=".36" stop-color="#edeadf" stop-opacity=".5"/><stop offset=".65" stop-color="#f8f4e8" stop-opacity=".75"/><stop offset="1" stop-color="#f0ebdf" stop-opacity=".8"/>
+    </linearGradient>
+    <!-- Thin highlight paths need absolute filter bounds; relative bounds can
+         truncate the blur and expose rectangular edges. -->
+    <filter id="agents-blur-3" filterUnits="userSpaceOnUse" x="0" y="0" width="1254" height="1254"><feGaussianBlur stdDeviation="3"/></filter>
+    <filter id="agents-blur-9" filterUnits="userSpaceOnUse" x="0" y="0" width="1254" height="1254"><feGaussianBlur stdDeviation="9"/></filter>
+    <filter id="agents-blur-20" filterUnits="userSpaceOnUse" x="0" y="0" width="1254" height="1254"><feGaussianBlur stdDeviation="20"/></filter>
+  </defs>
+
+  <!-- The pedestal's front edge slopes down to the right. Its right edge
+       recedes up-right, like the bottom edge of the monitor's side wall. -->
+  <g id="agents-pedestal">
+    <use href="#agents-foot" fill="url(#agents-foot-front)"/>
+    <g clip-path="url(#agents-foot-clip)">
+      <!-- The crease follows one smooth curve into the front corner. Both
+           shading fields extend past the shared clip, avoiding exposed joins. -->
+      <path d="M816 963C806 1002 794 1047 782 1077C777 1090 770 1107 757 1122L933 1132L929 966Z" fill="url(#agents-foot-side)" filter="url(#agents-blur-3)"/>
+      <path d="M327 1064C340 1079 355 1084 378 1086L732 1109C752 1112 769 1111 785 1106L869 1081C885 1076 893 1069 886 1055L933 1051L935 1147L318 1138Z" fill="url(#agents-foot-lip)"/>
+      <path d="M399 978Q540 1004 832 1002" stroke="#333b35" stroke-opacity=".42" stroke-width="27" filter="url(#agents-blur-9)"/>
+      <path d="M402 993C391 1008 369 1038 353 1057C345 1068 355 1076 379 1079L733 1102C750 1105 765 1103 780 1099L871 1073C882 1070 888 1062 882 1050" stroke="url(#agents-foot-edge-light)" stroke-width="4" stroke-linecap="round" filter="url(#agents-blur-3)"/>
+      <path d="M805 1000C796 1031 790 1065 778 1085C774 1093 769 1098 761 1106" stroke="url(#agents-foot-corner-light)" stroke-width="6" stroke-linecap="round" filter="url(#agents-blur-3)"/>
+    </g>
+  </g>
+
+  <g id="agents-rear-housing">
+    <use href="#agents-rear" fill="url(#agents-rear-tone)"/>
+    <g clip-path="url(#agents-rear-clip)">
+      <path d="M938 277C1039 343 1114 387 1154 424Q1180 449 1181 510L1183 791Q1185 849 1140 880L938 982" stroke="#e5e4d9" stroke-opacity=".68" stroke-width="7" filter="url(#agents-blur-3)"/>
+      <path d="M988 334Q1024 571 999 939" stroke="#555d56" stroke-opacity=".35" stroke-width="27" filter="url(#agents-blur-20)"/>
+    </g>
+  </g>
+
+  <!-- Real enclosure thickness: a separate visible wall behind the fascia. -->
+  <g id="agents-front-enclosure">
+    <use href="#agents-case" fill="url(#agents-case-depth)"/>
+    <g clip-path="url(#agents-case-clip)">
+      <path d="M847 154C922 147 959 200 969 262C987 410 985 829 968 920Q962 966 939 988" stroke="#efede3" stroke-opacity=".45" stroke-width="6" filter="url(#agents-blur-3)"/>
+      <path d="M941 260C964 435 960 798 944 934" stroke="#7e827c" stroke-opacity=".22" stroke-width="35" filter="url(#agents-blur-20)"/>
+    </g>
+    <use href="#agents-face" fill="url(#agents-face-tone)"/>
+    <g clip-path="url(#agents-face-clip)">
+      <!-- Broad shading makes the ring rounded instead of a flat outline. -->
+      <use href="#agents-face" fill="url(#agents-top-light)"/>
+      <path d="M227 289C404 251 646 239 755 250Q829 254 834 323L823 825Q819 902 754 912L236 892Q167 883 164 812L178 369Q183 310 227 289Z" stroke="#55554f" stroke-opacity=".38" stroke-width="44" filter="url(#agents-blur-20)"/>
+      <path d="M159 279C126 396 115 714 126 866Q127 923 164 936" stroke="#fffdf0" stroke-opacity=".7" stroke-width="17" stroke-linecap="round" filter="url(#agents-blur-9)"/>
+      <path d="M878 213C903 338 894 738 881 874Q877 946 851 976" stroke="#fff9eb" stroke-opacity=".78" stroke-width="16" stroke-linecap="round" filter="url(#agents-blur-9)"/>
+      <path d="M167 949C328 968 649 992 817 986" stroke="#fff8e8" stroke-opacity=".55" stroke-width="15" filter="url(#agents-blur-9)"/>
+      <path d="M217 215C390 178 654 150 829 158Q886 157 895 222C905 360 901 706 889 865Q883 962 835 989C748 1005 336 978 184 961Q111 953 103 895C91 736 101 492 119 355Q133 234 217 215Z" stroke="url(#agents-rim-light)" stroke-width="4"/>
+    </g>
+  </g>
+
+  <!-- Socket lip, then glass. Its rounded inner edge makes the screen recessed. -->
+  <g id="agents-screen">
+    <use href="#agents-socket" fill="url(#agents-inner-rim)"/>
+    <use href="#agents-glass" fill="url(#agents-glass-tone)"/>
+    <g clip-path="url(#agents-glass-clip)">
+      <use href="#agents-glass" stroke="#131b1e" stroke-opacity=".62" stroke-width="23" filter="url(#agents-blur-9)"/>
+      <path d="M247 313C397 281 620 269 753 281Q795 285 801 328" stroke="#fff9eb" stroke-opacity=".34" stroke-width="7" filter="url(#agents-blur-3)"/>
+      <path d="M210 406Q210 334 268 311C393 287 524 286 660 287" stroke="#fff9ef" stroke-opacity=".28" stroke-width="17" filter="url(#agents-blur-9)"/>
+      <rect x="170" y="263" width="650" height="632" fill="url(#agents-glass-reflection)"/>
+      <path d="M200 750L202 805Q205 851 243 858C398 878 622 889 739 875Q782 871 788 827" stroke="#f3e8d1" stroke-opacity=".16" stroke-width="11" filter="url(#agents-blur-9)"/>
+    </g>
+    <!-- A closed contour with a fading light has no visible stroke endpoint. -->
+    <use href="#agents-socket" stroke="url(#agents-socket-glint)" stroke-width="3"/>
+  </g>
+
+  <g id="agents-eyes">
+    <g fill="#ffecc9" opacity=".22" filter="url(#agents-blur-9)">
+      <rect x="355" y="539" width="58" height="142" rx="29" transform="rotate(1.2 384 610)"/>
+      <rect x="529" y="539" width="58" height="142" rx="29" transform="rotate(1.2 558 610)"/>
+    </g>
+    <g fill="#fff4df">
+      <rect x="355" y="539" width="58" height="142" rx="29" transform="rotate(1.2 384 610)"/>
+      <rect x="529" y="539" width="58" height="142" rx="29" transform="rotate(1.2 558 610)"/>
+    </g>
+  </g>
+</svg>

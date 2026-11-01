@@ -7,4 +7,4 @@ let
   };
   pkgs = import source.outPath { };
 in
-import ./nix/dev-shell.nix { inherit pkgs; }
+import ./packaging/nix/dev-shell.nix { inherit pkgs; }

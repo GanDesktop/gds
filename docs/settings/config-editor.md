@@ -1,6 +1,6 @@
 # 从配置类型派生原生编辑器
 
-`#[derive(gds::ConfigEditor)]` 根据 Rust 字段类型与 `#[setting(...)]` 标注生成公共配置编辑组件。宏位于 `crates/gds-settings-derive`，原生控件与状态位于 `gds::ui::settings::form`。Files 的常规设置和共享字体设置已使用这套组件。
+`#[derive(gds::ConfigEditor)]` 根据 Rust 字段类型与 `#[setting(...)]` 标注生成公共配置编辑组件。宏位于 `macros/gds-settings-derive`，原生控件与状态位于 `gds::ui::settings::form`。Files 的常规设置和共享字体设置已使用这套组件。
 
 ```rust
 #[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, gds::ConfigEditor)]

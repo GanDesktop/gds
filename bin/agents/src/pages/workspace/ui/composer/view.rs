@@ -1,0 +1,647 @@
+use crate::shared::i18n::tr;
+use gds_uim::el;
+use gpui_kit::{ClickEvent, Focusable};
+
+use super::*;
+
+const COMPOSER_TEXT_INSET: f32 =
+    COMPOSER_CONTROL_INSET + (layout::ICON_BUTTON_SIZE - agent::TOOLBAR_AGENT_ICON_SIZE) / 2.;
+const COMPOSER_CONTROL_GAP: f32 = 4.;
+// The pinned editor reserves 10px each for its gutter and caret at the right edge.
+const EDITOR_WRAP_INSET: f32 = 20.;
+
+impl Workspace {
+    pub(in crate::pages::workspace) fn composer_expansion_button(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Button {
+        el! {
+            ("expand-message-editor", $(if self.composer.expanded {
+                        IconName::Minimize2
+                    } else {
+                        IconName::Maximize2
+                }), cx).message_actions::action_button {
+                tooltip_with_shortcut: $(if self.composer.expanded {
+                            tr!("composer-collapse")
+                        } else {
+                            tr!("composer-expand")
+                        }), $(shortcuts::shortcut(ExpandMessageEditor));
+                on_click: $(cx.listener(Self::on_composer_toggle_expansion));
+            }
+        }
+    }
+
+    fn on_composer_toggle_expansion(
+        &mut self,
+        _: &gpui_kit::ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_composer_expansion(window, cx);
+    }
+
+    pub(in crate::pages::workspace) fn composer_fills_thread(&self) -> bool {
+        !self.window.compact
+            && !self.awaiting_connection()
+            && self.composer.expanded
+            && !self.selected.awaiting_history()
+            && !self.thread_has_user_prompt()
+            && !self.working()
+            && self.selected.approval.panel.is_empty()
+            && self.selected.authentication.panel.is_none()
+            && self.selected.elicitations.is_empty()
+            && self.selected.id.is_none_or(|id| {
+                !self
+                    .sessions
+                    .outboxes
+                    .get(&id)
+                    .is_some_and(outbox::SessionOutbox::pending)
+            })
+    }
+
+    pub(in crate::pages::workspace) fn measure_composer(&mut self, cx: &mut Context<Self>) {
+        let input = self.composer.input.read(cx);
+        let width = input
+            .text_bounds()
+            .map(|bounds| (bounds.size.width - px(EDITOR_WRAP_INSET)).max(px(1.)));
+        let text = input.text().clone();
+        let mut font = gpui_kit::font(cx.theme().font_family.clone());
+        font.fallbacks = theme::font_style(cx).text.font_fallbacks;
+        self.composer.rows =
+            self.composer
+                .layout
+                .measure(&text, font, theme::content_font_size(cx), width, cx);
+    }
+
+    pub(in crate::pages::workspace) fn composer_height(&self, cx: &App) -> f32 {
+        let input = self.composer.input.read(cx);
+        let rows = input_layout::visible_rows(
+            self.composer.rows,
+            input.text().lines_len(),
+            self.window.compact,
+            self.composer.expanded,
+        );
+        let height = rows as f32
+            * (f32::from(theme::content_font_size(cx)) * theme::content_line_height(cx)).ceil()
+            + f32::from(gpui_kit::component::Size::Medium.input_py()) * 2.;
+        if self.composer.expanded && !self.window.compact {
+            height.min(self.composer.available_height.get())
+        } else {
+            height
+        }
+    }
+
+    pub(in crate::pages::workspace) fn feedback_height(&self, cx: &App) -> f32 {
+        if self.composer_error(cx).is_some() {
+            crate::shared::ui::CONTROL
+        } else {
+            0.
+        }
+    }
+
+    fn render_composer_feedback(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let message = self.composer_error(cx)?;
+        let retry = self.selected.timeline.conversation.is_some()
+            && matches!(self.selected.stream, StreamState::Unavailable(_));
+        Some(
+            el! {
+                .div {
+                    flex;
+                    items_center;
+                    min_w_0;
+                    px_2;
+                    h: $(px(crate::shared::ui::CONTROL));
+                    flex_shrink_0;
+                } [
+                    .div {
+                        flex_1;
+                        min_w_0;
+                    } [
+                        $(crate::shared::ui::feedback("composer-feedback", message, cx.theme().danger).compact()),
+                    ],
+                    ..$(retry.then(|| el! {("history-resync-retry", IconName::RefreshCw, $(self.history_retry_label())).crate::shared::ui::icon_action {
+                                    flex_shrink_0;
+                                    disabled: $(self.history_retry_disabled());
+                                    on_click: $(cx.listener(|this, _, _, cx| this.retry_history(cx)));
+                    }})),
+                ]
+            }
+            .into_any_element(),
+        )
+    }
+
+    pub(in crate::pages::workspace) fn render_composer(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let fills_thread = self.composer_fills_thread();
+        let line_height =
+            (f32::from(theme::content_font_size(cx)) * theme::content_line_height(cx)).ceil();
+        let expand_top = gpui_kit::component::Size::Medium.input_py()
+            + px((line_height - layout::ICON_BUTTON_SIZE) / 2.);
+        let composition_locked = self
+            .selected
+            .id
+            .is_some_and(|id| self.composition_locked(id));
+        let cancelling = self
+            .selected
+            .id
+            .is_some_and(|id| self.sessions.pending.cancelling.contains(&id));
+        let can_send = self.can_send(cx);
+        let submit_hint = if self.working() || cancelling {
+            gds::ui::ShortcutHint::plain(tr!("action-stop"))
+        } else {
+            self.composer_shortcut_hint()
+        };
+        let submit = if self.working() || cancelling {
+            el! {
+                ("stop-turn").Button::new {
+                    ghost;
+                    small;
+                    icon: IconName::Square;
+                    text_color: $(cx.theme().danger);
+                    when: $(self.composer_error(cx).is_some()), {
+                        text_color: $(cx.theme().danger);
+                    };
+                    disabled: $(cancelling || self.connection_status() != status::ConnectionStatus::Connected);
+                    on_click: $(cx.listener(Self::on_composer_stop));
+                }
+            }
+        } else {
+            el! {
+                ("send-message").Button::new {
+                    shortcut: $(gds::ui::Shortcut::new(Box::new(SendComposer), Some("BasWorkspace > BasComposer > Input")));
+                    primary;
+                    when: $(!can_send), {
+                        ghost;
+                    };
+                    small;
+                    icon: IconName::Send;
+                    when: $(self.composer_error(cx).is_some()), {
+                        text_color: $(cx.theme().danger);
+                    };
+                    disabled: $(!can_send);
+                    on_click: $(cx.listener(Self::on_composer_send));
+                }
+            }
+        };
+        let panel = el! {
+            .div {
+                # "composer-panel";
+                test_support;
+                w_full;
+                min_w_0;
+                flex;
+                flex_col;
+                flex_shrink_0;
+                when: fills_thread, {
+                    flex_1;
+                    min_h_0;
+                };
+                when: $(self.window.compact), {
+                    px: COMPOSER_SIDE_PADDING.px;
+                    pb: COMPOSER_BOTTOM_PADDING.px;
+                };
+            }
+        }
+        .drag_over::<gpui_kit::ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+        .on_drop(cx.listener(Self::on_composer_drop));
+        el! {
+            panel [
+                $(self.render_commands(cx)),
+                ..$(self.render_composer_feedback(cx)),
+                $(self.render_composer_editor(fills_thread, composition_locked, expand_top, cx)),
+                $(self.render_composer_toolbar(submit, submit_hint, cx)),
+            ]
+        }
+        .into_any_element()
+    }
+
+    fn render_composer_editor(
+        &self,
+        fills_thread: bool,
+        composition_locked: bool,
+        expand_top: Pixels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // Trim the component's measured blank inset while retaining native editing and overlays.
+        let inset = -(self.composer.content_left.get() - px(COMPOSER_TEXT_INSET)).max(px(0.));
+        let copyable = self.composer.input.read(cx).is_copyable();
+        let editable = !(composition_locked || self.composer.paste_pending);
+        let editor = el! {
+            ($(&self.composer.input)).Editor::new {
+                w_auto;
+                flex_1;
+                min_w_0;
+                ml: inset;
+                font_family: $(cx.theme().font_family.clone());
+                text_size: $(theme::content_font_size(cx));
+                line_height: $(gpui_kit::relative(theme::content_line_height(cx)));
+                appearance: false;
+                bordered: false;
+                readonly: $(composition_locked || self.composer.paste_pending);
+                context_menu: $(move |menu, _, cx| super::text_menu(menu, editable, copyable, cx));
+                aria_label: tr!("composer-message");
+                when: fills_thread, {
+                    h_full;
+                };
+                when: $(!fills_thread), {
+                    h: $(px(self.composer_height(cx)));
+                };
+            }
+        };
+        let editor = crate::shared::ui::input::placeholder(&self.composer.input, editor);
+        el! {
+            .div {
+                # "composer-editor";
+                relative;
+                key_context: "BasComposer";
+                test_support;
+                capture_action: $(cx.listener(Self::on_composer_expand_action));
+                capture_action: $(cx.listener(Self::on_composer_send_action));
+                capture_action: $(cx.listener(Self::capture_composer_enter));
+                capture_action: $(cx.listener(Self::on_composer_paste_action));
+                capture_action: $(cx.listener(Self::on_composer_backspace_action));
+                capture_action: $(cx.listener(Self::on_composer_delete_action));
+                capture_action: $(cx.listener(Self::on_composer_previous_word_action));
+                capture_action: $(cx.listener(Self::on_composer_next_word_action));
+                capture_action: $(cx.listener(Self::on_composer_left_action));
+                capture_action: $(cx.listener(Self::on_composer_right_action));
+                capture_action: $(cx.listener(Self::on_composer_up_action));
+                capture_action: $(cx.listener(Self::on_composer_down_action));
+                capture_action: $(cx.listener(Self::on_composer_tab_action));
+                capture_action: $(cx.listener(Self::on_composer_escape_action));
+                flex;
+                items_start;
+                pr: COMPOSER_CONTROL_INSET.px;
+                when: $(self.window.compact), {
+                    pr: $(px(COMPOSER_CONTROL_INSET + layout::ICON_BUTTON_SIZE + COMPOSER_CONTROL_GAP));
+                };
+                when: fills_thread, {
+                    flex_1;
+                    min_h_0;
+                };
+            } [
+                ("composer-focus", $(shortcuts::shortcut(FocusComposer))).gds::ui::keytips::Anchor::new,
+                .div {
+                    relative;
+                    flex;
+                    flex_1;
+                    min_w_0;
+                    overflow_x_hidden;
+                    when: fills_thread, {
+                        h_full;
+                    };
+                } [
+                    editor,
+                    $(self.render_attachment_chips(cx)),
+                ],
+                ..$(self.window.compact.then(|| el! { .div {
+                    absolute;
+                    top: $(expand_top.max(px(0.)));
+                    right: $(px(COMPOSER_CONTROL_INSET));
+                } [
+                    $(self.composer_expansion_button(cx)),
+                ]})),
+            ]
+        }
+        .into_any_element()
+    }
+
+    fn render_composer_toolbar(
+        &self,
+        submit: Button,
+        submit_hint: gds::ui::ShortcutHint,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        el! {
+            .div {
+                # "composer-toolbar";
+                test_support;
+                w_full;
+                flex;
+                items_center;
+                gap_1;
+                pl: $(px(COMPOSER_CONTROL_INSET));
+                pr: $(px(COMPOSER_CONTROL_INSET));
+                h: $(px(COMPOSER_TOOLBAR_HEIGHT));
+                flex_shrink_0;
+                when: $(!self.window.compact), {
+                    h: CONTROL_TOOLBAR_HEIGHT.px;
+                    mt_2;
+                    pt_1;
+                    border_t_1;
+                    border_color: $(cx.theme().border);
+                };
+            } [
+                ..$(self.render_usage(cx)),
+                $(self.attachment_button(cx)) {
+                    w: $(px(layout::ICON_BUTTON_SIZE));
+                    h: $(px(layout::ICON_BUTTON_SIZE));
+                    p_0;
+                },
+                ..$(self.supports_directories().then(|| self.directories_button(cx))),
+                .div {
+                    flex_1;
+                    min_w_0;
+                } [
+                    $(self.render_config_options(cx)),
+                ],
+                ..$(self.render_queue(cx)),
+                ..$((self.working() && !self.composer.input.read(cx).value().trim().is_empty())
+                    .then(|| self.immediate_send_button(cx))),
+                ..$((!self.window.compact && self.selected.authentication.required.is_some())
+                    .then(|| self.authentication_button(cx))),
+                ..$((self.working() && !self.composer.input.read(cx).value().trim().is_empty())
+                    .then(|| el! { .div {
+                            # "queue-message-hint";
+                            hoverable_tooltip: $(self.composer_shortcut_hint().builder());
+                        } [ ("queue-message").Button::new {
+                                    shortcut: $(gds::ui::Shortcut::new(Box::new(SendComposer), Some("BasWorkspace > BasComposer > Input")));
+                                    ghost;
+                                    xsmall;
+                                    icon: IconName::Send;
+                                    disabled: $(!self.can_send(cx));
+                                    on_click: $(cx.listener(Self::on_composer_send));
+                            }
+                        ]})),
+                .div {
+                    # "submit-hint";
+                    hoverable_tooltip: $(submit_hint.builder());
+                } [
+                        submit {
+                                xsmall;
+                                w: $(px(layout::ICON_BUTTON_SIZE));
+                                h: $(px(layout::ICON_BUTTON_SIZE));
+                                p_0;
+                                flex_shrink_0;
+                                when: $(!self.window.compact), {
+                                    rounded_full;
+                                };
+                                when: $(!self.window.compact && !self.can_send(cx)), {
+                                    bg: $(gds::appearance::theme::Colors::current(cx).hover());
+                                };
+                        },
+                ],
+            ]
+        }
+        .into_any_element()
+    }
+
+    fn on_composer_stop(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(session) = self.selected.id
+            && self.sessions.healthy(session)
+        {
+            self.sessions.pending.cancelling.insert(session);
+            self.sessions.outboxes.entry(session).or_default().pause();
+            self.command(Command::Cancel(session), cx);
+            cx.notify();
+        }
+    }
+
+    fn on_composer_send(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.send_prompt(window, cx);
+    }
+
+    fn on_composer_drop(
+        &mut self,
+        paths: &gpui_kit::ExternalPaths,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.drop_attachments(paths.paths().to_vec(), window, cx);
+    }
+
+    pub(in crate::pages::workspace) fn on_composer_expand_action(
+        &mut self,
+        _: &composer::ExpandMessageEditor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.terminal_focused(window, cx) {
+            cx.propagate();
+            return;
+        }
+        self.toggle_composer_expansion(window, cx);
+        cx.stop_propagation();
+    }
+
+    fn on_composer_send_action(
+        &mut self,
+        _: &composer::SendComposer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.submit_composer(window, cx);
+        cx.stop_propagation();
+    }
+
+    fn on_composer_paste_action(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.paste_attachment(window, cx);
+    }
+
+    fn on_composer_backspace_action(
+        &mut self,
+        _: &Backspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.delete_mention(true, window, cx);
+    }
+
+    fn on_composer_delete_action(
+        &mut self,
+        _: &Delete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.delete_mention(false, window, cx);
+    }
+
+    fn on_composer_previous_word_action(
+        &mut self,
+        _: &DeleteToPreviousWordStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.delete_word_preserving_mentions(true, window, cx);
+    }
+
+    fn on_composer_next_word_action(
+        &mut self,
+        _: &DeleteToNextWordEnd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.delete_word_preserving_mentions(false, window, cx);
+    }
+
+    fn on_composer_left_action(
+        &mut self,
+        _: &MoveLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.cross_mention(true, cx);
+    }
+
+    fn on_composer_right_action(
+        &mut self,
+        _: &MoveRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.cross_mention(false, cx);
+    }
+
+    fn on_composer_up_action(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.command_action("up", window, cx);
+    }
+
+    fn on_composer_down_action(
+        &mut self,
+        _: &MoveDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.command_action("down", window, cx);
+    }
+
+    fn on_composer_tab_action(
+        &mut self,
+        _: &IndentInline,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.command_action("tab", window, cx);
+    }
+
+    fn on_composer_escape_action(
+        &mut self,
+        _: &Escape,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            cx.propagate();
+            return;
+        }
+        self.command_action("escape", window, cx);
+    }
+}

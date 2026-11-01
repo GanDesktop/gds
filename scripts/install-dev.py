@@ -9,11 +9,12 @@ from pathlib import Path
 import shlex
 import shutil
 import tempfile
+import tomllib
 
 MARKER = "# Managed by GDS install-dev"
 APPLICATIONS = {
-    "files": ("Files", "System;FileTools;FileManager;", "system-file-manager"),
-    "agents": ("Agents", "Development;Utility;", "applications-development"),
+    "files": ("io.github.GanDesktop.GdsFiles", "System;FileTools;FileManager;"),
+    "agents": ("io.github.GanDesktop.GdsAgents", "Development;Utility;"),
 }
 
 
@@ -78,25 +79,25 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("application", choices=["all", *APPLICATIONS])
-    parser.add_argument("environment", nargs="?")
     args = parser.parse_args()
-    if not args.remove and not args.environment:
-        parser.error("installation requires a recorded Nix development environment")
+    runtime = os.environ.get("GDS_DEV_RUNTIME")
+    if not args.remove and not runtime:
+        parser.error("installation requires the GDS Nix environment; use just install-dev")
 
     project = Path(__file__).resolve().parent.parent
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "gds/development"
     applications = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "applications"
     selected = APPLICATIONS if args.application == "all" else [args.application]
     for app in selected:
-        title, categories, icon = APPLICATIONS[app]
+        app_id, categories = APPLICATIONS[app]
         binary = project / "target/debug" / f"gds-{app}"
         launcher = Path.home() / ".local/bin" / f"gds-{app}"
-        desktop = applications / f"io.github.fourt145.Gds{title}.desktop"
+        desktop = applications / f"{app_id}.desktop"
         backups = [(launcher, state / f"{app}-launcher.previous"), (desktop, state / f"{app}-desktop.previous")]
         if args.remove:
             for path, backup in backups:
                 restore(path, backup)
-            print(f"Restored previous {title} entries")
+            print(f"Restored previous {app} entries")
             continue
 
         if not binary.is_file():
@@ -104,10 +105,18 @@ def main():
         if launcher.exists() or launcher.is_symlink():
             if launcher.is_symlink() or MARKER not in launcher.read_text():
                 raise RuntimeError(f"refusing to replace an unrelated command: {launcher}")
-        nix = shutil.which("nix")
-        if not nix:
-            raise RuntimeError("nix is required to launch the development environment")
-        command = shlex.join([nix, "develop", str(Path(args.environment).absolute()), "--command", str(binary)])
+        labels = tomllib.loads((project / "assets" / app / "desktop.toml").read_text())
+        title = labels["default"]["Name"]
+        localized = []
+        for locale, entries in labels.items():
+            suffix = "" if locale == "default" else f"[{locale}]"
+            for key, value in entries.items():
+                if key == "Name":
+                    value += " (Dev)"
+                localized.append(f"{key}{suffix}={value}")
+        desktop_labels = "\n".join(localized)
+        icon = project / "assets" / app / "icon-desktop.svg"
+        command = shlex.join([runtime, str(binary)])
         for path, backup in backups:
             save_original(path, backup)
         write(launcher, f'#!/usr/bin/env bash\n{MARKER}\nexec {command} "$@"\n', 0o755)
@@ -116,11 +125,11 @@ def main():
         write(desktop, f"""{MARKER}
 [Desktop Entry]
 Type=Application
-Name=GDS {title} (Dev)
+{desktop_labels}
 Exec={desktop_argument(launcher)}{arguments}
 Icon={icon}
 Categories={categories}
-StartupWMClass=io.github.fourt145.Gds{title}
+StartupWMClass={app_id}
 Terminal=false
 {mime}""", 0o644)
         print(f"Installed {title} development launcher: {launcher} -> {binary}")

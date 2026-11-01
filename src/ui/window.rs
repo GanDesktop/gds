@@ -13,7 +13,7 @@ use gpui_kit::{
     px,
 };
 
-pub const HEIGHT: f32 = super::TOOLBAR_HEIGHT;
+pub const HEIGHT: f32 = crate::appearance::tokens::TOOLBAR_HEIGHT;
 pub const MACOS_CONTROLS_WIDTH: f32 = 80.;
 type Handler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -24,25 +24,18 @@ pub fn window_options() -> WindowOptions {
         titlebar: cfg!(target_os = "macos").then(gpui_kit::component::TitleBar::title_bar_options),
         app_owns_titlebar_drag: cfg!(target_os = "macos"),
         window_decorations: Some(WindowDecorations::Client),
-        window_background: crate::design::WINDOW_BACKGROUND,
+        window_background: crate::appearance::tokens::WINDOW_BACKGROUND,
         ..Default::default()
     }
 }
 
-#[derive(IntoElement)]
+#[derive(Default, IntoElement)]
 pub struct WindowControls {
     maximize: Option<Handler>,
     close: Option<Handler>,
 }
 
 impl WindowControls {
-    pub fn new() -> Self {
-        Self {
-            maximize: None,
-            close: None,
-        }
-    }
-
     pub fn on_maximize(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -85,8 +78,8 @@ fn control(
     super::button::Button::new(id)
         .ghost()
         .xsmall()
-        .w(px(super::ICON_BUTTON_SIZE))
-        .h(px(super::ICON_BUTTON_SIZE))
+        .w(px(crate::appearance::tokens::ICON_BUTTON_SIZE))
+        .h(px(crate::appearance::tokens::ICON_BUTTON_SIZE))
         .p_0()
         .flex_shrink_0()
         .child(
@@ -94,7 +87,7 @@ fn control(
                 .id(gpui_kit::SharedString::from(format!("{id}-icon")))
                 .test_support()
                 .flex()
-                .child(Icon::new(icon).with_size(px(crate::design::SMALL_ICON_SIZE))),
+                .child(Icon::new(icon).with_size(px(crate::appearance::tokens::SMALL_ICON_SIZE))),
         )
         .accessibility_label(hint.clone())
         .tooltip(hint)
@@ -189,20 +182,13 @@ impl RenderOnce for WindowControls {
 #[cfg(test)]
 mod tests;
 
-#[derive(IntoElement)]
+#[derive(Default, IntoElement)]
 pub struct TitleBar {
     children: Vec<AnyElement>,
     controls: WindowControls,
 }
 
 impl TitleBar {
-    pub fn new() -> Self {
-        Self {
-            children: Vec::new(),
-            controls: WindowControls::new(),
-        }
-    }
-
     pub fn window_options() -> WindowOptions {
         window_options()
     }
@@ -237,7 +223,7 @@ impl RenderOnce for TitleBar {
             .items_center()
             .flex_1()
             .h_full()
-            .text_size(super::SMALL)
+            .text_size(crate::appearance::tokens::SMALL)
             .window_control_area(WindowControlArea::Drag)
             .on_mouse_down(MouseButton::Left, move |_, _, _| down.set(true))
             .on_mouse_up(MouseButton::Left, move |_, _, _| up.set(false))
@@ -273,7 +259,7 @@ impl RenderOnce for TitleBar {
                 cfg!(target_os = "macos") && !window.is_fullscreen(),
                 |bar| bar.pl(px(MACOS_CONTROLS_WIDTH)),
             )
-            .bg(crate::theme::sidebar_background(cx))
+            .bg(crate::appearance::theme::sidebar_background(cx))
             .border_b_1()
             .border_color(cx.theme().title_bar_border)
             .child(title.children(self.children))

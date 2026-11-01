@@ -1,6 +1,0 @@
-Scan: 5 mutation sites in src/bin/agents/workspace/images/loading.rs
-  src/bin/agents/workspace/images/loading.rs:19 true -> false  [defn-/load]
-  src/bin/agents/workspace/images/loading.rs:22 delete !  [defn-/load]
-  src/bin/agents/workspace/images/loading.rs:28 + -> -  [defn-/load]
-  src/bin/agents/workspace/images/loading.rs:28 1 -> 0  [defn-/load]
-  src/bin/agents/workspace/images/loading.rs:38 > -> >=  [defn-/normalized]

@@ -1,48 +1,37 @@
-# 在 NixOS 安装 GDS
+# Install GDS on NixOS
 
-GDS 是原生桌面应用套件，目前包含 Files 和 Agents，支持 `x86_64-linux` / `aarch64-linux`。各应用有独立的软件包、启动入口和 NixOS 模块。
+GDS exports packages for `x86_64-linux` and `aarch64-linux`. The graphical suite contains Files and Agents. GDS Portal is packaged and enabled separately.
 
-| 应用 | 软件包 / 启动入口 | NixOS 模块 | 启用选项 |
+| Component | Package | NixOS module | Enable option |
 | --- | --- | --- | --- |
-| Files | `gds-files` | `nixosModules.gds-files` | `programs.gds-files.enable` |
-| Agents | `gds-agents` | `nixosModules.gds-agents` | `programs.gds-agents.enable` |
+| GDS Files | `gds-files` | `nixosModules.gds-files` | `programs.gds-files.enable` |
+| GDS Agents | `gds-agents` | `nixosModules.gds-agents` | `programs.gds-agents.enable` |
+| GDS Portal | `xdg-desktop-portal-gds` | `nixosModules.gds-portal` | `services.gds-portal.enable` |
 
-`packages.<system>.gds` 和 `packages.<system>.default` 包含所有应用的二进制、桌面入口和资源。启动时需显式选择应用；仓库不提供默认应用。
+## Build, install and run
 
-## 构建、安装和运行
-
-在仓库目录执行：
+From the repository:
 
 ```sh
-# 构建整个套件，或单独构建应用：
-nix build
+nix build .#gds
 nix build .#gds-files
 nix build .#gds-agents
+nix build .#xdg-desktop-portal-gds
 
-# 安装到当前用户的 Nix profile：
-just install
-just install files
-just install agents
-# 等价命令分别为：
-# nix profile install .#gds
-# nix profile install .#gds-files
-# nix profile install .#gds-agents
-
-# 在图形会话中直接运行：
+nix profile install .#gds
 nix run .#gds-files -- "$HOME"
 nix run .#gds-agents -- --compact
 ```
 
-套件和单应用包提供相同的文件，profile 中选其中一种安装方式即可。构建产物包含所需动态库包装，不依赖开发环境。
+`nix build` uses the graphical suite by default. Install either the suite or individual graphical packages in a profile. `just install`, `just install files` and `just install agents` provide equivalent profile installation commands. Packaged executables include their runtime wrappers and do not require a development shell.
 
-## 接入系统 flake
+## System flake
 
 ```nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    gds.url = "github:4t145/gds";
-    # 本地开发可改为 git+file:///absolute/path/to/gds。
+    gds.url = "github:GanDesktop/gds";
   };
 
   outputs = { nixpkgs, gds, ... }: {
@@ -54,6 +43,7 @@ nix run .#gds-agents -- --compact
         {
           programs.gds-files.enable = true;
           programs.gds-agents.enable = true;
+          services.gds-portal.enable = true;
         }
       ];
     };
@@ -61,22 +51,21 @@ nix run .#gds-agents -- --compact
 }
 ```
 
-`nixosModules.default` 导入各应用模块，不自动启用应用。只需一个应用时，也可仅导入对应的 `nixosModules.gds-files` 或 `nixosModules.gds-agents`。
+The default module registers all options without enabling components. Import individual modules when only some components are needed. Packages use the project's locked nixpkgs; setting `gds.inputs.nixpkgs.follows` is unnecessary. Override a component with its `programs.<application>.package` or `services.gds-portal.package` option.
 
-模块默认使用 GDS 锁定的 nixpkgs 构建软件包，无需设置 `gds.inputs.nixpkgs.follows`。可通过各自的 `programs.<应用>.package` 定制包。仅安装套件包不会启用应用的系统集成；这些设置由对应模块负责。
-
-在系统配置目录执行（把 `myhost` 换成自己的配置名）：
+Run in the system configuration repository, replacing `myhost`:
 
 ```sh
 nix flake update gds
 sudo nixos-rebuild switch --flake .#myhost
 ```
 
-本地 Git flake 仅包含 Git 已跟踪的文件，新增的 Nix 定义和资源需要先加入 Git。首次构建会下载 Rust 依赖并编译图形栈。
+For a local checkout, use `git+file:///absolute/path/to/gds`. Git flakes include tracked files, so required new source and packaging files must be added to Git before building through a flake.
 
-## 应用集成
+## Integration
 
-- [Files：默认文件管理器、设备和文件选择 Portal](apps/files/nixos.md)
-- [Agents：独立前端和 Bas 服务连接](apps/agents/migration.md#nix-安装入口)
+- [Files desktop integration](apps/files/nixos.md) covers directory associations, FileManager1, volumes and FileChooser routing.
+- [Agents](apps/agents/README.md) is a frontend; its module does not start the independent Bas service.
+- Portal uses `gds-files` from PATH for FileChooser requests. Install Files separately or supply another handler with `--file-chooser`.
 
-各应用的打包定义和模块位于 `nix/apps/<应用>/`，共用 `nix/package.nix` 的 Rust 构建和运行库包装。flake 按该目录生成应用包、启动入口和模块；Cargo feature 从 `Cargo.toml` 中对应二进制的 `required-features` 读取。
+Graphical packages and modules live in `packaging/nix/apps/<application>/`, sharing `packaging/nix/package.nix`. The flake discovers those applications and reads target features from Cargo.toml. Portal definitions live in `packaging/nix/portal/` and do not depend on a graphical application package.

@@ -7,7 +7,7 @@ develop := "nix develop --impure --expr 'import ./shell.nix'"
 default:
     @just --list
 
-# 编译并启动指定应用：just dev files / just dev agents，可继续传应用参数。
+# 编译并启动指定目标，可继续传应用参数。
 dev app *args:
     @just _cargo run "$@"
 
@@ -15,13 +15,17 @@ dev app *args:
 shell:
     {{ develop }}
 
-# 构建整个套件，或指定 files / agents。
+# 构建整个套件，或指定 files / agents / portal。
 build app="all":
     @just _cargo build "$@"
 
 # 构建整个套件或指定应用的发布版。
 release app="all":
     @just _cargo build "$@" --release --locked
+
+# 在宿主机的 Fedora 容器中增量构建 Files 和可选 Portal 的原生 RPM。
+rpm fedora="43" profile="dev":
+    @python3 scripts/build-rpm.py --fedora "$1" --profile "$2"
 
 # 安装整个套件，或指定 files / agents 到当前用户的 Nix profile。
 install app="all":
@@ -34,7 +38,7 @@ install-dev app="all":
     just _cargo build "$1" --locked
     runtime_profile="${XDG_STATE_HOME:-$HOME/.local/state}/gds/development/environment"
     mkdir -p "$(dirname "$runtime_profile")"
-    {{ develop }} --profile "$runtime_profile" --command python3 scripts/install-dev.py "$1" "$runtime_profile"
+    {{ develop }} --profile "$runtime_profile" --command python3 scripts/install-dev.py "$1"
 
 # 移除开发版入口，恢复此前的命令和桌面入口。
 uninstall-dev app="all":
@@ -42,11 +46,11 @@ uninstall-dev app="all":
 
 # 检查全部 Rust 目标。
 check:
-    {{ develop }} --command cargo check --workspace --features agents --all-targets
+    {{ develop }} --command cargo check --workspace --features files,agents,portal,gpui-kit/test-support --all-targets
 
 # 运行测试，可传测试名称等 Cargo 参数。
 test *args:
-    {{ develop }} --command cargo test --workspace --features agents "$@"
+    {{ develop }} --command cargo test --workspace --features files,agents,portal,gpui-kit/test-support "$@"
 
 # 格式化项目代码。
 fmt:
@@ -66,15 +70,16 @@ _cargo command app *args:
     case "$app" in
         all)
             if [ "$command" = run ]; then
-                printf '%s\n' '启动时请指定应用：just dev files / just dev agents' >&2
+                printf '%s\n' '启动时请指定目标：just dev files / just dev agents / just dev portal' >&2
                 exit 2
             fi
-            targets=(--bins --features agents)
+            targets=(--bins --features files,agents,portal)
             ;;
-        files) targets=(--bin gds-files) ;;
+        files) targets=(--bin gds-files --features files) ;;
         agents) targets=(--bin gds-agents --features agents) ;;
+        portal) targets=(--bin xdg-desktop-portal-gds --features portal) ;;
         *)
-            printf '未知应用：%s；可选 files、agents\n' "$app" >&2
+            printf '未知应用：%s；可选 files、agents、portal\n' "$app" >&2
             exit 2
             ;;
     esac

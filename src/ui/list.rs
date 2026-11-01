@@ -5,7 +5,7 @@ use std::{cell::RefCell, rc::Rc};
 use gds_uim::el;
 use gpui_kit::{prelude::*, *};
 
-use super::DataListStyle;
+use crate::appearance::tokens::DataListStyle;
 
 #[derive(Clone, Copy)]
 struct Geometry {

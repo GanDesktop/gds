@@ -1,7 +1,7 @@
 //! Shared capacity meter: the filled part is occupied or reserved; the
 //! remaining track is available. Callers supply a localized byte summary.
 
-use gds_uim::el;
+use gds_uim::{component, el};
 use gpui_kit::{
     component::{ActiveTheme, Sizable, progress::Progress},
     prelude::*,
@@ -11,24 +11,27 @@ use gpui_kit::{
 const GAP: f32 = 5.;
 const PADDING_BOTTOM: f32 = 6.;
 pub const EXTRA_ROW_HEIGHT: f32 = 32.;
-pub const COMPACT_EXTRA_ROW_HEIGHT: f32 = 10.;
 
+#[component]
 #[derive(IntoElement)]
 pub struct CapacityBar {
     id: ElementId,
+    #[attr(into)]
     label: SharedString,
     fraction: Option<f32>,
+    #[attr]
     compact: bool,
     unavailable: bool,
     embedded: bool,
+    #[attr]
     selected: bool,
 }
 
 impl CapacityBar {
-    pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
+    pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
-            label: label.into(),
+            label: SharedString::default(),
             fraction: None,
             compact: false,
             unavailable: false,
@@ -42,15 +45,6 @@ impl CapacityBar {
         self
     }
 
-    pub fn compact(mut self, compact: bool) -> Self {
-        self.compact = compact;
-        self
-    }
-
-    pub fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
-        self
-    }
     pub fn unavailable(mut self) -> Self {
         self.unavailable = true;
         self
@@ -81,9 +75,9 @@ impl RenderOnce for CapacityBar {
                 @if (!self.embedded) pb: PADDING_BOTTOM.px; @end;
             } [
                 bar,
-                @if (!self.compact)
-                    .div { text_xs; text_color: $(if self.selected { cx.theme().accent_foreground } else { cx.theme().muted_foreground }); truncate } [$(self.label)],
-                @end,
+                .div { text_xs; text_color: $(if self.selected { cx.theme().accent_foreground } else { cx.theme().muted_foreground }); truncate;
+                    @if (self.compact) invisible; @end;
+                } [$(self.label)],
             ]
         }
     }

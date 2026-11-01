@@ -1,16 +1,15 @@
 //! Shared foundation for the GDS desktop applications.
 
 extern crate self as gds;
+#[cfg(feature = "ui")]
 pub use gds_settings_derive::ConfigEditor;
 
-pub mod actions;
-pub mod configuration;
-pub mod design;
-pub mod desktop;
+#[cfg(feature = "appearance")]
+pub mod appearance;
+#[cfg(feature = "i18n")]
 pub mod i18n;
-pub mod notifications;
-pub mod terminal;
-pub mod theme;
-pub mod time;
-pub mod typography;
+#[cfg(feature = "persistence")]
+pub mod persistence;
+pub mod service;
+#[cfg(feature = "ui")]
 pub mod ui;

@@ -1,14 +1,27 @@
+## 个性
+请你在写代码的时候，能够有整体性的审美，确保项目整体向一个好的方向发展，而不是为了单次任务的通过增加了系统整体的复杂性，最后在整体上得到了更坏的结果。
+
 ## 项目目标
 本项目的目标是在构建一套基于GPUI的，原生桌面应用套件。
 
 ## 兼容性支持
-首要支持NixOS Linux/Wayland/Niri 这个环境，次要支持其它linux/x11，再次要支持Windows/MacOS。
+首要支持 Linux + Wayland，次要支持 Linux + X11，再次支持 Windows / macOS。内部优先在 NixOS / Niri 验证；面向用户的文档统一描述 Linux + Wayland 支持目标，不强调发行版或合成器的验证优先级。
 
 ## 技术栈
 1. 使用zed的GPUI
 2. 长桥的[gpui-kit](https://github.com/longbridge/gpui-kit)
-3. 使用[gds-uim](https://github.com/4t145/gds-uim)这个库来组织ui，具体例子可以看这个库的docs文件夹和example
-4. i18n 使用mozilla的fluent
+3. ↓请不要无视下一条，很重要↓
+4. **使用**[gds-uim](https://github.com/GanDesktop/gds-uim)这个库来组织ui，具体例子可以看这个库的docs文件夹和example。对于需要重复使用的组件，请以解剖的形式声明。可以参考公共组建库中的`ContentPage`。默认使用`Default::detault`来创建组件。请不要无视这一条！！！！！
+5. ↑请不要无视上一条，很重要↑
+6. i18n 使用mozilla的fluent
+
+## 依赖与补丁
+
+第三方源码不复制进本仓库的 vendor 或其他目录维护。需要修改依赖时，在 `GanDesktop` 的对应仓库按上游版本建立补丁分支，提交并推送修改；GDS 通过 Cargo Git 分支引用，由 `Cargo.lock` 锁定具体提交，同时更新 Nix 的源码 hash。补丁说明保留上游版本、来源和修改范围；上游发布修复后再切回发布版。
+
+公共库默认 feature 为空。依赖声明为 optional，模块与依赖按同一能力 feature 启用；`files`、`agents`、`portal` 只组装各自需要的能力。所有应用在根 `Cargo.toml` 中声明 `[[bin]]` 与 `required-features`，不为普通应用另建 package 或 manifest。共享的纯协议通过 `desktop-protocol` 独立使用；Portal 通过 `portal` feature 使用本库，不能因此带入 GPUI、SQLite、终端或远程文件后端。
+
+应用自有的异步 I/O 统一用 Tokio，包括进程、信号、计时和 zbus 后端；不再引入 async-io、async-process、async-signal 等另一套应用 I/O 运行时。GPUI 的界面执行器与 Tokio 的职责保持分离。
 
 ## UI设计
 1. 不要过多描述一个东西有什么用，让icon与UI自己去说话
@@ -19,9 +32,13 @@
 因为我们这个项目肯定有很多需要复用的东西，所以做时候不要仅仅为了某一个应用考虑，而是要考虑到可复用性。
 
 ## 项目组织
-使用一个大lib，公共库的入口在`src/lib.rs`中，所有的二进制编译目标全部放在`src/bin/`下面。比如`src/bin/app-a`。
+使用一个大 lib，公共库入口在 `src/lib.rs`，应用放在根目录 `bin/<应用>/`，代码放在各自的 `src/` 下，例如 `bin/files/src/main.rs`。所有 binary target、feature 与依赖仍由根 `Cargo.toml` 管理。
 
-如果一段代码是公共的，就放在`src/bin`外面，否则，就放在对应的二进制目标文件夹下面。
+公共代码放在根 `src/`，应用专属代码放在 `bin/<应用>/src/`。应用目录可放 README 作为开发入口，详细文档仍放在 `docs/`。项目自有代码统一使用根 `LICENSE`，应用目录不重复放 LICENSE 或 NOTICE。
+
+构建、打包与安装集成统一放在 `packaging/`：Nix 定义位于 `packaging/nix/`，Fedora RPM 定义位于 `packaging/fedora/`。根目录的 `flake.nix`、`flake.lock` 和 `shell.nix` 保留为 Nix 入口。
+
+过程宏 crate 放在根 `macros/`，例如 `macros/gds-settings-derive`。应用身份图标统一使用 `assets/<应用>/icon-solid.svg`；桌面入口使用 `icon-desktop.svg`。桌面文件、窗口 app ID 和相关匹配规则使用 `io.github.GanDesktop` 命名空间。
 
 ## 文档规范
 1. 保持`README.md`清洁，不要随意修改其内容
@@ -211,3 +228,22 @@ fn make_some_big_news(&self, target_id: &str, by: &str, content: &str, timestamp
 ## 项目额外的代码规范
 ### 关于GPUI的使用
 1. `on_click`的handler尽量少些闭包，通过成员函数或者提前写好的闭包提供，提升代码可读性
+2. 在使用处导入 UIM 和翻译宏，使用 `el!`、`m!`、`tr!`，不写完整模块路径的宏调用。
+3. UIM 中元素 ID 使用 `# expression`，如 `# format!("audio-{id}")`；常量路径、变量和宏调用直接作为 DSL 值，不加多余的 `$()`。仅在需要 Rust 字段访问、方法链或运算等语义时使用 Rust 转义。
+4. UI 二进制采用 FSD：`app → pages → widgets → features → entities → shared`，只建立实际需要的层。业务差异集中在二级切片；`app` 负责启动、组装与生命周期，`shared/i18n` 提供翻译能力。跨切片只访问 `<slice>.rs` 的显式公开入口；同层切片不互相依赖，实体关系通过 `x/<consumer>`（Rust 对 FSD `@x` 的适配）明确暴露。`app` 和 `shared` 使用职责分段。具体边界和标准链接见 `docs/development.md`。
+
+5. 公共 `gds` 库的根能力为 `appearance`、`service`、`ui`、`persistence`、`i18n`。`appearance` 保存主题、字体与视觉 tokens；`ui` 只保存组件及其专属状态、事件和辅助实现，不转导出外观基础能力。`service/terminal`、`service/desktop`、`service/logs` 提供服务，服务代码不反向引用 `ui` 或 GPUI 类型；终端呈现、焦点、字体、IME 与输入类型适配位于 `ui/terminal`，日志查看器位于 `ui/logs`。应用组装层安装服务退出清理钩子与本进程日志；配置结构与保存策略留在应用，公共 `persistence` 只提供存储机制。
+6. 图形应用使用 clap 管理启动参数；内存日志与日志面板仅通过 `--enable-logs` 显式开启。关闭时不得隐式创建日志队列，也不显示日志入口或注册日志窗口快捷键；普通通知与 stderr 诊断独立于此开关。
+
+## 文档与i18n
+对外统一使用 `GDS`、`GDS Files`、`GDS Agents` 和 `GDS Portal`等，不使用预留中文名。
+
+桌面入口显示名称使用 `Files` / `Agents`，不加 GDS 前缀；开发版追加 `(Dev)`。应用 ID、命令名与包名保持稳定。
+
+桌面入口的 `Name`、`GenericName` 和 `Comment` 及译文统一放在 `assets/<应用>/desktop.toml`，由 Nix 与开发版安装器共用，生成标准 `.desktop` 本地化字段。桌面语言由系统 locale 选择，与应用内 Fluent 独立。
+
+GDS Portal 的软件包与服务模块位于 `packaging/nix/portal/`，通过 `services.gds-portal.enable` 单独启用；图形应用模块不隐式安装或启用 Portal。Portal 包不绑定具体图形应用的安装路径。
+
+项目所有的**非开发**文档一律使用英文，对应的i18n文档放在对应的docs目录下面的i18n/<language>下面，使用和原英文文档同样的文件名。
+
+项目的 Portal 后端统一称为 `GDS Portal`；`FileChooser Portal` 仅指桌面通用的文件选择接口，不作为项目产品名。

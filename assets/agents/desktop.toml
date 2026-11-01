@@ -1,0 +1,9 @@
+[default]
+Name = "Agents"
+GenericName = "Agent Workspace"
+Comment = "Manage agents and conversations"
+
+[zh_CN]
+Name = "智能体"
+GenericName = "智能体工作区"
+Comment = "管理智能体与会话"

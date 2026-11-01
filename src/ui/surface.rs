@@ -15,7 +15,7 @@ const CONTACT_SPREAD: f32 = -2.;
 
 /// A translucent glass panel with an even tint and a raised rim.
 pub fn glass_panel(opacity: f32, cx: &App) -> Div {
-    let colors = crate::theme::Colors::current(cx);
+    let colors = crate::appearance::theme::Colors::current(cx);
     let highlight = colors.panel_foreground.opacity(HIGHLIGHT_OPACITY);
     let face = colors.panel.opacity(opacity * FACE_OPACITY);
     let shadows = vec![

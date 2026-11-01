@@ -1,16 +1,38 @@
 # 原生 App 开发与运行
 
-GDS 包含 Files、Agents 等平级的原生桌面应用，共用 `src/lib.rs`，各应用代码位于 `src/bin/<应用>/`。首要环境为 **NixOS + Niri / Wayland**；应用使用 GPUI 原生绘制，不包含 WebView。
+GDS 包含 Files、Agents 等平级的原生桌面应用，共用 `src/lib.rs`，各应用代码位于 `bin/<应用>/src/`。首要支持 **Linux + Wayland**；应用使用 GPUI 原生绘制，不包含 WebView。
+
+## 仓库结构
+
+```text
+Cargo.toml                 # 所有 binary target、feature 与依赖
+LICENSE                    # 项目自有代码共用的 Apache-2.0 许可证
+src/                       # 公共库
+macros/                    # Rust 过程宏
+flake.nix / flake.lock      # Nix flake 入口与依赖锁
+shell.nix                  # 本地 Nix 开发环境入口
+packaging/
+├── nix/                   # Nix 包、NixOS 模块与开发环境定义
+└── fedora/                # Fedora RPM、构建容器与安装资源
+bin/
+├── files/
+│   ├── README.md
+│   └── src/               # Files 的 FSD 应用代码
+├── agents/
+│   ├── README.md
+│   └── src/               # Agents 的 FSD 应用代码
+└── portal/
+    ├── README.md
+    └── src/               # 无界面 Portal 后端
+```
+
+各应用目录的 README 提供职责、入口与运行命令；完整设计与开发文档留在 `docs/`。应用共用根 manifest 和许可证，不单独建立 Cargo package，也不重复放置 LICENSE。
+
+各安装方式的构建、打包与系统集成统一放在 `packaging/`。Nix 的根目录入口委托给 `packaging/nix/` 中的定义；生成的二进制、RPM 和构建缓存保留在 `target/`，不放进打包定义目录。
 
 ## 运行
 
-卷管理按 [卷与侧栏设计](apps/files/devices-and-sidebar.md) 实现：位置组固定在底部，标签页与卷组分配剩余高度，可拖动或用方向键调整分界，分组分别滚动。卷条目是独立固定页签，直接打开所选默认挂载点，不创建普通页签。管理页沿用文件表格，展示格式、系统卷标记、空间与默认挂载点选择器；挂载／卸载集中在右键、行尾与卷页右上菜单。默认选择按稳定卷身份保存在 Files 设置中。已挂载系统卷也提供浏览入口，运行中的系统卷不提供卸载或整盘移除。主菜单及卷分组旁的入口打开卷管理页。
-
-已挂载卷在侧栏与管理页显示容量条、总空间和当前用户可用的剩余空间，Linux 通过 `fstatvfs` 后台查询文件系统统计。各卷独立读取并缓存，随设备校准定期更新，手动刷新和文件操作完成后更新；卸载与断开会清除数据，过期请求不会覆盖新的挂载状态。
-
-Linux 后端直接使用 UDisks2 系统 D-Bus，订阅对象和属性变化，并定期校准系统状态。当前卷界面提供菜单挂载与单卷卸载；后端另具备 USB 整盘安全移除和光盘弹出能力，入口留待后续设备页面。多卷移除包括隐藏卷及同一 USB 外壳的相关设备。设备忙或部分卸载失败保留实际结果，Files 文件任务涉及目标卷时可等待任务完成再移除。断开设备保留原标签，隐藏旧文件列表，重连按卷身份和相对目录校验。加密卷首阶段提示先在系统工具中解锁；本应用密码交互和可选自动挂载留到后续阶段。
-
-系统安装、默认文件夹打开方式和系统文件选择器接入见 [NixOS 安装与桌面集成](nixos.md)。
+应用使用方式见 [Files](apps/files/README.md)、[Agents](apps/agents/README.md)；系统安装与桌面接入见 [NixOS 安装](nixos.md)。
 
 在图形会话里的终端执行；[justfile](../justfile) 会自动进入 Nix 开发环境：
 
@@ -25,7 +47,7 @@ just dev agents --compact
 just
 ```
 
-`just build` 构建全部应用的开发版，`just build files` / `just build agents` 单独构建指定应用。`just check` 检查所有目标，`just test` 运行测试，`just fmt` 格式化，`just fmt-check` 只检查格式。`just shell` 进入交互式开发环境。开发环境也包含 just；主机没有 just 时可用 `nix develop --impure --expr 'import ./shell.nix' --command just dev files`。
+`just build` 构建全部应用的开发版，`just build files` / `just build agents` / `just build portal` 单独构建指定应用。`just check` 检查所有目标，`just test` 运行测试，`just fmt` 格式化，`just fmt-check` 只检查格式。`just shell` 进入交互式开发环境。开发环境也包含 just；主机没有 just 时可用 `nix develop --impure --expr 'import ./shell.nix' --command just dev files`。
 
 应用参数会原样传递，例如 `just -- dev files --help` 或 `just -- dev agents --help`；这些命令继承当前图形会话环境，不固定显示服务器或用户路径。
 
@@ -33,82 +55,252 @@ just
 
 频繁调整界面时使用 `just install-dev`，也可指定 `just install-dev files` / `just install-dev agents`。它用普通 Cargo dev profile 增量构建，复用当前仓库的 `target/debug` 缓存，再安装用户级命令和标为 `(Dev)` 的桌面入口，不走 Nix 发布包的完整 LTO 和包内测试流程。
 
-入口直接运行工作区中的 debug 二进制，不复制大型产物；运行库由记录在用户 state 目录中的 Nix 开发环境提供。后续 `just build` 或 `just install-dev` 更新相同二进制，重开窗口即可使用新版本。工作区与 `target/debug` 需要保留，尚未运行的测试仍可通过 `just test` 或 GUI 测试命令单独执行。
+入口通过轻量运行包装直接执行工作区中的 debug 二进制，不复制大型产物，也不在每次启动时进入 `nix develop`。包装仅补充运行库、终端启动器、缩略图工具和 terminfo，保留桌面会话的 `SHELL`、提示符与其它环境；安装时记录在用户 state 目录中的 Nix profile 保持这些依赖可达。后续 `just build` 或 `just install-dev` 更新相同二进制，重开窗口即可使用新版本。工作区与 `target/debug` 需要保留，尚未运行的测试仍可通过 `just test` 或 GUI 测试命令单独执行。
 
 `just uninstall-dev`（也可指定单个应用）恢复之前的命令和桌面入口；此前的 Nix 发布包仍然保留。发布交付继续使用 `just install`。
 
-开发入口直接求值 [shell.nix](../shell.nix)，按 [flake.lock](../flake.lock) 的 revision 与 NAR hash 获取依赖，并和 flake 共用 [开发环境定义](../nix/dev-shell.nix)。这避免对整个项目做 flake 源快照：未置于 Git 中的工作目录，其 `.gitignore` 不会替 `nix develop` 排除 `target/`，反复快照会占用大量 Nix store 空间。请使用 `just dev <应用>` / `just shell`，而不是在这种目录中直接运行裸 `nix develop`。
+所有图形应用共用 [About 组件](components/about.md)。应用身份在 Cargo 元数据中登记，版本沿用 package version，build tag 在构建时写入短 commit hash；新二进制只需要增加登记并挂载公共组件。
+
+桌面入口的名称、通用名称和说明由 `assets/<应用>/desktop.toml` 统一维护。`[default]` 为英文回退，`[zh_CN]` 为简体中文；`Name` 是应用名，`GenericName` 是通用用途名，`Comment` 是简短说明。Nix 与开发版安装器读取同一份数据，生成 `Name[zh_CN]` 等标准字段；开发版仅在各语言的名称后追加 `(Dev)`。桌面使用 POSIX locale（例如 `zh_CN`），应用内 Fluent 资源仍使用 `zh-CN`，二者独立。字段与匹配规则见 [Desktop Entry Specification](https://specifications.freedesktop.org/desktop-entry/latest/localized-keys.html)。
+
+GDS Portal 的包和 NixOS 模块独立放在 `packaging/nix/portal/`，图形应用定义仍位于 `packaging/nix/apps/`。通过 `services.gds-portal.enable` 单独启用 Portal；其软件包不绑定 Files 的路径。文件选择接口默认调用 PATH 中的 `gds-files`，也可以用 `--file-chooser` 指定实现同一原生协议的处理程序。
+
+开发入口直接求值 [shell.nix](../shell.nix)，按 [flake.lock](../flake.lock) 的 revision 与 NAR hash 获取依赖，并和 flake 共用 [开发环境定义](../packaging/nix/dev-shell.nix)。这避免对整个项目做 flake 源快照：未置于 Git 中的工作目录，其 `.gitignore` 不会替 `nix develop` 排除 `target/`，反复快照会占用大量 Nix store 空间。请使用 `just dev <应用>` / `just shell`，而不是在这种目录中直接运行裸 `nix develop`。
 
 保持图形会话提供的 `XDG_RUNTIME_DIR`、`WAYLAND_DISPLAY` 和 D-Bus 环境。不要为 GPUI 设置 `QT_QPA_PLATFORMTHEME`，也不要修改 Niri / DMS 配置来运行本应用。非 Nix 环境需要相应 Rust 工具链、Wayland/X11、xkbcommon、字体栈和 Vulkan/GL 运行库。
 
 ```sh
 cargo fmt --all --check
-cargo check --workspace --features agents --all-targets
-cargo test --workspace --features agents
-cargo build --bins --features agents
+cargo check --workspace --features files,agents,portal,gpui-kit/test-support --all-targets
+cargo test --workspace --features files,agents,portal,gpui-kit/test-support
+cargo build --bins --features files,agents,portal
 ```
 
-首次构建需要下载依赖并编译图形栈。可通过 `CARGO_BUILD_JOBS` 调整本机并行度；例如 `CARGO_BUILD_JOBS=6 cargo build --bin gds-files`。
+首次构建需要下载依赖并编译图形栈。可通过 `CARGO_BUILD_JOBS` 调整本机并行度；例如 `CARGO_BUILD_JOBS=6 cargo build --bin gds-files --features files`。
+
+## 公共库与 feature
+
+`gds` 默认不启用任何能力。公共模块和它使用的依赖由同名 feature 一起开启，应用入口通过 `required-features` 声明组合：
+
+| Feature | 能力 |
+| --- | --- |
+| `desktop-protocol` | `service::desktop::protocol` 中的进程通信类型，只依赖 Serde |
+| `persistence` | 原子文件存储与路径管理 |
+| `watch` | 文件变化通知，独立于 GUI |
+| `desktop` | 桌面打开方式、剪贴板、FileManager1 与 Portal 客户端 |
+| `storage` | Toasty / SQLite 存储 |
+| `logs` | 本进程日志服务 |
+| `terminal` | PTY 与终端模型 |
+| `thumbnail` | 缩略图缓存与生成 |
+| `remote` | SFTP / SMB 文件服务 |
+| `appearance` | 主题、字体、视觉 tokens 与 GPUI 外观安装 |
+| `i18n` | Fluent 翻译与 GPUI 文本适配 |
+| `ui` | 公共组件及其需要的外观、翻译和服务 |
+| `files` / `agents` | 对应图形应用使用的完整组合 |
+| `portal` | 无界面 Portal 后端与共享桌面协议 |
+| `gui-tests` | 两个应用与 GPUI 测试支持 |
+
+`bin/portal/src` 与 Files、Agents 一样，是根 package 中声明的 binary target，没有单独的 manifest。`portal` feature 只启用共享协议及其自身的 I/O 依赖，独立构建不会带入 GPUI、SQLite、终端或远程文件后端：
+
+```sh
+cargo check --lib --no-default-features
+cargo check --lib --no-default-features --features storage
+cargo check --bin xdg-desktop-portal-gds --no-default-features --features portal
+cargo test --bin xdg-desktop-portal-gds --no-default-features --features portal
+cargo tree --no-default-features --features portal --edges normal,build
+```
+
+应用 I/O 和 Portal 统一使用 Tokio；GPUI 执行器负责界面任务。Portal 的 zbus 连接、子进程、信号和超时均在其 Tokio 运行时中执行。
+
+## 第三方补丁
+
+第三方源码在 GanDesktop 的独立仓库维护，通过 Git 分支引用，由 `Cargo.lock` 固定提交；不将源码复制进本项目。当前 GPUI 基于发布的 `0.3.10` 包快照，保留包名和版本：
+
+- [gpui-pre / gds-0.3.10](https://github.com/GanDesktop/gpui-pre/tree/gds-0.3.10)：外部父窗口与调用方激活 token 的公共接口。
+- [gpui-pre-linux / gds-0.3.10](https://github.com/GanDesktop/gpui-pre-linux/tree/gds-0.3.10)：对应 Wayland / X11 实现。
+- [trash-rs / fix/freedesktop-trashinfo-reviewed](https://github.com/GanDesktop/trash-rs/tree/fix/freedesktop-trashinfo-reviewed)：回收站记录解析与路径解析修复，保留 `trash` 包名及 `5.2.9` 版本。
+
+两份 GPUI 补丁配套更新，各自的 `PATCHES.md` 记录来源与范围。更新补丁分支后，同步本项目 `Cargo.lock` 和 `packaging/nix/cargo-lock.nix` 中的源码 hash；本仓库不保留 vendor 源码。
 
 ## Release 构建
 
-执行 `just release` 构建整个套件，或用 `just release files` / `just release agents` 单独构建。等价的套件命令是 `cargo build --release --locked --bins --features agents`，产物位于 `target/release/gds-files` 和 `target/release/gds-agents`。Nix 打包默认使用同一份 release 配置；安装命令见 [NixOS 安装](nixos.md)。
+Fedora 原生 RPM 的构建与安装见 [Fedora 打包流程](apps/files/fedora.md)。`just rpm` 在宿主机的 Fedora 容器中增量构建 Files 与独立的 GDS Portal 包；Fedora 测试机只安装 RPM，无需编译或安装 Nix。
+
+执行 `just release` 构建整个套件，或用 `just release files` / `just release agents` / `just release portal` 单独构建。等价的套件命令是 `cargo build --release --locked --bins --features files,agents,portal`，产物位于 `target/release/`，包含 `gds-files`、`gds-agents` 和 `xdg-desktop-portal-gds`。Nix 打包默认使用同一份 release 配置；安装命令见 [NixOS 安装](nixos.md)。
 
 [Cargo.toml](../Cargo.toml) 的 `[profile.release]` 以运行性能为先：`opt-level = 3`、完整 LTO（`lto = "fat"`）和 `codegen-units = 1` 提供跨 crate 优化机会，代价是更长的编译／链接时间和更高的构建内存需求。`debug = 0`、`strip = "symbols"` 去掉调试信息和符号，缩小交付体积，但也会减少崩溃回溯信息；关闭增量编译（`incremental = false`）。参数说明见 [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html)。实际性能收益需要用具体工作负载衡量。
 
 保留默认的 panic unwind 策略，以兼容 GPUI 依赖中的展开处理。发布配置使用通用目标 CPU；仅供本机使用的构建可自行加 `RUSTFLAGS="-C target-cpu=native"`，此时产物可能无法在较旧的 CPU 上运行。
 
-## 已接入的代码
+## 二进制目录组织
 
-- 后台读取真实本地目录；Kit DataTable 共享列宽并虚拟滚动。名称默认宽度有上限，列分界可拖动调整，调整在刷新、排序及窗口尺寸变化后保持；各表头可切换升降序，目录优先、缺失元数据后置。
-- 文件列可按需显示：名称、类型、大小、所有者、组、权限、修改时间、访问时间、详细类型。内容标题栏右侧的列配置按钮（`Alt+Shift+V`）打开列编辑器：勾选显示，拖动手柄或用紧凑的上移 / 下移按钮调整顺序；验证名称列不可隐藏但可重排，隐藏列在单独的弱化分组中显示，重新勾选后追加到末尾；对话框使用独立于文件拖拽的列载荷，短窗口滚动内容而底部操作保持可达。底部“应用”是 Check 图标加文字、取消是 X 图标加文字（共享 `DialogActions`，见 [共享对话框底部操作](#共享对话框底部操作)）；拖拽中按取消只结束拖拽、不关闭编辑器，草稿、文件夹 / 本应用默认作用域与“恢复使用本应用默认列”语义不变。所有者、组、权限、访问时间和详细类型来自目录读取元数据，缺失值显示“—”，权限以 `rwx` 呈现并可用提示查看八进制；符号链接按目标显示“到…的链接”，失效与无法访问分别显示，不改用链接目标的类型执行文件操作。当前用户是所有者的行显示“名称（您）”并加粗。列宽在本会话内按列身份记忆，隐藏或重排不会把宽度串到别的列。
-- 修改时间、访问时间和详情中的修改时间共用 [Timestamp](../src/time.rs) 组件，默认使用友好相对格式；在“设置 → 常规 → 时间显示”切换完整日期时间或恢复默认。格式是共享全局偏好 `time_format`，不受文件夹列覆盖影响，排序仍按原始时间值。悬停可查看带秒和时区偏移的完整时间，全应用只用一份分钟级刷新时钟。
-- 当前目录名称筛选常驻，`Ctrl+F` 聚焦并选中筛选词；清空恢复全部项目。筛选隐藏的项目从选择集合移除，不会成为隐含删除目标。
-- 语言切换同时更新表头、单元格、窗口标题、路径 / 筛选输入提示；重命名框打开时重新取得当前语言提示，不保留构造时的旧文案。已有筛选词、输入值与选择不会因翻译刷新被清空。
-- 大小列对普通文件显示字节数，对真实文件夹显示直接子项数（含隐藏项、不递归）；空目录为 0 项，无法读取为“—”，超过 1000 项显示下界。计数搭载后台目录读取，排序保留目录优先，目录按计数、文件按字节比较。
-- 上下键 / Home / End 移动文件焦点，Shift 扩选、Ctrl+A 全选可见项目，并跟随滚动；输入框中保留文本编辑行为。
-- 面包屑按真实路径分段：`/mnt/st2000/assets` 显示为 `/`、`mnt/`、`st2000/`、`assets` 四个独立块，父级块可直接点击返回；点击当前段或地址栏空白进入路径编辑，`Ctrl+L` 保留。失去焦点即退出未提交的编辑。支持鼠标前进 / 回退侧键；失败导航保留旧目录，过期后台结果不提交。
-- 纵向标签、独立目录历史 / 选择 / 滚动位置、固定标签。关闭按钮（X）平时隐藏，本行悬停或按住 `Ctrl` 时显示；收起侧栏时为右上角小按钮，悬停可查看名称与路径；隐藏时保留同宽空位，按住或松开都不移动标签行、标题列宽与滚动位置，窗口失活也不遗留 X。显示时每个标签都有自己的 X，点击只关闭该标签，不会顺带激活其它标签；只有活动标签的按钮提示 `Ctrl+W`，其它标签不宣称该快捷键，`Ctrl+W` 与标签菜单仍可关闭活动标签。按住 `Ctrl` 时，页签切换的实际目标行显示 `Shift+Tab` / `Tab`：按侧栏顺序取相邻项并首末循环，与 `Ctrl+Shift+Tab` / `Ctrl+Tab` 的分发目标一致；只有两个页签时两个方向落在同一行，两个提示并排显示，只有一个页签时不显示无效导航。固定标签保留原文件夹图标并加 Pin 角标。Home 使用独立目录状态，不进入普通标签列表；允许关闭全部普通标签，关完显示 Home。最近、收藏、网络、回收站也是固定特殊页，Esc 不退出它们。按住 Ctrl+Tab 后用 H/R/D/V/N/B 选对应特殊页、1–9 选普通标签；没选目标时松开 Tab 才循环，Ctrl+Shift+Tab 反向，不会先切一次再跳目标。网络页列出系统已挂载的网络目录。
-- 收藏与最近打开记录；固定位置在下次启动时重新打开。`Ctrl+D` 切换当前文件夹的收藏状态：未收藏时添加、已收藏时取消，与星标按钮是同一动作；星标提示随状态在“收藏当前位置 / 取消收藏”之间切换。当前文件夹尚未加载完成或正在进行导航时，`Ctrl+D` 与列配置入口都不生效。
-- 收藏与网络页使用名称／位置表格，右上提供复制、复制路径、收藏／取消收藏和刷新。单击只选中，方向键移动选中行，双击或 Enter 打开目录，Ctrl+Enter 在新页签打开；Ctrl+C 复制所选目录，Ctrl+Shift+C 复制路径，Ctrl+D 切换所选目录的收藏状态，收藏页的 Delete 只移除收藏记录，不删除目录。无选中项时操作按钮禁用。Ctrl+R 在后台重读收藏记录或网络挂载，保留仍存在的选择；网络页列出 Linux 的 NFS、SMB/CIFS、SSHFS、rclone 与 GVfs 网络挂载，不扫描服务器或建立新连接。两页各自保留选择和表格滚动位置。
-- 双击目录导航；普通文件交给默认应用，启动后不等待播放器等应用退出。带执行位的文件按内容识别音视频和图片，避免媒体被误拦；其它可执行文件与 `.desktop` 启动器需明确选择打开方式。Linux 单个文件右键提供“打开方式…”，使用系统 AppChooser；取消不写入最近记录，启动失败显示完整错误链。
-- 单选、多选与目录空白菜单分别构建，不共用数量分支拼成同一菜单。单选标签不显示“1 项”；多选操作按冻结的可见选中集合执行。菜单键帽读取公共动作绑定，不手写快捷键字符串。
-- 文件视图 Ctrl+C / Ctrl+X / Ctrl+V 复制、剪切、粘贴；Ctrl+Shift+C 复制路径，Ctrl+Enter 将选中目录打开到新标签。输入框仍执行文本编辑快捷键。空白区域及空目录提供粘贴、在当前目录打开外部终端与刷新菜单，终端入口不要求已有文件被选中。
-- `Ctrl+R` 刷新当前普通文件夹，回收站中同样重新读取；`F5` 保留为同一动作、同一作用域的兼容键，两者都只执行一次刷新。刷新按钮 tooltip 与设置页读取最高优先级的真实绑定，显示 `Ctrl+R` 而不是 `F5`；按住 Ctrl 时刷新角标只显示 `R`，Alt 组不显示它；重命名框或对话框打开时刷新与其他工作区快捷键都不执行。
-- `F2` 或单选菜单打开重命名对话框，初值选中完整文件名；输入框和对话框聚焦时文件快捷键被保护，`Esc` 取消、`Enter` 提交。Linux 使用原子不覆盖重命名，同名目标、非法名称与不支持该能力的文件系统都明确报错，绝不回退到可能覆盖的普通重命名；非 UTF-8 名称拒绝以有损文本编辑。成功后刷新来源目录并把选择定位到新名称。底部主操作是 Pencil 图标加“重命名”，取消沿用共享的 X 图标。
-- 位置区的“卷”入口打开卷管理，`Ctrl+Tab+V` 直接进入；按住 Ctrl 的提示会展示这一前缀路径。侧栏独立卷列表默认隐藏，可在“设置 → 文件”开启，选择会持久保存。卷管理支持通过 `F2`、工具栏或右键修改真实磁盘卷标，留空清除卷标；使用 UDisks2 [`Filesystem.SetLabel`](https://storaged.org/doc/udisks2-api/latest/gdbus-org.freedesktop.UDisks2.Filesystem.html#gdbus-method-org-freedesktop-UDisks2-Filesystem.SetLabel)，需要权限时交给系统授权，结果会重新读取并同步到卷列表。只读或锁定卷不提供改名，不会为改名自动卸载；文件系统不支持或拒绝操作时保留系统错误说明。
-- `Ctrl+P` 打开 / 收起右侧详情栏。单选项目显示名称、类型、所有者、组、权限与系统提供的时间；底部不重复显示地址，只有符号链接保留独立目标行。按类型补充头部可得的尺寸、音视频参数、编码 / 换行；目录只单层统计最多 256 项，超限用下界表示。新增元信息只读最多 256 KiB 前缀，不扫描完整文档或目录树；图片缩略图仍使用独立 32 MiB 限额并复用其已读前缀。空选和多选分别显示明确状态。图像读取在后台执行；没有可用预览的文件不显示媒体占位框，直接显示名称和元信息，加载、超过上限和解码失败仍有明确状态，不阻塞目录浏览；切换标签或目录会忽略过期结果。解码格式按文件内容嗅探，后缀与实际格式不一致的图片仍可显示，SVG 与原有图片格式保持支持；嗅探复用 GPUI 已锁定的 `image` 0.25，不引入第二套解码器。
-- 隐藏文件以半透明内容显示；待剪切项进一步淡化并加剪刀标记，剪贴板替换或完成移动后更新状态。正常链接使用目标类别图标加链接角标，断链使用独立图标。文件与列拖拽浮标跟随鼠标，带图标并保留小偏移。
-- 背景目录与单选文件夹菜单可新建文件夹；预置不重名名称，确认后后台原子创建，取消不创建。复制、剪切、粘贴菜单均有图标。新建对话框底部主操作是 FolderPlus 图标加文字，标题图标仍表示对象，不代替底部按钮。
-- 粘贴先在后台检查重名，逐项提供不重名候选，允许编辑新名称或取消；候选被占用会重新提示，不提供覆盖或合并。输入校验不进行同步文件系统查询；取消前若已有并发冲突以外的完成项，会如实报告部分完成。冲突对话框底部主操作是 ClipboardPaste 图标加“粘贴”；名称无效时不关闭对话框。
-- 文件和目录传输在后台进行，保留原始名称及符号链接本身；目标同名不覆盖、不合并，目录复制到自身或子目录会明确失败。同文件系统移动使用原子不覆盖重命名，跨文件系统先完整复制提交，再移走源；逐项失败保留，失败剪切项不从剪贴板清除。
-- 拖拽复用同一传输通道：应用内拖拽默认移动，按住 Ctrl 放下复制；从其它应用拖入固定复制，不删除来源。文件标签与文件列表空白区都是放置目标，`Esc` 取消进行中的拖拽且不清空文件选择。Wayland 下支持把文件拖出到其它应用；X11 当前只支持应用内拖拽与外部拖入，不宣称外部拖出。
-- `Delete` / 移到回收站菜单直接执行，无确认；`Shift+Delete` / 永久删除菜单明确提示不可恢复并要求确认。两种操作共享冻结目标、忙碌状态、逐项结果和刷新流程，不在失败时切换模式。符号链接只处理链接本身，原始非 UTF-8 路径仍可操作；中途切换页签不改变已提交目标。确认对话框底部主操作为 Trash 图标加数量文字，使用危险色。
-- 回收站是真实虚拟位置，不是普通目录：Linux 下侧栏 `Trash` 入口可用，其它平台暂不伪装支持，标题、加载、空状态、失败状态与真实记录分离显示。列表在后台读取系统回收站，旧结果不会覆盖较新的加载；回收站记录按回收站自身的记录 id 选中，原位置只作展示，同原位置的多条记录保持为独立行，不合并、也不会被当作当前文件路径执行普通文件操作。表格展示名称、原位置、删除时间和大小或目录项数（平台提供时）。恢复、永久删除、清空与刷新同时出现在标题栏和右键菜单：标题栏是图标按钮，`Trash` 表示单项永久删除，清空使用 `Broom` 与它区分（图标库没有 `Trash2`），悬停提示与可访问性名称仍是本地化的“清空回收站”；右键菜单保留文字标签。清空与永久删除都要经过确认对话框，确认主操作为图标加文字并使用危险色，不会一击直接删除。`Delete` / `Shift+Delete` 在回收站中进入明确的永久删除确认，`Ctrl+R`（兼容 `F5`）重新读取。永久删除与清空只作用于确认时冻结的记录集合，确认后新进入回收站的项目不会被删除，取消不改变任何记录。恢复遇到原位置同名时不覆盖现有文件；批量结果通过统一通知报告逐项原因并重新读取列表。数据已经恢复或删除、仅记录清理失败时，会说明已发生的结果，不宣称回滚或数据仍在回收站；已提交的恢复也会刷新受影响的普通文件视图。离开回收站返回原目录时保留普通标签页的目录、选择与滚动状态。
-- 公共窗口布局、语义图标、实际按键绑定生成的键帽 / 按钮提示。各侧栏复用 NavItem：38 px 点击区、18 px 图标，展开左对齐、折叠居中。窗口级终端开关固定在底栏右下角，顶栏不再重复；底栏最左侧保留当前位置范围的槽位，本轮暂时隐藏“本地”文字，布局与其它控件位置不变。
-- 详情栏只在文件内容标题栏保留一个 Info 开关，面板标题沿用同一图标与“详情”名称，不再有重复关闭按钮。占位内容在面板内居中且不溢出；文件列表表格占满内容视口，水平滚动条固定在视口底部，只有一行时也不会贴在行下，行下空白仍支持右键菜单、清除选择和拖放。
-- 设置从主菜单或 `Ctrl+,` 进入；只有设置中心在左上显示 ArrowLeft 返回工作区。固定特殊页与普通文件页共用主菜单；底部没有独立设置按钮。
-- 左上主菜单按钮与 `Alt+M`（兼容 `F10`）是同一个动作、同一份菜单：鼠标与按键都只驱动一个打开状态，不会叠出第二份菜单；菜单打开时再按 `Alt+M` 关闭，`Esc` 关闭并把焦点交回文件工作区。菜单提供设置 / 卷管理 / 关于，图标、行布局与项目内菜单一致；设置读取公共绑定，关于显示应用名与版本，不虚构快捷键。按钮 tooltip 与设置页读取最高优先级绑定，显示 `Alt+M` 而不是 `F10`；按住 Alt 时按钮右上角角标只显示 `M`。普通文件页和固定特殊页均可打开主菜单；设置中心保留返回入口。对话框打开或路径编辑时不打开背景菜单。菜单旁的展开态空白支持原生窗口拖动，顶栏竖线与下方贯通；窗口最小尺寸为 1000×640。
-- 统一设置中心，Files 页面集中在 `src/bin/files/settings/pages`；真实修改立即应用并自动保存，无保存条或保存按钮。应用文案采用 Fluent，提供中文 / 英文。公共层只提供设置行、滑块及主题／字体等基础规则，应用页面、字段和配置由应用持有：当前只读写 Files 自己的配置文件，页面统一标为“当前应用”。
-- 设置页内 `Ctrl+Tab` / `Ctrl+Shift+Tab` 按左侧导航顺序循环切换页面（首末相连），只改变可见页，不修改文件标签或偏好值；离开页面时焦点转入新页，未确认的下拉菜单随焦点关闭，模态弹窗打开时不切页。按住 `Ctrl` 时，相邻导航项在尾部分别显示 `Tab` / `Shift+Tab`。Ctrl 与 Alt 提示按组合分类，仅省略对应已按住修饰键；图标按钮用右上角角标，图标加文字按钮用稳定尾槽，原有 tooltip 仍显示完整快捷键。
-- 语言、主题和明暗使用下拉框；不透明度使用公共数值滑块；偏离默认值的字段显示独立恢复按钮。
-- 外观页提供可搜索的已安装字体选择与 12–24 px 基准字号，默认保持系统 / Kit 字体和 16 px；两项各自恢复默认，偏好实时应用并持久化。文件表格的显式文字尺寸也按公共比例缩放；切换主题不会重置字体。缺失字体回退系统字体但保留配置，安装后可重新生效。
-- 主题与明暗默认均为“跟随系统”。主题提供系统 / 内置，明暗提供系统 / 浅色 / 深色；显式选择保持不变，恢复默认按字段独立回到系统。Qt5ct / Qt6ct 适配代码保留但 UI 不显示。系统主题不可用时启动会明确提示并使用内置回退，不重复尝试同一缺失来源。
+Files 和 Agents 采用 [Feature-Sliced Design 的层定义](https://feature-sliced.design/docs/reference/layers)、[切片与分段](https://feature-sliced.design/docs/reference/slices-segments)及[公开入口规则](https://feature-sliced.design/docs/reference/public-api)。入口 `main.rs` 只声明层模块并调用 `app::run()`。层按依赖方向排列：
 
-源码入口为 [Files](../src/bin/files/main.rs)，公共库入口为 [gds](../src/lib.rs)。依赖锁在 [Cargo.lock](../Cargo.lock) 与 [flake.lock](../flake.lock)；本次采用 **GPUI Kit 0.8.0 / GPUI pre 0.3.9**，没有同时链接旧 GPUI 身份。GPUI Kit 版本依据 [已发布版本](https://crates.io/crates/gpui-kit/0.8.0)。
+```text
+app → pages → widgets → features → entities → shared
+```
+
+模块可以跳过中间层，直接依赖任意下层。同层切片相互独立；`app` 和 `shared` 按职责分段，不再划分业务切片，也不受切片间隔离规则约束。只创建已有代码需要的层和切片。
+
+| 层 | 职责 | Files | Agents |
+| --- | --- | --- | --- |
+| `app` | 命令行入口、初始化、路由安装和退出 | [app.rs](../bin/files/src/app.rs)、`app/startup.rs`、`app/cli.rs` | [app.rs](../bin/agents/src/app.rs)、`app/startup.rs`、`app/cli.rs` |
+| `pages` | 完整窗口及其页面组合 | `workspace`：浏览、选择模式、设置视图的组合 | `workspace`：会话工作区、后台切换和管理视图的窗口宿主 |
+| `widgets` | 可独立使用、也可嵌入页面的界面块 | `settings` | `settings`（含 Agent 管理与安装内容）、`history` |
+| `features` | 可由不同界面触发的用户操作与工作流 | `file_operations`、`pick_files` | `navigation`（切换后台、打开管理视图）、`agent_auth`、`delete_session` |
+| `entities` | 领域数据、状态、相关 API 与呈现 | `file`、`location`、`preferences` | `agent`、`backend`、`session` |
+| `shared` | 不承载业务决策的应用内基础能力 | `i18n`、`lib/clipboard` | `i18n`、`config`、`api`、`lib`、`ui`、`routes` |
+
+每层使用 `<layer>.rs` 配合 `<layer>/`；每个切片使用 `<slice>.rs` 作为公开入口，内部按实际职责组织 `ui`、`model`、`api` 等分段。外部调用只通过切片入口公开的类型、函数或命名空间访问，内部实现分段保持私有。测试与资源留在所属模块附近。
+
+`app/cli` 将启动输入转换为运行参数。翻译目录、翻译接口和语言状态在 `shared/i18n`，由启动代码安装，供各切片直接使用。配置持久化保持既有语义：Files 的用户偏好属于 `entities/preferences`，文件列布局属于 `entities/file`；Agents 的前端配置与存储适配在 `shared/config`。
+
+Files 的位置记录和偏好引用文件列布局，通过 `entities/file/x/{location,preferences}` 明确公开这两个实体关系。这是 FSD `@x` 跨实体入口在 Rust 模块语法中的写法；其他层的同层切片不建立横向依赖。
+
+Agents 的设置和历史浏览器既可嵌入工作区，也可独立打开，因此归入 widgets。`features/navigation` 声明路由回调与请求；`pages/workspace` 实现原生宿主，`app` 在启动时安装。这样 widgets 可以请求跳转，同时保持对页面和应用层的依赖方向。App 的跨层集成测试放在 `app/tests/`；模块测试通过各自公开接口和测试夹具验证行为。
+
+跨应用通用组件继续使用公共库 `src/ui`。Agents 专属的通用组件和资源在 `shared/ui`。FileChooser Portal 位于 `bin/portal/src`，与其他应用共用根 manifest，保留独立的可执行入口，不属于 UI 应用的 FSD 层。
+
+## 公共库目录与服务边界
+
+公共库本身承担跨应用共享职责，根入口为 `src/lib.rs`，公开五组能力：
+
+```text
+src/
+├── lib.rs
+├── appearance.rs + appearance/
+│   ├── theme.rs + theme/          # 主题来源、配色、明暗与热更新
+│   ├── typography.rs             # 字体与字号规则
+│   └── tokens.rs                 # 共享视觉默认值
+├── service.rs + service/
+│   ├── desktop.rs + desktop/       # 桌面打开、portal、剪贴板与监听
+│   ├── remote.rs + remote/       # SFTP / SMB 地址、会话与文件传输接口
+│   ├── logs.rs + logs/             # 本进程日志、tracing 采集与保留队列
+│   ├── storage.rs + storage/       # Toasty SQLite 初始化与原生迁移接入
+│   ├── terminal.rs + terminal/      # 终端进程、会话、状态、协议编码
+│   └── thumbnail.rs + thumbnail/    # 图片／视频预览与标准磁盘缩略图
+├── ui.rs + ui/
+│   ├── feedback/                  # 通知、对话框、tooltip
+│   ├── forms/                     # 字段、设置行与 ConfigEditor
+│   ├── interaction/               # 快捷键提示、KeyTips、焦点区域及组件动作
+│   ├── terminal/                  # 终端的 GPUI 实例、绘制、字体和 IME
+│   ├── logs.rs + logs/            # 日志查看器、筛选、详情与窗口宿主
+│   ├── time/                      # 时间戳组件及其刷新时钟
+│   └── sidebar/、page/、frame/…    # 保留组件族的解剖边界
+├── persistence.rs                 # 原子读写、锁、冲突检测
+└── i18n.rs + i18n/                 # 翻译基础能力
+```
+
+`appearance` 提供外观规则：主题解析、字体应用和视觉默认值；它可以接入 GPUI，但不归入组件目录。`ui` 只放可复用组件，以及这些组件专属的状态、事件和渲染辅助实现。例如时间戳的刷新时钟、通知队列、终端的输入适配均随组件保存；全局主题、字体和视觉默认值统一从 `appearance` 使用；应用直接使用 `appearance`。
+
+主题来源集中在 `appearance/theme/provider`，按 `system`（DMS 活动方案）、`config`（Qt 配置指定的色板）、`builtin`（内置配色）分组。来源负责发现、读取和解析，`palette` 保存通用颜色角色，主题应用及热更新协调留在外层。具体目录和明暗解析规则见 [主题文档](vistual-language/theme.md#4-固定配色分工)。
+
+内置主题为竹林、怀旧、霓虹、马卡龙、高对比和 Aero，每套包含明暗两版，配色配置在 `appearance/theme/provider/builtin/assets/*.toml` 中并编入二进制。应用保存内置配色选择，修改主题不重置明暗偏好或透明度。
+
+`service` 提供运行时能力，其接口使用普通 Rust 类型、原生协议模型和异步通道；服务代码不引用 `ui` 或 GPUI 类型。组件可以将服务状态映射为界面，并把鼠标、键盘和 IME 转换为服务操作。`persistence` 提供配置文件的原子读写与冲突检测；`service::storage` 提供 SQLite 应用数据存储，应用定义自己的表结构与迁移 SQL。
+
+GPUI 与 Tokio 的执行器独立。Files 和 Agents 的启动层直接创建并持有原生 `tokio::runtime::Runtime`，直到 UI 主循环和退出钩子完成；后台 I/O 服务显式接收 `tokio::runtime::Handle` 并调用 `handle.spawn`。`cx.spawn` 在 GPUI 前台接收结果、更新界面，`cx.background_executor().spawn` 用于普通后台工作。需要随持有者销毁而取消的 Tokio 任务使用 `tokio-util::AbortOnDropHandle`；任务异常通过原生 `JoinHandle` 结果处理。没有全局 runtime 查找或通用 spawn 包装。
+
+卷监听通过容量为 16 的 `tokio::sync::mpsc` 向 GPUI 发送 `Observation`。这个通道的普通异步收发不依赖 Tokio 上下文，GPUI 前台可以直接等待 `receiver.recv()`。GPUI 接收任务持有监听句柄，销毁时取消监听；监听拥有唯一发送端，发送端关闭并排空缓冲后，接收任务检查监听的执行结果并报告异常。监听期间的 D-Bus 错误仍通过 `Observation` 报告。
+
+`service::desktop::Desktop` 提供文件打开和外部终端操作；Linux Portal 连接按需建立，由克隆的 `Desktop` 共享。桌面操作返回 `desktop::Error`，Portal 失败保留为 `PortalError` 及其底层错误；默认应用和选择器均失败时保留两次错误，用户取消是正常结果。
+
+`service::desktop::clipboard::Clipboard` 创建通用 `Reader`：`mime_types()` 列出可用格式，`read(mime)` 按需返回 `Option<Vec<u8>>` 原始字节。它不解码文本、文件或图片，也不限制 MIME 类别；多个格式读取共用截止时间，每份载荷受大小限制。Agents 负责文本兼容、换行处理、本地文件 URI、图片格式选择及附件优先级；Files 负责复制／剪切协议。底层库每次读取重新连接，读取器不代表剪贴板内容的原子快照；Files 组合 KDE 标记与 URI 列表时仍会重读 URI，核对内容是否变化。
+
+剪贴板先提供可用的 MIME 表示，再由消费者选择并请求数据，见 [Wayland 数据提供协议](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_data_offer)。例如同一份内容可以提供 `text/plain` 与 `text/html`，或文件 URI 与复制／剪切标记。当前锁定的 GPUI Wayland 后端从外部剪贴板读取时优先文本、其次图片，不能同时取回两者，也不解析文件 URI；公共服务补充格式级读取能力，其余 GPUI 剪贴板功能继续直接复用。
+
+Files 的 UDisks2 连接、设备操作、重连计时器以及 OpenURI 请求在这个 Tokio runtime 中运行。zbus 5.19 同时编译两种后端时，会根据连接创建时的 Tokio 环境选择后端。GPUI 自身依赖 ashpd 的 `async-io` feature，且 ashpd 不允许同时开启 `tokio` feature；应用通过 ashpd 官方 `OpenFileRequest::connection` 接口注入在 Tokio 中创建的 zbus 连接，避免复用框架可能已在其它执行器初始化的全局 Portal 连接。框架内部仍保留其原有依赖配置。相关机制见 [zbus 运行时文档](https://docs.rs/zbus/5.19.0/zbus/#special-tokio-support) 和 [GPUI 前台／后台执行器说明](https://zed.dev/blog/zed-decoded-async-rust)。
+
+SQLite 入口为 `gds::service::storage::Options`：应用通过 `Options::new(migrations).models(models!(...)).open(path)` 注册模型并打开数据库，返回 Toasty 原生 `Db`（转导出为 `Database`）。Toasty 管理连接池、连接任务、请求队列与事务，本地库的池容量为 1，句柄克隆共享该连接。应用使用 `Model` 派生生成的强类型查询、更新和 upsert 接口；原生 `Json<T>` 字段负责结构化数据的编解码。裸 SQL 留给 SQLite 初始化配置和迁移。数据库操作在应用持有的多线程 Tokio runtime 中运行，GPUI 只等待结果并更新界面。Toasty 的 SQLite 驱动底层仍使用同步 rusqlite，由其连接任务执行。
+
+Files 的 `location/model/address` 定义与页签无关的位置身份：普通目录、最近访问、收藏、网络、回收站、卷列表，以及卷身份加卷内相对路径。`location/api/places/record` 保存位置记录和视图设置；Toasty 模型显式声明 `key_kind`、`key_identity`、`key_path` 三列组成主键，位置类型使用原生 `Embed` 枚举，路径保留非 UTF-8 OS 数据。`view_settings` 按位置保存列布局、以列身份索引的逻辑像素列宽、排序方式、详情栏开关和列表／网格模式；应用默认值也保存在这张表。页签只承载位置的浏览过程，设置不依赖页签 ID。侧栏位置在当前页签导航，特殊位置沿用相同的位置身份和视图设置。Agents 的 `session/api/connection/cache/record` 定义缓存会话、页面与事件模型，快照和事件保留各自的业务类型；页面起始游标单独存列，供覆盖页面查询使用。缓存写入按实际新增事件和替换页面更新会话的字节预算，重复写入不重复计数，淘汰按最近访问顺序执行。
+
+每个存储入口的 `Store` 管理数据库句柄及事务的开启、提交和回滚。事务内的业务读写集中在对应的 `accessor.rs`：`Accessor` 借用当前 `Transaction`，读写方法通过 `&mut self` 使用它；Agents 的访问器同时携带命名空间和缓存容量限制。多个修改与修改后的快照读取共用当前事务。
+
+应用通过 `Options::new(migrations)` 提供 Toasty 原生 `MigrationSet`，每项迁移为带固定 ID、名称及嵌入 SQL 的 `MigrationFile`。初始化直接调用 `MigrationSet::apply(&db)`；待执行项判断、SQL 执行、事务回滚和 `__toasty_migrations` 记录均由 Toasty 管理。SQL 文件使用原生 `-- #[toasty::breakpoint]` 语句分隔。多个进程通过数据库旁的 `.lock` 文件串行初始化；文件锁使用标准库 API，等待锁在 Tokio blocking pool 执行。
+
+默认 WAL、外键约束及 5 秒忙等待；Agents 缓存保留 DELETE journal 和 FULL auto-vacuum。文件准备使用 Tokio 文件 API，服务创建私有数据库文件，不修改已有目录权限。配置文件继续使用 TOML，缩略图继续使用 freedesktop 标准 PNG 缓存。参考 [Toasty 原生迁移管理](https://tokio-rs.github.io/toasty/0.11.0/guide/schema-management.html)、[SQLite 驱动](https://tokio-rs.github.io/toasty/0.11.0/guide/sqlite.html)和[事务接口](https://tokio-rs.github.io/toasty/0.11.0/guide/transactions.html)。
+
+终端服务入口为 `gds::service::terminal`，界面入口为 `gds::ui::terminal`。服务的 `Terminal::prepare(options)` 返回终端句柄和阻塞启动任务 `Launch`；调用方在后台执行 `launch.run()`，随后可等待 `terminal.ready()`，通过 `Session` 读写、resize、观察状态或订阅合并后的更新通知。`shutdown()` 在调用时请求停止，其 future 等待尚未完成的启动及最终 PTY 清理；最后一个所有者释放时也请求清理。启动任务不会持有进程所有者，等待启动的 future 也不会阻止最后一个所有者释放。
+
+GUI 适配器负责把主题调色板和网格尺寸传给服务；GPUI `Keystroke` / `Modifiers` 在 UI 边界转换为服务自己的输入类型。字体、选区绘制、焦点、IME 和窗口状态留在 `ui/terminal`。应用负责安装退出钩子调用 `gds::service::terminal::shutdown_all()`；`gds::ui::terminal::init(cx)` 只注册终端输入上下文的 Tab 行为，其他快捷键和标签页归应用。
+
+公共界面组件仍通过 `gds::ui::sidebar`、`gds::ui::page`、`gds::ui::settings` 等显式入口使用；实现按视觉职责分组，入口不暴露组件内部文件。外观入口为 `gds::appearance::{theme, typography}`，视觉默认值为 `gds::appearance::tokens`，存储机制为 `gds::persistence`。
+
+### 本应用日志
+
+图形应用的启动参数统一由 clap 管理。Files 与 Agents 默认关闭内存日志和日志面板，只有显式传入 `--enable-logs` 才启用：
+
+```sh
+gds-files --enable-logs
+gds-files --enable-logs --pick-file --filter 'Text:*.txt,*.md' /path/to/folder
+gds-agents --enable-logs
+gds-agents --enable-logs --compact
+# 开发时也可使用 just dev files --enable-logs / just dev agents --enable-logs
+```
+
+启用后，公共 `service::logs` 采集本进程的 tracing 事件，`ui::logs::Viewer` 显示同一份队列。两个应用均以 `Ctrl+Shift+L`（macOS 为 `Cmd+Shift+L`）打开独立日志窗口；Files 主菜单也提供入口。未启用时不创建队列、不显示该菜单项，也不注册快捷键或允许直接打开面板。普通错误通知继续显示。终端输入上下文继续保留该按键给 PTY，不触发应用日志窗口。
+
+日志支持级别、来源和文本筛选、键盘选中、全文详情与复制。关闭窗口不会停止采集，重新打开保留记录；向上滚动时停止自动跟随，回到底部继续跟随。每个进程最多保留 2,000 条、约 2 MiB 消息，单条消息最多 64 KiB；清空只影响本进程，不写磁盘或读取其他应用日志。
+
+应用在启动任务前将 `enable_logs` 传给 `service::logs::init_tracing`；返回 `Some(Store)` 时，通过 `ui::logs::install` 安装，再用 `ui::logs::init` 提供应用身份、窗口样式和根视图组装。禁用时保留 stderr 的基本诊断，`ui::logs::store` 返回 `None`，不会隐式创建队列。服务不依赖 GPUI 或 Tokio runtime；更新通知通过独立的有界异步通道发送给每个查看器。`RUST_LOG` 可覆盖过滤规则，但不会自行启用 GUI 日志功能。控制台输出固定走 stderr，Files 选择器的 stdout 仍只返回结果 JSON。开启采集时，公共操作通知及 Files 后台失败也进入日志队列。
 
 ## UI 代码组织
 
-原生元素树使用当前锁定的 `gds-uim` 新语法（`.div`、后缀构造器、属性块及条件 children），不是在大段 builder 外只包一层宏。参考锁定提交的 [语法文档](https://github.com/4t145/gds-uim/blob/94fe061888c45e137daff0d45c172c36bdb09882/docs/grammer.md) 和 [示例](https://github.com/4t145/gds-uim/tree/94fe061888c45e137daff0d45c172c36bdb09882/examples)。
+原生元素树使用当前锁定的 `gds-uim` 新语法（`.div`、后缀构造器、属性块及条件 children），不是在大段 builder 外只包一层宏。参考锁定提交的 [语法文档](https://github.com/GanDesktop/gds-uim/blob/90f5424edf6ba9c5ffaacc2b11cb5ffe24960519/docs/grammer.md) 和 [示例](https://github.com/GanDesktop/gds-uim/tree/90f5424edf6ba9c5ffaacc2b11cb5ffe24960519/examples)。
 
 公共 `Frame`、导航条目、键帽与设置控件都在公共库中；Files 专属渲染与具名事件处理器留在二进制模块。明显归属对象的构造、状态同步和呈现方法放在对应 `impl` 中。一次性原生显示检查脚本和数据放在临时目录，不保留到项目；常驻测试只覆盖关键工作流与非显然行为。
+
+### UIM 写法
+
+在使用处导入 `el`、`m` 和翻译宏，分别写 `el!`、`m!`、`tr!` / `t!`。元素 ID 统一用 `# expression`。路径、常量和宏调用直接作为 DSL 值；只有字段访问、Rust 方法链、运算等需要 Rust 语义的表达式才使用 `$()`。
+
+```rust
+use crate::shared::i18n::tr;
+use gds_uim::el;
+
+el! {
+    .div {
+        # format!("audio-{id}");
+        text_size: crate::shared::ui::SMALL;
+        text_color: $(cx.theme().muted_foreground);
+    } [tr!("audio-stop")]
+}
+```
+
+### 界面翻译
+
+Fluent 资源按语言存放在各自的 `i18n/assets/en-US/`、`i18n/assets/zh-CN/` 下。语言目录内按功能命名，例如 `core.ftl`、`terminal.ftl`；Files 和 Agents 的基础文案统一使用 `app.ftl`。
+
+公共翻译宏从 `gds::i18n::t`（也可用 `gds::t`）导入，返回 `SharedString`。`@` 标记立即求值的上下文；具名变量支持同名简写、显式表达式、混用和尾逗号，格式化与复数选择交给 Fluent。
+
+```rust
+use gds::i18n::t;
+
+t!(@cx, "tabs");
+t!(@cx, "items-count", count); // count = count
+t!(@cx, "summary", count, name = user.name.as_str(),);
+
+el! {
+    t!(@cx, "tabs").SideBarSectionTitle::new { flex_1 }
+}
+```
+
+省略 `@cx` 时通过固定签名的工厂生成翻译闭包，参数表达式在闭包调用时求值。UIM 可以将 `App` 或 `Context<T>` 的引用传给这个闭包：
+
+```rust
+el! { cx.t!("tabs").SideBarSectionTitle::new }
+el! { cx.t!("summary", count, name = user.name.as_str()) }
+```
+
+工厂返回的 `FnOnce(&App) -> SharedString` 签名为调用参数提供 Rust 的解引用和重新借用上下文，渲染方法中的 `&mut App`、`&mut Context<T>` 因而都可以直接写 `cx.t!(...)`，调用后仍可继续使用 `cx`。动态调用先构造可调用值，再从左到右求值输入，与普通 Rust 函数调用顺序一致。
 
 ### 共享对话框底部操作
 
 确认与命名对话框统一使用公共 `DialogActions`：主操作是图标加文字（`Alt+A`），取消是 X 图标加文字（`Alt+C`），Kit 的 `Enter` / `Esc` 仍然有效。组件只派发 Kit 的 Confirm / Cancel，不接管业务回调；各对话框继续自己保留 `on_ok` / `on_cancel` / `on_close`、返回 `bool` 决定是否关闭、冻结目标、验证失败不关闭与关闭后的焦点恢复，也不另外注册一套 Alt 处理。
 
 ```rust
-footer: $(DialogActions::new(label, IconName::Check, cancel_label));
+footer: $(DialogActions::default().primary_label(label).primary_icon(IconName::Check).cancel_label(cancel_label));
 // 危险操作在同一个组件上加 `.danger()`
 ```
 
@@ -121,14 +313,14 @@ footer: $(DialogActions::new(label, IconName::Check, cancel_label));
 | 普通永久删除确认 | `Trash`（危险色） |
 | 回收站永久删除 / 清空确认 | `Trash` / `Broom`（危险色） |
 
-标题图标只说明对象，不代替底部主操作图标；图标库没有 `Trash2`，回收站的“清空”因此用 `Broom` 与单项永久删除的 `Trash` 区分。底部被共享组件取代后，对话框不再分别设置 `ok_text` / `cancel_text` / `ok_variant`。
+标题图标只说明对象，不代替底部主操作图标；图标库没有 `Trash2`，回收站的“清空”因此用 `Broom` 与单项永久删除的 `Trash` 区分。对话框通过此组件统一设置底部操作，不分别设置 `ok_text` / `cancel_text` / `ok_variant`。
 
 ### 共享操作通知
 
-公共接口位于 [notifications](../src/notifications.rs)。窗口创建时调用 `gds::notifications::bind_window(window, cx)`，组件或后台结果回到 GPUI 上下文后即可调用 `error` / `warning` / `info` / `success`，不需要 Files 的 `Browser` 引用：
+公共接口位于 [notifications](../src/ui/feedback/notifications.rs)。窗口创建时调用 `gds::ui::notifications::bind_window(window, cx)`，组件或后台结果回到 GPUI 上下文后即可调用 `error` / `warning` / `info` / `success`，不需要 Files 的 `Browser` 引用：
 
 ```rust
-gds::notifications::error("操作失败的原因", cx);
+gds::ui::notifications::error("操作失败的原因", cx);
 ```
 
 带明细的报告使用 `Report`，异步操作的开始 / 结束使用 `Operation` 复用通知槽。消息由套件共享的 Kit 通知队列持有，由应用根视图挂载的覆盖层平铺渲染，不改变文件列表和设置页高度；完整摘要与明细在有界区域内滚动。错误保持到用户关闭，其余沿用 Kit 自动消退。具体位置、材质与交互约定见 [统一通知语言](vistual-language/README.md#通知气泡与共享接口)。
@@ -136,141 +328,37 @@ gds::notifications::error("操作失败的原因", cx);
 ## 设置与状态
 
 - 应用配置（Files）：`$XDG_CONFIG_HOME/gds/files/settings.toml`，默认 `~/.config/gds/files/settings.toml`，与 `state/files` 同层。设置真实变化时立即请求应用并自动保存；重复选择同值不写入，程序回写不再发起应用请求。应用失败恢复上一次有效偏好并报错；持久化失败保留已生效的运行态，明确提示“已生效但未保存”。声明式符号链接或只读目标允许读取，但不被替换。应用与保存失败通过共享右上角通知气泡反馈，不插入设置页内容，也不另设全宽保存底栏。
-- 旧套件配置 `$XDG_CONFIG_HOME/gds/settings.toml` 只作为一次性导入源：仅当应用配置不存在时读取，并在新路径原子创建副本；新配置存在时完全以新文件为准。旧文件绝不覆盖或删除；旧配置损坏时报错而不写默认值；复制失败时保留已读取的旧偏好用于本次运行并给出启动提示，下次启动重试；并发创建的新配置不会被导入覆盖。本轮不建立跨应用设置框架或“全局 / 本应用”开关。
-- Files 状态：`$XDG_STATE_HOME/gds/files/places.json`，默认 `~/.local/state/gds/files/places.json`。包含收藏、最近记录、固定位置和按精确路径保存的列覆盖；使用能保留非 UTF-8 Unix 路径的表示。损坏状态不自动被空数据覆盖。列编辑器每次打开默认只作用于当前文件夹；“本应用默认”才改写应用 `settings.toml` 的 `files.columns`，并在默认布局保存成功后清除当前文件夹的覆盖，让该文件夹继承新默认布局，其它文件夹的覆盖不变；默认保存失败时保留当前文件夹覆盖，不清除已有配置。文件夹提供“恢复使用本应用默认列”以删除自己的覆盖，不波及子文件夹。只有列的显示与顺序会被持久化，列宽只在本会话内记忆；状态文件无法读取时拒绝保存并反馈，而不宣称已保存。
+- 旧套件配置 `$XDG_CONFIG_HOME/gds/settings.toml` 只作为一次性导入源：仅当应用配置不存在时读取，并在新路径原子创建副本；新配置存在时完全以新文件为准。旧文件绝不覆盖或删除；旧配置损坏时报错而不写默认值；复制失败时保留已读取的旧偏好用于本次运行并给出启动提示，下次启动重试；并发创建的新配置不会被导入覆盖。应用设置不跨应用同步。
+- Files 状态：`$XDG_STATE_HOME/gds/files/state.sqlite`，默认 `~/.local/state/gds/files/state.sqlite`。`locations` 保存收藏、最近访问和固定位置，远程 URI 使用独立记录；`view_settings` 保存应用默认值与各位置的列布局、列宽、排序、详情栏开关和列表／网格模式。列编辑器默认只作用于当前位置；“本应用默认”在同一 Toasty 事务中更新数据库默认列并清除当前位置的列覆盖，其它视图字段保留。`settings.toml` 保存主题、字体、语言、隐藏文件、侧栏等应用偏好，列与视图状态统一由 SQLite 管理。
+- Agents 的连接历史缓存继续位于 `$XDG_CACHE_HOME/gds/agents/history-v1/history.sqlite`（默认 `~/.cache/gds/agents/history-v1/history.sqlite`）。数据库执行接入公共 `service::storage`，窗口边界、连接命名空间和 512 MiB 淘汰策略仍由 Agents 管理；缓存可删除重建，不与 Files 的持久状态共库。
 - Qt 来源沿实际 qtct 配置中的 `color_scheme_path` 读取，不硬编码某个桌面生成文件。DMS 来源读取已经生成的 `DankMaterialShell/dms-colors.json`。缺失 / 不支持 / 格式错误会报错，不把内置主题伪装成成功跟随。
-- 外部主题在启动或主题 / 明暗选择变化时读取。明暗跟随系统时读取当前活动模式，显式浅 / 深色时则按用户偏好读取对应配色组。仅透明度变化走轻量材质更新，不重新读取色板或重建主题。DMS 来源监听导出文件的父目录并后台热加载；内置 / Qt 的跟随系统模式响应平台明暗通知。失败保留最后有效主题，旧来源结果不会覆盖新选择；首期不监听 Qt 配置文件，也不加防抖（约 150ms 合并事件仅留作代码注释）。
+- 外部主题在启动或主题 / 明暗选择变化时读取。DMS 的跟随系统模式读取导出的活动模式；内置 / Qt 读取平台明暗偏好。`theme::Observer` 统一监听 DMS、Qt 配置及解析后的色板路径，跟随原子替换与托管符号链接；后台读取成功后才安装，失败保留最后有效主题，旧来源结果不覆盖新选择。透明度变化只更新材质，不重读色板。
 - 透明度仅影响表面；窗口允许 alpha，Root 清除不透明垫底。整条左列（顶栏左区、文件或设置侧栏、终端左区、底部留白）各区域仅绘制一次相同侧栏背景，不叠加内容底色；右侧区域独立绘制内容背景。底部左区没有分割顶线。没有启用或宣称支持 Niri 的桌面背板模糊。
 
 ## 文件选择器
 
-`gds-files --pick-file [DIRECTORY]` 启动单文件选择模式，支持重复 `--filter '名称:*.txt,*.md'` 和默认只读标记 `--read-only`。右下操作区替换终端入口；确认输出一行 JSON 后退出，取消不输出。只读是返回给调用程序的选项，不修改权限或调用默认应用。完整参数与结果协议见[文件选择器说明](apps/files/picker.md)。本轮通过全目标编译检查及二进制构建，未运行测试或原生验证。
+`gds-files --pick-file [DIRECTORY]` / `--pick-directory` 提供本地文件或目录选择；`--multiple` 支持多选。文件模式支持重复 `--filter` 与 `--read-only`。确认后 stdout 输出一行 JSON，取消无结果输出；诊断使用 stderr。Portal 通过 `--portal-request` 使用独立的结构化请求协议，支持打开与保存。完整参数与结果见 [文件选择器](apps/files/picker.md)。
 
 ## 内置终端
 
 Files 和 Agents 已接入共享的本地 PTY 终端。`Ctrl+反引号` 显示／收起面板，有效本地目录的空集合在显式展开时自动新建一个终端；`+`（“新建终端 / New terminal”）继续增加实例，关闭最后一个后重绘不自动重启。Files 在窗口级独立持有集合及活动实例，切换 / 关闭文件标签不改变终端；新建使用当前可用真实目录，否则 Home；F2 重命名实例且自定义名不受 shell 标题影响；Agents 由本地连接和工作目录对应的 workspace 提供集合、实时标题与独立分隔尺寸，终端控制区关联其导航组，PTY 面板只拆分右侧工作内容区。终端输入区的 `Ctrl+C/W/L`、Tab 等交给 shell，复制／粘贴用 `Ctrl+Shift+C/V`，`F6` 返回文件或对话区域。
 
-隐藏、切换标签或打开设置不结束进程；关闭终端、宿主标签／窗口不弹确认，直接终止并等待受管终端清理。Shell、字体、字号和滚屏仍从设置中心的终端页配置，终端区域不重复显示设置齿轮；外部模拟器配置仍独立。远程/TCP Agent 上下文不启动本机 shell，picker 不提供内置终端。
+隐藏、切换标签或打开设置不结束进程；关闭终端或窗口不弹确认，直接终止并等待受管终端清理；Files 的文件标签不拥有终端。Shell、字体、字号和滚屏仍从设置中心的终端页配置，终端区域不重复显示设置齿轮；外部模拟器配置仍独立。远程/TCP Agent 上下文不启动本机 shell，picker 不提供内置终端。
 
-Files 的终端标题栏提供显式“在新终端标签页打开当前文件夹”，新建实例而不改变原 shell、输入和作业；文件导航及目录动作均不向已有 PTY 注入 `cd`。实现边界、配置与验证见 [共享终端](apps/terminal.md)；当前不包含远程 shell、退出后保活或 Agent 执行工具权限。
+Files 的终端标题栏提供显式“在新终端标签页打开当前文件夹”，新建实例而不改变原 shell、输入和作业；文件导航及目录动作均不向已有 PTY 注入 `cd`。实现边界与配置见 [共享终端](apps/terminal.md)；当前不包含远程 shell、退出后保活或 Agent 执行工具权限。
 
 ## 外部终端
 
 优先使用 `GDS_TERMINAL` 指定的**单个可执行程序**，继承用户会话环境并设置工作目录；该变量不是 shell 命令或带参数的字符串。
 
 ```sh
-GDS_TERMINAL=alacritty cargo run --bin gds-files
+GDS_TERMINAL=alacritty cargo run --bin gds-files --features files
 ```
 
-未设置时调用 `xdg-terminal-exec --dir=…`。该启动器需要由桌面环境提供；不存在时应用会说明失败，不猜测终端模拟器的参数，也不硬编码用户 shell。
+未设置时调用 `xdg-terminal-exec --dir=…`。Nix 发布包与开发环境均提供该启动器，其它安装方式需要将它加入运行环境；不存在时应用会说明失败，不猜测终端模拟器的参数，也不硬编码用户 shell。
 
-## 验证记录（2026-10-27）
+## 检查边界
 
-目录导航按来源页区分 `FixedLocation` 与 `DirectoryTab`；虚拟卷列表也属于固定位置。从卷列表双击、回车、键盘菜单或鼠标右键“打开”卷根目录，均新建普通标签；后续进入子目录沿用该标签。侧栏卷入口单独切换固定卷页，不增加普通标签。独立 X11 / XDG / 模拟 UDisks2 验证了上述四个入口、连续两层目录浏览、返回卷列表、侧栏直接选择及侧栏菜单保持固定入口。格式检查、全部目标编译和 239 项测试通过。
+日常检查使用 `just fmt-check`、`just check` 和 `just test`；只检查某个应用时显式传入其 feature 和 binary target。需要 GPUI 测试支持的回归使用 `gui-tests`。编译、单元测试与无显示服务器的 GPUI 测试不能代替目标桌面的输入、IME、父窗口和材质验收。
 
-固定位置／卷页打开子目录时新建普通标签，固定页入口仍保留原语义；普通标签内继续原地浏览。修复新标签已创建却被窄标签区裁切的问题：新建和切换标签会自动滚动到对应项。最近记录保留来源页信息，目录也新建标签，文件仍交给默认应用。刷新现在同时重新读取 UDisks2 元数据和容量，能够更新卷名等属性。
-
-独立 X11、临时目录和私有 D-Bus 模拟卷中，对照已安装旧版复现了新标签不可见、刷新不重新枚举卷名的问题；修复后验证卷内子目录新建可见标签、下一层目录仍在同一普通标签中浏览、再次点击卷返回固定入口，以及最近目录新建标签。模拟卷改名和外部卷名变化后的手动刷新均同步更新侧栏与管理表格，未改动真实硬盘卷标。
-
-区域访问与通知采用统一 Alt 绑定：`Alt+L / V / T / Space / N` 分别聚焦位置、卷、标签、中央内容及通知；`Alt+X` 关闭当前通知，`Alt+Shift+X` 关闭全部。列配置改为 `Alt+Shift+V`，地址编辑保留 `Ctrl+L`。区域和行光标使用共享 focus ring，Alt 提示及设置分组读取公共动作。通知交互放在公共模块，恢复输入焦点时保留地址栏草稿；卷组访问只在本会话临时显示，不写入用户偏好。
-
-本轮通过格式检查、全部目标编译、239 项测试（97 项公共库 + 142 项 Files）和原生构建。独立 X11 / XDG 环境验证了区域焦点与 Enter 激活分离、Alt 键帽、隐藏且折叠的卷组访问、通知上下切换与单条／全部关闭、最后一条关闭及 Esc 后恢复输入草稿、无通知时保留焦点、对话框优先，以及设置页中的通知访问和关闭。窗口保留独立根焦点，设置替换中央内容后快捷键仍可达。测试未改写真实用户设置或操作真实磁盘卷。
-
-文件打开修订通过格式检查、全部目标编译、236 项测试（95 项公共库 + 141 项 Files）及原生构建。已只读确认反馈视频的权限为 `755`、内容为 MP4，并用启动器替身验证原始路径可以交付；未修改源文件权限。独立 X11 / D-Bus / XDG 环境中，使用真实视频头部的临时副本验证带执行位文件的双击启动、选中项菜单中的“打开方式…”及 GTK 应用列表；取消选择返回 `Cancelled`。自动回归还覆盖符号链接及伪装成视频的可执行脚本仍需明确选择应用。
-
-提示层与选择交互修订已通过 `cargo check --all-targets --locked` 和 `cargo build --bin gds-files --locked`，未运行测试或原生 UI。Ctrl 预览层展示相邻循环键和其它目标的 `Tab+…` 路径；Ctrl+Tab 导航层仅显示目标数字/字母。IconButton 外框固定为按钮尺寸并相对定位，最近页清空动作位于标题栏右侧。最近/收藏/回收站接入方向键导航，普通记录由 Enter 打开；文件列表空白拖动支持框选、Ctrl/Shift 合并及 Esc 取消。应用内文件拖拽悬停普通页签 600ms 后切换，按拖拽会话区分计时；外部平台拖拽仍保留原投放能力，本轮不宣称支持外部拖拽悬停切页。
-
-本轮固定位置页签、Ctrl+Tab 前缀、侧栏 hover/Ctrl 关闭、Pin 角标、菜单与窗口框架调整已通过 `cargo check --all-targets --locked` 和 `cargo build --bin gds-files --locked`。Home 的新建目录、重命名选中回写、文件操作清理与列排序更新已纳入独立 Home 状态。按交付约定未新增或运行测试，也未运行原生 UI 验证；网络页仅提供明确的未实现说明。
-
-修饰键提示分组、控件定位与刷新兼容通过格式检查、全部目标编译、201 项测试（70 项公共库 + 131 项 Files）及原生构建。独立 X11 / XDG 环境确认：
-
-- 按 Ctrl 只显示 Ctrl 组的 `R/B/W…`，按 Alt 只显示 Alt 组的 `V/↑…`；图标按钮采用右上角角标，图标加文字的确认 / 取消按钮在稳定尾槽显示 `A/C`，模态背景不冒出另一组工作区提示。
-- 设置相邻导航在 Ctrl 下显示 `Tab` / `Shift+Tab`，保留剩余 Shift；普通 tooltip 的完整组合键显示不变。
-- Ctrl+R 与 F5 分别刷新出外部新建的临时文件；主绑定与兼容键均指向唯一 Refresh，主显示为 Ctrl+R。
-- 本轮最终格式检查、208 项测试（74 项公共库 + 134 项 Files）和原生构建通过。原生复核：默认隐藏关闭 X，按住 Ctrl 显示且不跳动；活动页签提示 W，非活动 X 只关自身。三个页签的上一 / 下一目标提示与实际顺序一致，两个页签时两种提示并排。Ctrl+D 添加后再按会取消收藏，持久化记录同步更新。
-- 主菜单 Alt+M 与备用 F10 已原生验证，M 角标可见；Esc 关闭后可立即用另一快捷键重新打开，方向键选择“设置”并回车能执行并关闭菜单。集成修正了受控弹层的焦点顺序，并在窗口 Cancel / 菜单命令路径同步关闭状态，避免 Escape 被窗口动作先处理时菜单残留。
-
-所有文件和配置仅为临时测试样本，未操作用户真实数据。
-
-## 验证记录（2026-10-25）
-
-### 应用设置作用域、页签循环与 Alt 标签
-
-格式检查、全部目标编译、197 项测试（66 项公共库 + 131 项 Files）与原生构建通过。独立 X11 / XDG 环境验证了：
-
-- 危险按钮在浅色 / 深色主题下从普通态到 hover 有可见颜色变化，确认与取消语义不变。
-- 启动从旧配置导入 Files 专属路径；修改设置只写应用配置，旧配置与其它应用哨兵文件字节不变。重启优先使用已修改的应用配置。并发导入输给新配置时取新文件值、目标不可写 / 损坏等边界由聚焦测试覆盖。
-- 设置中 Ctrl+Tab / Ctrl+Shift+Tab 顺序切换并首尾循环；语言下拉搜索框聚焦时也能切页，旧下拉随之关闭，搜索文字不被误保存。
-- Alt 提示可重复按下 / 松开，窗口失活后不残留；密集工具栏标签可读，模态内标签在遮罩上方且背景全局快捷键被抑制。最后按反馈改为约 16px 高的完整组合键单片标签，骑在按钮内侧底缘；设置导航标签留在自身行内，不再使用大键帽组或脱离控件的多行主排布。工具栏、删除确认与设置导航均已截图复测。
-
-所有操作只使用独立临时配置与文件，未改动用户真实配置或删除其文件。
-
-### 通用弹窗操作与精简入口
-
-格式检查、全部目标编译、178 项测试（47 项公共库 + 131 项 Files）与原生构建通过。隔离 X11 / XDG 环境验证了六类弹窗的图标 footer、Alt+A 主操作和 Alt+C 取消，以及提示中的实际快捷键键帽。列编辑取消草稿不落盘，Alt+A 应用会保存；拖拽期间 Alt+C 只结束拖拽，编辑器仍保留。
-
-重命名与新建文件夹的输入框聚焦时，Alt+A 可正常提交而不插入字符；无效名称仍被校验拦截、弹窗不关闭。粘贴冲突的鼠标取消 / 确认同样经过原动作链路；永久删除须先确认，Alt+C 保留文件，Alt+A 只删除冻结的临时目标。清空图标会先打开带文字的危险确认，取消后无数据变化；在弹窗外按 Alt+A 不会执行清空。底栏“本地”文字已隐藏，原有布局和状态区保持。所有操作仅使用独立临时文件和回收站记录。
-
-### 本地化、回收站、目录项数与字体
-
-格式检查、全部目标编译、176 项测试（45 项公共库 + 131 项 Files）及原生构建通过。独立 X11 / XDG 环境复现了旧版切换英文后筛选提示仍为中文的问题；修复后中英双向切换一致，已有筛选词保留，窗口标题和重命名提示也更新。大小列实测空目录为 0 项，含普通文件、隐藏文件和链接的目录为 3 项。
-
-回收站实测仅操作专门创建的三个临时记录：正常恢复及记录清理、原位置同名时原文件和回收站内容均不变、永久删除确认取消和确认执行、清空确认取消。清空消息显示冻结的数量，不再出现未插值变量；未对用户真实回收站执行清空。
-
-字体实测可搜索选择 DejaVu Sans Mono、字号改为 20 px，表格同步生效，切换配色及重启后仍保持；独立恢复字号不改变字体家族，再恢复家族后默认字体配置段省略。大字号下数值及单位保持一行。测试配置、文件和回收站记录均在独立临时目录。
-
-### 文件操作与详情补全
-
-通过格式检查、全部目标编译检查、156 项测试（39 项公共库 + 117 项 Files）与原生构建。独立 X11 / XDG 测试目录验证了：
-
-- 重名粘贴预置避让已有 `(2)` 的 `(3)` 候选；取消不创建目标，自定义名称复制后内容匹配，既有同名文件内容不变；剪切取消保留源和剪切意图，随后确认新名完成移动。
-- 新建文件夹取消无副作用，`../escape` 被输入校验拒绝，合法名称完成创建；背景目录菜单的新建 / 粘贴图标可见。
-- 隐藏行淡化、剪切行淡化与剪刀标记、目标类别图标加链接角标、断链图标；复制会清除旧剪切标记。文件浮标在指定鼠标位置右下方显示图标与名称，Esc 不执行放下。
-- Alt+V 打开新的列编辑器，拖拽改变顺序并保存；Esc 先取消拖拽且保留编辑器，取消草稿不改变已应用顺序。1000×480 窗口中操作按钮仍可达；Ctrl+D 重复执行只保留一条收藏，重启恢复。
-- PNG 轻量尺寸 / 位深 / 透明通道、WAV 和前置 moov 的 MP4 参数；512 MiB 测试图片不解码缩略图但能取得头部尺寸，详情底部没有地址栏。
-
-原生验证还发现并修复了地址栏 Enter 可能触发原选中文件打开的问题：输入结束后延后恢复文件焦点，Open 动作只接受已稳定的文件区焦点。复测导航没有启动外部查看器或产生误打开提示。所有操作使用独立临时文件，未修改用户真实配置。
-
-### 表头与共享时间
-
-此前通过格式检查、全部目标编译检查、114 项测试（39 项公共库 + 75 项 Files）及原生构建。独立 X11 窗口验证了通知默认平铺、成功提示自动消退且错误保留、关闭按钮，以及无预览媒体框省略但保留元信息。
-
-列配置实际启用了全部九列并调整顺序，检查了当前用户“您”标记、组、`rwx` 权限、访问时间、PNG 内容与 JPG 后缀不一致时的详细格式、代码 / 音视频及链接目标分类。验证了当前文件夹覆盖不影响另一目录、显式应用全局仍保留其它目录覆盖、重启后布局与时间格式恢复，以及“恢复使用全局配置”会移除当前目录覆盖。目录导航未完成时禁用列编辑入口，避免编辑器冻结到即将离开的目录。
-
-时间显示在设置中可即时切换并保存；完整格式与精确悬停提示、相对格式的分钟 / 今天 / 昨天 / 天 / 周 / 月 / 年 / UNIX 零时及未来时间回退均有测试。原生列表按修改时间排序后仍按真实值排序。测试窗口无输入保持到稍后，显示由“2分钟前”自动变为“今天 02:48”，确认跨半小时后的标签不会停留在旧值。所有文件操作和设置写入均使用独立临时目录，不修改用户真实配置。
-
-## 验证记录（2026-10-24）
-
-详情 / 布局 / 统一通知修订通过格式检查、全部目标编译检查、80 项测试（27 项公共库 + 53 项 Files）及原生构建。独立 X11 窗口验证了 Ctrl+P 与唯一 Info 开关、Ctrl+R 解除绑定、详情占位居中与短窗口内部滚动、终端右下角开关、终端展开后仍在最左下角的本地标记、只有一行数据时固定在文件区底部且可拖动的横向滚动条。使用用户提供图片的副本验证了 PNG 内容 / JPG 后缀可以正常预览，原文件与副本校验值保持一致。还验证了重命名失败气泡不挤动文件行，35 行终端错误被限制在窗口内、可滚动到末行且关闭按钮固定；完整高度表格下的空白右键菜单、清选择和多选拖拽仍可用。所有写入及故意触发的失败均限于临时测试目录，未修改用户真实图片、配置或当前窗口。
-
-此前六项交互补全通过 `cargo fmt --all --check`、`cargo check --all-targets`、73 项测试（25 项公共库 + 48 项 Files）及原生二进制构建。在独立 X11 测试显示与临时目录中实际验证了 F2 / Enter 重命名、Esc 取消、同名不覆盖和输入焦点保护，右侧预览开关（现为 `Ctrl+P` 详情）及图片 / 解码失败 / 空选 / 多选预览，路径父级块导航，标签关闭按钮悬停显隐，普通目录与空目录无选择时打开终端，以及默认移动、Ctrl 复制、多选整组与侧栏跨标签拖放。原生测试发现并修复了关闭预览时列表高度塌缩和已绑定 Esc 动作未取消拖拽的问题；最终实测取消拖拽保留选择与源文件，松手不创建目标。未操作用户真实文件或配置。Wayland 跨应用拖入 / 拖出已按平台 API 接入，但本轮未在 Niri 会话中人工验证。
-
-前一轮菜单 / 剪贴板 / 文件传输修订完成格式化、全部目标编译检查、37 项 Files 行为测试及构建。覆盖原始名称、符号链接、只读目录复制、原子不覆盖、跨文件系统路径、失败源保留和剪切快照身份；该轮未访问真实剪贴板，也未重复原生 UI 检查。选中颜色和选中层透明度未改动。以下保留更早的验证记录：
-
-- 格式化、全部 Cargo 目标检查、52 项关键行为测试及原生二进制构建通过。新增覆盖系统默认 / 旧显式配置兼容、DMS 活动模式解析及明确的内置启动回退。
-- 在独立 X11 测试显示中运行实际 GPUI 二进制，检查了文件列对齐、双击导航、返回和多选，以及展开 / 折叠侧栏和左上返回入口。
-- 原生操作验证了语言下拉搜索与即时保存、语言单项复位、滑块点击 / 键盘 / 拖动及即时保存、仅复位侧栏透明度且不改变内容透明度，以及系统主题下独立切换深色模式。
-- 对照概念图检查了 40 px 行距、透明表头、无逐行网格、轻悬停 / 圆角选中、主次文字层级和长文件名裁切；原生设置页确认主题与明暗均显示跟随系统，且处于默认值时不显示复位按钮。
-- 原生检查确认了表头正文排序、拖拽列宽后刷新保持、键盘首末项与扩选滚动、输入框 Ctrl+A 不抢文件选择、常驻筛选与结果计数、点击地址栏编辑，以及鼠标侧键前进 / 后退；深色滚动条轨道无白底。
-- 独立 XDG 回收站中实际批量移动了普通文件、有效 / 悬空符号链接及非 UTF-8 名称，链接目标内容保留；确认框取消不移动文件，关闭后恢复文件区焦点。多选菜单不被名称提示遮挡。
-- 检查使用独立的临时配置、状态、回收站与目录，不改用户的桌面主题或 GDS 配置，不操作用户真实文件。临时脚本未加入项目。
-- Niri 会话已创建过原生窗口；当前窗口不可见时没有截取其他窗口或绕过会话状态。独立显示验证的是原生布局与交互，不冒充 Niri 合成器透明 / 模糊效果的完整验收。
-
-## 首版边界
-
-- 所有者、组与 `rwx` 权限来自 Unix 元数据；它们不是 ACL、挂载只读状态或实际写入授权的完整判断，其它平台无法提供的字段显示“—”。类型探测在后台最多读取 8 KiB 文件头，无法识别时回退扩展名或 MIME；读取可能按文件系统策略更新访问时间，表格显示本次元数据采样取得的值。
-
-- **内嵌终端已接入本地 PTY**，Files 与 Agents 共享真实终端模型和 GPUI 网格视图；外部终端入口保留。远程 shell、自动目录同步和退出后保活不在当前范围，详见 [共享终端](apps/terminal.md)。
-- **网络协议尚未接入**，对应侧栏入口仍禁用；回收站内容浏览、恢复、永久删除与清空已接入（见上），普通本地目录与回收站共用同一套虚拟位置切换，但回收站不提供递归浏览已删除目录或内容预览。已经由系统挂载的目录可作为普通本地路径浏览。
-- 基础复制 / 剪切 / 粘贴已接入 Linux 文件传输；同名目标目前明确报冲突，不提供覆盖、合并或自动改名。重命名与右侧详情已接入；完整冲突解决界面、完整图标 / 网格视图、递归搜索、键盘重映射仍待后续实现。
-- Niri / Wayland 文件剪贴板提供标准 URI list、GNOME copy/cut、KDE cut 标记与 GDS 原始路径元数据；只接收本地 file URI，不从普通文本猜文件。已有 GDS 剪切快照在操作成功后核对身份再更新，外部身份不明时不抢占其剪贴板。
-- 当前 GPUI 的 X11 剪贴板后端不提供跨应用文件 MIME，本版本在 X11 下只保留同一 GDS 进程内的元数据方案，不宣称 X11 跨应用文件互通。Wayland 后端按当前会话环境选择，依赖 compositor 的 data-control 支持。
-- 当前复制路径只支持可无损表示为 UTF-8 的文本；其他路径仍可通过原始 OS 路径浏览和打开，不会用有损显示字符串访问文件。
-- 最近记录、收藏与窗口会话不是系统全局文件历史；固定位置恢复不代表恢复终端进程。
-
-后续开发以原生 App 和真实行为为中心；[概念设计](apps/files/concept.md)继续作为交互基线，不继续扩建 HTML 预览。
-# Agents
-
-`just dev agents` 启动 Agents 完整工作区；`just dev agents --compact` 启动快捷输入窗口。该应用连接独立运行的 Bas 服务。源码、配置路径、共享边界与剩余验收见 [Agents 迁移](apps/agents/migration.md)。
-
-`just check` / `just test` 包含两个应用；Agents 通过固定 Git revision 使用 BAS 的 `bas-client` 包，客户端自身测试在 BAS 仓库运行。只验证 Files 时可使用 `cargo check --bin gds-files` / `cargo test --bin gds-files`。Agents 的完整交互测试使用 `cargo test --features gui-tests --bin gds-agents`。
+文件操作和配置写入的验证使用独立临时目录与 XDG 环境。一次性验证脚本、日志、截图和逐轮结果不纳入项目文档。文档描述当前行为、接口与限制；数据库和配置的运行时迁移机制仍按其兼容契约维护。

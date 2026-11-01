@@ -1,5 +1,0 @@
-{:entries [
-  {:name "refresh", :namespace "gds::desktop::watch::Sources", :complexity 11, :coverage nil, :crap nil}
-  {:name "new", :namespace "gds::desktop::watch::Sources", :complexity 1, :coverage nil, :crap nil}
-  {:name "set_paths", :namespace "gds::desktop::watch::Sources", :complexity 1, :coverage nil, :crap nil}
-]}

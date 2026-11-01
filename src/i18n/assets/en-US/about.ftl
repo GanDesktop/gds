@@ -1,0 +1,10 @@
+gds-about-version = Version
+gds-about-build-tag = Build tag
+gds-about-copy = Copy
+gds-about-website = Website
+gds-about-feedback = Feedback
+gds-about-credits = Credits
+gds-about-license = License
+gds-about-authors = Developers
+gds-about-projects = Open-source projects used
+gds-about-back = Back

@@ -1,0 +1,11 @@
+logs-title = 调试日志
+logs-open-error = 无法打开调试日志
+logs-search = 搜索消息和来源…
+logs-all = 所有级别
+logs-level = 按级别筛选
+logs-target = 按 tracing 来源筛选
+logs-all-targets = 所有来源
+logs-close-detail = 关闭日志详情
+logs-clear = 清空日志
+logs-copy-selected = 复制所选日志
+logs-count = 显示 { $visible } 条 · 保留 { $retained } 条 · 已淘汰 { $evicted } 条

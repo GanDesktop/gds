@@ -1,7 +1,0 @@
-   Compiling gds-w6-watch-review v0.1.0 (/tmp/gds-w6-watch-review)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.84s
-     Running `/tmp/gds-w6-watch-review/target/debug/gds-w6-watch-review`
-
-thread 'main' (1118401) panicked at src/lib.rs:32:5:
-new target file creation must wake
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

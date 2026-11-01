@@ -8,14 +8,15 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
       applications = builtins.attrNames (nixpkgs.lib.filterAttrs
-        (_: type: type == "directory") (builtins.readDir ./nix/apps));
+        (_: type: type == "directory") (builtins.readDir ./packaging/nix/apps));
       applicationNames = map (name: "gds-${name}") applications;
+      buildTag = builtins.substring 0 9 (self.rev or self.dirtyRev or "unknown");
     in {
       packages = forEachSystem (system:
         let
           pkgs = import nixpkgs { inherit system; };
           packages = nixpkgs.lib.genAttrs applicationNames (name:
-            pkgs.callPackage (./nix/apps + "/${nixpkgs.lib.removePrefix "gds-" name}/package.nix") { });
+            pkgs.callPackage (./packaging/nix/apps + "/${nixpkgs.lib.removePrefix "gds-" name}/package.nix") { inherit buildTag; });
           suite = pkgs.buildEnv {
             name = "gds";
             paths = builtins.attrValues packages;
@@ -23,9 +24,7 @@
           };
         in packages // {
           gds = suite;
-          xdg-desktop-portal-gds = pkgs.callPackage ./nix/apps/files/portal.nix {
-            gds-files = packages.gds-files;
-          };
+          xdg-desktop-portal-gds = pkgs.callPackage ./packaging/nix/portal/package.nix { inherit buildTag; };
           default = suite;
         });
 
@@ -37,33 +36,25 @@
         }));
 
       nixosModules = nixpkgs.lib.genAttrs applicationNames (name:
-        import (./nix/apps + "/${nixpkgs.lib.removePrefix "gds-" name}/module.nix") self
+        import (./packaging/nix/apps + "/${nixpkgs.lib.removePrefix "gds-" name}/module.nix") self
       ) // {
+        gds-portal = import ./packaging/nix/portal/module.nix self;
         default = {
-          imports = map (name: self.nixosModules.${name}) applicationNames;
+          imports = map (name: self.nixosModules.${name}) applicationNames
+            ++ [ self.nixosModules.gds-portal ];
         };
       };
 
       checks = forEachSystem (system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-          python = pkgs.python3.withPackages (ps: [ ps.dbus-next ]);
-        in {
-          portal = pkgs.runCommand "gds-portal-tests" {
-            nativeBuildInputs = [ python pkgs.dbus ];
-          } ''
-            export PYTHONDONTWRITEBYTECODE=1
-            dbus-run-session --config-file=${pkgs.dbus}/share/dbus-1/session.conf \
-              -- python ${./src/bin/files}/portal/tests.py
-            touch "$out"
-          '';
+        {
+          portal = self.packages.${system}.xdg-desktop-portal-gds;
         });
 
       devShells = forEachSystem (system:
         let
           pkgs = import nixpkgs { inherit system; };
         in {
-          default = import ./nix/dev-shell.nix { inherit pkgs; };
+          default = import ./packaging/nix/dev-shell.nix { inherit pkgs; };
         });
     };
 }

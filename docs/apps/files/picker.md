@@ -1,78 +1,74 @@
-# 文件选择器模式
+# File picker
 
-普通启动 `gds-files [DIRECTORY]` 仍是文件管理器。加 `--pick-file` 启动文件选择器，确认后输出结果并退出，不调用默认应用打开文件。默认单选，加 `--multiple` 可以多选。
-
-`gds-files --pick-directory [DIRECTORY]` 选择文件夹。列表只显示目录和可导航的目录符号链接；双击仍是进入目录。
-点击“选择文件夹”时，返回选中的目录；没有选中项目时返回当前目录。目录加载期间不能确认。
-加 `--multiple` 可以用 Ctrl / Shift 选中多个文件夹并一次返回。目录模式不显示文件类型和只读选项。
+GDS Files provides file and directory selection in a separate process. Confirming emits one JSON line on stdout and exits; cancelling emits no selection. Diagnostics go to stderr.
 
 ```sh
-gds-files --pick-file "$HOME/Documents" \
-  --filter '文本文件:*.txt,*.md' \
-  --filter '所有文件:*' \
-  --read-only
+gds-files --pick-file "$HOME" --filter 'Text:*.txt,*.md'
+gds-files --pick-file --multiple "$HOME"
+gds-files --pick-directory "$HOME"
+gds-files --pick-directory --multiple "$HOME"
 ```
 
-使用项目的 Nix 开发环境：
+## CLI options and interaction
 
-```sh
-nix develop --impure --expr 'import ./shell.nix' --command \
-  cargo run --bin gds-files -- --pick-file --filter '图片:*.png,*.jpg,*.webp'
-```
-
-## 参数与界面
-
-- `--pick-file`：启用文件选择模式。
-- `--pick-directory`：启用文件夹选择模式。
-- `--multiple`：在任一种选择模式中启用 Ctrl / Shift 扩选和 Ctrl+A 全选；文件模式全选时只选择文件。
-- `DIRECTORY`：可选初始目录，缺省为主目录。
-- `--filter '[名称:]模式[,模式…]'`：可重复指定过滤组，模式匹配文件名；没有指定时显示所有文件。目录仍可浏览，名称搜索与类型过滤叠加。
-- `--read-only`：默认勾选“只读打开”，界面仍可更改。
-- `--`：后面的参数只解释为目录，供以 `-` 开头的目录名使用。
-
-右下角终端入口替换为类型过滤、只读勾选、取消和确认。选择文件后确认；目录只能进入，不能作为结果。`Alt+A` 确认，`Alt+C` 取消；Enter / 双击文件走确认流程，目录继续导航。菜单、输入编辑和模态对话框优先处理其自身取消，不由选择器抢走。
-
-“只读打开”只作为结果标记返回，由调用程序决定如何打开文件；选择器不修改文件权限，也不替调用程序强制只读。
-
-## 窗口和快捷键
-
-选择器使用独立窗口标识 `io.github.fourt145.GdsFiles.Picker`，以对话框类型打开，默认大小 1100 × 740。
-Niri 悬浮规则和安装方法见 [NixOS 集成](nixos.md)。普通浏览窗口继续使用原来的标识和布局。
-
-| 快捷键 | 操作 |
+| Option | Meaning |
 | --- | --- |
-| Alt+A / Ctrl+Enter | 确认选择；目录模式未选中项目时确认当前目录 |
-| Alt+C / Esc | 取消；Esc 优先退出菜单、路径编辑等局部状态 |
-| Alt+R | 切换只读标记，仅文件模式 |
-| Alt+T | 循环切换文件类型，仅存在多个过滤组时生效 |
-| ↑ / ↓、Shift+↑ / ↓ | 移动选择、多选模式扩展选择 |
-| Ctrl+A | 多选模式全选可选择的项目 |
-| Enter | 进入文件夹，或确认文件选择 |
-| Ctrl+L / Ctrl+F | 编辑路径、筛选当前目录名称 |
-| Alt+↑ / Alt+← / Alt+→ | 上级目录、后退、前进 |
+| `--pick-file` | Select files; directories remain navigable |
+| `--pick-directory` | Select directories; with no selected directory, confirm the current directory |
+| `--multiple` | Allow multiple selections in a picker mode |
+| `DIRECTORY` | Initial local directory; defaults to Home |
+| `--filter '[LABEL:]GLOB[,GLOB...]'` | Repeatable filename-filter groups; file mode only |
+| `--read-only` | Initially check the read-only result flag; file mode only |
+| `--` | Interpret subsequent input as the directory, including names beginning with `-` |
 
-按住 Alt 或 Ctrl，控件上显示对应修饰键组的按键提示；松开即隐藏，布局不移动。
-悬停控件也可查看真实绑定。不可用的确认按钮不显示确认提示，目录模式不显示文件类型与只读提示。
-路径编辑、应用设置和弹出的对话框不会被确认快捷键直接关闭；过滤菜单打开时先处理其自身的键盘导航。
+The picker replaces the terminal controls with filter, read-only, cancel and confirm controls. Name filtering and file-type filtering combine; directories remain browsable. Read-only is a result flag for the caller and does not change filesystem permissions.
 
-## 输出协议
+| Shortcut | Action |
+| --- | --- |
+| Alt+A / Ctrl+Enter | Confirm an eligible selection |
+| Alt+C / Esc | Cancel; Esc first dismisses local editing/menu state |
+| Alt+R | Toggle read-only in file mode |
+| Alt+T | Cycle file filters when more than one exists |
+| Arrow keys / Shift+arrow keys | Move/extend selection |
+| Ctrl+A | Select eligible items in multiple-selection mode |
+| Enter / double-click | Enter a directory or confirm a file |
+| Ctrl+L / Ctrl+F | Edit location / filter names |
+| Alt+Up / Alt+Left / Alt+Right | Parent / back / forward |
 
-确认成功时，stdout 只有一行 JSON，并在退出前 flush：
+Editing, menus, settings and modal dialogs retain their own keyboard scopes. Holding Ctrl or Alt reveals available hints for that modifier without moving the layout. The picker has no embedded terminal.
+
+The window uses `io.github.GanDesktop.GdsFiles.Picker`, dialog window semantics and an initial size of 1100 × 740. See [desktop integration](nixos.md#picker-window-rules) for window rules.
+
+## CLI result
+
+A single selection returns an absolute path, read-only flag and zero-based filter index:
 
 ```json
-{"path":"/absolute/path/report.txt","read_only":true}
+{"path":"/absolute/path/report.txt","read_only":true,"filter_index":0}
 ```
 
-结果还包含 `filter_index`，表示当前文件类型过滤组的索引。单个目录沿用同一格式；
-选择多个文件或目录时返回 `{"selections":[... ]}`，数组各项都是上述包含路径、只读标记和过滤器索引的对象。
-Portal 会把这些路径转换成 URI 列表，供 Zed 等调用程序使用。
-
-返回绝对路径，不通过 canonicalize 替换用户选中的符号链接路径。对于不能表示成 UTF-8 的路径，`path` 为 null，另返回可恢复的原生 `OsString` 编码。例如 Unix：
+One selected directory has the same shape. When more than one item is selected, the result is wrapped in `selections`:
 
 ```json
-{"path":null,"path_os":{"Unix":[47,116,109,112,47,255]},"read_only":false}
+{"selections":[{"path":"/data/a.txt","read_only":false,"filter_index":0},{"path":"/data/b.txt","read_only":false,"filter_index":0}]}
 ```
 
-调用方应同时检查退出码：`0` 表示确认成功，`1` 表示取消或直接关窗；输出失败返回 `2`。参数或启动失败也以非零状态结束。非成功退出时，不应使用 stdout 中的内容。诊断写入 stderr。
+Paths are not canonicalized to replace a selected symlink. A non-UTF-8 path has `path: null` and a recoverable native `OsString` representation. On Unix:
 
-取消或直接关窗不输出选择结果。`--help` / `--version` 是普通命令行查询，其 stdout 不属于选择结果协议。
+```json
+{"path":null,"path_os":{"Unix":[47,116,109,112,47,255]},"read_only":false,"filter_index":0}
+```
+
+Exit status is `0` for confirmation, `1` for cancellation/window close/startup failure, and `2` for result-output or CLI argument failure. Use stdout only after success. `--help` and `--version` are ordinary CLI queries and do not emit selection results.
+
+## Native Portal protocol
+
+GDS Portal invokes the internal `--portal-request` mode with a stdin JSON `Request` from [`gds::service::desktop::protocol::chooser`](../../../src/service/desktop/protocol/chooser.rs). It supports Open, Save and SaveFiles, raw Unix paths, filename/MIME filters, choices and parent-window/modality information. This mode emits the protocol's structured `Result`, separately from the public CLI format above.
+
+Save puts a filename input beside the confirm controls and asks before selecting an occupied target. SaveFiles selects a destination directory and generates unique names for conflicts. The Portal converts results to local file URIs and reaps cancelled picker processes.
+
+Portal implementation: [`bin/portal/src`](../../../bin/portal/src). Its protocol tests can run independently:
+
+```sh
+cargo test --locked --bin xdg-desktop-portal-gds --no-default-features --features portal
+```

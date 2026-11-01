@@ -1,0 +1,5 @@
+// GDS file and folder chooser windows.
+window-rule {
+    match app-id=r#"^io\.github\.GanDesktop\.GdsFiles\.Picker$"#
+    open-floating true
+}
