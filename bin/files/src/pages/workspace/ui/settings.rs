@@ -17,9 +17,8 @@ impl State {
         cx: &mut App,
     ) -> Self {
         Self {
-            view: cx.new(|cx| {
-                widget::View::new(preferences.clone(), tokens::SIDEBAR_WIDTH, window, cx)
-            }),
+            view: cx
+                .new(|cx| widget::View::new(preferences.clone(), Default::default(), window, cx)),
             theme_reload: gds::appearance::theme::HotReload::shared(
                 preferences.appearance.clone(),
                 window,

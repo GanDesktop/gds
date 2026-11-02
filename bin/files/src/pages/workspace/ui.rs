@@ -424,11 +424,7 @@ impl Browser {
     }
 
     fn width(&self) -> f32 {
-        if self.sidebar.collapsed {
-            tokens::COLLAPSED_SIDEBAR_WIDTH
-        } else {
-            tokens::SIDEBAR_WIDTH
-        }
+        self.sidebar.presentation.width()
     }
 
     fn current_location(&self) -> Location {
@@ -1099,10 +1095,6 @@ impl Browser {
             }
             Command::Sidebar => {
                 self.sidebar.collapsed = !self.sidebar.collapsed;
-                let width = self.width();
-                self.settings
-                    .view
-                    .update(cx, |view, cx| view.set_sidebar_width(width, cx));
             }
             Command::Terminal => self.toggle_terminal(window, cx),
             Command::EditLocation => {

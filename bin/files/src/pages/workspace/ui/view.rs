@@ -70,7 +70,20 @@ impl Render for Browser {
         if self.settings.open || self.collection().is_some() {
             self.menus.sort = None;
         }
-        let frame = Frame::default().sidebar_width(self.width());
+        let state = if self.sidebar.collapsed {
+            ui::sidebar::SidebarState::Collapsed
+        } else {
+            ui::sidebar::SidebarState::Expanded
+        };
+        self.sidebar.presentation =
+            ui::sidebar::SideBar::default()
+                .state(state)
+                .sample("files-sidebar-motion", window, cx);
+        let width = self.width();
+        self.settings.view.update(cx, |view, cx| {
+            view.set_sidebar_presentation(self.sidebar.presentation, cx)
+        });
+        let frame = Frame::default().sidebar_width(width);
         let toolbar = self.render_toolbar(&frame, window, cx);
         let body = if self.settings.open {
             el! { .div { flex_1; min_h_0 } [$(self.settings.view.clone())] }.into_any_element()
@@ -382,7 +395,8 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = slot.id;
-        let compact = self.sidebar.collapsed;
+        let presentation = self.sidebar.presentation;
+        let compact = presentation.progress() == 0.;
         let row_height = gds::appearance::typography::scaled(TAB_HEIGHT, cx);
         let selected = id == self.tabs.active_id;
         let cursor =
@@ -400,7 +414,8 @@ impl Browser {
         let menu = Self::tab_menu(cx.entity().downgrade(), id, slot.pinned);
         // Hovering this row or holding Ctrl reveals its X; otherwise the space
         // stays reserved, so a press or release never reflows the strip.
-        let show_close = self.revealing_tab_close() || self.tabs.hovered == Some(id);
+        let show_close = (self.revealing_tab_close() || self.tabs.hovered == Some(id))
+            && (presentation.actions_visible() || compact);
         // A row with a pending press loses on_hover on mouse movement. Keep
         // the close button's press off that row until its click completes.
         let on_close_down = |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
@@ -409,46 +424,43 @@ impl Browser {
         let close = match (show_close, compact) {
             (true, false) => {
                 let on_close = cx.listener(Self::click_close_tab(id));
-                Some(el! {
-                    .div { # $("close-tab-press", id); flex_shrink_0;
-                        on_mouse_down: MouseButton::Left, on_close_down;
-                    } [
-                        ($("close-tab", id)).IconButton::new {
-                            icon: IconName::X; label: $i18n::text("close-this-tab", cx);
-                            @if (selected) command: Command::CloseTab; @end;
-                            on_click: on_close;
-                        },
-                    ]
-                }
-                .into_any_element())
+                Some(
+                    el! {
+                        .div { # $("close-tab-press", id); absolute; right: ITEM_GAP.px;
+                            on_mouse_down: MouseButton::Left, on_close_down;
+                        } [
+                            ($("close-tab", id)).IconButton::new {
+                                icon: IconName::X; label: $i18n::text("close-this-tab", cx);
+                                @if (selected) command: Command::CloseTab; @end;
+                                on_click: on_close;
+                            },
+                        ]
+                    }
+                    .into_any_element(),
+                )
             }
             // A collapsed row has no free trailing space: the X sits in its own
             // top trailing corner at icon size instead of widening the row.
             (true, true) => {
                 let on_close = cx.listener(Self::click_close_tab(id));
-                Some(el! {
-                    .div {
-                        # $("close-tab", id); absolute; top: 1.0.px; right: 1.0.px;
-                        on_mouse_down: MouseButton::Left, on_close_down;
-                    } [
-                        ($("close-tab-corner", id)).Button::new {
-                            ghost; small; size: TAB_CORNER_CLOSE_SIZE.px;
-                            icon: IconName::X.Icon::new { size: TAB_CORNER_CLOSE_ICON.px };
-                            accessibility_label: $i18n::text("close-this-tab", cx);
-                            on_click: on_close;
-                        },
-                    ]
-                }
-                .into_any_element())
+                Some(
+                    el! {
+                        .div {
+                            # $("close-tab", id); absolute; top: 1.0.px; right: 1.0.px;
+                            on_mouse_down: MouseButton::Left, on_close_down;
+                        } [
+                            ($("close-tab-corner", id)).Button::new {
+                                ghost; small; size: TAB_CORNER_CLOSE_SIZE.px;
+                                icon: IconName::X.Icon::new { size: TAB_CORNER_CLOSE_ICON.px };
+                                accessibility_label: $i18n::text("close-this-tab", cx);
+                                on_click: on_close;
+                            },
+                        ]
+                    }
+                    .into_any_element(),
+                )
             }
-            (false, false) => Some(el! {
-                .div {
-                    # $("close-tab-slot", id);
-                    w: tokens::ICON_BUTTON_SIZE.px; h: tokens::ICON_BUTTON_SIZE.px; flex_shrink_0;
-                }
-            }
-            .into_any_element()),
-            (false, true) => None,
+            (false, _) => None,
         };
         // The cycle keys land on exactly one neighbour in each direction; those
         // two rows show them, every other numbered row shows the path to its own
@@ -477,8 +489,9 @@ impl Browser {
             .div {
                 # $("tab", id); relative; flex; items_center; gap: ITEM_GAP.px; w_full; flex_shrink_0;
                 h: row_height; min_h: row_height;
-                @if (compact) justify_center; @end;
-                px: ITEM_GAP.px; rounded: ITEM_RADIUS.px; cursor_pointer;
+                overflow_hidden;
+                pl: $(px(presentation.interpolate(ITEM_GAP, (tokens::COLLAPSED_SIDEBAR_WIDTH - 2. * tokens::SIDEBAR_PADDING - 1. - tokens::SIDEBAR_ICON_SIZE) / 2.)));
+                pr: ITEM_GAP.px; rounded: ITEM_RADIUS.px; cursor_pointer;
                 text_color: $cx.theme().sidebar_foreground;
                 @if (selected) bg: $cx.theme().sidebar_accent; text_color: $cx.theme().sidebar_accent_foreground;
                 @else hover: { bg: $(gds::appearance::theme::Colors::current(cx).sidebar_hover()) }; @end;
@@ -487,13 +500,11 @@ impl Browser {
                 @if (!self.revealing_tab_close()) tooltip_show_delay: tokens::TOOLTIP_DELAY; tooltip: tooltip; @end;
             } [
                 @if (cursor) $(ui::region::focus_ring(cx)), @end,
-                icon,
-                @if (!compact)
-                    .div { flex_1; min_w_0; flex; flex_col } [
-                        .div { text_ellipsis } [title],
-                        .div { text_xs; text_color: $(if selected { cx.theme().sidebar_accent_foreground } else { cx.theme().muted_foreground }); text_ellipsis } [path],
-                    ],
-                @end,
+                .div { # $("tab-icon", id); test_support; flex_shrink_0; w: tokens::SIDEBAR_ICON_SIZE.px; } [icon],
+                .div { flex_1; min_w_0; flex; flex_col; overflow_hidden; opacity: $(presentation.label_opacity()); } [
+                    .div { pr: $(px(tokens::ICON_BUTTON_SIZE + ITEM_GAP)); text_ellipsis } [title],
+                    .div { pr: $(px(tokens::ICON_BUTTON_SIZE + ITEM_GAP)); text_xs; text_color: $(if selected { cx.theme().sidebar_accent_foreground } else { cx.theme().muted_foreground }); text_ellipsis } [path],
+                ],
                 ..close,
                 ..hints,
             ]
@@ -510,7 +521,7 @@ impl Browser {
         } else {
             tab
         };
-        el! { tab { context_menu: menu; into_any_element } }
+        el! { tab { test_support; context_menu: menu; into_any_element } }
     }
 
     /// A row's folder name and its whole path.
@@ -633,7 +644,7 @@ impl Browser {
         let label = i18n::text(id, cx);
         let nav = el! {
             (id, icon, label).NavItem::new {
-                compact: $self.sidebar.collapsed;
+                presentation: $self.sidebar.presentation;
                 selected: $self.location_selected(target);
                 on_click: on_click;
             }

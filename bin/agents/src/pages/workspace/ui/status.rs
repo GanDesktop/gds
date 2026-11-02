@@ -183,11 +183,14 @@ impl Workspace {
         state.render(id, indicator, cx)
     }
 
-    pub(super) fn server_status_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn server_status_footer(
+        &self,
+        sidebar: gds::ui::sidebar::SidebarPresentation,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         use crate::features::navigation::{self as routing, presentation};
         use gpui_kit::component::menu::PopupMenuItem;
 
-        let compact = !self.window.sidebar_visible;
         let label = self.server_status_label();
         let pending = !self.backend.connected || self.backend.error.is_some();
         let color = if self.backend.error.is_some() {
@@ -208,11 +211,7 @@ impl Workspace {
         let entries = profiles.read(cx).entries().to_vec();
         let owner = cx.entity().downgrade();
         let workspace_window = self.window.handle;
-        let loading_size = if compact {
-            crate::shared::ui::SMALL_ICON
-        } else {
-            ACTIVITY_ICON_SIZE
-        };
+        let loading_size = ACTIVITY_ICON_SIZE;
         let indicator = el! {
             .div {
                 # "server-status-indicator";
@@ -249,52 +248,55 @@ impl Workspace {
                 flex_shrink_0;
             }
         };
+        let inset = sidebar.interpolate(
+            12.,
+            (gds::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH
+                - gds::appearance::tokens::ICON_BUTTON_SIZE)
+                / 2.,
+        );
         let button = el! {
             ("server-status").Button::new {
                 small;
                 ghost;
-                w_full;
+                w: $(px(sidebar.width() - inset - 12.));
                 min_w_0;
                 accessibility_label: $(hint.clone());
                 tooltip: hint;
-                when: compact, {
-                    relative;
-                    size: gds::appearance::tokens::ICON_BUTTON_SIZE.px;
-                    p_0;
-                    flex_shrink_0;
-                };
+                overflow_hidden;
+                justify_start;
+                px_0;
             } [
-                @if (compact)
+                .div {
+                    relative;
+                    flex_shrink_0;
+                    flex;
+                    items_center;
+                    justify_center;
+                    size: gds::appearance::tokens::ICON_BUTTON_SIZE.px;
+                } [
                     icon,
                     .div {
                         absolute;
                         bottom: CONNECTION_BADGE_INSET.px;
                         right: CONNECTION_BADGE_INSET.px;
-                        size: crate::shared::ui::SMALL_ICON.px;
-                        flex;
-                        items_center;
-                        justify_center;
-                        rounded_full;
-                        bg: $(gds::appearance::theme::sidebar_background(cx));
                     } [indicator],
-                @else
-                    indicator,
-                    icon,
-                    .div {
-                        # "server-status-name";
-                        test_support;
-                        role: gpui_kit::Role::Label;
-                        aria_label: $(name.clone());
-                        flex_1;
-                        min_w_0;
-                        truncate;
-                        text_left;
-                    } [name],
-                    (IconName::ChevronDown).Icon::new {
-                        size: crate::shared::ui::SMALL_ICON.px;
-                        flex_shrink_0;
-                    },
-                @end,
+                ],
+                .div {
+                    # "server-status-name";
+                    test_support;
+                    role: gpui_kit::Role::Label;
+                    aria_label: $(name.clone());
+                    flex_1;
+                    min_w_0;
+                    truncate;
+                    text_left;
+                    opacity: $(sidebar.label_opacity());
+                } [name],
+                (IconName::ChevronDown).Icon::new {
+                    size: crate::shared::ui::SMALL_ICON.px;
+                    flex_shrink_0;
+                    when: $(!sidebar.actions_visible()), { invisible; };
+                },
             ]
         };
         let menu = self.menu_button(
@@ -352,12 +354,10 @@ impl Workspace {
                 flex_shrink_0;
                 flex;
                 items_center;
-                px_3;
+                pl: inset.px;
+                pr_3;
                 min_w_0;
-                when: compact, {
-                    px_0;
-                    justify_center;
-                };
+                overflow_hidden;
             } [
                 menu,
             ]

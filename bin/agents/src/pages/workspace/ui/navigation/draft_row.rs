@@ -70,7 +70,12 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn draft_thread_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn draft_thread_row(
+        &self,
+        index: usize,
+        presentation: gds::ui::sidebar::SidebarPresentation,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let editing = self.renaming_draft();
         let group = SharedString::from(format!("draft-thread-{index}"));
         let now = Timestamp::now();
@@ -121,7 +126,7 @@ impl Workspace {
                 title,
             ]
         };
-        let actions = (!editing).then(|| el! {
+        let actions = (!editing && presentation.actions_visible()).then(|| el! {
             .div {
                 # $(SharedString::from(format!("draft-thread-actions-{index}")));
                 test_support;
@@ -141,39 +146,67 @@ impl Workspace {
         } else {
             Status::Idle
         };
-        let trailing = gds::ui::hover_action(
-            group.clone(),
-            state.render(
-                format!("draft-thread-status-{index}"),
-                format!("draft-thread-indicator-{index}"),
-                cx,
-            ),
-            actions,
+        let hint = format!(
+            "{}\n{} · {}\n{}",
+            self.draft_title(),
+            self.selected.agent,
+            groups::name(directory.as_deref()),
+            crate::shared::ui::time::recent_time(updated_at, now, cx),
         );
+        let trailing = if presentation.actions_visible() {
+            gds::ui::hover_action(
+                group.clone(),
+                state.render(
+                    format!("draft-thread-status-{index}"),
+                    format!("draft-thread-indicator-{index}"),
+                    cx,
+                ),
+                actions,
+            )
+        } else {
+            div().size(px(layout::ICON_BUTTON_SIZE)).into_any_element()
+        };
+        let badge = (!presentation.actions_visible())
+            .then(|| state.badge(format!("draft-icon-status-{index}"), cx))
+            .flatten()
+            .map(|badge| {
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .right_0()
+                    .opacity(1.0 - presentation.progress())
+                    .child(badge)
+            });
         el! {
             .div {
                 # $(group.clone());
                 test_support;
                 group: group;
+                role: gpui_kit::Role::Button;
+                aria_label: $(self.draft_title());
                 w_full;
                 flex_shrink_0;
                 h: gds::appearance::tokens::SIDEBAR_ITEM_HEIGHT.px;
-                px_2;
+                pl: $(px(presentation.interpolate(8., 10.)));
+                pr_2;
+                overflow_hidden;
                 rounded: 6.0.px;
                 tooltip_show_delay: gds::appearance::tokens::TOOLTIP_DELAY;
                 when: $(self.window.menu.is_none()), {
-                    hoverable_tooltip: $(move |window, cx| crate::shared::ui::tooltip::view(crate::shared::ui::time::recent_time(updated_at, now, cx), window, cx));
+                    hoverable_tooltip: $(move |window, cx| crate::shared::ui::tooltip::view(hint.clone(), window, cx));
                 };
                 bg: $(cx.theme().sidebar_accent);
                 text_color: $(cx.theme().sidebar_accent_foreground);
                 flex;
                 items_center;
                 gap_2;
+                on_click: $(cx.listener(|this, _, window, cx| this.focus_input(window, cx)));
                 on_mouse_down: gpui_kit::MouseButton::Right, $(cx.listener(move |this, event, window, cx| {
                             this.on_draft_row_context_menu(directory.clone(), disabled, event, window, cx);
                 }));
             } [
                 .div {
+                    relative;
                     h: layout::ICON_BUTTON_SIZE.px;
                     flex;
                     items_center;
@@ -182,9 +215,10 @@ impl Workspace {
                     $(self.agent_icon(format!("draft-thread-agent-{index}"), &self.selected.agent, cx)
                         .size(px(gds::appearance::tokens::SIDEBAR_ICON_SIZE))
                         .text_color(cx.theme().sidebar_accent_foreground)),
+                    ..badge,
                 ],
-                title_row,
-                trailing,
+                .div { flex_1; min_w_0; overflow_hidden; opacity: $(presentation.label_opacity()); } [title_row],
+                .div { flex_shrink_0; when: $(!presentation.actions_visible()), { invisible; }; } [trailing],
             ]
         }.into_any_element()
     }

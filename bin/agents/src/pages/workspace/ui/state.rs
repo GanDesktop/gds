@@ -107,6 +107,7 @@ impl BackendState {
 pub(super) struct NavigationState {
     pub(super) search: Entity<InputState>,
     pub(super) search_expanded: bool,
+    pub(super) scroll: gpui_kit::ScrollHandle,
     pub(super) directories: Vec<PathBuf>,
     pub(super) selected_directory: Option<PathBuf>,
     pub(super) collapsed: HashSet<Option<PathBuf>>,
@@ -127,6 +128,7 @@ impl NavigationState {
         Self {
             search,
             search_expanded: false,
+            scroll: gpui_kit::ScrollHandle::new(),
             directories: vec![directory.clone()],
             selected_directory: Some(directory),
             collapsed: HashSet::new(),

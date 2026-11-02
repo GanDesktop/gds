@@ -17,6 +17,9 @@ pub(super) const MIN_CONTENT_HEIGHT: f32 = sidebar::MIN_TABS_HEIGHT
     + tokens::SIDEBAR_ITEM_HEIGHT * 2.;
 pub(super) const MIN_DOCK_HEIGHT: f32 = 160.;
 pub(super) const DEFAULT_DOCK_HEIGHT: f32 = 280.;
+const COLLAPSED_ACTION_INSET: f32 =
+    (tokens::COLLAPSED_SIDEBAR_WIDTH - 2. * tokens::SIDEBAR_PADDING - tokens::ICON_BUTTON_SIZE)
+        / 2.;
 
 /// Sessions and selection belong to this window, never a file location.
 pub(super) struct State {
@@ -286,7 +289,9 @@ impl Browser {
             ))
             .on_click(cx.listener(Self::maximize_terminal));
         let width = self.width();
-        panel.update(cx, |panel, cx| panel.set_sidebar_width(width, cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_sidebar_presentation(self.sidebar.presentation, cx)
+        });
         let frame = ui::Frame::default().sidebar_width(width);
         let title = gds::i18n::t!(@cx, "settings-terminal");
         let heading = div()
@@ -297,13 +302,22 @@ impl Browser {
             .min_w_0()
             .px(px(tokens::SIDEBAR_PADDING))
             .text_color(cx.theme().muted_foreground)
-            .when(!self.sidebar.collapsed, |this| {
-                this.child(
-                    ui::sidebar::SideBarSectionTitle::new(title)
-                        .flex_1()
-                        .px(px(tokens::SIDEBAR_SECTION_PADDING)),
-                )
-            })
+            .pr(px(tokens::SIDEBAR_PADDING
+                + self
+                    .sidebar
+                    .presentation
+                    .interpolate(0., COLLAPSED_ACTION_INSET)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .opacity(self.sidebar.presentation.label_opacity())
+                    .child(
+                        ui::sidebar::SideBarSectionTitle::new(title)
+                            .px(px(tokens::SIDEBAR_SECTION_PADDING)),
+                    ),
+            )
             .child(panel.update(cx, |panel, cx| panel.new_button(cx)));
         let active_title = panel.read(cx).active_title(cx);
         let title_hint = panel

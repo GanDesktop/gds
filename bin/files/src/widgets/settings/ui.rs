@@ -22,10 +22,8 @@ use gpui_kit::{
 use gds::{
     appearance::{theme, tokens::SIDEBAR_PADDING, typography},
     i18n::text,
-    ui::{Frame, NavItem, Shortcut},
+    ui::{Frame, NavItem, Shortcut, sidebar::SidebarPresentation},
 };
-
-const MIN_LABEL_WIDTH: f32 = 100.0;
 
 #[derive(Clone)]
 pub enum Event {
@@ -35,7 +33,7 @@ pub enum Event {
 
 pub struct View {
     preferences: Preferences,
-    sidebar_width: f32,
+    sidebar: SidebarPresentation,
     page: Page,
     /// One focus target per page, so page cycling keeps keyboard navigation
     /// inside the visible page and blurs controls on the page being left.
@@ -56,7 +54,7 @@ impl EventEmitter<Event> for View {}
 impl View {
     pub fn new(
         preferences: Preferences,
-        sidebar_width: f32,
+        sidebar: SidebarPresentation,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -115,7 +113,7 @@ impl View {
         }
         Self {
             preferences,
-            sidebar_width,
+            sidebar,
             page: Page::General,
             page_focus: std::array::from_fn(|_| cx.focus_handle()),
             general,
@@ -130,9 +128,15 @@ impl View {
         }
     }
 
-    pub fn set_sidebar_width(&mut self, width: f32, cx: &mut Context<Self>) {
-        self.sidebar_width = width;
-        cx.notify();
+    pub fn set_sidebar_presentation(
+        &mut self,
+        sidebar: SidebarPresentation,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sidebar != sidebar {
+            self.sidebar = sidebar;
+            cx.notify();
+        }
     }
 
     /// Move to the adjacent settings page, wrapping at both ends of the sidebar.
@@ -429,7 +433,7 @@ impl View {
         let on_page = cx.listener(Self::on_page(destination));
         let item = el! {
             (id, icon, label).NavItem::new {
-                compact: $(self.sidebar_width < MIN_LABEL_WIDTH);
+                presentation: $self.sidebar;
                 selected: $(self.page == destination);
                 on_click: on_page;
             }
@@ -476,7 +480,7 @@ impl Render for View {
         let navigation = self.render_navigation(cx);
         let content = self.render_page_content(cx);
         let workspace = Frame::default()
-            .sidebar_width(self.sidebar_width)
+            .sidebar_width(self.sidebar.width())
             .workspace(navigation, content, cx);
         el! {
             .div { size_full; min_h_0; flex; flex_col; text_color: $(cx.theme().foreground) } [workspace]

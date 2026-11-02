@@ -65,9 +65,17 @@ fn footer_switches_backends_in_place_and_restores_drafts(cx: &mut TestAppContext
         let indicator = window.find("server-status-indicator");
         assert_eq!(indicator.label(), Some(tr!("status-connected")));
         assert_eq!(indicator.bounds().size.width, px(6.));
+        cx.set_reduce_motion(true);
         window.press("ctrl-b", cx);
         window.render_frame(cx);
-        assert!(window.try_find("server-status-name").is_none());
+        assert_eq!(
+            window.find("server-status-name").label(),
+            Some("My workstation")
+        );
+        assert_eq!(
+            window.find("server-status-name").bounds().size.width,
+            px(0.)
+        );
         let footer = window.find("server-status");
         assert!(footer.bounds().right() <= px(gds::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH));
         assert!(

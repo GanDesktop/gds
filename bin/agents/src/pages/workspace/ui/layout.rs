@@ -458,17 +458,15 @@ impl Workspace {
     }
 
     fn render_window(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let width = if self.window.sidebar_visible {
-            SIDEBAR_WIDTH
+        use gds::ui::sidebar::{SideBar, SidebarState};
+        let sidebar = SideBar::default().state(if self.window.sidebar_visible {
+            SidebarState::Expanded
         } else {
-            gds::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH
-        };
-        let frame = gds::ui::Frame::default().sidebar_width(width);
-        let sidebar = if self.window.sidebar_visible {
-            self.render_sidebar(window, cx).into_any_element()
-        } else {
-            self.render_sidebar_rail(cx)
-        };
+            SidebarState::Collapsed
+        });
+        let presentation = sidebar.sample("workspace-sidebar", window, cx);
+        let frame = gds::ui::Frame::default().sidebar_width(presentation.width());
+        let sidebar = self.render_sidebar(presentation, cx).into_any_element();
         let menu = self.application_button(cx);
         let controls = self.header_row(window, cx).into_any_element();
         let toolbar =
@@ -486,7 +484,7 @@ impl Workspace {
         } else {
             frame.workspace(sidebar, content, cx)
         };
-        let server = self.server_status_footer(cx);
+        let server = self.server_status_footer(presentation, cx);
         let status = div()
             .children(self.activity_label().map(|label| caption(label, cx)))
             .into_any_element();

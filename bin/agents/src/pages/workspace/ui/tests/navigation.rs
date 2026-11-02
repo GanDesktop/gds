@@ -104,14 +104,7 @@ fn sidebar_view_menu_selects_each_view_and_keeps_the_current_one(cx: &mut TestAp
             if fixture.view.read(cx).window.sidebar_visible == collapsed {
                 window.press("ctrl-b", cx);
             }
-            window.click(
-                if collapsed {
-                    "rail-view-menu"
-                } else {
-                    "sidebar-view-menu"
-                },
-                cx,
-            );
+            window.click("sidebar-view-menu", cx);
             for _ in 0..=index {
                 window.press("down", cx);
             }
@@ -123,7 +116,7 @@ fn sidebar_view_menu_selects_each_view_and_keeps_the_current_one(cx: &mut TestAp
             window.render_frame(cx);
             assert_eq!(fixture.view.read(cx).navigation.view, expected);
             let is_archive = expected == workspace_navigation::View::Archived;
-            let prefix = if collapsed { "rail-session" } else { "session" };
+            let prefix = "session";
             assert_eq!(
                 window
                     .try_find(format!("{prefix}-{}", archived.id))
@@ -146,7 +139,7 @@ fn collapsed_sidebar_keeps_drafts_and_switches_sessions_without_expanding(cx: &m
     let fixture = fixture(cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.press("ctrl-b", cx);
-        window.click("rail-draft", cx);
+        window.click("draft-thread-0", cx);
         window.input("Keep the new draft", cx);
         window.press("ctrl-b", cx);
         assert_eq!(
@@ -167,7 +160,7 @@ fn collapsed_sidebar_keeps_drafts_and_switches_sessions_without_expanding(cx: &m
             });
         });
         window.press("ctrl-b", cx);
-        window.click(format!("rail-session-{}", first.id), cx);
+        window.click(format!("session-{}", first.id), cx);
         let view = fixture.view.read(cx);
         assert_eq!(view.selected.id, Some(first.id));
         assert!(!view.window.sidebar_visible);
@@ -175,7 +168,7 @@ fn collapsed_sidebar_keeps_drafts_and_switches_sessions_without_expanding(cx: &m
             view.sessions.drafts[&second.id].text,
             "Keep the session draft"
         );
-        window.right_click(format!("rail-session-{}", first.id), cx);
+        window.right_click(format!("session-{}", first.id), cx);
         assert!(
             fixture
                 .view
@@ -616,4 +609,157 @@ fn switching_preserves_cached_history_but_detach_and_switch_clear_transient_cont
         });
     })
     .expect("selection lifecycle preserves work owned by other sessions");
+}
+
+#[gpui_kit::test]
+fn sidebar_motion_keeps_shared_boundaries_rows_and_scroll(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let mut sessions: Vec<_> = (0..30).map(|_| session()).collect();
+    for session in &mut sessions {
+        session.cwd = Some(PathBuf::from("/tmp"));
+    }
+    let target = sessions[8].id;
+    let mut hidden = session();
+    hidden.cwd = Some(PathBuf::from("/var"));
+    let hidden_id = hidden.id;
+    sessions.push(hidden);
+    cx.update(|cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.sessions.entries = sessions;
+            view.navigation
+                .collapsed
+                .insert(Some(PathBuf::from("/var")));
+            cx.notify();
+        });
+    });
+    cx.run_until_parked();
+    let initial = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            fixture
+                .view
+                .read(cx)
+                .navigation
+                .scroll
+                .set_offset(gpui_kit::point(px(0.), px(-96.)));
+            window.refresh();
+            window.render_frame(cx);
+            let row = window.find(format!("session-{target}")).bounds();
+            let icon = window.find(format!("thread-icon-{target}")).bounds();
+            let offset = fixture.view.read(cx).navigation.scroll.offset();
+            assert_eq!(offset.y, px(-96.));
+            window.press("ctrl-b", cx);
+            (row, icon, offset)
+        })
+        .expect("capture expanded sidebar geometry");
+    for elapsed in [60, 160] {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(elapsed));
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            window.simulate_next_frame(cx);
+        })
+        .expect("advance sidebar animation without sleeping");
+        cx.run_until_parked();
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let top = window.find("frame-toolbar-sidebar").bounds();
+            let body = window.find("frame-workspace-sidebar").bounds();
+            let bottom = window.find("frame-footer-sidebar").bounds();
+            assert_eq!(top.right(), body.right());
+            assert_eq!(bottom.right(), body.right());
+            if elapsed == 60 {
+                assert!(body.size.width > px(gds::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH));
+                assert!(body.size.width < px(gds::appearance::tokens::SIDEBAR_WIDTH));
+            } else {
+                assert_eq!(
+                    body.size.width,
+                    px(gds::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH)
+                );
+            }
+            let row = window.find(format!("session-{target}")).bounds();
+            let icon = window.find(format!("thread-icon-{target}")).bounds();
+            assert_eq!(row.top(), initial.0.top());
+            assert_eq!(row.size.height, initial.0.size.height);
+            assert_eq!(icon.center().y, initial.1.center().y);
+            assert_eq!(fixture.view.read(cx).navigation.scroll.offset(), initial.2);
+            assert!(
+                fixture
+                    .view
+                    .read(cx)
+                    .navigation
+                    .collapsed
+                    .contains(&Some(PathBuf::from("/var")))
+            );
+            assert!(window.try_find(format!("session-{hidden_id}")).is_none());
+            if elapsed == 160 {
+                assert_eq!(icon.center().x, body.center().x);
+                window.hover(format!("session-{target}"), cx);
+                assert!(
+                    window
+                        .try_find(format!("thread-actions-{target}"))
+                        .is_none()
+                );
+            }
+        })
+        .expect("one continuous sidebar layout at every width");
+    }
+}
+
+#[gpui_kit::test]
+fn sidebar_collapsed_menu_keeps_commands_and_focus_available(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.activate_window();
+        cx.set_reduce_motion(true);
+        window.press("ctrl-b", cx);
+        window.click("sidebar-view-menu", cx);
+        for _ in 0..6 {
+            window.press("down", cx);
+        }
+        window.press("enter", cx);
+    })
+    .expect("create a new session from the narrow sidebar menu");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        assert!(fixture.view.read(cx).selected.id.is_none());
+        assert!(!fixture.view.read(cx).window.sidebar_visible);
+        assert!(
+            fixture
+                .view
+                .read(cx)
+                .composer
+                .input
+                .focus_handle(cx)
+                .is_focused(window)
+        );
+        window.click("sidebar-view-menu", cx);
+        for _ in 0..5 {
+            window.press("down", cx);
+        }
+        window.press("enter", cx);
+    })
+    .expect("search from the same menu");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        let view = fixture.view.read(cx);
+        assert!(view.window.sidebar_visible);
+        assert!(view.navigation.search_expanded);
+        assert!(view.navigation.search.focus_handle(cx).is_focused(window));
+        window.press("escape", cx);
+        window.press("ctrl-b", cx);
+        window.click("sidebar-view-menu", cx);
+        for _ in 0..7 {
+            window.press("down", cx);
+        }
+        window.press("enter", cx);
+    })
+    .expect("open add-workspace without moving the narrow menu control");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        assert!(!fixture.view.read(cx).window.sidebar_visible);
+        assert!(window.find("popup-menu").visible());
+        assert!(fixture.view.read(cx).window.menu.is_some());
+        window.press("escape", cx);
+    })
+    .expect("workspace add menu remains accessible");
 }

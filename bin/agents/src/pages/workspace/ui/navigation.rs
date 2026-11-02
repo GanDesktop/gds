@@ -9,7 +9,6 @@ pub(super) mod draft_row;
 mod folders;
 pub(super) mod groups;
 pub(super) mod history;
-mod rail;
 pub(super) mod removal;
 pub(super) mod restore;
 mod sidebar;

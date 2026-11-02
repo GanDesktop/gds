@@ -268,6 +268,7 @@ impl Workspace {
     pub(super) fn render_workspace_terminals(
         &self,
         directory: Option<&Path>,
+        presentation: gds::ui::sidebar::SidebarPresentation,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if !self.terminals.visible {
@@ -278,7 +279,7 @@ impl Workspace {
             return None;
         }
         let panel = self.terminals.workspaces.get(&group)?.panel.clone();
-        let tabs = panel.update(cx, |panel, cx| panel.render_tabs(cx));
+        let tabs = panel.update(cx, |panel, cx| panel.render_tabs(presentation, cx));
         Some(
             div()
                 .id("workspace-terminals")
@@ -287,14 +288,17 @@ impl Workspace {
                 .flex_col()
                 .w_full()
                 .min_w_0()
-                .pl_2()
+                .pl(px(presentation.interpolate(8., 0.)))
                 .child(
                     gds::ui::sidebar::SideBarSectionTitle::new(gds::i18n::t!(
                         @cx, "local-terminal-title"
                     ))
                     .id("agents-terminal-heading")
                     .px(px(gds::appearance::tokens::SIDEBAR_SECTION_PADDING))
-                    .py_1(),
+                    .py_1()
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .opacity(presentation.label_opacity()),
                 )
                 .child(tabs)
                 .into_any_element(),

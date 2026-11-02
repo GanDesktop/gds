@@ -11,7 +11,7 @@ const WORKSPACE_MENU_ROWS: usize = 5;
 impl Workspace {
     pub(in crate::pages::workspace) fn render_sidebar(
         &self,
-        _: &mut Window,
+        presentation: SidebarPresentation,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let query = self.navigation.search.read(cx).value().to_lowercase();
@@ -22,7 +22,7 @@ impl Workspace {
         } else {
             self.grouped_threads(&sessions, &query)
         };
-        let header = self.sidebar_controls(cx);
+        let header = self.sidebar_controls(presentation, cx);
         let empty = (if self.navigation.view.flat() {
             !sessions
                 .iter()
@@ -34,6 +34,9 @@ impl Workspace {
             el! {
                 .div {
                     p_3;
+                    whitespace_nowrap;
+                    overflow_hidden;
+                    opacity: $(presentation.label_opacity());
                 } [
                     (tr!("session-no-results"), cx).caption,
                 ]
@@ -55,10 +58,13 @@ impl Workspace {
                                     px_3;
                                     pt_3;
                                     pb_1;
+                                    whitespace_nowrap;
+                                    overflow_hidden;
+                                    opacity: $(presentation.label_opacity());
                                 },
                             ],
                             .SideBarSectionContent::default [
-                                ..$(group.sessions.into_iter().map(|session| self.thread_row(session, &cycle, cx))),
+                                ..$(group.sessions.into_iter().map(|session| self.thread_row(session, &cycle, presentation, cx))),
                             ],
                         ]
                     }
@@ -69,7 +75,7 @@ impl Workspace {
             history::sorted(&sessions)
                 .into_iter()
                 .filter(|session| matches_query(session, &query))
-                .map(|session| self.thread_row(session, &cycle, cx))
+                .map(|session| self.thread_row(session, &cycle, presentation, cx))
                 .collect()
         } else {
             groups
@@ -83,11 +89,11 @@ impl Workspace {
                         && self.selected.id.is_none()
                         && self.navigation.selected_directory == directory;
                     let terminals = (!collapsed)
-                        .then(|| self.render_workspace_terminals(directory.as_deref(), cx))
+                        .then(|| self.render_workspace_terminals(directory.as_deref(), presentation, cx))
                         .flatten();
-                    let header = self.workspace_header(index, directory, collapsed, cx);
+                    let header = self.workspace_header(index, directory, collapsed, presentation, cx);
                     let draft =
-                        (!collapsed && draft_selected).then(|| self.draft_thread_row(index, cx));
+                        (!collapsed && draft_selected).then(|| self.draft_thread_row(index, presentation, cx));
                     let empty =
                         (!collapsed && group.threads.is_empty() && !draft_selected).then(|| {
                             el! {
@@ -95,6 +101,9 @@ impl Workspace {
                                     ml_5;
                                     px_3;
                                     py_2;
+                                    whitespace_nowrap;
+                                    overflow_hidden;
+                                    opacity: $(presentation.label_opacity());
                                 }
                             }
                         });
@@ -102,11 +111,11 @@ impl Workspace {
                         .threads
                         .into_iter()
                         .filter(|_| !collapsed)
-                        .map(|session| self.thread_row(session, &cycle, cx));
+                        .map(|session| self.thread_row(session, &cycle, presentation, cx));
                     el! {
                         .SideBarSection::default [
                             .SideBarSectionHeader::default [header],
-                            .SideBarSectionContent::default { pl_2 } [
+                            .SideBarSectionContent::default { pl: $(px(presentation.interpolate(8., 0.))); } [
                                 ..draft,
                                 ..empty,
                                 ..threads,
@@ -119,7 +128,7 @@ impl Workspace {
                 .collect::<Vec<_>>()
         };
         el! {
-            .SideBar::default [
+            .SideBar::default { presentation: presentation; } [
                 .SideBarHeader::default [header],
                 .SideBarContent::default { # "agents-sidebar-content"; overflow_hidden } [
                     .div {
@@ -128,6 +137,7 @@ impl Workspace {
                         flex_1;
                         min_h_0;
                         overflow_y_scroll;
+                        track_scroll: $(&self.navigation.scroll);
                         px: gds::appearance::tokens::SIDEBAR_PADDING.px;
                         flex;
                         flex_col;
@@ -164,6 +174,7 @@ impl Workspace {
         index: usize,
         directory: Option<PathBuf>,
         collapsed: bool,
+        presentation: SidebarPresentation,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let group = SharedString::from(format!("workspace-header-{index}"));
@@ -194,7 +205,9 @@ impl Workspace {
                 items_center;
                 flex_shrink_0;
                 invisible;
-                group_hover: $(group.clone()), m! {visible;};
+                when: $(presentation.actions_visible()), {
+                    group_hover: $(group.clone()), m! {visible;};
+                };
             } [
                 ($(SharedString::from(format!("new-thread-{index}"))), IconName::Plus).layout::icon_button {
                     accessibility_label: tr!("workspace-new-session");
@@ -220,7 +233,10 @@ impl Workspace {
                 flex;
                 items_center;
                 gap_2;
-                px_2;
+                pl: $(px(presentation.interpolate(8., 10.)));
+                pr_2;
+                overflow_hidden;
+                flex_shrink_0;
                 text_color: $(cx.theme().muted_foreground);
                 when: active, {
                     text_color: $(cx.theme().sidebar_foreground);
@@ -257,12 +273,13 @@ impl Workspace {
                     });
                 } [
                     ($(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown })).Icon::new {
-                        xsmall;
+                        size: gds::appearance::tokens::SIDEBAR_ICON_SIZE.px;
                         flex_shrink_0;
                     },
                     .div {
                         text_size: crate::shared::ui::SMALL;
                         truncate;
+                        opacity: $(presentation.label_opacity());
                     } [
                         name,
                     ],

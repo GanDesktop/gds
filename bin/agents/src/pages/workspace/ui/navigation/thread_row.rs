@@ -27,6 +27,7 @@ impl Workspace {
         &self,
         session: &SessionMeta,
         cycle: &super::CycleTargets,
+        presentation: gds::ui::sidebar::SidebarPresentation,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = session.id;
@@ -87,7 +88,7 @@ impl Workspace {
                 ..bookmark,
             ]
         };
-        let actions = (!editing).then(|| {
+        let actions = (!editing && presentation.actions_visible()).then(|| {
             el! {
                 .div {
                     # $(SharedString::from(format!("thread-actions-{id}")));
@@ -101,19 +102,29 @@ impl Workspace {
             }
             .into_any_element()
         });
-        let trailing = gds::ui::hover_action(
-            group.clone(),
-            state.render(
-                format!("thread-status-{id}"),
-                format!("thread-indicator-{id}"),
-                cx,
-            ),
-            actions,
-        );
+        let trailing = if presentation.actions_visible() {
+            gds::ui::hover_action(
+                group.clone(),
+                state.render(
+                    format!("thread-status-{id}"),
+                    format!("thread-indicator-{id}"),
+                    cx,
+                ),
+                actions,
+            )
+        } else {
+            div().size(px(layout::ICON_BUTTON_SIZE)).into_any_element()
+        };
         let hint = format!(
-            "{} · {} · {}",
+            "{}\n{} · {} · {}\n{}",
             title(session),
+            session.agent,
             super::groups::name(session.cwd.as_deref()),
+            if session.archived {
+                tr!("session-archived")
+            } else {
+                state.label()
+            },
             recent_time(session.updated_at, Timestamp::now(), cx)
         );
         let agent = gds::ui::with_pin(
@@ -127,16 +138,31 @@ impl Workspace {
             pinned,
             cx,
         );
+        let badge = (!presentation.actions_visible())
+            .then(|| state.badge(format!("thread-icon-status-{id}"), cx))
+            .flatten()
+            .map(|badge| {
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .right_0()
+                    .opacity(1.0 - presentation.progress())
+                    .child(badge)
+            });
         el! {
             .div {
                 # $(SharedString::from(format!("session-{id}")));
                 test_support;
                 group: group;
+                role: gpui_kit::Role::Button;
+                aria_label: $(title(session));
                 relative;
                 w_full;
                 flex_shrink_0;
                 h: gds::appearance::tokens::SIDEBAR_ITEM_HEIGHT.px;
-                px_2;
+                pl: $(px(presentation.interpolate(8., 10.)));
+                pr_2;
+                overflow_hidden;
                 rounded: 6.0.px;
                 tooltip_show_delay: gds::appearance::tokens::TOOLTIP_DELAY;
                 when: $(self.window.menu.is_none()), {
@@ -166,17 +192,21 @@ impl Workspace {
                             this.on_thread_row_context_menu(&menu_session, event, window, cx);
                 }));
             } [
-                ..$(cycle.hints(id, false)),
+                ..$(cycle.hints(id, presentation.progress() == 0.0)),
                 .div {
+                    # format!("thread-icon-{id}");
+                    test_support;
+                    relative;
                     h: layout::ICON_BUTTON_SIZE.px;
                     flex;
                     items_center;
                     flex_shrink_0;
                 } [
                     agent,
+                    ..badge,
                 ],
-                title_row,
-                trailing,
+                .div { flex_1; min_w_0; overflow_hidden; opacity: $(presentation.label_opacity()); } [title_row],
+                .div { flex_shrink_0; when: $(!presentation.actions_visible()), { invisible; }; } [trailing],
             ]
         }.into_any_element()
     }

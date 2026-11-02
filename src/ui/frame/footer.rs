@@ -18,7 +18,7 @@ impl Frame {
         el! {
             .div { relative; flex; w_full; h: FOOTER_HEIGHT.px; flex_shrink_0 } [
                 @if (let Some(width) = width)
-                    .div { w: width.px; h_full; flex_shrink_0; bg: $(theme::sidebar_background(cx)) } [sidebar_status],
+                    .div { # "frame-footer-sidebar"; test_support; w: width.px; h_full; flex_shrink_0; bg: $(theme::sidebar_background(cx)) } [sidebar_status],
                 @end,
                 .div {
                     flex_1; min_w_0; h_full; flex; items_center; gap: ITEM_GAP.px;

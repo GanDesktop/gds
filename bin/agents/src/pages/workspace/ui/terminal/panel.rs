@@ -331,7 +331,13 @@ impl Panel {
             .line(status)
     }
 
-    fn tab(&self, entry: &Entry, window: &Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    fn tab(
+        &self,
+        entry: &Entry,
+        presentation: gds::ui::sidebar::SidebarPresentation,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
         let id = entry.id;
         let title = Self::title(entry, cx);
         let hint = Self::hint(entry, cx);
@@ -374,6 +380,7 @@ impl Panel {
             .child(
                 gds::ui::NavItem::new(("agents-terminal-tab", id), IconName::Terminal, title)
                     .selected(selected)
+                    .presentation(presentation)
                     .tooltip_enabled(false)
                     .trailing(vec![close])
                     .on_click(cx.listener(move |panel, _, window, cx| {
@@ -386,11 +393,20 @@ impl Panel {
     }
 
     /// Navigation is rendered with the window's current modifier and focus scope.
-    pub fn render_tabs(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        Tabs(cx.entity()).into_any_element()
+    pub fn render_tabs(
+        &self,
+        presentation: gds::ui::sidebar::SidebarPresentation,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        Tabs(cx.entity(), presentation).into_any_element()
     }
 
-    fn tabs(&self, window: &Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    fn tabs(
+        &self,
+        presentation: gds::ui::sidebar::SidebarPresentation,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
         div()
             .id("agents-terminal-tabs")
             .test_support()
@@ -408,13 +424,18 @@ impl Panel {
             .on_action(cx.listener(Self::next_terminal))
             .on_action(cx.listener(Self::previous_terminal))
             .on_action(cx.listener(Self::focus_terminal))
-            .children(self.entries.iter().map(|entry| self.tab(entry, window, cx)))
+            .children(
+                self.entries
+                    .iter()
+                    .map(|entry| self.tab(entry, presentation, window, cx)),
+            )
             .child(
                 gds::ui::NavItem::new(
                     "agents-terminal-new",
                     IconName::Plus,
                     tr!("local-terminal-new"),
                 )
+                .presentation(presentation)
                 .disabled(self.cwd.is_none() || self.closing)
                 .shortcut(gds::ui::Shortcut::new(
                     Box::new(NewTerminal),
@@ -431,11 +452,12 @@ impl Panel {
 }
 
 #[derive(IntoElement)]
-struct Tabs(Entity<Panel>);
+struct Tabs(Entity<Panel>, gds::ui::sidebar::SidebarPresentation);
 
 impl RenderOnce for Tabs {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        self.0.update(cx, |panel, cx| panel.tabs(window, cx))
+        self.0
+            .update(cx, |panel, cx| panel.tabs(self.1, window, cx))
     }
 }
 

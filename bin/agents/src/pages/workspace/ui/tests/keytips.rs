@@ -167,11 +167,17 @@ fn sidebar_cycle_hints_track_the_actual_keyboard_target_in_both_layouts(cx: &mut
                 .label(),
             Some("Tab")
         );
-        assert_eq!(window.find("keytip-rail-new-session").label(), Some("N"));
+        assert!(window.find("sidebar-view-menu").visible());
         window.press("ctrl-shift-tab", cx);
     })
     .expect("follow the previous-thread hint in the rail");
     cx.update(|cx| assert_eq!(fixture.view.read(cx).selected.id, Some(second.id)));
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.press("ctrl-n", cx);
+        assert!(fixture.view.read(cx).selected.id.is_none());
+        assert!(!fixture.view.read(cx).window.sidebar_visible);
+    })
+    .expect("new-session shortcut remains available from the collapsed menu");
 }
 
 #[gpui_kit::test]

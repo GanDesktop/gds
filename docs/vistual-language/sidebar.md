@@ -69,7 +69,29 @@ let sidebar = el! {
 let frame = gds::ui::Frame::default().sidebar_width(sidebar.width());
 ```
 
-折叠状态由应用持有，切换入口修改同一个状态并通知界面刷新。`SideBar` 默认展开宽度 222 px、折叠宽度 58 px，支持 `expanded_width` / `collapsed_width` 覆盖；列宽使用这两个属性配置。标题是否隐藏、条目是否只显示图标，以及分区自己的展开状态，由应用依据当前状态组合。
+The application owns the collapsed target state; toggles only update that state and notify the view. `SideBar` defaults to 222 px expanded and 58 px collapsed, with `expanded_width` / `collapsed_width` overrides. Static callers (including settings navigation) may continue using `state` and `width()` without opting into motion.
+
+## Continuous presentation
+
+Workspace hosts sample **once per render**, before building any column parts:
+
+```rust,ignore
+let sidebar = SideBar::default().state(state);
+let presentation = sidebar.sample("workspace-sidebar", window, cx);
+let frame = Frame::default().sidebar_width(presentation.width());
+let sidebar = sidebar.presentation(presentation);
+```
+
+Pass the same `SidebarPresentation` to the header, navigation rows, footer, separators, and Files terminal left column. `NavItem::presentation(...)` clips and fades its label, moves its icon horizontally, and removes hidden trailing hit targets. Custom rows use `interpolate(expanded, collapsed)` for local horizontal measurements and `label_opacity()` for text only. Never start a transition per row or sample another clock in a child. An explicit presentation takes precedence over `SideBar`'s target width.
+
+- The shared policy uses Kit's target-value transition: **160 ms ease-out cubic**, without a spring or overshoot. A stable host-local ID is required.
+- First display adopts the current target immediately. Retargeting during motion starts from the current displayed width. Reduced motion immediately adopts the target, including when the preference changes during motion. Settled transitions stop requesting animation frames.
+- Keep one content tree, stable IDs and one set of scroll handles. Narrowing does not expand sections or change row order, row heights, title slots, auxiliary-line heights, or split sizes. No expanded/rail tree swap.
+- Labels are single-line and clipped (with optional text-only fading), never scaled or wrapped into taller rows. Main icons interpolate to the narrow column axis. Header/menu/new controls follow the same progress rather than changing alignment at an endpoint.
+- Trailing controls are only interactive when fully expanded (`actions_visible()`). Keep narrow-state commands available through row/context menus or stable primary controls. Opacity alone is not sufficient to disable a hit target.
+- Do not animate glass alpha, colors, or background layer count. The existing `Frame` surface remains a single stable surface; do not cross-fade duplicate navigation trees.
+
+Headless tests advance GPUI's deterministic clock for reversal, reduced motion and frame scheduling. They do not establish FPS or replace a Linux + Wayland visual review.
 
 ## 展开与折叠的空间约定
 
@@ -83,4 +105,4 @@ let frame = gds::ui::Frame::default().sidebar_width(sidebar.width());
 
 实现优先保留同一布局中的槽位，使用 Kit 的 `invisible` 隐藏非交互文字；只隐藏文字时，不给空白区域添加交互。不要为两个宽度分别维护一套行高、分区高度或滚动位置。
 
-需要分区独立滚动时，对 `SideBarContent` 设置 `overflow_hidden`，再为各个 `SideBarSectionContent` 设置稳定的 `id`、`flex_1`、`min_h_0` 和 `overflow_y_scroll`。Files 用这种方式保留标签页与设备之间的可拖动分界，位置区放在底部；Agents 的展开列表与折叠图标列分别组合相同的骨架组件。
+For independently scrolling sections, use `overflow_hidden` on `SideBarContent`, with stable IDs, `flex_1`, `min_h_0` and `overflow_y_scroll` on each `SideBarSectionContent`. Files retains its draggable tabs/devices split and bottom locations section. Agents uses the same grouped list and scroll handle at every presentation width.

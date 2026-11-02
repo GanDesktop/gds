@@ -40,7 +40,8 @@ pub(in crate::pages::workspace) struct Panel {
     tabs_focus: FocusHandle,
     cwd: Option<PathBuf>,
     preferences: terminal::Preferences,
-    sidebar_width: f32,
+    sidebar: ui::sidebar::SidebarPresentation,
+    tabs_scroll: ScrollHandle,
     sealed: bool,
 }
 
@@ -53,7 +54,8 @@ impl Panel {
             tabs_focus: cx.focus_handle(),
             cwd: None,
             preferences: terminal::Preferences::default(),
-            sidebar_width: tokens::SIDEBAR_WIDTH,
+            sidebar: Default::default(),
+            tabs_scroll: ScrollHandle::new(),
             sealed: false,
         }
     }
@@ -66,9 +68,13 @@ impl Panel {
         }
     }
 
-    pub fn set_sidebar_width(&mut self, width: f32, cx: &mut Context<Self>) {
-        if width.is_finite() && self.sidebar_width != width {
-            self.sidebar_width = width;
+    pub fn set_sidebar_presentation(
+        &mut self,
+        sidebar: ui::sidebar::SidebarPresentation,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sidebar != sidebar {
+            self.sidebar = sidebar;
             cx.notify();
         }
     }
@@ -395,13 +401,7 @@ impl Panel {
         cx.notify();
     }
 
-    fn tab(
-        &self,
-        entry: &Entry,
-        collapsed: bool,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn tab(&self, entry: &Entry, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let id = entry.id;
         let selected = self.active == Some(id);
         let shortcut_target = selected && self.tabs_focus.is_focused(window);
@@ -446,10 +446,10 @@ impl Panel {
                     IconName::Terminal,
                     Self::title(entry, cx),
                 )
-                .compact(collapsed)
+                .presentation(self.sidebar)
                 .selected(selected)
                 .tooltip_enabled(false)
-                .trailing(if collapsed { Vec::new() } else { vec![close] })
+                .trailing(vec![close])
                 .on_click(cx.listener(move |panel, _, window, cx| panel.select(id, window, cx))),
             )
             .into_any_element()
@@ -481,16 +481,16 @@ impl Panel {
 impl Render for Panel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = gds::appearance::theme::Colors::current(cx);
-        let collapsed = self.sidebar_width <= tokens::COLLAPSED_SIDEBAR_WIDTH + 1.;
         let tabs = div()
             .id("files-terminal-tabs")
             .test_support()
-            .w(px(self.sidebar_width))
+            .w(px(self.sidebar.width()))
             .h_full()
             .flex_shrink_0()
             .flex()
             .flex_col()
             .overflow_y_scroll()
+            .track_scroll(&self.tabs_scroll)
             .p(px(tokens::SIDEBAR_PADDING))
             .gap_1()
             .bg(gds::appearance::theme::sidebar_background(cx))
@@ -503,11 +503,7 @@ impl Render for Panel {
             .on_action(cx.listener(Self::on_previous))
             .on_action(cx.listener(Self::on_focus))
             .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
-            .children(
-                self.entries
-                    .iter()
-                    .map(|entry| self.tab(entry, collapsed, window, cx)),
-            );
+            .children(self.entries.iter().map(|entry| self.tab(entry, window, cx)));
         let body = match self.selected() {
             Some(entry) => entry.terminal.clone().into_any_element(),
             None => div()
@@ -537,8 +533,10 @@ impl Render for Panel {
             .child(div().flex_1().min_h_0().min_w_0().h_full().child(body))
             .child(
                 div()
+                    .id("files-terminal-divider")
+                    .test_support()
                     .absolute()
-                    .left(px(self.sidebar_width))
+                    .left(px(self.sidebar.width() - 1.))
                     .top_0()
                     .bottom_0()
                     .w(px(1.))

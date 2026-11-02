@@ -175,17 +175,34 @@ async fn terminal_navigation_is_nested_in_its_workspace_and_dock_does_not_split_
         })
         .expect("workspace-owned terminal layout");
     cx.update_window(fixture.window.into(), |_, window, cx| {
+        let before = window.find("workspace-terminals").bounds();
+        cx.set_reduce_motion(true);
+        fixture
+            .view
+            .update(cx, |view, cx| view.toggle_sidebar(window, cx));
+        window.render_frame(cx);
+        let after = window.find("workspace-terminals").bounds();
+        assert_eq!(before.top(), after.top());
+        assert_eq!(before.size.height, after.size.height);
+        assert!(window.find("agents-terminal-tabs").visible());
+        assert!(
+            after.right() <= px(gds::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH),
+            "terminal bounds: {before:?} -> {after:?}; sidebar header: {:?}; expanded: {}",
+            window.find("sidebar-header").bounds(),
+            fixture.view.read(cx).window.sidebar_visible
+        );
         fixture.view.update(cx, |view, cx| {
+            let presentation = gds::ui::sidebar::SidebarPresentation::default();
             view.navigation.selected_directory = Some(second_cwd.clone());
             view.sync_terminal_panel(window, cx);
             let second = view.terminal_panel().expect("second workspace panel");
             assert_ne!(first.entity_id(), second.entity_id());
             assert!(
-                view.render_workspace_terminals(Some(&first_cwd), cx)
+                view.render_workspace_terminals(Some(&first_cwd), presentation, cx)
                     .is_none()
             );
             assert!(
-                view.render_workspace_terminals(Some(&second_cwd), cx)
+                view.render_workspace_terminals(Some(&second_cwd), presentation, cx)
                     .is_some()
             );
             view.navigation.selected_directory = Some(first_cwd.clone());
@@ -196,11 +213,11 @@ async fn terminal_navigation_is_nested_in_its_workspace_and_dock_does_not_split_
                 first.entity_id()
             );
             assert!(
-                view.render_workspace_terminals(Some(&first_cwd), cx)
+                view.render_workspace_terminals(Some(&first_cwd), presentation, cx)
                     .is_some()
             );
             assert!(
-                view.render_workspace_terminals(Some(&second_cwd), cx)
+                view.render_workspace_terminals(Some(&second_cwd), presentation, cx)
                     .is_none()
             );
         });
@@ -277,7 +294,10 @@ async fn dock_switch_and_close_work_without_sidebar_terminal_controls(cx: &mut T
                 cx.notify();
             });
             window.render_frame(cx);
-            assert!(window.try_find("agents-terminal-tabs").is_none());
+            assert_eq!(
+                window.try_find("agents-terminal-tabs").is_some(),
+                view_mode == workspace_navigation::View::Workspaces && !collapsed && !filtered,
+            );
             assert!(window.try_find("choose-local-terminal").is_none());
             assert!(window.find("close-local-terminal").visible());
             window.click("new-local-terminal", cx);

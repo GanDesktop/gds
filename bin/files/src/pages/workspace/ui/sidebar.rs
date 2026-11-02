@@ -11,6 +11,9 @@ use gpui_kit::{
     prelude::*,
 };
 
+#[cfg(all(test, feature = "gui-tests"))]
+mod tests;
+
 pub(super) const MIN_TABS_HEIGHT: f32 = 94.;
 pub(super) const MIN_DEVICES_HEIGHT: f32 = 108.;
 const HEADER_HEIGHT: f32 = 34.;
@@ -18,10 +21,20 @@ const LOCATION_HEADER_HEIGHT: f32 = 28.;
 const GROUP_GAP: f32 = 6.;
 const ROW_GAP: f32 = 4.;
 const DEFAULT_DEVICE_ROWS: usize = 4;
+const DIVIDER_WIDTH: f32 = 1.;
+const HEADING_ICON_SIZE: f32 = 12.;
+const HEADING_PADDING: f32 = 8.;
+const COLLAPSED_ACTION_INSET: f32 = (tokens::COLLAPSED_SIDEBAR_WIDTH
+    - 2. * tokens::SIDEBAR_PADDING
+    - DIVIDER_WIDTH
+    - tokens::ICON_BUTTON_SIZE)
+    / 2.;
 
 pub(super) struct State {
     pub split: Entity<ui::split::State>,
     pub collapsed: bool,
+    /// The host samples once before rendering any of its aligned columns.
+    pub presentation: SidebarPresentation,
     pub regions: regions::State,
 }
 
@@ -37,6 +50,7 @@ impl State {
                 )
             }),
             collapsed: false,
+            presentation: SidebarPresentation::default(),
             regions: regions::State::new(cx),
         }
     }
@@ -70,6 +84,14 @@ impl Browser {
         self.save_sidebar(cx);
     }
 
+    fn sidebar_heading_inset(&self) -> Pixels {
+        px(self.sidebar.presentation.interpolate(
+            HEADING_PADDING,
+            (tokens::COLLAPSED_SIDEBAR_WIDTH - DIVIDER_WIDTH - HEADING_ICON_SIZE) / 2.
+                - tokens::SIDEBAR_PADDING,
+        ))
+    }
+
     fn device_heading(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let collapsed = self.settings.preferences.files.sidebar.volumes_collapsed
             && !self.sidebar.regions.volumes.is_focused(window)
@@ -77,15 +99,15 @@ impl Browser {
         let on_click = cx.listener(Self::toggle_devices);
         let heading = el! {
             .div { flex; items_center; gap: GROUP_GAP.px; w_full; min_w_0;
-                @if (self.sidebar.collapsed) justify_center; @end;
+                overflow_hidden;
             } [
-                $(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown }).Icon::new { size: 12.0.px },
-                @if (!self.sidebar.collapsed) cx.t!("volumes").SideBarSectionTitle::new, @end,
+                $(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown }).Icon::new { size: HEADING_ICON_SIZE.px; flex_shrink_0 },
+                .div { flex_1; min_w_0; overflow_hidden; opacity: $(self.sidebar.presentation.label_opacity()); } [cx.t!("volumes").SideBarSectionTitle::new],
             ]
         };
         el! {
             .SideBarSectionHeader::default { h: HEADER_HEIGHT.px } [
-                "volumes".Button::new { ghost; small; flex_1; min_w_0; justify_start;
+                "volumes".Button::new { ghost; small; flex_1; min_w_0; justify_start; pl: $(self.sidebar_heading_inset());
                     accessibility_label: t!(@cx, "volumes"); on_click: on_click;
                     aria_expanded: $(!collapsed);
                     @if (self.sidebar.collapsed) tooltip: t!(@cx, "volumes"); @end;
@@ -108,11 +130,12 @@ impl Browser {
         let content = el! {
             .SideBarSection::default { size_full; min_h_0; px: tokens::SIDEBAR_PADDING.px; pt: GROUP_GAP.px } [
                 .SideBarSectionHeader::default { h: HEADER_HEIGHT.px;
-                    @if (self.sidebar.collapsed) justify_center; @end;
+                    pr: $(px(self.sidebar.presentation.interpolate(0., COLLAPSED_ACTION_INSET)));
+                    overflow_hidden;
                 } [
-                    @if (!self.sidebar.collapsed)
-                        cx.t!("tabs").ui::sidebar::SideBarSectionTitle::new { flex_1; px: tokens::SIDEBAR_SECTION_PADDING.px },
-                    @end,
+                    .div { flex_1; min_w_0; overflow_hidden; opacity: $(self.sidebar.presentation.label_opacity()); } [
+                        cx.t!("tabs").ui::sidebar::SideBarSectionTitle::new { px: tokens::SIDEBAR_SECTION_PADDING.px },
+                    ],
                     "new-tab".ui::IconButton::new { icon: IconName::Plus; label: t!(@cx, "new-tab");
                         command: Command::NewTab; on_click: on_new_tab;
                     },
@@ -156,15 +179,15 @@ impl Browser {
         let heading = {
             let label = el! {
                 .div { flex; items_center; gap: GROUP_GAP.px; w_full; min_w_0;
-                    @if (self.sidebar.collapsed) justify_center; @end;
+                    overflow_hidden;
                 } [
-                    $(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).Icon::new { size: 12.0.px; },
-                    @if (!self.sidebar.collapsed) cx.t!("locations").SideBarSectionTitle::new, @end,
+                    $(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).Icon::new { size: HEADING_ICON_SIZE.px; flex_shrink_0; },
+                    .div { flex_1; min_w_0; overflow_hidden; opacity: $(self.sidebar.presentation.label_opacity()); } [cx.t!("locations").SideBarSectionTitle::new],
                 ]
             };
             el! {
                 .SideBarSectionHeader::default { h: LOCATION_HEADER_HEIGHT.px; } [
-                    "locations-toggle".Button::new { ghost; small; flex_1; min_w_0; justify_start;
+                    "locations-toggle".Button::new { ghost; small; flex_1; min_w_0; justify_start; pl: $(self.sidebar_heading_inset());
                         accessibility_label: t!(@cx, "locations"); aria_expanded: expanded;
                         on_click: on_toggle;
                         @if (self.sidebar.collapsed) tooltip: t!(@cx, "locations"); @end;
@@ -252,7 +275,7 @@ impl Browser {
                     } [..devices,
                         @if (device_row_count == 0)
                             .div { px: GROUP_GAP.px; text_xs; truncate; text_color: $cx.theme().muted_foreground;
-                                @if (self.sidebar.collapsed) invisible; @end;
+                                opacity: $(self.sidebar.presentation.label_opacity());
                             } [t!(@cx, "device-none")],
                         @end,
                     ],
@@ -301,7 +324,7 @@ impl Browser {
             SidebarState::Expanded
         };
         el! {
-            .SideBar::default { # "file-sidebar-content"; state: state; pr: 1.0.px; } [
+            .SideBar::default { # "file-sidebar-content"; state: state; presentation: $self.sidebar.presentation; pr: 1.0.px; } [
                 .SideBarContent::default { # "file-sidebar-workspace"; min_h: workspace_minimum.px; overflow_hidden } [workspace],
                 .SideBarFooter::default { flex_shrink_1; min_h_0; overflow_hidden } [locations],
             ]

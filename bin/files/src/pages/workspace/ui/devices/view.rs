@@ -110,7 +110,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let compact = self.sidebar.collapsed;
+        let presentation = self.sidebar.presentation;
         let id = format!("sidebar-volume-{}", volume.object);
         let selected = self
             .current_tab()
@@ -121,18 +121,18 @@ impl Browser {
             Some(el! {
                 .div { w_full; min_w_0; px: GAP.px; pb: GAP.px; text_xs; truncate;
                     text_color: $(if selected { cx.theme().sidebar_accent_foreground } else { cx.theme().muted_foreground });
-                    @if (compact) invisible; @end;
+                    opacity: $(presentation.label_opacity());
                 } [$i18n::text("device-not-mounted", cx)]
             }.into_any_element())
         } else {
             let bar = Self::capacity_bar(
                 format!("{id}-capacity"),
                 self.devices.service.read(cx).capacity(&volume.id),
-                compact,
+                false,
                 cx,
             )
             .selected(selected);
-            Some(el! { .div { px: GAP.px; w_full; min_w_0 } [bar] }.into_any_element())
+            Some(el! { .div { px: GAP.px; w_full; min_w_0; overflow_hidden; opacity: $(presentation.label_opacity()); } [bar] }.into_any_element())
         };
         let nav = NavItem::new(
             id.clone(),
@@ -148,7 +148,7 @@ impl Browser {
                     .as_ref()
                     .is_none_or(|focus| !focus.contains_focused(window, cx)),
         )
-        .compact(compact)
+        .presentation(presentation)
         .selected(selected)
         .on_click(cx.listener(Self::click_volume(volume.id.clone())))
         .when_some(details, |nav, details| nav.details(details))

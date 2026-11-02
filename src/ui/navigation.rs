@@ -44,6 +44,8 @@ pub struct NavItem {
     label: SharedString,
     #[attr]
     compact: bool,
+    #[attr(option)]
+    presentation: Option<sidebar::SidebarPresentation>,
     command: Option<Shortcut>,
     shortcut: Option<Shortcut>,
     disabled: bool,
@@ -72,6 +74,7 @@ impl NavItem {
             icon,
             label,
             compact: false,
+            presentation: None,
             command: None,
             shortcut: None,
             disabled: false,
@@ -120,6 +123,7 @@ impl RenderOnce for NavItem {
             icon,
             label,
             compact,
+            presentation,
             command,
             shortcut,
             disabled,
@@ -128,6 +132,17 @@ impl RenderOnce for NavItem {
             details,
             trailing,
         } = self;
+        let compact = presentation.map_or(compact, |value| value.progress() == 0.0);
+        let show_actions = presentation.is_none_or(|value| value.actions_visible());
+        let icon_inset = presentation.map(|value| {
+            value.interpolate(
+                ITEM_GAP,
+                (crate::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH
+                    - 2.0 * crate::appearance::tokens::SIDEBAR_PADDING
+                    - SIDEBAR_ICON_SIZE)
+                    / 2.0,
+            )
+        });
         let trailing_width = trailing.len() as f32 * ICON_BUTTON_SIZE;
         let header_right_padding = px(ITEM_GAP + trailing_width);
         let trailing: Vec<_> = trailing.into_iter().map(|control| {
@@ -138,10 +153,19 @@ impl RenderOnce for NavItem {
         let content = el! {
             .NavItemContent::default [
                 .NavItemHeader::default {
-                    @if (compact) justify_center; @else pr: header_right_padding; @end;
+                    overflow_hidden;
+                    @if (let Some(inset) = icon_inset)
+                        pl: inset.px; pr: header_right_padding;
+                    @else
+                        @if (compact) justify_center; @else pr: header_right_padding; @end;
+                    @end;
                 } [
                     icon.Icon::new { size: SIDEBAR_ICON_SIZE.px; flex_shrink_0 },
-                    @if (!compact) .NavItemLabel::default [~label], @end,
+                    @if (!compact || presentation.is_some())
+                        .NavItemLabel::default {
+                            @if (let Some(value) = presentation) opacity: $(value.label_opacity()); @end;
+                        } [~label],
+                    @end,
                 ],
                 @if (let Some(details) = details) .NavItemDetails::default [details], @end,
             ]
@@ -180,7 +204,7 @@ impl RenderOnce for NavItem {
                 @if (tooltip_enabled) tooltip_show_delay: TOOLTIP_DELAY; tooltip: tooltip; @end;
             } [
                 button,
-                @if (!trailing.is_empty())
+                @if (show_actions && !trailing.is_empty())
                     .NavItemActions::default [
                         ..trailing,
                     ],

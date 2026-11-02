@@ -30,13 +30,22 @@ impl Frame {
             theme::content_background(cx)
         };
         let divider = self.vertical_divider(cx);
+        let collapsed_width = crate::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH;
+        let progress =
+            ((width - collapsed_width) / (SIDEBAR_WIDTH - collapsed_width)).clamp(0.0, 1.0);
+        let collapsed_inset = (collapsed_width - ICON_BUTTON_SIZE) / 2.0;
+        let menu_inset = if self.sidebar_width.is_some() {
+            collapsed_inset + (MENU_PADDING - collapsed_inset) * progress
+        } else {
+            MENU_PADDING
+        };
         el! {
             .div { relative; flex; flex_shrink_0; w_full; h: TOOLBAR_HEIGHT.px } [
                 .div { absolute; inset_0 } [WindowDragArea],
                 .div {
+                    # "frame-toolbar-sidebar"; test_support;
                     w: width.px; h_full; flex_shrink_0; flex; items_center;
-                    px: MENU_PADDING.px; bg: leading_background;
-                    @if (width <= crate::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH) justify_center; @end;
+                    pl: menu_inset.px; pr: MENU_PADDING.px; bg: leading_background;
                 } [
                     menu,
                 ],
