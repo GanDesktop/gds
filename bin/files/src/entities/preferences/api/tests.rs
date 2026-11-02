@@ -42,6 +42,7 @@ fn saves_and_reloads_the_complete_preferences_including_cleared_language() {
     preferences.appearance.sidebar_opacity = 0.85;
     preferences.language = Some(Language::Chinese);
     preferences.time_format = Format::Absolute;
+    preferences.animations_enabled = Some(false);
     preferences.font.family = Some("Noto Sans".to_owned());
     preferences.font.size = 18.0;
     preferences.files.show_hidden = true;
@@ -89,6 +90,7 @@ fn omitted_fields_receive_defaults_but_malformed_configuration_is_an_error() {
     assert_eq!(preferences.appearance, Preferences::default().appearance);
     assert_eq!(preferences.language, None);
     assert_eq!(preferences.time_format, Format::Relative);
+    assert!(preferences.animations_enabled.unwrap_or(true));
     assert_eq!(preferences.font, Preferences::default().font);
     assert_eq!(
         preferences.terminal,

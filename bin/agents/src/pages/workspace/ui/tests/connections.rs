@@ -65,7 +65,7 @@ fn footer_switches_backends_in_place_and_restores_drafts(cx: &mut TestAppContext
         let indicator = window.find("server-status-indicator");
         assert_eq!(indicator.label(), Some(tr!("status-connected")));
         assert_eq!(indicator.bounds().size.width, px(6.));
-        cx.set_reduce_motion(true);
+        gds::appearance::motion::set_animations_enabled(false, cx);
         window.press("ctrl-b", cx);
         window.render_frame(cx);
         assert_eq!(

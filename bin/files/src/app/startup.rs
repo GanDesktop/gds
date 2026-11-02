@@ -169,6 +169,11 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gds::appearance::init(cx);
+            gds::appearance::motion::set_animations_enabled(
+                preferences.animations_enabled.unwrap_or(true),
+                cx,
+            );
+            gds::appearance::motion::follow_system(&handle, cx);
             if let Some(logs) = logs {
                 gds::ui::logs::install(logs, cx);
                 gds::ui::logs::init(

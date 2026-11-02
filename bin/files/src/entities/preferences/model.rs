@@ -36,6 +36,9 @@ pub struct SidebarPreferences {
 #[serde(default)]
 pub struct Preferences {
     pub appearance: theme::Appearance,
+    /// None enables interface animations while respecting system reduced motion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub animations_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[setting(label = "form-language")]
     pub language: Option<Language>,
@@ -86,6 +89,12 @@ impl Preferences {
         }
         if self.time_format != previous.time_format {
             time::apply(self.time_format, cx);
+        }
+        if self.animations_enabled != previous.animations_enabled {
+            gds::appearance::motion::set_animations_enabled(
+                self.animations_enabled.unwrap_or(true),
+                cx,
+            );
         }
         Ok(())
     }

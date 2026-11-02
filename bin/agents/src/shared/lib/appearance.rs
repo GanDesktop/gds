@@ -205,6 +205,10 @@ pub(crate) fn watch(cx: &mut App) {
 fn apply(resolved: loader::Resolved, window: Option<&mut Window>, cx: &mut App) {
     let effective = resolved.effective;
     let preferences = &effective.preferences;
+    gds::appearance::motion::set_animations_enabled(
+        preferences.animations_enabled.unwrap_or(true),
+        cx,
+    );
     let opacity = gds::appearance::tokens::SurfaceOpacity::default();
     crate::shared::i18n::install(preferences.language, cx);
     let applied = resolved

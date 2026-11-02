@@ -2,6 +2,76 @@ use super::*;
 use gpui_kit::{TestAppContext, component::slider::SliderValue, px, size, test::TestWindowExt};
 
 #[gpui_kit::test]
+fn animations_are_searchable_saved_and_reset_without_changing_other_preferences(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().expect("isolated appearance");
+    let path = directory.path().join("settings.json");
+    std::fs::write(
+        &path,
+        r#"{"appearance":{"theme_source":"builtin","content_opacity":0.74,"confirm_session_delete":false}}"#,
+    ).expect("legacy appearance");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::shared::config::init(Some(path.clone()), cx);
+        theme::init(cx);
+    });
+    let store = crate::shared::config::Store::at(path);
+    let original = store.load().expect("old configuration").settings.appearance;
+    assert!(original.animations_enabled.unwrap_or(true));
+    let mut page = None;
+    let window = cx.open_window(size(px(1000.), px(850.)), |window, cx| {
+        let editor = theme::Editor::current(cx);
+        let view = cx.new(|cx| AppearancePage::new(editor, window, cx));
+        page = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let page = page.expect("appearance page");
+    cx.update_window(window.into(), |_, window, cx| {
+        page.update(cx, |page, cx| {
+            page.query = Field::Animations.label().into();
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.find("appearance-animations-row").visible());
+        assert!(window.try_find("appearance-opacity-row").is_none());
+        window.click("appearance-animations", cx);
+        assert!(
+            cx.reduce_motion(),
+            "the toggle immediately stops native Kit motion"
+        );
+    })
+    .expect("toggle animations through settings");
+    let saved = store.load().expect("saved toggle").settings.appearance;
+    assert_eq!(saved.animations_enabled, Some(false));
+    assert_eq!(saved.content_opacity, original.content_opacity);
+    assert_eq!(
+        saved.confirm_session_delete,
+        original.confirm_session_delete
+    );
+    cx.update(|cx| {
+        theme::init(cx);
+        assert!(
+            cx.reduce_motion(),
+            "reloading saved appearance keeps motion disabled"
+        );
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("appearance-animations-default", cx);
+        assert!(
+            !cx.reduce_motion(),
+            "reset restores the fixture's system preference"
+        );
+    })
+    .expect("reset animation preference only");
+    assert_eq!(
+        store.load().expect("saved reset").settings.appearance,
+        original
+    );
+}
+
+#[gpui_kit::test]
 fn builtin_palette_selection_applies_persists_and_resets_independently(cx: &mut TestAppContext) {
     use gds::appearance::theme::{BuiltinTheme, Colors};
     let directory = tempfile::tempdir().expect("isolated appearance");

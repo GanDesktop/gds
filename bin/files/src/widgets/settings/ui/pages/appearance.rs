@@ -1,5 +1,5 @@
 use gds_uim::el;
-use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::{ActiveTheme, switch::Switch};
 use gpui_kit::*;
 
 use crate::widgets::settings::ui::{
@@ -11,6 +11,15 @@ use gds::ui::settings::SettingRow;
 
 impl View {
     pub(super) fn render_appearance(&mut self, cx: &mut Context<Self>) -> Div {
+        let animations = el! {
+            "settings-animations".Switch::new {
+                accessibility_label: $(text("appearance-animations", cx));
+                checked: $(self.preferences.animations_enabled.unwrap_or(true));
+                on_change: $(cx.listener(Self::on_animations_changed));
+            }
+        };
+        let animations_row = self.setting_row(Field::Animations, animations, cx);
+        let animations_note = SettingNote::new(text("appearance-animations-help", cx));
         let source = self.source.render(
             Field::Source,
             text("theme-custom", cx),
@@ -54,6 +63,8 @@ impl View {
                 source_row,
                 ..builtin_row,
                 mode_row,
+                animations_row,
+                animations_note,
                 content_opacity,
                 sidebar_opacity,
                 $(self.font.clone()),

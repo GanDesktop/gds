@@ -31,11 +31,13 @@ pub(super) enum Field {
     SidebarOpacity,
     ShowHidden,
     SidebarVolumes,
+    Animations,
 }
 
 impl Field {
     pub fn label_id(self) -> &'static str {
         match self {
+            Self::Animations => "appearance-animations",
             Self::Source => "theme-source",
             Self::Builtin => "theme-builtin-selection",
             Self::Mode => "theme-mode",
@@ -49,6 +51,7 @@ impl Field {
     pub fn is_modified(self, preferences: &Preferences) -> bool {
         let defaults = Preferences::default();
         match self {
+            Self::Animations => !preferences.animations_enabled.unwrap_or(true),
             Self::Source => preferences.appearance.source != defaults.appearance.source,
             Self::Builtin => preferences.appearance.builtin != defaults.appearance.builtin,
             Self::Mode => preferences.appearance.mode != defaults.appearance.mode,
@@ -73,6 +76,7 @@ impl Field {
         }
         let defaults = Preferences::default();
         match self {
+            Self::Animations => preferences.animations_enabled = defaults.animations_enabled,
             Self::Source => preferences.appearance.source = defaults.appearance.source,
             Self::Builtin => preferences.appearance.builtin = defaults.appearance.builtin,
             Self::Mode => preferences.appearance.mode = defaults.appearance.mode,

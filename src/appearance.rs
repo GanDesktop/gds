@@ -1,4 +1,5 @@
 //! Theme, typography and the shared visual language.
+pub mod motion;
 pub mod theme;
 pub mod tokens;
 pub mod typography;
@@ -19,6 +20,7 @@ pub fn init(cx: &mut gpui_kit::App) {
         seeded
     };
     gpui_kit::init(cx);
+    motion::init(cx);
     #[cfg(target_os = "linux")]
     if seeded {
         use gpui_kit::component::{Theme, ThemeMode, ThemeRegistry};

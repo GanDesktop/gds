@@ -65,6 +65,7 @@ impl Group {
 
 #[derive(Clone, Copy)]
 enum Field {
+    Animations,
     Language,
     Source,
     Builtin,
@@ -81,8 +82,9 @@ enum Field {
     ComposerEnter,
 }
 impl Field {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 14] = [
         Self::Language,
+        Self::Animations,
         Self::Source,
         Self::Builtin,
         Self::Mode,
@@ -98,6 +100,7 @@ impl Field {
     ];
     fn id(self) -> &'static str {
         match self {
+            Self::Animations => "appearance-animations",
             Self::Language => "appearance-language",
             Self::Source => "appearance-source",
             Self::Builtin => "appearance-builtin-theme",
@@ -116,6 +119,7 @@ impl Field {
     }
     fn label(self) -> &'static str {
         match self {
+            Self::Animations => tr!("appearance-animations"),
             Self::Language => tr!("appearance-language"),
             Self::Source => tr!("appearance-source"),
             Self::Builtin => tr!("appearance-builtin-theme"),
@@ -134,6 +138,7 @@ impl Field {
     }
     fn help(self) -> &'static str {
         match self {
+            Self::Animations => tr!("appearance-animations-help"),
             Self::Language => tr!("appearance-language-help"),
             Self::Source => tr!("appearance-source-help"),
             Self::Builtin => tr!("appearance-builtin-theme-help"),
@@ -154,7 +159,7 @@ impl Field {
     }
     fn group(self) -> Group {
         match self {
-            Self::Language => Group::Theme,
+            Self::Animations | Self::Language => Group::Theme,
             Self::Source
             | Self::Builtin
             | Self::Mode
@@ -400,8 +405,17 @@ impl AppearancePage {
         }
     }
 
-    fn control(&self, field: Field, cx: &App) -> gpui_kit::AnyElement {
+    fn control(&self, field: Field, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         match field {
+            Field::Animations => el! {
+                ($(field.id())).crate::shared::ui::checkbox {
+                    accessibility_label: $(field.label());
+                    checked: $(self.form.animations_enabled.unwrap_or(true));
+                    disabled: $(self.document.is_none());
+                    on_click: $(cx.listener(Self::on_animations_changed));
+                }
+            }
+            .into_any_element(),
             Field::Language => el! {
                 .div {
                     # $(field.id());

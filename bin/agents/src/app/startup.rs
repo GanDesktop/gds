@@ -46,6 +46,7 @@ pub(crate) fn run() -> Result<()> {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gds::appearance::init(cx);
+            gds::appearance::motion::follow_system(&handle, cx);
             if let Some(logs) = logs { diagnostics::init(logs, cx); }
             configuration::init(args.settings_file, cx);
             let profiles = routing::shared(cx);

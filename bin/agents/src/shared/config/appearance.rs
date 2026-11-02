@@ -16,6 +16,9 @@ pub struct Appearance {
     pub content_line_height: Option<f32>,
     pub content_opacity: Option<f32>,
     pub sidebar_opacity: Option<f32>,
+    /// None enables interface animations while respecting system reduced motion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub animations_enabled: Option<bool>,
     pub composer_enter_behavior: ComposerEnterBehavior,
     /// None starts new conversations with the most recently used Agent.
     pub default_agent: Option<String>,

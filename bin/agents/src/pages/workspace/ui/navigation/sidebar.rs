@@ -1,7 +1,7 @@
 use super::{View, groups, history};
 use crate::pages::workspace::ui::*;
 use crate::shared::i18n::tr;
-use gds::ui::sidebar::*;
+use gds::ui::{disclosure::DisclosureIcon, sidebar::*};
 use gds_uim::el;
 use gds_uim::m;
 use gpui_kit::component::menu::PopupMenuItem;
@@ -178,6 +178,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let group = SharedString::from(format!("workspace-header-{index}"));
+        let disclosure_id = SharedString::from(format!("workspace-disclosure-{directory:?}"));
         let name = groups::name(directory.as_deref());
         let active = self.navigation.selected_directory == directory;
         let new_directory = directory.clone();
@@ -272,9 +273,9 @@ impl Workspace {
                             )
                     });
                 } [
-                    ($(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown })).Icon::new {
-                        size: gds::appearance::tokens::SIDEBAR_ICON_SIZE.px;
-                        flex_shrink_0;
+                    .DisclosureIcon::default {
+                        # disclosure_id;
+                        expanded: $(!collapsed);
                     },
                     .div {
                         text_size: crate::shared::ui::SMALL;

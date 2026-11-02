@@ -176,7 +176,7 @@ async fn terminal_navigation_is_nested_in_its_workspace_and_dock_does_not_split_
         .expect("workspace-owned terminal layout");
     cx.update_window(fixture.window.into(), |_, window, cx| {
         let before = window.find("workspace-terminals").bounds();
-        cx.set_reduce_motion(true);
+        gds::appearance::motion::set_animations_enabled(false, cx);
         fixture
             .view
             .update(cx, |view, cx| view.toggle_sidebar(window, cx));

@@ -19,6 +19,7 @@ fn modified_preferences() -> Preferences {
             content_opacity: 0.7,
             sidebar_opacity: 0.8,
         },
+        animations_enabled: Some(false),
         language: Some(Language::English),
         time_format: Format::Absolute,
         font: typography::Preferences {
@@ -45,6 +46,17 @@ fn reset_generated<T: Model>(model: &mut T, id: &str) {
         .find(|field| field.id == id)
         .expect("generated field");
     (field.set)(model, (field.get)(&T::default())).expect("default field value");
+}
+
+#[test]
+fn animation_reset_preserves_all_other_preferences() {
+    let before = modified_preferences();
+    let mut reset = before.clone();
+    assert!(Field::Animations.reset(&mut reset));
+    assert!(reset.animations_enabled.unwrap_or(true));
+    assert!(!Field::Animations.reset(&mut reset));
+    reset.animations_enabled = before.animations_enabled;
+    assert_eq!(reset, before);
 }
 
 #[test]
@@ -214,6 +226,60 @@ fn legacy_float_rounding_is_equivalent_without_rewriting_the_preference() {
     assert!(!Field::ContentOpacity.is_modified(&preferences));
     assert!(!Field::ContentOpacity.reset(&mut preferences));
     assert_eq!(preferences.appearance.content_opacity, rounded);
+}
+
+#[cfg(feature = "gui-tests")]
+#[gpui_kit::test]
+fn appearance_navigation_exposes_animation_toggle_and_independent_reset(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::widgets::settings::ui::{Event, Page, View};
+    use gpui_kit::{AppContext, component::Root, px, size, test::TestWindowExt};
+    use std::{cell::RefCell, rc::Rc};
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::shared::i18n::install(Language::English, cx).expect("translations");
+    });
+    let mut view = None;
+    let window = cx.open_window(size(px(1000.), px(850.)), |window, cx| {
+        let settings =
+            cx.new(|cx| View::new(Preferences::default(), Default::default(), window, cx));
+        view = Some(settings.clone());
+        Root::new(settings, window, cx)
+    });
+    let view = view.expect("settings view");
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let observed = changes.clone();
+    let _subscription = cx.update(|cx| {
+        cx.subscribe(&view, move |_, event, cx| {
+            let Event::Apply(preferences) = event;
+            let previous = observed.borrow().last().cloned().unwrap_or_default();
+            preferences
+                .apply_shared(&previous, cx)
+                .expect("live motion update");
+            observed.borrow_mut().push(preferences.clone());
+        })
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.select_page(Page::Appearance, window, cx)
+        });
+        window.render_frame(cx);
+        window.click("settings-animations", cx);
+        assert_eq!(view.read(cx).preferences.animations_enabled, Some(false));
+    })
+    .expect("navigate and toggle");
+    cx.update(|cx| assert!(cx.reduce_motion(), "native Kit motion is stopped"));
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click(("settings-reset", Field::Animations as usize), cx);
+    })
+    .expect("reset animations");
+    cx.update(|cx| assert!(!cx.reduce_motion(), "system preference is restored"));
+    let changes = changes.borrow();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0].animations_enabled, Some(false));
+    assert_eq!(changes[1], Preferences::default());
 }
 
 #[cfg(feature = "gui-tests")]

@@ -338,6 +338,17 @@ impl View {
         }
     }
 
+    fn on_animations_changed(
+        &mut self,
+        checked: &bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.change(window, cx, |preferences| {
+            Field::replace(&mut preferences.animations_enabled, Some(*checked))
+        });
+    }
+
     fn on_hidden_changed(&mut self, checked: &bool, window: &mut Window, cx: &mut Context<Self>) {
         self.change(window, cx, |preferences| {
             Field::replace(&mut preferences.files.show_hidden, *checked)

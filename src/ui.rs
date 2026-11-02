@@ -13,6 +13,7 @@ pub mod about;
 pub mod button;
 pub mod capacity;
 mod container;
+pub mod disclosure;
 pub mod frame;
 pub mod list;
 pub mod logs;

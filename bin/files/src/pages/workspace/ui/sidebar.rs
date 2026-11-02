@@ -2,12 +2,12 @@
 
 use super::*;
 use gds::appearance::tokens;
-use gds::ui::sidebar::*;
+use gds::ui::{disclosure::DisclosureIcon, sidebar::*};
 use gds::{i18n::t, ui::button::Button};
 use gds_uim::el;
 use gpui_kit::{
     assets::IconName,
-    component::{ActiveTheme, Icon, Sizable, button::ButtonVariants},
+    component::{ActiveTheme, Sizable, button::ButtonVariants},
     prelude::*,
 };
 
@@ -101,7 +101,7 @@ impl Browser {
             .div { flex; items_center; gap: GROUP_GAP.px; w_full; min_w_0;
                 overflow_hidden;
             } [
-                $(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown }).Icon::new { size: HEADING_ICON_SIZE.px; flex_shrink_0 },
+                .DisclosureIcon::default { # "volumes-disclosure"; expanded: $(!collapsed); size: HEADING_ICON_SIZE.px; },
                 .div { flex_1; min_w_0; overflow_hidden; opacity: $(self.sidebar.presentation.label_opacity()); } [cx.t!("volumes").SideBarSectionTitle::new],
             ]
         };
@@ -181,7 +181,7 @@ impl Browser {
                 .div { flex; items_center; gap: GROUP_GAP.px; w_full; min_w_0;
                     overflow_hidden;
                 } [
-                    $(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).Icon::new { size: HEADING_ICON_SIZE.px; flex_shrink_0; },
+                    .DisclosureIcon::default { # "locations-disclosure"; expanded: expanded; size: HEADING_ICON_SIZE.px; },
                     .div { flex_1; min_w_0; overflow_hidden; opacity: $(self.sidebar.presentation.label_opacity()); } [cx.t!("locations").SideBarSectionTitle::new],
                 ]
             };

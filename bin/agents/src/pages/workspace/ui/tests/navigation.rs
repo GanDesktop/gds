@@ -710,7 +710,7 @@ fn sidebar_collapsed_menu_keeps_commands_and_focus_available(cx: &mut TestAppCon
     attach(&fixture, session(), cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.activate_window();
-        cx.set_reduce_motion(true);
+        gds::appearance::motion::set_animations_enabled(false, cx);
         window.press("ctrl-b", cx);
         window.click("sidebar-view-menu", cx);
         for _ in 0..6 {

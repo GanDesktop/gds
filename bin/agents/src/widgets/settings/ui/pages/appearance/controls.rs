@@ -24,6 +24,16 @@ impl Field {
 }
 
 impl AppearancePage {
+    pub(super) fn on_animations_changed(
+        &mut self,
+        checked: &bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.form.animations_enabled = Some(*checked);
+        self.flush_pending(window, cx);
+    }
+
     pub(super) fn setting_number(&self, field: Field) -> &form::Numeric {
         match field {
             Field::UiSize => &self.form.ui_size,
@@ -123,6 +133,7 @@ impl AppearancePage {
         };
         let defaults = Preferences::default();
         match field {
+            Field::Animations => !self.form.animations_enabled.unwrap_or(true),
             Field::UiFont => named(&self.form.ui_font),
             Field::MonoFont => named(&self.form.mono_font),
             Field::UiSize
@@ -176,6 +187,7 @@ impl AppearancePage {
         }
         let defaults = Preferences::default();
         match field {
+            Field::Animations => self.form.animations_enabled = defaults.animations_enabled,
             Field::UiFont => self.form.ui_font.update(cx, |select, cx| {
                 select.set_selected_value(&form::FontChoice::Default, window, cx)
             }),

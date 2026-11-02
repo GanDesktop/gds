@@ -79,6 +79,7 @@ remote = [
 appearance = [
     "watch", "dep:gpui-kit", "dep:font-kit", "dep:directories", "dep:tracing",
     "dep:serde", "dep:serde_json", "dep:thiserror", "dep:toml", "dep:rust-ini",
+    "dep:zbus", "dep:futures-lite",
 ]
 i18n = ["dep:fluent-bundle", "dep:gpui-kit", "dep:serde", "dep:thiserror", "dep:unic-langid"]
 ui = [
@@ -110,7 +111,7 @@ portal = [
     "desktop-protocol", "dep:anyhow", "dep:tokio", "dep:clap", "dep:nix",
     "dep:serde_json", "dep:thiserror", "dep:url", "dep:zbus",
 ]
-gui-tests = ["files", "agents", "gpui-kit/test-support"]
+gui-tests = ["files", "agents", "gpui-kit/test-support", "zbus?/p2p"]
 
 [dependencies]
 gds-settings-derive = { path = "macros/gds-settings-derive", optional = true }
