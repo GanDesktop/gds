@@ -6,6 +6,9 @@ use gpui_kit::{prelude::*, *};
 use std::path::{Path, PathBuf};
 use tokio::sync::watch;
 
+#[cfg(all(test, feature = "gui-tests", unix))]
+mod tests;
+
 /// One terminal surface; the service owns startup, process state and cleanup.
 pub struct Terminal {
     service: service::Terminal,
@@ -13,6 +16,7 @@ pub struct Terminal {
     focus: FocusHandle,
     view: Option<Entity<View>>,
     updates: Option<Subscription>,
+    _theme: Subscription,
     shutdown_done: Option<watch::Receiver<bool>>,
     observed: Option<(Status, Option<SharedString>)>,
 }
@@ -65,6 +69,14 @@ impl Terminal {
             focus: cx.focus_handle(),
             view: None,
             updates: None,
+            _theme: cx.observe_global::<theme::Colors>(|this, cx| {
+                this.service
+                    .set_palette(super::view::palette::Palette::new(cx).query_colors());
+                if let Some(view) = &this.view {
+                    view.update(cx, |_, cx| cx.notify());
+                }
+                cx.notify();
+            }),
             shutdown_done: None,
             observed: None,
         }

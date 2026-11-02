@@ -4,6 +4,8 @@ mod hot_reload;
 mod material;
 mod observer;
 mod palette;
+mod terminal;
+pub use terminal::TerminalColors;
 pub mod provider;
 #[cfg(test)]
 mod tests;

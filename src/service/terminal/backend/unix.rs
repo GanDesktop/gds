@@ -1,10 +1,7 @@
 use std::{
     collections::BTreeSet,
     io::{self, Read, Write},
-    os::{
-        fd::{AsFd, BorrowedFd, RawFd},
-        unix::net::UnixStream,
-    },
+    os::fd::{BorrowedFd, RawFd},
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
@@ -13,50 +10,25 @@ use alacritty_terminal::vte::ansi::Processor;
 use nix::{
     errno::Errno,
     fcntl::{FcntlArg, OFlag, fcntl},
-    poll::{PollFd, PollFlags, poll},
     sys::signal::{Signal, killpg},
     unistd::{Pid, getsid},
 };
 use portable_pty::{Child, ExitStatus, MasterPty};
+use tokio::{
+    io::{Interest, unix::AsyncFd},
+    signal::unix::{SignalKind, signal},
+};
 
 use super::{
     super::session::{Completion, Error, Shared, Size, SpawnOptions, Status, lock},
     shell::Command,
 };
 
-const POLL_MILLIS: u16 = 25;
 const READ_CHUNK: usize = 4096;
 const IO_BUDGET: usize = 64 * 1024;
 // GPUI's quit fallback has a 200 ms budget; normal window close awaits Completion.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(50);
 const FINAL_DRAIN_BUDGET: usize = 256 * 1024;
-
-pub(crate) struct Wake(UnixStream);
-
-impl Wake {
-    pub(crate) fn pair() -> io::Result<(Self, UnixStream)> {
-        let (writer, reader) = UnixStream::pair()?;
-        writer.set_nonblocking(true)?;
-        reader.set_nonblocking(true)?;
-        Ok((Self(writer), reader))
-    }
-
-    pub(crate) fn notify(&self) {
-        match (&self.0).write(&[1]) {
-            Ok(_) => {}
-            // Full means a wakeup is already pending. Closed means the worker
-            // has exited. The worker also polls shutdown every POLL_MILLIS.
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock
-                        | io::ErrorKind::BrokenPipe
-                        | io::ErrorKind::Interrupted
-                ) => {}
-            Err(_) => {} // Poll's finite timeout preserves progress if wake fails.
-        }
-    }
-}
 
 pub(crate) struct Backend {
     master: Box<dyn MasterPty + Send>,
@@ -65,7 +37,6 @@ pub(crate) struct Backend {
     child: Option<Box<dyn Child + Send + Sync>>,
     pid: Option<u32>,
     directory_commands: bool,
-    wake: UnixStream,
     fd: RawFd,
     reaped: bool,
     // Fields drop in declaration order: signal completion AFTER all PTY handles.
@@ -79,11 +50,7 @@ struct Pending {
 }
 
 impl Backend {
-    pub(crate) fn open(
-        options: &SpawnOptions,
-        size: Size,
-        wake: UnixStream,
-    ) -> Result<Self, Error> {
+    pub(crate) fn open(options: &SpawnOptions, size: Size) -> Result<Self, Error> {
         let command = Command::prepare(options)?;
         let pair = portable_pty::native_pty_system().openpty(size.pty_size())?;
         let fd = pair
@@ -116,7 +83,6 @@ impl Backend {
             child: Some(child),
             pid,
             directory_commands,
-            wake,
             fd,
             reaped: false,
             completion: None,
@@ -130,7 +96,12 @@ impl Backend {
 
     pub(crate) fn run(mut self, shared: Arc<Shared>) {
         let mut parser = Processor::new();
-        let result = self.io_loop(&shared, &mut parser);
+        // A current-thread driver stays on the existing worker; the UI needs no runtime.
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(anyhow::Error::from)
+            .and_then(|runtime| runtime.block_on(self.io_loop(&shared, &mut parser)));
         if let Err(error) = &result {
             shared.state.fail(error);
         }
@@ -141,7 +112,9 @@ impl Backend {
         }
         // Preserve final output before publishing the final status/closing updates.
         if let Err(error) = self.read_output(&shared, &mut parser, FINAL_DRAIN_BUDGET) {
-            shared.state.fail(error);
+            if error.kind() != io::ErrorKind::WouldBlock {
+                shared.state.fail(error);
+            }
         }
         parser.stop_sync(&mut *shared.term.lock());
         {
@@ -170,11 +143,16 @@ impl Backend {
         // Completion closes notifications and the quit barrier after fd drops.
     }
 
-    fn io_loop(
+    async fn io_loop(
         &mut self,
         shared: &Shared,
         parser: &mut Processor,
     ) -> anyhow::Result<Option<ExitStatus>> {
+        // SAFETY: Backend owns this open master for the whole registration lifetime;
+        // io_loop drops the registration before run/Drop can release the PTY handles.
+        let descriptor = unsafe { AsyncFd::register(self.fd) }?;
+        // Subscribe before the first try_wait, including an already-exited child.
+        let mut children = signal(SignalKind::child())?;
         let mut pending: Option<Pending> = None;
         loop {
             if shared.state.shutdown.load(Ordering::Acquire) {
@@ -193,8 +171,23 @@ impl Backend {
                 shared.state.notify();
             }
             self.change_directory(shared);
-            self.write_input(shared, &mut pending)?;
-            self.read_output(shared, parser, IO_BUDGET)?;
+            match descriptor.try_io(Interest::WRITABLE, |_| {
+                self.write_input(shared, &mut pending)
+            }) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error.into()),
+            }
+            match descriptor.try_io(Interest::READABLE, |_| {
+                self.read_output(shared, parser, IO_BUDGET)
+            }) {
+                // A final slave close can precede waitpid readiness; cleanup waits
+                // the direct child rather than spinning on a permanently-ready EOF.
+                Ok(0) => return Ok(None),
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error.into()),
+            }
             if parser
                 .sync_timeout()
                 .sync_timeout()
@@ -215,54 +208,35 @@ impl Backend {
                 let control = lock(&shared.state.control);
                 !control.input.is_empty() || !control.responses.is_empty()
             };
-            let mut events = PollFlags::POLLIN;
-            if wants_write {
-                events |= PollFlags::POLLOUT;
+            let interest = if wants_write {
+                Interest::READABLE | Interest::WRITABLE
+            } else {
+                Interest::READABLE
+            };
+            let deadline = parser.sync_timeout().sync_timeout();
+            enum Event {
+                Ready(io::Result<()>),
+                Control,
+                Child(Option<()>),
+                SyncTimeout,
             }
-            // `master` owns this descriptor; poll cannot outlive it.
-            let borrowed = unsafe { BorrowedFd::borrow_raw(self.fd) };
-            let mut descriptors = [
-                PollFd::new(borrowed, events),
-                PollFd::new(self.wake.as_fd(), PollFlags::POLLIN),
-            ];
-            match poll(&mut descriptors, POLL_MILLIS) {
-                Ok(_) => {}
-                Err(Errno::EINTR) => continue,
-                Err(error) => return Err(error.into()),
-            }
-            let wake_ready = descriptors[1].any().unwrap_or(false);
-            let terminal_events = descriptors[0].revents().unwrap_or_else(PollFlags::empty);
-            if terminal_events.contains(PollFlags::POLLNVAL) {
-                anyhow::bail!("PTY descriptor became invalid");
-            }
-            if wake_ready {
-                self.drain_wake()?;
-            }
-            if terminal_events.intersects(PollFlags::POLLHUP | PollFlags::POLLERR) {
-                // A final slave close can precede waitpid readiness by a moment.
-                self.read_output(shared, parser, FINAL_DRAIN_BUDGET)?;
-                if let Some(child) = self.child.as_mut() {
-                    if let Some(status) = child.try_wait()? {
-                        self.reaped = true;
-                        self.child.take();
-                        return Ok(Some(status));
-                    }
+            let event = tokio::select! {
+                ready = descriptor.ready(interest) => {
+                    Event::Ready(ready.map(|mut ready| ready.retain_ready()))
                 }
-                // Avoid spinning on a permanently readable HUP descriptor.
-                return Ok(None);
-            }
-        }
-    }
-
-    fn drain_wake(&mut self) -> io::Result<()> {
-        let mut bytes = [0; 256];
-        loop {
-            match self.wake.read(&mut bytes) {
-                Ok(0) => return Ok(()),
-                Ok(_) => {}
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error),
+                _ = shared.state.wake.notified() => Event::Control,
+                child = children.recv() => Event::Child(child),
+                _ = async {
+                    match deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
+                        None => std::future::pending().await,
+                    }
+                } => Event::SyncTimeout,
+            };
+            match event {
+                Event::Ready(result) => result?,
+                Event::Child(None) => anyhow::bail!("Terminal child signal stream closed"),
+                Event::Control | Event::Child(Some(())) | Event::SyncTimeout => {}
             }
         }
     }
@@ -272,7 +246,7 @@ impl Backend {
         shared: &Shared,
         parser: &mut Processor,
         budget: usize,
-    ) -> io::Result<()> {
+    ) -> io::Result<usize> {
         let mut bytes = [0; READ_CHUNK];
         let mut processed = 0;
         while processed < budget {
@@ -285,7 +259,7 @@ impl Backend {
                     processed += count;
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock && processed != 0 => break,
                 // portable-pty maps Unix EIO to EOF, but keep this defensive.
                 Err(error) if error.raw_os_error() == Some(nix::libc::EIO) => break,
                 Err(error) => return Err(error),
@@ -294,7 +268,8 @@ impl Backend {
         if processed != 0 {
             shared.state.notify();
         }
-        Ok(())
+        // Budget exhaustion retains readiness; only an actual WouldBlock clears it.
+        Ok(processed)
     }
 
     fn answer_color_queries(shared: &Shared) {
@@ -307,7 +282,7 @@ impl Backend {
                 continue;
             }
             let color = shared.term.lock().colors()[query.index]
-                .unwrap_or_else(|| lock(&shared.state.metadata).palette[query.index]);
+                .unwrap_or_else(|| shared.state.palette.color(query.index));
             shared.state.respond((query.format)(color));
         }
     }
@@ -378,7 +353,6 @@ impl Backend {
                         *pending = None;
                     }
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(error),
             }
@@ -420,13 +394,15 @@ impl Backend {
                 {
                     continue;
                 }
+                // A task can disappear after open as well as before it; procfs
+                // then reports ESRCH instead of ENOENT while reading stat.
                 let stat = match std::fs::read_to_string(entry.path().join("stat")) {
                     Ok(stat) => stat,
                     Err(error)
                         if matches!(
                             error.kind(),
                             io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
-                        ) =>
+                        ) || error.raw_os_error() == Some(nix::libc::ESRCH) =>
                     {
                         continue;
                     }

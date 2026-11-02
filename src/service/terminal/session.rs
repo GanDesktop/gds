@@ -197,17 +197,37 @@ pub(crate) struct Metadata {
     pub title: Option<String>,
     pub size: Size,
     pub error: Option<String>,
-    pub palette: [Rgb; alacritty_terminal::term::color::COUNT],
+}
+
+/// Shared before native startup so a theme change never races a copied launch snapshot.
+#[derive(Clone)]
+pub(crate) struct QueryPalette(Arc<Mutex<[Rgb; alacritty_terminal::term::color::COUNT]>>);
+
+impl QueryPalette {
+    pub(crate) fn new(colors: Option<[Rgb; alacritty_terminal::term::color::COUNT]>) -> Self {
+        Self(Arc::new(Mutex::new(
+            colors.unwrap_or_else(|| std::array::from_fn(default_color)),
+        )))
+    }
+
+    pub(crate) fn set(&self, colors: [Rgb; alacritty_terminal::term::color::COUNT]) {
+        *lock(&self.0) = colors;
+    }
+
+    pub(crate) fn color(&self, index: usize) -> Rgb {
+        lock(&self.0)[index]
+    }
 }
 
 pub(crate) struct State {
     pub control: Mutex<Control>,
     pub metadata: Mutex<Metadata>,
+    pub palette: QueryPalette,
     pub shutdown: AtomicBool,
     /// Changes coalesce; true means native cleanup has completed.
     pub updates: watch::Sender<bool>,
     #[cfg(unix)]
-    pub wake: backend::Wake,
+    pub wake: tokio::sync::Notify,
 }
 
 impl State {
@@ -218,7 +238,7 @@ impl State {
 
     pub(crate) fn wake(&self) {
         #[cfg(unix)]
-        self.wake.notify();
+        self.wake.notify_one();
     }
 
     pub(crate) fn stop(&self) {
@@ -436,15 +456,22 @@ impl Session {
     /// # Errors
     /// Returns a validation, shell resolution, PTY, or worker creation error.
     pub fn spawn(options: SpawnOptions) -> Result<Self, Error> {
+        let palette = QueryPalette::new(options.palette);
+        Self::spawn_with_palette(options, palette)
+    }
+
+    pub(crate) fn spawn_with_palette(
+        options: SpawnOptions,
+        palette: QueryPalette,
+    ) -> Result<Self, Error> {
         #[cfg(not(unix))]
         {
-            let _ = options;
+            let _ = (options, palette);
             Err(Error::UnsupportedPlatform)
         }
         #[cfg(unix)]
         {
             let size = Size::new(options.columns, options.rows, 0, 0)?;
-            let (wake, wake_reader) = backend::Wake::pair().map_err(anyhow::Error::from)?;
             let (updates, _) = watch::channel(false);
             let state = Arc::new(State {
                 control: Mutex::new(Control::default()),
@@ -453,13 +480,11 @@ impl Session {
                     title: None,
                     size,
                     error: None,
-                    palette: options
-                        .palette
-                        .unwrap_or_else(|| std::array::from_fn(default_color)),
                 }),
+                palette,
                 shutdown: AtomicBool::new(false),
                 updates,
-                wake,
+                wake: tokio::sync::Notify::new(),
             });
             let completion = Completion::register(state.clone())?;
             let config = size.term_config(options.scrollback);
@@ -475,8 +500,7 @@ impl Session {
                 state,
                 scrollback: options.scrollback.min(MAX_SCROLLBACK),
             });
-            let backend =
-                backend::Backend::open(&options, size, wake_reader)?.with_completion(completion);
+            let backend = backend::Backend::open(&options, size)?.with_completion(completion);
             if shared.state.shutdown.load(Ordering::Acquire) {
                 return Err(Error::Closed);
             }
@@ -601,9 +625,9 @@ impl Session {
         Ok(())
     }
 
-    /// Set query fallback colors to match the view; OSC color overrides remain intact.
+    /// Update theme query fallbacks without modifying program-owned OSC overrides.
     pub fn set_palette(&self, palette: [Rgb; alacritty_terminal::term::color::COUNT]) {
-        lock(&self.0.shared.state.metadata).palette = palette;
+        self.0.shared.state.palette.set(palette);
     }
 
     pub fn terminate(&self) {

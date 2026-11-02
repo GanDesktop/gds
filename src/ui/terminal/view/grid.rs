@@ -273,7 +273,6 @@ impl Element for Grid {
         let palette = Palette::new(cx);
         let scale = f32::from(window.scale_factor());
         self.view.update(cx, |view, _| {
-            view.session.set_palette(palette.query_colors());
             if !view.fonts.as_ref().is_some_and(|fonts| {
                 fonts.matches(
                     &view.preferences.font_family,
@@ -391,7 +390,7 @@ impl Element for Grid {
                     palette.resolve(Color::Named(NamedColor::Cursor), &snapshot.colors);
                 if view.focused && at_cursor.is_some_and(|(_, shape)| shape == CursorShape::Block) {
                     bg = cursor_color;
-                    fg = palette.resolve(Color::Named(NamedColor::Background), &snapshot.colors);
+                    fg = palette.cursor_text;
                     explicit_background = true;
                 }
                 let obscured = composition.is_some_and(|(r, start, end)| {

@@ -223,6 +223,8 @@ Files 的 `location/model/address` 定义与页签无关的位置身份：普通
 
 终端服务入口为 `gds::service::terminal`，界面入口为 `gds::ui::terminal`。服务的 `Terminal::prepare(options)` 返回终端句柄和阻塞启动任务 `Launch`；调用方在后台执行 `launch.run()`，随后可等待 `terminal.ready()`，通过 `Session` 读写、resize、观察状态或订阅合并后的更新通知。`shutdown()` 在调用时请求停止，其 future 等待尚未完成的启动及最终 PTY 清理；最后一个所有者释放时也请求清理。启动任务不会持有进程所有者，等待启动的 future 也不会阻止最后一个所有者释放。
 
+Backend reuse decisions and retained host policy are documented in [Terminal backend boundary](development/terminal-backend.md); terminal color ownership and live updates are documented in [Terminal appearance contract](development/terminal-theme.md).
+
 GUI 适配器负责把主题调色板和网格尺寸传给服务；GPUI `Keystroke` / `Modifiers` 在 UI 边界转换为服务自己的输入类型。字体、选区绘制、焦点、IME 和窗口状态留在 `ui/terminal`。应用负责安装退出钩子调用 `gds::service::terminal::shutdown_all()`；`gds::ui::terminal::init(cx)` 只注册终端输入上下文的 Tab 行为，其他快捷键和标签页归应用。
 
 公共界面组件仍通过 `gds::ui::sidebar`、`gds::ui::page`、`gds::ui::settings` 等显式入口使用；实现按视觉职责分组，入口不暴露组件内部文件。外观入口为 `gds::appearance::{theme, typography}`，视觉默认值为 `gds::appearance::tokens`，存储机制为 `gds::persistence`。

@@ -17,7 +17,16 @@ fn embedded_catalog_loads_both_modes_without_runtime_files() {
                 .expect("complete embedded palette");
             assert!(prepared.source_paths().is_empty());
             assert_eq!(prepared.loaded.mode, mode.resolve(WindowAppearance::Dark));
-            variants.push(prepared.loaded.palette);
+            let palette = prepared.loaded.palette;
+            assert_eq!(palette.terminal.foreground, palette.foreground);
+            assert_eq!(palette.terminal.background, palette.content);
+            assert_eq!(palette.terminal.cursor_text, palette.terminal.background);
+            assert_eq!(palette.terminal.selection, palette.selection);
+            assert_eq!(
+                palette.terminal.selection_text,
+                palette.selection_foreground
+            );
+            variants.push(palette);
         }
         assert_ne!(variants[0], variants[1]);
     }

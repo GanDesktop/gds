@@ -12,6 +12,8 @@ struct Export {
     #[serde(default)]
     mode: Option<serde_json::Value>,
     colors: HashMap<String, HashMap<String, String>>,
+    #[serde(flatten)]
+    extensions: HashMap<String, serde_json::Value>,
 }
 
 impl Export {
@@ -93,6 +95,28 @@ pub(super) fn parse(
     if colors.contains_key("error") || colors.contains_key("on_error") {
         palette.error = required(colors, "error")?;
         palette.error_foreground = required(colors, "on_error")?;
+    }
+    palette.terminal_fallback(mode);
+    if let Some(dank16) = export.extensions.get("dank16") {
+        // A present export is atomic: never blend a partial ANSI scheme with defaults.
+        let mut ansi = [palette.terminal.foreground; 16];
+        for (index, color) in ansi.iter_mut().enumerate() {
+            let role = format!("color{index}");
+            let field = format!("dank16.{role}.{name}");
+            let value = dank16
+                .get(&role)
+                .and_then(|entry| entry.get(name))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    Error::invalid(
+                        &field,
+                        "required DMS terminal color is missing or not a string",
+                    )
+                })?;
+            *color = hex_color(value, &field, false)?;
+        }
+        palette.terminal.normal = std::array::from_fn(|i| ansi[i]);
+        palette.terminal.bright = std::array::from_fn(|i| ansi[i + 8]);
     }
     Ok(Parsed { palette, mode })
 }

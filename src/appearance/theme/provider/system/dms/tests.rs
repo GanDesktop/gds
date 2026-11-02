@@ -13,9 +13,99 @@ fn dms_export(active_mode: &str) -> String {
         "colors": {
             "dark": {"surface":"#101010", "on_surface":"#eeeeee", "primary":"#888888", "on_primary":"#111111"},
             "light": {"surface":"#abcdef", "on_surface":"#123456", "primary":"#654321", "on_primary":"#fedcba"}
-        },
-        "dank16": {"not-ui-data": true}
+        }
     }).to_string()
+}
+
+fn terminal_export(active: &str) -> serde_json::Value {
+    let mut export: serde_json::Value = serde_json::from_str(&dms_export(active)).expect("fixture");
+    for index in 0..16 {
+        export["dank16"][format!("color{index}")] = serde_json::json!({
+            "dark": format!("#{:06x}", 0x102030 + index),
+            "light": format!("#{:06x}", 0xa0b0c0 + index),
+            "default": "#ff00ff"
+        });
+    }
+    export
+}
+
+#[test]
+fn terminal_ansi_uses_all_sixteen_colors_of_the_resolved_mode() {
+    for (active, preference, base) in [
+        ("light", ModePreference::System, 0xa0b0c0),
+        ("dark", ModePreference::System, 0x102030),
+        ("light", ModePreference::Dark, 0x102030),
+        ("dark", ModePreference::Light, 0xa0b0c0),
+    ] {
+        let parsed = dms::parse(
+            &terminal_export(active).to_string(),
+            Path::new("fixture.json"),
+            preference,
+        )
+        .expect("complete terminal export");
+        let roles = parsed.palette.terminal;
+        for (index, actual) in roles.normal.into_iter().chain(roles.bright).enumerate() {
+            assert_eq!(actual, color(base + index as u32));
+        }
+        assert_eq!(roles.background, parsed.palette.content);
+        assert_eq!(roles.cursor_text, roles.background);
+        assert_eq!(roles.selection_text, parsed.palette.selection_foreground);
+    }
+}
+
+#[test]
+fn absent_terminal_export_uses_complete_mode_appropriate_fallback() {
+    let dark = dms::parse(
+        &dms_export("dark"),
+        Path::new("fixture.json"),
+        ModePreference::System,
+    )
+    .expect("legacy export");
+    let light = dms::parse(
+        &dms_export("light"),
+        Path::new("fixture.json"),
+        ModePreference::System,
+    )
+    .expect("legacy export");
+    assert_ne!(dark.palette.terminal.normal, light.palette.terminal.normal);
+    assert_eq!(dark.palette.terminal.background, dark.palette.content);
+    assert_eq!(light.palette.terminal.foreground, light.palette.foreground);
+}
+
+#[test]
+fn present_terminal_export_never_silently_falls_back_or_uses_default() {
+    for invalid in [
+        serde_json::Value::Null,
+        serde_json::json!({}),
+        serde_json::json!({"color0": {"default": "#ffffff"}}),
+    ] {
+        let mut export = terminal_export("dark");
+        export["dank16"] = invalid;
+        assert!(
+            dms::parse(
+                &export.to_string(),
+                Path::new("fixture.json"),
+                ModePreference::Dark
+            )
+            .is_err()
+        );
+    }
+    for invalid in [
+        serde_json::json!("not-a-color"),
+        serde_json::json!(42),
+        serde_json::Value::Null,
+    ] {
+        let mut export = terminal_export("dark");
+        export["dank16"]["color15"]["dark"] = invalid;
+        assert!(
+            dms::parse(
+                &export.to_string(),
+                Path::new("fixture.json"),
+                ModePreference::Dark
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]

@@ -4,6 +4,8 @@ Files 和 Agents 复用 `gds::service::terminal` 服务和 `gds::ui::terminal` �
 
 ## 分层与依赖
 
+See [Terminal backend boundary](../development/terminal-backend.md) for the audited upstream reuse decision, retained host contracts and validation limits.
+
 ```text
 Files / Agents：终端集合、标签页、Dock、工作目录和快捷键
                           │
@@ -20,7 +22,7 @@ Files / Agents：终端集合、标签页、Dock、工作目录和快捷键
                   portable-pty / shell
 ```
 
-- `portable-pty 0.9.0`（MIT）负责 PTY；`alacritty_terminal 0.26.0`（Apache-2.0）负责终端状态与字符网格。只使用一套 PTY I/O，不再启动 Alacritty 自己的 PTY event loop。
+- `portable-pty 0.9.0` (MIT) owns PTY allocation/handles; `alacritty_terminal 0.26.0` (Apache-2.0) supplies the terminal model, grid and parser. One worker uses Tokio readiness/control/child-exit notifications; no parallel Alacritty event loop or fixed-interval PTY polling is added.
 - Unix 子进程启动使用 `std::process::Command` 连接该 PTY，并在 exec 时关闭额外描述符。启动适配保留 Rust 的 exec 错误管道，以便正确报告无效解释器等启动错误。
 - GPUI 视图使用 GDS 当前 GPUI Kit，终端实现不包含另一套 GPUI 或 Zed 的 GPL `terminal` / `terminal_view`。
 - 服务模块不引用 GPUI、界面组件、Files 标签类型或 Bas 会话类型，也不绑定 Agents 的 Tokio runtime。调用方选择启动任务的后台执行器。
@@ -83,6 +85,8 @@ Nix 包和开发环境提供 `xterm-256color` 的 terminfo，并保留用户的 
 - Kitty 图形协议等扩展，以及未经实机验收的 Windows / macOS 支持承诺。
 
 ## 显示与集成原则
+
+Terminal palette sources, fallback and live synchronization: [Terminal appearance contract](../development/terminal-theme.md).
 
 - 字体使用系统字体服务解析实际等宽家族，不把 CSS 的 `monospace` 名称直接交给 GPUI 后任其回退到比例字体。网格尺寸来自实际字体 advance / ascent / descent，并对齐设备像素。
 - 每行按字形样式批量 shaping；glyph cluster 映射回终端列，保留组合字符内部偏移。中英文、Nerd Font 符号、彩色 emoji、光标和 IME 共享同一列坐标与基线，fallback 字体不改变下一列的位置。

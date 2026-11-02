@@ -1,4 +1,5 @@
-//! PTY transport. Unix uses one nonblocking worker, not Alacritty's tty/event loop.
+//! PTY transport: Tokio readiness on one worker, Alacritty parser/grid.
+//! Host queue limits, query ordering and session cleanup stay outside Alacritty's event loop.
 
 #[cfg(unix)]
 mod shell;
@@ -6,4 +7,4 @@ mod shell;
 mod unix;
 
 #[cfg(unix)]
-pub(crate) use unix::{Backend, Wake};
+pub(crate) use unix::Backend;

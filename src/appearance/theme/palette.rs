@@ -10,6 +10,7 @@ const SCROLL_THUMB_HOVER_OPACITY: f32 = 0.55;
 /// Surface/foreground and action/foreground pairs must be used together.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
+    pub terminal: super::TerminalColors,
     pub content: Hsla,
     pub sidebar: Hsla,
     pub foreground: Hsla,
@@ -47,7 +48,13 @@ impl Palette {
     pub fn current(cx: &App) -> Self {
         cx.try_global::<Self>().copied().unwrap_or_else(|| {
             let colors = cx.theme();
-            Self {
+            let mode = if colors.background.l < 0.5 {
+                super::Mode::Dark
+            } else {
+                super::Mode::Light
+            };
+            let mut palette = Self {
+                terminal: super::TerminalColors::fallback(mode),
                 content: colors.background,
                 sidebar: colors.sidebar,
                 foreground: colors.foreground,
@@ -73,8 +80,24 @@ impl Palette {
                 success_foreground: colors.success_foreground,
                 warning: colors.warning,
                 warning_foreground: colors.warning_foreground,
-            }
+            };
+            palette.terminal_fallback(mode);
+            palette
         })
+    }
+
+    /// Sources without terminal data share ANSI defaults and their own paired
+    /// text/surface roles. Call after resolving the source's UI roles.
+    pub(super) fn terminal_fallback(&mut self, mode: super::Mode) {
+        self.terminal = super::TerminalColors {
+            foreground: self.foreground,
+            background: self.content,
+            cursor: self.foreground,
+            cursor_text: self.content,
+            selection: self.selection,
+            selection_text: self.selection_foreground,
+            ..super::TerminalColors::fallback(mode)
+        };
     }
 
     /// State layers keep neutral interaction distinct from persistent selection.

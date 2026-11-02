@@ -1,5 +1,8 @@
 //! Session startup and shutdown ownership, independent of a UI executor or window.
-use super::{ProcessStatus, Session, SpawnOptions, session::lock};
+use super::{
+    ProcessStatus, Session, SpawnOptions,
+    session::{QueryPalette, lock},
+};
 use std::{
     future::Future,
     path::{Path, PathBuf},
@@ -40,6 +43,7 @@ struct Lifecycle {
 struct State {
     lifecycle: Mutex<Lifecycle>,
     ready: watch::Sender<bool>,
+    palette: QueryPalette,
 }
 impl State {
     fn stop(&self) {
@@ -89,7 +93,7 @@ impl Launch {
             return;
         }
         let options = self.options.take().expect("a launch is consumed only once");
-        let result = Session::spawn(options);
+        let result = Session::spawn_with_palette(options, self.state.palette.clone());
         let mut state = lock(&self.state.lifecycle);
         state.phase = match result {
             Ok(session) => {
@@ -127,6 +131,7 @@ impl Terminal {
                 closed: false,
             }),
             ready,
+            palette: QueryPalette::new(options.palette),
         });
         let terminal = Self(Arc::new(Handle {
             cwd: options.cwd.clone(),
@@ -140,6 +145,15 @@ impl Terminal {
             },
         )
     }
+    /// Replace theme query fallbacks for both starting and already-running sessions.
+    /// The parser's OSC overrides are independent and survive until the program resets them.
+    pub fn set_palette(
+        &self,
+        palette: [alacritty_terminal::vte::ansi::Rgb; alacritty_terminal::term::color::COUNT],
+    ) {
+        self.0.state.palette.set(palette);
+    }
+
     pub fn cwd(&self) -> &Path {
         &self.0.cwd
     }

@@ -153,6 +153,7 @@ fn parse_qtct(ini: &Ini, mode: Mode) -> Result<Palette, Error> {
     palette.tooltip = active[TOOLTIP_BASE];
     palette.tooltip_foreground = active[TOOLTIP_TEXT];
     palette.link = active[LINK];
+    palette.terminal_fallback(mode);
     Ok(palette)
 }
 
@@ -207,6 +208,7 @@ fn parse_kde(ini: &Ini, mode: Mode) -> Result<Palette, Error> {
     palette.tooltip_foreground =
         optional(ini, "Colors:Tooltip", "ForegroundNormal")?.unwrap_or(palette.sidebar_foreground);
     palette.link = optional(ini, "Colors:View", "ForegroundLink")?.unwrap_or(palette.primary);
+    palette.terminal_fallback(mode);
     Ok(palette)
 }
 

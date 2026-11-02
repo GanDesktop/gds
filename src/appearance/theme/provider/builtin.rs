@@ -76,11 +76,13 @@ impl Theme {
 
     fn palette(self, mode: Mode) -> Palette {
         let definition = self.definition();
-        match mode {
+        let mut palette = match mode {
             Mode::Light => definition.light,
             Mode::Dark => definition.dark,
         }
-        .into()
+        .into_palette(mode);
+        palette.terminal_fallback(mode);
+        palette
     }
 }
 
@@ -146,9 +148,11 @@ struct Scheme {
     warning_foreground: Color,
 }
 
-impl From<Scheme> for Palette {
-    fn from(colors: Scheme) -> Self {
-        Self {
+impl Scheme {
+    fn into_palette(self, mode: Mode) -> Palette {
+        let colors = self;
+        Palette {
+            terminal: crate::appearance::theme::TerminalColors::fallback(mode),
             content: colors.content.0,
             sidebar: colors.sidebar.0,
             foreground: colors.foreground.0,
