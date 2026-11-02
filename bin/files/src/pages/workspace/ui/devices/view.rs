@@ -157,7 +157,7 @@ impl Browser {
                 .into_iter()
                 .collect(),
         );
-        let cursor = self.sidebar.regions.volumes.is_focused(window)
+        let cursor = ui::region::is_focus_visible(&self.sidebar.regions.volumes, window)
             && self.sidebar.regions.volume.as_ref() == Some(&volume.id);
         el! { .div { # id; relative; w_full; flex_shrink_0 } [nav,
             @if (cursor) $(ui::region::focus_ring(cx)), @end,

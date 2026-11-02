@@ -3,6 +3,9 @@
 use super::selection::Motion;
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) struct State {
     pub tabs: FocusHandle,
     pub locations: FocusHandle,

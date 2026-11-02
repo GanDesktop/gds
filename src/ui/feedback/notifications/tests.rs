@@ -122,6 +122,119 @@ fn reduced_motion_preserves_notification_timeout_and_manual_close(
         .expect("notification lifecycle settles independently of motion");
 }
 
+#[cfg(feature = "gui-tests")]
+#[gpui::test]
+fn keyboard_cursor_pointer_activation_and_close_restore_the_previous_target(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::actions::{CloseNotification, FocusNotifications};
+    use gpui_kit::{component::Root, test::TestWindowExt};
+
+    struct Host {
+        overlay: Entity<Overlay>,
+        origin: FocusHandle,
+    }
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .on_action(|_: &FocusNotifications, window, cx| focus(window, cx))
+                .on_action(|_: &CloseNotification, window, cx| close_current(window, cx))
+                .child(
+                    div()
+                        .id("notification-origin")
+                        .test_support()
+                        .track_focus(&self.origin)
+                        .child("Origin"),
+                )
+                .child(self.overlay.clone())
+        }
+    }
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::appearance::theme::apply(&Default::default(), cx).expect("application theme");
+        cx.set_reduce_motion(true);
+        cx.bind_keys([
+            gpui_kit::KeyBinding::new("alt-n", FocusNotifications, None),
+            gpui_kit::KeyBinding::new("alt-c", CloseNotification, None),
+        ]);
+    });
+    let mut host = None;
+    let window = cx.open_window(gpui_kit::size(px(640.), px(480.)), |window, cx| {
+        let view = cx.new(|cx| Host {
+            overlay: Overlay::for_window(window, cx),
+            origin: cx.focus_handle(),
+        });
+        host = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let host = host.expect("notification host");
+    let overlay = cx.update(|cx| host.read(cx).overlay.clone());
+    cx.update_window(window.into(), |_, window, cx| {
+        overlay.update(cx, |overlay, cx| {
+            overlay.push(Notification::info("First").autohide(false), window, cx);
+            overlay.push(Notification::info("Second").autohide(false), window, cx);
+        });
+        host.read(cx).origin.clone().focus(window, cx);
+    })
+    .expect("mount notifications");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.activate_window();
+        window.render_frame(cx);
+        let notes = overlay.read(cx).available(cx);
+        let first = notes[0].entity_id();
+        let second = notes[1].entity_id();
+        let id = ("gds-notification", second);
+        let bounds = window.find(id).bounds();
+        let has_cursor = |window: &Window, id, cx: &App| {
+            let bounds = window
+                .find(("gds-notification", id))
+                .bounds()
+                .scale(window.scale_factor());
+            window.painted_quads().iter().any(|quad| {
+                quad.bounds == bounds
+                    && quad.border_color == cx.theme().ring
+                    && quad.border_widths.top > px(0.).scale(window.scale_factor())
+            })
+        };
+        window.press("alt-n", cx);
+        window.render_frame(cx);
+        assert_eq!(overlay.read(cx).selected, Some(second));
+        assert!(has_cursor(window, second, cx));
+        assert!(!has_cursor(window, first, cx));
+
+        // Pointer activity changes presentation, not the notification target.
+        window.click_at(
+            id,
+            gpui_kit::point(bounds.size.width / 2., bounds.size.height / 2.),
+            cx,
+        );
+        window.render_frame(cx);
+        assert_eq!(overlay.read(cx).selected, Some(second));
+        assert!(!has_cursor(window, second, cx));
+        assert_eq!(window.find(id).bounds(), bounds);
+        window.press("up", cx);
+        window.render_frame(cx);
+        assert_eq!(overlay.read(cx).selected, Some(first));
+        assert!(has_cursor(window, first, cx));
+        assert!(!has_cursor(window, second, cx));
+        window.press("alt-c", cx);
+        window.render_frame(cx);
+        assert_eq!(overlay.read(cx).available(cx).len(), 1);
+        assert_eq!(overlay.read(cx).selected, Some(second));
+        assert!(has_cursor(window, second, cx));
+
+        window.press("alt-n", cx);
+        assert!(host.read(cx).origin.is_focused(window));
+        window.press("alt-n", cx);
+        window.press("alt-c", cx);
+        assert!(overlay.read(cx).available(cx).is_empty());
+        assert!(host.read(cx).origin.is_focused(window));
+    })
+    .expect("notification focus and close lifecycle");
+}
+
 #[test]
 fn column_height_stops_at_the_bottom_inset() {
     let top = px(crate::appearance::tokens::TOOLBAR_HEIGHT + TOAST_TOP_GAP);

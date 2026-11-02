@@ -2,6 +2,8 @@
 
 mod icon;
 mod menu;
+#[cfg(all(test, feature = "gui-tests"))]
+mod tests;
 pub use icon::IconButton;
 
 use std::rc::Rc;
@@ -12,7 +14,7 @@ use gpui_kit::{
     StyleRefinement, Styled, Window,
     assets::IconName,
     component::{
-        Disableable, Icon, Selectable, Sizable, Size,
+        Disableable, FocusableExt, Icon, Selectable, Sizable, Size,
         button::{Button as ComponentButton, ButtonCustomVariant, ButtonVariant, ButtonVariants},
         spinner::Spinner,
     },
@@ -223,6 +225,9 @@ impl Button {
         self.inner
             .disabled(self.disabled)
             .loading(self.loading)
+            // Pointer reuse must not leave a previous keyboard cursor behind.
+            // Kit retains the focus handle; only its decoration follows modality.
+            .focus_ring(window.last_input_was_keyboard())
             .cursor(cursor)
     }
 }

@@ -5,6 +5,12 @@ use gpui_kit::{prelude::*, *};
 
 use crate::ui::{Shortcut, keytips};
 
+/// Keyboard focus belongs to the current target, not every containing region.
+/// Match Kit's focus-visible policy without changing focus or selection state.
+pub fn is_focus_visible(focus: &FocusHandle, window: &Window) -> bool {
+    focus.is_focused(window) && window.last_input_was_keyboard()
+}
+
 /// A region wrapper with its own focus target and the shared Alt key hint.
 /// Callers supply layout and contents; focus changes do not change its geometry.
 pub fn surface(
@@ -13,12 +19,13 @@ pub fn surface(
     command: impl Into<Shortcut>,
     window: &mut Window,
     cx: &mut App,
-) -> Stateful<Div> {
-    let active = focus.contains_focused(window, cx);
+) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
+    let active = is_focus_visible(focus, window);
     let focus = focus.clone().tab_stop(true);
     let hint = keytips::anchor(window, cx, format!("{id}-hint").into(), command.into());
     div()
         .id(id)
+        .test_support()
         .relative()
         .min_w_0()
         .min_h_0()

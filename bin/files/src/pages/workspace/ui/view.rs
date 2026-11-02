@@ -399,8 +399,8 @@ impl Browser {
         let compact = presentation.progress() == 0.;
         let row_height = gds::appearance::typography::scaled(TAB_HEIGHT, cx);
         let selected = id == self.tabs.active_id;
-        let cursor =
-            self.sidebar.regions.tabs.is_focused(window) && self.sidebar.regions.tab == Some(id);
+        let cursor = ui::region::is_focus_visible(&self.sidebar.regions.tabs, window)
+            && self.sidebar.regions.tab == Some(id);
         let title: SharedString = self.tab_title(slot, cx).into();
         let path: SharedString = slot
             .path()
@@ -657,7 +657,7 @@ impl Browser {
             format!("location-prefix-hint-{id}").into(),
             tabs::location_shortcut(target),
         );
-        let cursor = self.sidebar.regions.locations.is_focused(window)
+        let cursor = ui::region::is_focus_visible(&self.sidebar.regions.locations, window)
             && self.sidebar.regions.location == target;
         el! { .div { relative; w_full } [nav, hint,
             @if (cursor) $(ui::region::focus_ring(cx)), @end,

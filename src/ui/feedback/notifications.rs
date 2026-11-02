@@ -26,7 +26,8 @@ use gpui_kit::{
     AnyElement, AnyWindowHandle, App, AppContext, Axis, ClickEvent, ClipboardItem, Context, Div,
     ElementId, Entity, EntityId, FocusHandle, FontWeight, Global, InteractiveElement as _,
     IntoElement, ParentElement as _, Pixels, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, px,
+    StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _, Window, div,
+    px,
 };
 
 use crate::{i18n, i18n::t, ui};
@@ -483,6 +484,7 @@ impl Render for Overlay {
             .min(window.viewport_size().width - right * 2.);
         let height = column_height(window.viewport_size().height, top, bottom);
         let active = self.focus.contains_focused(window, cx);
+        let focus_visible = ui::region::is_focus_visible(&self.focus, window);
         let target = if active {
             self.selected
         } else {
@@ -503,12 +505,13 @@ impl Render for Overlay {
                 });
                 div()
                     .id(id)
+                    .test_support()
                     .relative()
                     .w_full()
                     .flex_shrink_0()
                     .child(note)
                     .children(close_hint)
-                    .when(active && current, |card| {
+                    .when(focus_visible && current, |card| {
                         card.child(ui::region::focus_ring(cx))
                     })
             })

@@ -208,7 +208,12 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
     // A mode change reloads Kit's registered palette. Apply custom colors only
     // afterwards; Theme::update reconciles its colors/tokens/Base projection.
     Theme::change(ThemeMode::from(mode), None, cx);
-    Theme::update(cx, |theme| palette.apply_to(&mut theme.colors));
+    Theme::update(cx, |theme| {
+        palette.apply_to(&mut theme.colors);
+        // Keep Kit's tinted border/inset line, not its outer 3px halo: our
+        // scrolling surfaces clip at their edges. Reapply on every palette load.
+        theme.focus_ring = false;
+    });
     cx.set_global(palette);
     cx.set_global(Material {
         content: palette.content,
