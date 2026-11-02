@@ -93,3 +93,9 @@ focus-within frame also contributed to the original problem).
 [Pointer activation preview](<assets/focus-pointer.png>): row selection remains,
 without a large content focus outline. The fixture path and timestamps are test
 data, not part of the visual contract.
+
+Files owns file selection independently of the table component. Its file-table
+context removes the table's native selection bindings: Tab and Shift+Tab use
+window focus traversal, while arrows and Home/End reach file navigation.
+Popup menus keep their own bindings. Disabling native selection alone must not
+leave a focusable table that consumes keys without handling them.

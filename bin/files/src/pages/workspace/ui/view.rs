@@ -8,6 +8,7 @@ use gds::{
 };
 use gds_uim::el;
 use gpui_kit::assets::IconName;
+use gpui_kit::base::motion::Interpolate as _;
 use gpui_kit::component::empty::{Empty as EmptyState, EmptyDescription};
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, button::ButtonVariants, menu::ContextMenuExt, table::DataTable,
@@ -49,7 +50,7 @@ impl Render for Browser {
         self.window.held_modifier = Self::current_held_modifier(window);
         self.drain_device_removals(cx);
         self.sync_terminal_cwd(window, cx);
-        if self.settings.open
+        if !self.pages.is_empty()
             || self.collection().is_some()
             || self.menus.application_open
             || self.menus.context.is_some()
@@ -59,15 +60,12 @@ impl Render for Browser {
         {
             self.discard_marquee();
         }
-        // The hint layer shows either the plain Ctrl keys or the keys an armed
-        // prefix accepts; the mode is idempotent and only a change redraws it.
-        ui::keytips::set_prefix(window, cx, self.tabs.prefix.is_some());
         // Settings replaces the toolbar; every location page keeps the menu, so
         // only entering Settings drops a menu that was open over the workspace.
-        if self.settings.open {
+        if !self.pages.is_empty() {
             self.menus.application_open = false;
         }
-        if self.settings.open || self.collection().is_some() {
+        if !self.pages.is_empty() || self.collection().is_some() {
             self.menus.sort = None;
         }
         let state = if self.sidebar.collapsed {
@@ -83,11 +81,19 @@ impl Render for Browser {
         self.settings.view.update(cx, |view, cx| {
             view.set_sidebar_presentation(self.sidebar.presentation, cx)
         });
-        let frame = Frame::default().sidebar_width(width);
+        let frame = if self.pages.current() == Some(&pages::Page::Help) {
+            Frame::without_sidebar()
+        } else {
+            Frame::default().sidebar_width(width)
+        };
         let toolbar = self.render_toolbar(&frame, window, cx);
-        let body = if self.settings.open {
+        let body = if self.pages.current() == Some(&pages::Page::Help) {
+            el! { .div { flex_1; min_h_0; } [$(crate::widgets::help::render(cx))] }
+                .into_any_element()
+        } else if !self.pages.is_empty() {
             el! { .div { flex_1; min_h_0 } [$(self.settings.view.clone())] }.into_any_element()
         } else {
+            let opacity = motion::tab_content(self.tabs.active_id, window, cx);
             let content = self.render_content(window, cx);
             let content = ui::region::surface(
                 "content-region",
@@ -96,6 +102,7 @@ impl Render for Browser {
                 window,
                 cx,
             )
+            .opacity(opacity)
             .aria_label(self.current_location().label(cx))
             .flex()
             .flex_col()
@@ -106,9 +113,9 @@ impl Render for Browser {
             let workspace = frame
                 .workspace(self.render_sidebar(window, cx), content, cx)
                 .into_any_element();
-            self.terminal_workspace(workspace, cx)
+            self.terminal_workspace(workspace, window, cx)
         };
-        let extras = if self.settings.open {
+        let extras = if !self.pages.is_empty() {
             Vec::new()
         } else {
             self.render_picker_extras(self.picker_actions_available(window, cx), cx)
@@ -132,16 +139,15 @@ impl Render for Browser {
             self.render_footer_controls(window, cx),
             cx,
         );
-        let mut context = KeyContext::parse(if self.settings.open {
+        let mut context = KeyContext::parse(if self.pages.current() == Some(&pages::Page::Help) {
+            "Help"
+        } else if !self.pages.is_empty() {
             SETTINGS_CONTEXT
         } else {
             WORKSPACE_CONTEXT
         })
         .expect("bundled key contexts are valid");
-        if self.tabs.prefix.is_some() {
-            context.add(TAB_PREFIX_CONTEXT);
-        }
-        if !self.settings.open
+        if self.pages.is_empty()
             && (self.collection() == Some(Collection::Volumes)
                 || self.current_tab().is_some_and(|slot| slot.device.is_some()))
         {
@@ -150,7 +156,7 @@ impl Render for Browser {
         // The picker decisions exist only on the picker page itself. Settings
         // replaces the workspace context, and a dialog owns its own context, so
         // neither can pick up `Alt+A` / `Alt+C` from here.
-        if self.picker.is_some() && !self.settings.open {
+        if self.picker.is_some() && self.pages.is_empty() {
             context.add(picker::PICKER_CONTEXT);
         }
         let notification_overlay = notifications::overlay_for(window, cx);
@@ -169,6 +175,8 @@ impl Render for Browser {
                 on_action: (cx, Self::on_close_notification).Context::listener;
                 on_action: (cx, Self::on_close_all_notifications).Context::listener;
                 on_action: (cx, Self::on_settings).Context::listener;
+                on_action: (cx, Self::on_help).Context::listener;
+                on_action: (cx, Self::on_new_folder).Context::listener;
                 on_action: (cx, Self::on_new_tab).Context::listener;
                 on_action: (cx, Self::on_close_tab).Context::listener;
                 on_action: (cx, Self::on_next_tab).Context::listener;
@@ -211,21 +219,21 @@ impl Render for Browser {
                 on_action: (cx, Self::on_picker_read_only).Context::listener;
                 on_action: (cx, Self::on_picker_next_filter).Context::listener;
                 on_action: (cx, Self::on_picker_cancel).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_home).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_recent).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_favorites).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_volumes).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_network).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_trash).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_1).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_2).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_3).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_4).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_5).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_6).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_7).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_8).Context::listener;
-                on_action: (cx, Self::on_tab_prefix_9).Context::listener;
+
+
+
+
+
+
+                on_action: (cx, Self::on_tab_1).Context::listener;
+                on_action: (cx, Self::on_tab_2).Context::listener;
+                on_action: (cx, Self::on_tab_3).Context::listener;
+                on_action: (cx, Self::on_tab_4).Context::listener;
+                on_action: (cx, Self::on_tab_5).Context::listener;
+                on_action: (cx, Self::on_tab_6).Context::listener;
+                on_action: (cx, Self::on_tab_7).Context::listener;
+                on_action: (cx, Self::on_tab_8).Context::listener;
+                on_action: (cx, Self::on_tab_9).Context::listener;
                 capture_key_down: (cx, Self::on_region_key_down).Context::listener;
                 capture_key_down: (cx, Self::on_file_key_down).Context::listener;
                 capture_key_down: (cx, Self::on_trash_key_down).Context::listener;
@@ -238,7 +246,7 @@ impl Render for Browser {
                 on_mouse_down: $(MouseButton::Navigate(NavigationDirection::Back)), (cx, Self::on_mouse_back).Context::listener;
                 on_mouse_down: $(MouseButton::Navigate(NavigationDirection::Forward)), (cx, Self::on_mouse_forward).Context::listener;
                 on_action: (cx, Self::on_cancel).Context::listener;
-                capture_key_up: (cx, Self::on_tab_key_up).Context::listener;
+
                 on_modifiers_changed: (cx, Self::on_modifiers_changed).Context::listener;
             } [toolbar, body, ..extras, footer,
                 ..selection_menu,
@@ -265,12 +273,12 @@ impl Browser {
 
     fn render_toolbar(&self, frame: &Frame, window: &mut Window, cx: &mut Context<Self>) -> Div {
         // Settings owns its return control; location navigation stays in the workspace.
-        let secondary = self.settings.open;
+        let secondary = !self.pages.is_empty();
         let menu = if secondary {
             let on_click = cx.listener(Self::click_command(Command::Cancel));
             el! {
                 "return-to-files".IconButton::new {
-                    icon: IconName::ArrowLeft; label: $i18n::text("settings-return", cx);
+                    icon: IconName::ArrowLeft; label: $i18n::text("page-return", cx);
                     command: Command::Cancel; on_click: on_click;
                 }
             }
@@ -279,14 +287,14 @@ impl Browser {
             menu::application_menu(self.menus.application_open, cx.entity().downgrade(), cx)
         };
         let sidebar = self.command_button("sidebar", IconName::PanelLeft, Command::Sidebar, cx);
-        let content = if self.settings.open {
-            el! { .div { flex_1; px: ITEM_GAP.px } [$i18n::text("settings", cx)] }
+        let content = if !self.pages.is_empty() {
+            el! { .div { flex_1; px: ITEM_GAP.px } [$i18n::text(if self.pages.current() == Some(&pages::Page::Help) { "help" } else { "settings" }, cx)] }
                 .into_any_element()
         } else {
             self.render_navigation(window, cx)
         };
         let controls = el! {
-            .div { flex; items_center; gap: SMALL_GAP.px; w_full; min_w_0 } [sidebar, content]
+            .div { flex; items_center; gap: SMALL_GAP.px; w_full; min_w_0 } [@if (self.pages.current() != Some(&pages::Page::Help)) sidebar, @end, content]
         };
         let window_controls = ui::window::WindowControls::default()
             .on_close_window(cx.listener(Self::on_close_window));
@@ -399,6 +407,8 @@ impl Browser {
         let compact = presentation.progress() == 0.;
         let row_height = gds::appearance::typography::scaled(TAB_HEIGHT, cx);
         let selected = id == self.tabs.active_id;
+        let selection =
+            motion::state_progress(format!("files-tab-selection-{id}"), selected, window, cx);
         let cursor = ui::region::is_focus_visible(&self.sidebar.regions.tabs, window)
             && self.sidebar.regions.tab == Some(id);
         let title: SharedString = self.tab_title(slot, cx).into();
@@ -407,31 +417,53 @@ impl Browser {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| slot.location().label(cx))
             .into();
-        // The folder keeps its own icon; pinned rows only gain a small pin badge.
-        let icon = ui::pinned_icon(slot.navigation.location().icon(), slot.pinned, cx);
+        let icon = Icon::new(slot.navigation.location().icon()).size(px(tokens::SIDEBAR_ICON_SIZE));
         let on_click = cx.listener(Self::click_tab(id));
         let on_hover = cx.listener(Self::hover_tab(id));
         let menu = Self::tab_menu(cx.entity().downgrade(), id, slot.pinned);
-        // Hovering this row or holding Ctrl reveals its X; otherwise the space
-        // stays reserved, so a press or release never reflows the strip.
-        let show_close = (self.revealing_tab_close() || self.tabs.hovered == Some(id))
-            && (presentation.actions_visible() || compact);
+        // Pinned tabs keep their unpin control in the ordinary close slot.
+        let action_icon = if slot.pinned {
+            IconName::Pin
+        } else {
+            IconName::X
+        };
+        let action_label = i18n::text(
+            if slot.pinned {
+                "unpin-tab"
+            } else {
+                "close-this-tab"
+            },
+            cx,
+        );
+        let action_id = if slot.pinned {
+            "unpin-tab"
+        } else {
+            "close-tab"
+        };
+        let corner_id = if slot.pinned {
+            "unpin-tab-corner"
+        } else {
+            "close-tab-corner"
+        };
+        let show_action =
+            (slot.pinned || self.revealing_tab_close() || self.tabs.hovered == Some(id))
+                && (presentation.actions_visible() || compact);
         // A row with a pending press loses on_hover on mouse movement. Keep
-        // the close button's press off that row until its click completes.
+        // the action button's press off that row until its click completes.
         let on_close_down = |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
             cx.stop_propagation();
         };
-        let close = match (show_close, compact) {
+        let action = match (show_action, compact) {
             (true, false) => {
-                let on_close = cx.listener(Self::click_close_tab(id));
+                let on_close = cx.listener(Self::click_tab_action(id, slot.pinned));
                 Some(
                     el! {
-                        .div { # $("close-tab-press", id); absolute; right: ITEM_GAP.px;
+                        .div { # $(if slot.pinned { "unpin-tab-press" } else { "close-tab-press" }, id); absolute; right: ITEM_GAP.px;
                             on_mouse_down: MouseButton::Left, on_close_down;
                         } [
-                            ($("close-tab", id)).IconButton::new {
-                                icon: IconName::X; label: $i18n::text("close-this-tab", cx);
-                                @if (selected) command: Command::CloseTab; @end;
+                            ($(action_id, id)).IconButton::new {
+                                icon: action_icon; label: action_label;
+                                @if (selected && !slot.pinned) command: Command::CloseTab; @end;
                                 on_click: on_close;
                             },
                         ]
@@ -439,20 +471,21 @@ impl Browser {
                     .into_any_element(),
                 )
             }
-            // A collapsed row has no free trailing space: the X sits in its own
+            // A collapsed row has no free trailing space: the action sits in its own
             // top trailing corner at icon size instead of widening the row.
             (true, true) => {
-                let on_close = cx.listener(Self::click_close_tab(id));
+                let on_close = cx.listener(Self::click_tab_action(id, slot.pinned));
                 Some(
                     el! {
                         .div {
-                            # $("close-tab", id); absolute; top: 1.0.px; right: 1.0.px;
+                            # $(action_id, id); absolute; top: 1.0.px; right: 1.0.px;
                             on_mouse_down: MouseButton::Left, on_close_down;
                         } [
-                            ($("close-tab-corner", id)).Button::new {
+                            ($(corner_id, id)).Button::new {
                                 ghost; small; size: TAB_CORNER_CLOSE_SIZE.px;
-                                icon: IconName::X.Icon::new { size: TAB_CORNER_CLOSE_ICON.px };
-                                accessibility_label: $i18n::text("close-this-tab", cx);
+                                icon: action_icon.Icon::new { size: TAB_CORNER_CLOSE_ICON.px };
+                                accessibility_label: $action_label.clone();
+                                tooltip: action_label;
                                 on_click: on_close;
                             },
                         ]
@@ -462,27 +495,9 @@ impl Browser {
             }
             (false, _) => None,
         };
-        // The cycle keys land on exactly one neighbour in each direction; those
-        // two rows show them, every other numbered row shows the path to its own
-        // key. While the prefix is armed only those target keys are shown.
-        let adjacent = cycle_targets.0 == Some(id) || cycle_targets.1 == Some(id);
-        let prefix_armed = self.tabs.prefix.is_some();
-        let mut hints = Vec::new();
-        if !prefix_armed {
-            hints.extend(self.render_tab_cycle_hints(
-                id,
-                cycle_targets,
-                compact,
-                show_close,
-                window,
-                cx,
-            ));
-        }
-        if prefix_armed || !adjacent {
-            hints.extend(
-                self.render_tab_ordinal_hint(id, position, compact, show_close, window, cx),
-            );
-        }
+        let mut hints =
+            self.render_tab_cycle_hints(id, cycle_targets, compact, show_action, window, cx);
+        hints.extend(self.render_tab_ordinal_hint(id, position, compact, show_action, window, cx));
         let muted = cx.theme().muted_foreground;
         let tooltip = Self::tab_tooltip(title.clone(), path.clone(), muted);
         let tab = el! {
@@ -492,9 +507,9 @@ impl Browser {
                 overflow_hidden;
                 pl: $(px(presentation.interpolate(ITEM_GAP, (tokens::COLLAPSED_SIDEBAR_WIDTH - 2. * tokens::SIDEBAR_PADDING - 1. - tokens::SIDEBAR_ICON_SIZE) / 2.)));
                 pr: ITEM_GAP.px; rounded: ITEM_RADIUS.px; cursor_pointer;
-                text_color: $cx.theme().sidebar_foreground;
-                @if (selected) bg: $cx.theme().sidebar_accent; text_color: $cx.theme().sidebar_accent_foreground;
-                @else hover: { bg: $(gds::appearance::theme::Colors::current(cx).sidebar_hover()) }; @end;
+                bg: $(cx.theme().sidebar_accent.opacity(selection));
+                text_color: $(cx.theme().sidebar_foreground.interpolate(&cx.theme().sidebar_accent_foreground, selection));
+                @if (!selected && selection == 0.) hover: { bg: $(gds::appearance::theme::Colors::current(cx).sidebar_hover()) }; @end;
                 on_click: on_click;
                 on_hover: on_hover;
                 @if (!self.revealing_tab_close()) tooltip_show_delay: tokens::TOOLTIP_DELAY; tooltip: tooltip; @end;
@@ -503,9 +518,9 @@ impl Browser {
                 .div { # $("tab-icon", id); test_support; flex_shrink_0; w: tokens::SIDEBAR_ICON_SIZE.px; } [icon],
                 .div { flex_1; min_w_0; flex; flex_col; overflow_hidden; opacity: $(presentation.label_opacity()); } [
                     .div { pr: $(px(tokens::ICON_BUTTON_SIZE + ITEM_GAP)); text_ellipsis } [title],
-                    .div { pr: $(px(tokens::ICON_BUTTON_SIZE + ITEM_GAP)); text_xs; text_color: $(if selected { cx.theme().sidebar_accent_foreground } else { cx.theme().muted_foreground }); text_ellipsis } [path],
+                    .div { pr: $(px(tokens::ICON_BUTTON_SIZE + ITEM_GAP)); text_xs; text_color: $(cx.theme().muted_foreground.interpolate(&cx.theme().sidebar_accent_foreground, selection)); text_ellipsis } [path],
                 ],
-                ..close,
+                ..action,
                 ..hints,
             ]
         };
@@ -554,7 +569,7 @@ impl Browser {
         id: u64,
         cycle_targets: (Option<u64>, Option<u64>),
         compact: bool,
-        show_close: bool,
+        show_action: bool,
         window: &mut Window,
         cx: &mut App,
     ) -> Vec<AnyElement> {
@@ -574,7 +589,7 @@ impl Browser {
                 key,
                 ui::Shortcut::from(command),
                 compact,
-                show_close,
+                show_action,
                 window,
                 cx,
             ));
@@ -591,16 +606,16 @@ impl Browser {
         id: u64,
         position: usize,
         compact: bool,
-        show_close: bool,
+        show_action: bool,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<AnyElement> {
-        let shortcut = tabs::ordinal_shortcut(position)?;
+        let shortcut = ordinal_shortcut(position)?;
         Some(Self::stage_tab_hint(
             ("tab-ordinal-hint", id).into(),
             shortcut,
             compact,
-            show_close,
+            show_action,
             window,
             cx,
         ))
@@ -615,11 +630,11 @@ impl Browser {
         key: ElementId,
         shortcut: ui::Shortcut,
         compact: bool,
-        show_close: bool,
+        show_action: bool,
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        match (compact, show_close) {
+        match (compact, show_action) {
             (true, true) => ui::keytips::bottom_corner_anchor(window, cx, key, shortcut),
             (true, false) => ui::keytips::anchor(window, cx, key, shortcut),
             (false, _) => ui::keytips::trailing_before_anchor(
@@ -649,17 +664,9 @@ impl Browser {
                 on_click: on_click;
             }
         };
-        // The page key is staged in both layers: the plain one shows the path to it
-        // (`Tab+H`), the armed prefix the target alone (`H`).
-        let hint = ui::keytips::row_anchor(
-            window,
-            cx,
-            format!("location-prefix-hint-{id}").into(),
-            tabs::location_shortcut(target),
-        );
         let cursor = ui::region::is_focus_visible(&self.sidebar.regions.locations, window)
             && self.sidebar.regions.location == target;
-        el! { .div { relative; w_full } [nav, hint,
+        el! { .div { relative; w_full } [nav,
             @if (cursor) $(ui::region::focus_ring(cx)), @end,
         ] }
         .into_any_element()
@@ -680,7 +687,7 @@ impl Browser {
                 text_xs; text_color: $cx.theme().muted_foreground;
                 @if (self.sidebar.collapsed) justify_center; @else px: CONTENT_PADDING.px; @end;
             } [
-                @if (!self.settings.open) $i18n::text("local", cx), @end,
+                @if (self.pages.is_empty()) $i18n::text("local", cx), @end,
             ]
         }
         .into_any_element()
@@ -804,14 +811,12 @@ impl Browser {
             slot.refresh_visible();
         }
         self.sync_preview(cx);
+        let details_progress =
+            motion::state_progress("files-details", self.details_visible(), window, cx);
         let width = f32::from(window.bounds().size.width)
             - self.width()
             - TABLE_INSET * 2.
-            - if self.details_visible() {
-                PREVIEW_WIDTH
-            } else {
-                0.
-            };
+            - PREVIEW_WIDTH * details_progress;
         let mode = self.view_mode();
         let font_scale = f32::from(gds::appearance::typography::scaled(1., cx));
         if let Some(slot) = self.active_mut() {
@@ -869,13 +874,13 @@ impl Browser {
             self.marquee_surface(list_area.into_any_element(), window, cx)
         };
         let content = self.directory_page(list_area, window, cx);
-        let panel = self.details_visible().then(|| {
+        let panel = (details_progress > 0.).then(|| {
             el! {
                 .div {
-                    # "preview-panel"; w: PREVIEW_WIDTH.px; flex_shrink_0; h_full; min_h_0;
+                    # "preview-panel"; w: $(PREVIEW_WIDTH * details_progress).px; flex_shrink_0; h_full; min_h_0;
                     flex; flex_col; overflow_hidden; border_l_1; border_color: $cx.theme().border;
                 } [
-                    .div { flex_1; min_h_0; min_w_0; flex; flex_col; overflow_hidden } [$(self.files.preview.clone())],
+                    .div { w: PREVIEW_WIDTH.px; flex_1; min_h_0; flex_shrink_0; flex; flex_col; overflow_hidden } [$(self.files.preview.clone())],
                 ]
             }
         });
@@ -928,11 +933,8 @@ impl Browser {
             content_width: f32::from(window.bounds().size.width)
                 - self.width()
                 - TABLE_INSET * 2.
-                - if self.details_visible() {
-                    PREVIEW_WIDTH
-                } else {
-                    0.
-                },
+                - PREVIEW_WIDTH
+                    * motion::state_progress("files-details", self.details_visible(), window, cx),
             layout: self.columns_layout(&self.current_location()).clone(),
             location: self.current_location(),
             widths: self.locations.places.column_widths(self.current_location()),
@@ -965,7 +967,7 @@ impl Browser {
         // blank area below the rows remains a separate target, inset by the
         // scrollbar lane so the scrollbar itself stays draggable.
         el! {
-            .div { # "file-table-area"; relative; flex; flex_col; size_full; min_h_0 } [
+            .div { # "file-table-area"; key_context: FILE_TABLE_CONTEXT; relative; flex; flex_col; size_full; min_h_0 } [
                 .div { flex_1; min_h_0; min_w_0 } [table],
                 empty_space,
             ]
@@ -1008,12 +1010,15 @@ impl Browser {
     /// filter group, read-only mark, cancel and confirm sit where the terminal
     /// control sits in a browser window; leaving picker mode restores it.
     fn render_footer_controls(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        if self.settings.open {
+        if !self.pages.is_empty() {
             return el! { .div }.into_any_element();
         }
         if self.picker.is_some() {
             let picker = self.render_picker_controls(window, cx);
             return picker;
+        }
+        if !self.settings.preferences.terminal_enabled() {
+            return el! { .div }.into_any_element();
         }
         let terminal = self
             .command_button("terminal", IconName::Terminal, Command::Terminal, cx)
@@ -1032,7 +1037,10 @@ impl Browser {
 
     fn render_status(&self, cx: &App) -> AnyElement {
         let mut labels = Vec::new();
-        if self.settings.open {
+        if self.pages.current() == Some(&pages::Page::Help) {
+            return el! { .div }.into_any_element();
+        }
+        if !self.pages.is_empty() {
             labels.push(i18n::text("settings-auto-apply", cx));
         } else if self
             .current_tab()

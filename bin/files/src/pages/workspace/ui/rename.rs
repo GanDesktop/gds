@@ -290,7 +290,7 @@ impl Render for State {
 
 impl Browser {
     pub(super) fn request_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings.open
+        if !self.pages.is_empty()
             || self.collection().is_some()
             || self.operations.in_progress
             || window.has_active_dialog(cx)

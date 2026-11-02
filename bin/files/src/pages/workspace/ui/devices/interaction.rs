@@ -40,7 +40,7 @@ impl Browser {
     }
 
     pub(in super::super) fn volume_action_target(&self, cx: &App) -> Option<VolumeId> {
-        if self.settings.open {
+        if !self.pages.is_empty() {
             return None;
         }
         let id = if self.collection() == Some(Collection::Volumes) {

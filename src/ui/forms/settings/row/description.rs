@@ -1,6 +1,6 @@
 use gds_uim::el;
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _};
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use crate::ui::container::container_traits;
 

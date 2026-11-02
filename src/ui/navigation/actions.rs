@@ -1,7 +1,7 @@
 use crate::appearance::tokens::{ICON_BUTTON_SIZE, SIDEBAR_ITEM_HEIGHT};
 use crate::ui::container::container_traits;
 use gds_uim::el;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 #[derive(IntoElement)]
 pub struct NavItemActions {
     base: Div,

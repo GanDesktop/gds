@@ -119,6 +119,20 @@ impl Terminal {
         self.focus.contains_focused(window, cx)
             || self.focus_handle(cx).contains_focused(window, cx)
     }
+    /// Paste quoted file paths without submitting the command or modifying the clipboard.
+    pub fn paste_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let Some(view) = self.view.clone() else {
+            return;
+        };
+        match crate::service::terminal::input::path_text(paths) {
+            Ok(text) => {
+                view.update(cx, |view, cx| view.paste_text(&text, cx));
+                self.focus(window, cx);
+            }
+            Err(error) => tracing::warn!(%error, "cannot paste file paths into terminal"),
+        }
+    }
+
     /// Shell changes affect future sessions; existing processes are never restarted.
     pub fn set_preferences(&mut self, preferences: Preferences, cx: &mut Context<Self>) {
         let preferences = preferences.normalized();

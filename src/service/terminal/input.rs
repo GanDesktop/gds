@@ -170,3 +170,37 @@ pub fn mouse_bytes(
 
 #[cfg(test)]
 mod tests;
+
+#[derive(Debug, thiserror::Error)]
+#[error("File path cannot be represented as terminal input: {0:?}")]
+pub struct PathInputError(std::path::PathBuf);
+
+/// Quote paths for POSIX shells and fish, without a line terminator.
+///
+/// # Errors
+/// Rejects paths containing control characters or non-Unicode bytes.
+pub fn path_text(paths: &[std::path::PathBuf]) -> Result<String, PathInputError> {
+    if paths.is_empty() {
+        return Ok(String::new());
+    }
+    paths
+        .iter()
+        .map(|path| {
+            let value = path
+                .to_str()
+                .filter(|value| !value.chars().any(char::is_control))
+                .ok_or_else(|| PathInputError(path.clone()))?;
+            let mut quoted = String::from("'");
+            for ch in value.chars() {
+                match ch {
+                    '\'' => quoted.push_str("'\\''"),
+                    '\\' => quoted.push_str("'\\\\'"),
+                    other => quoted.push(other),
+                }
+            }
+            quoted.push('\'');
+            Ok(quoted)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|parts| parts.join(" ") + " ")
+}

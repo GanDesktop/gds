@@ -3,7 +3,7 @@ use gds_uim::el;
 use gpui_kit::{
     component::{
         ActiveTheme, Disableable, IndexPath, Sizable,
-        input::{InputEvent, InputState},
+        input::{InputEvent, InputState, Textarea, TextareaState},
         select::{SearchableVec, SelectEvent, SelectState},
         slider::{SliderEvent, SliderValue},
         switch::Switch,
@@ -29,6 +29,7 @@ enum Control {
     Toggle,
     Number(NumberControl),
     Text(Entity<InputState>),
+    StringList(Entity<TextareaState>),
     Choice {
         state: Entity<SelectState<SearchableVec<Choice>>>,
         choices: Vec<Choice>,
@@ -83,8 +84,7 @@ impl<T: Model> Editor<T> {
                     Kind::Text => {
                         let value = (field.get)(&value);
                         let state = cx.new(|cx| {
-                            InputState::new(window, cx)
-                                .default_value(value.as_str().unwrap_or_default())
+                            InputState::new(window, cx).default_value(editable_text(&value))
                         });
                         subscriptions.push(cx.subscribe_in(
                             &state,
@@ -102,6 +102,33 @@ impl<T: Model> Editor<T> {
                             },
                         ));
                         Control::Text(state)
+                    }
+                    Kind::StringList => {
+                        let value = (field.get)(&value);
+                        let state = cx.new(|cx| {
+                            TextareaState::new(window, cx)
+                                .auto_grow(2, 5)
+                                .default_value(editable_text(&value))
+                        });
+                        subscriptions.push(cx.subscribe_in(
+                            &state,
+                            window,
+                            move |this, input, event: &InputEvent, window, cx| {
+                                if matches!(event, InputEvent::Change) {
+                                    let value = Value::Array(
+                                        input
+                                            .read(cx)
+                                            .value()
+                                            .split('\n')
+                                            .filter(|line| !line.is_empty())
+                                            .map(|line| Value::String(line.to_owned()))
+                                            .collect(),
+                                    );
+                                    this.change(index, value, window, cx);
+                                }
+                            },
+                        ));
+                        Control::StringList(state)
                     }
                     Kind::Font | Kind::Language | Kind::Choice(_) => {
                         let choices = field.choices(&value, cx);
@@ -182,9 +209,15 @@ impl<T: Model> Editor<T> {
                         field.effective(&self.value).as_f64().unwrap_or(number.min) * number.scale;
                     control.sync(display as f32, window, cx);
                 }
-                Control::Text(state) => {
-                    let text = current.as_str().unwrap_or_default();
+                Control::StringList(state) => {
+                    let text = editable_text(&current);
                     if state.read(cx).value().as_str() != text {
+                        state.update(cx, |state, cx| state.set_value(text, window, cx));
+                    }
+                }
+                Control::Text(state) => {
+                    let text = editable_text(&current);
+                    if state.read(cx).value().as_str() != text.as_str() {
                         state.update(cx, |state, cx| state.set_value(text, window, cx));
                     }
                 }
@@ -282,6 +315,18 @@ impl<T: Model> Editor<T> {
                     this.change(index, Value::Bool(*checked), window, cx)
                 }))
                 .into_any_element(),
+            Control::StringList(state) => el! {
+                .div { # $id.clone(); test_support; w_full; } [
+                    $(Textarea::new(state)
+                        .accessibility_id(id)
+                        .small()
+                        .disabled(!self.enabled)
+                        .w_full()
+                        .aria_label(label)
+                        .bg(crate::appearance::theme::Colors::current(cx).content)),
+                ]
+            }
+            .into_any_element(),
             Control::Text(state) => ui::field::input(state, cx)
                 .id(id)
                 .small()
@@ -387,5 +432,16 @@ impl<T: Model> Render for Editor<T> {
             );
         }
         div().w_full().flex().flex_col().children(rows)
+    }
+}
+
+fn editable_text(value: &Value) -> String {
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => value.as_str().unwrap_or_default().to_owned(),
     }
 }

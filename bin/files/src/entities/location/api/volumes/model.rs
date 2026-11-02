@@ -140,6 +140,9 @@ impl Snapshot {
 
 impl Snapshot {
     pub fn supports_removal(&self, action: &DeviceAction) -> bool {
+        if !action.removes() {
+            return false;
+        }
         let members = self.removal_volumes(action);
         if members.is_empty() || members.iter().any(|volume| volume.system_mount) {
             return false;
@@ -160,9 +163,19 @@ impl Snapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeviceAction {
     Mount(VolumeId),
-    SetLabel { volume: VolumeId, label: String },
+    SetLabel {
+        volume: VolumeId,
+        label: String,
+    },
     Unmount(VolumeId),
     PowerOff(VolumeId),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "UDisks optical-media ejection is implemented and tested; Files currently exposes unmount and power-off"
+        )
+    )]
     Eject(VolumeId),
 }
 
@@ -182,7 +195,6 @@ impl DeviceAction {
 #[derive(Debug)]
 pub struct OperationOutcome {
     pub mount_point: Option<PathBuf>,
-    pub snapshot: Snapshot,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]

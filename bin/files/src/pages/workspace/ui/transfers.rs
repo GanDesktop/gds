@@ -255,7 +255,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         if self.operations.in_progress
-            || self.settings.open
+            || !self.pages.is_empty()
             || self.collection().is_some()
             || !self.device_path_accepts_task(&destination, cx)
         {

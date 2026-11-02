@@ -1,5 +1,6 @@
 use super::*;
 use gds_uim::el;
+use gpui_kit::IntoElement;
 
 /// A draggable background. Controls above it claim or stop their mouse presses.
 #[derive(Default, IntoElement)]

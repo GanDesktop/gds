@@ -144,6 +144,7 @@ impl Panel {
         !self.entries.is_empty()
     }
 
+    #[cfg(all(test, feature = "gui-tests"))]
     pub fn has_running_sessions(&self, cx: &App) -> bool {
         self.entries
             .iter()

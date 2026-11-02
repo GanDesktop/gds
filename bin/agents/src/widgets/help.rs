@@ -1,10 +1,17 @@
 use crate::shared::i18n::tr;
-use gds::ui::{Shortcut, ShortcutBadge, settings::*};
+use gds::ui::{
+    Shortcut,
+    help::{HelpPage, ShortcutHeading, ShortcutRow, ShortcutSection},
+};
 use gds_uim::el;
-use gpui_kit::{App, IntoElement, TestSupportExt, component::ActiveTheme, div, prelude::*};
+use gpui_kit::{App, IntoElement, prelude::*};
 
-pub(in crate::widgets::settings) fn render(query: &str, cx: &App) -> gpui_kit::AnyElement {
+pub(crate) fn render(cx: &App) -> gpui_kit::AnyElement {
     let application = vec![
+        (
+            tr!("app-help"),
+            Shortcut::new(Box::new(gds::ui::help::OpenHelp), None),
+        ),
         (
             tr!("settings-title"),
             Shortcut::new(Box::new(crate::shared::ui::dialogs::OpenSettings), None),
@@ -18,28 +25,28 @@ pub(in crate::widgets::settings) fn render(query: &str, cx: &App) -> gpui_kit::A
         (
             tr!("settings-return"),
             Shortcut::new(
-                Box::new(super::super::window::CloseWindow),
+                Box::new(crate::shared::routes::CloseWindow),
                 Some("BasSettings"),
             ),
         ),
         (
             tr!("shortcuts-next-page"),
             Shortcut::new(
-                Box::new(super::super::window::NextPage),
+                Box::new(crate::shared::routes::NextPage),
                 Some("BasSettings"),
             ),
         ),
         (
             tr!("shortcuts-previous-page"),
             Shortcut::new(
-                Box::new(super::super::window::PreviousPage),
+                Box::new(crate::shared::routes::PreviousPage),
                 Some("BasSettings"),
             ),
         ),
         (
             tr!("sidebar-toggle"),
             Shortcut::new(
-                Box::new(super::super::window::ToggleSidebar),
+                Box::new(crate::shared::routes::ToggleSidebar),
                 Some("BasSettings"),
             ),
         ),
@@ -57,41 +64,22 @@ pub(in crate::widgets::settings) fn render(query: &str, cx: &App) -> gpui_kit::A
         .map(|command| (gds::i18n::text(command.label_id(), cx), command.shortcut()))
         .collect();
     let sections = [
-        (tr!("settings-title"), owned(application)),
+        (tr!("shortcuts-application"), owned(application)),
         (
             tr!("shortcuts-workspace"),
-            owned(crate::features::navigation::commands::settings_entries()),
+            owned(crate::features::navigation::commands::shortcut_entries()),
         ),
         (tr!("shortcuts-settings"), owned(settings)),
         (tr!("shortcuts-notifications"), notifications),
         (tr!("shortcuts-dialogs"), dialogs),
     ];
-    let query = query.trim().to_lowercase();
-    let query = if ["shortcuts", "keyboard shortcuts", "keybindings", "快捷键"]
-        .contains(&query.as_str())
-    {
-        String::new()
-    } else {
-        query
-    };
     el! {
-        .div { # "settings-keybindings-page"; test_support; size_full; min_h_0; overflow_y_scroll; p_6 } [
-            .div { pb_4; text_sm; text_color: $(cx.theme().muted_foreground) } [tr!("shortcuts-note")],
+        .HelpPage::default [
             ..$(sections.into_iter().filter_map(|(title, entries)| {
-                let rows: Vec<_> = entries.into_iter().filter(|(label, _)| {
-                    query.is_empty() || title.to_lowercase().contains(&query) || label.to_lowercase().contains(&query)
-                }).map(|(label, shortcut)| el! {
-                    .SettingRow::default [
-                        .SettingLabel::default [label],
-                        .SettingActions::default [
-                            .SettingReset::default,
-                            .SettingControl::default [shortcut.ShortcutBadge::bound],
-                        ],
-                    ]
-                }).collect();
+                let rows: Vec<_> = entries.into_iter().map(|(label, shortcut)| ShortcutRow::new(label, shortcut)).collect();
                 (!rows.is_empty()).then(|| el! {
-                    .div { pb_6 } [
-                        .div { pb_2; text_xs; text_color: $(cx.theme().muted_foreground) } [title],
+                    .ShortcutSection::default [
+                        .ShortcutHeading::default [title],
                         ..rows,
                     ]
                 })

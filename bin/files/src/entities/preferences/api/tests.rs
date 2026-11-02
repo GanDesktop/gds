@@ -46,6 +46,7 @@ fn saves_and_reloads_the_complete_preferences_including_cleared_language() {
     preferences.font.family = Some("Noto Sans".to_owned());
     preferences.font.size = 18.0;
     preferences.files.show_hidden = true;
+    preferences.terminal_enabled = Some(false);
     preferences.terminal.shell = Some("/usr/bin/fish".into());
     preferences.terminal.shell_args =
         vec!["--private".into(), "literal argument with spaces".into()];
@@ -87,6 +88,7 @@ fn omitted_fields_receive_defaults_but_malformed_configuration_is_an_error() {
     fs::write(&path, "[files]\nshow_hidden = true\n").expect("write partial preferences");
     let preferences = load_from(&path).expect("read supported partial preferences");
     assert!(preferences.files.show_hidden);
+    assert!(preferences.terminal_enabled());
     assert_eq!(preferences.appearance, Preferences::default().appearance);
     assert_eq!(preferences.language, None);
     assert_eq!(preferences.time_format, Format::Relative);

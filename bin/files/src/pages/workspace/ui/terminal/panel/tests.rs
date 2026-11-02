@@ -59,6 +59,26 @@ async fn f2_from_terminal_input_confirms_and_cancels_instance_rename(cx: &mut Te
         );
     })
     .expect("terminal rename keyboard workflow");
+    cx.update_window(window.into(), |_, window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_cwd(Some(directory.path().to_owned()), cx);
+            panel.focus(window, cx);
+        });
+        window.render_frame(cx);
+        window.press("ctrl-n", cx);
+        assert_eq!(
+            panel.read(cx).entries.len(),
+            2,
+            "input focus creates a terminal tab"
+        );
+        window.render_frame(cx);
+        window.press("ctrl-w", cx);
+        assert!(
+            panel.read(cx).entries[1].closing,
+            "input focus closes the selected terminal"
+        );
+    })
+    .expect("terminal tab shortcuts from input");
     let shutdown = cx.update(|cx| panel.update(cx, |panel, cx| panel.shutdown(cx)));
     shutdown.await;
 }
@@ -311,7 +331,9 @@ async fn folder_switch_opens_new_instance_and_preserves_existing_shells(cx: &mut
 }
 
 #[gpui_kit::test]
-async fn row_close_is_hover_only_and_targets_its_own_terminal(cx: &mut TestAppContext) {
+async fn row_close_follows_hover_and_shortcuts_and_targets_its_own_terminal(
+    cx: &mut TestAppContext,
+) {
     use gpui_kit::{InputEvent as _, Modifiers, ModifiersChangedEvent, test::TestWindowExt};
 
     cx.executor().allow_parking();
@@ -362,8 +384,8 @@ async fn row_close_is_hover_only_and_targets_its_own_terminal(cx: &mut TestAppCo
             });
             window.render_frame(cx);
             assert!(
-                !window.find(("files-terminal-close", second)).visible(),
-                "PTY focus must not advertise the navigation Ctrl+W target"
+                window.find(("files-terminal-close", second)).visible(),
+                "PTY focus exposes the same active-terminal Ctrl+W target"
             );
             panel.update(cx, |panel, cx| panel.shutdown(cx))
         })

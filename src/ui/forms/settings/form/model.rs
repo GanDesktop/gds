@@ -121,6 +121,7 @@ pub enum Kind {
     Toggle,
     Number(Number),
     Text,
+    StringList,
     Font,
     Language,
     Choice(fn(&App) -> Vec<Choice>),

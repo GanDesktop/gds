@@ -31,7 +31,7 @@ impl Browser {
             cx.notify();
             return;
         }
-        if self.settings.open
+        if !self.pages.is_empty()
             || self.collection().is_some()
             || self.editing_path(window, cx)
             || window.has_active_dialog(cx)

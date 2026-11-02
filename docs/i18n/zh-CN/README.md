@@ -10,7 +10,7 @@ GDS 是一个旨在为一般人提供一个现代，简单，易用，且美观�
 ## 桌面软件
 ### 文件
 
-[![GDS Files 文件管理器](../../../bin/files/docs/assets/overview.png)](../../../bin/files/docs/i18n/zh-CN/README.md)
+[![GDS Files 文件管理器](../../../bin/files/docs/assets/file-browsing.gif)](../../../bin/files/docs/i18n/zh-CN/README.md)
 
 GDS Files，一个原生文件管理器，提供熟悉的文件浏览体验、内置终端和全键盘操作，方便日常浏览与整理文件。
 

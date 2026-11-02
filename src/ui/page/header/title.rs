@@ -1,6 +1,6 @@
 use gds_uim::el;
 use gpui_kit::component::StyledExt as _;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use super::super::super::container::container_traits;
 use super::super::TITLE_SIZE;

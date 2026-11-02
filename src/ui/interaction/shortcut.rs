@@ -16,33 +16,13 @@ const KEY_GAP: f32 = 4.;
 pub struct Shortcut {
     action: Rc<dyn Action>,
     context: Option<&'static str>,
-    prefix: Option<PrefixTarget>,
 }
-
-/// A shortcut's entry action when it is reached through a keyboard prefix.
-#[derive(Clone)]
-pub struct PrefixTarget {
-    entry: Rc<Shortcut>,
-}
-
-impl PrefixTarget {
-    pub fn entry(&self) -> &Shortcut {
-        &self.entry
-    }
-}
-impl PartialEq for PrefixTarget {
-    fn eq(&self, other: &Self) -> bool {
-        self.entry.same_scope(&other.entry)
-    }
-}
-impl Eq for PrefixTarget {}
 
 impl Shortcut {
     pub fn new(action: Box<dyn Action>, context: Option<&'static str>) -> Self {
         Self {
             action: Rc::from(action),
             context,
-            prefix: None,
         }
     }
 
@@ -80,26 +60,10 @@ impl Shortcut {
         &*self.action
     }
 
-    /// Mark this as a page key that only runs behind the prefix `entry` arms.
-    pub fn via_prefix(mut self, entry: impl Into<Shortcut>) -> Self {
-        self.prefix = Some(PrefixTarget {
-            entry: Rc::new(entry.into()),
-        });
-        self
-    }
-
-    /// The prefix this key belongs behind, for a page key; `None` for an
-    /// ordinary shortcut that runs from the plain layer itself.
-    pub fn prefix(&self) -> Option<PrefixTarget> {
-        self.prefix.clone()
-    }
-
     /// Whether both shortcuts name the same action in the same scope, so a
     /// cached presentation does not have to be rebuilt.
     pub fn same_scope(&self, other: &Self) -> bool {
-        self.context == other.context
-            && self.prefix == other.prefix
-            && self.action.partial_eq(&*other.action)
+        self.context == other.context && self.action.partial_eq(&*other.action)
     }
 
     /// The highest-precedence binding currently in effect for this action.

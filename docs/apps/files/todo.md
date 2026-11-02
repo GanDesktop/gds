@@ -80,7 +80,7 @@ P1 表示已有功能的正确性问题；P2 表示互操作能力与覆盖范�
 - FM-02：`src/service/desktop/protocol` 提供轻量共享请求，stdin JSON 跨进程保留原生字节；
   三种模式均走原生界面，支持 MIME／文件名过滤、choices、标题、按钮及助记符。
   SaveFile 确认覆盖，SaveFiles 分配唯一名称且不预先创建文件。
-  GPUI 平台补丁集中在 GanDesktop 的 `gpui-pre` / `gpui-pre-linux` 分支 的窗口 API、Wayland import 和 X11 提示。
+  GPUI 平台补丁集中在 GanDesktop 的 `gpui-fast` / `gpui-fast-linux` 分支 的窗口 API、Wayland import 和 X11 提示。
   协议缺失、失效或跨 Wayland/X11 的父窗口关系会报告具体限制，原生窗口继续显示。
 - FM-03：`service/desktop/file_manager` 处理标准接口，工作区复用已有目录页签、延迟应用组选择；
   属性使用已有详情组件打开原生窗口。Files 自身实例名与标准 provider 名分开，选择器不注册它们。

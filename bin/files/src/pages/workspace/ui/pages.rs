@@ -1,0 +1,39 @@
+//! Secondary pages keep the file workspace and the previous focus intact.
+use super::*;
+use gds::ui::page::stack::Entry;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Page {
+    Settings,
+    Help,
+}
+
+impl Browser {
+    pub(super) fn show_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.pages.iter().position(|entry| entry.content == page) {
+            while self.pages.len() > index + 1 {
+                self.back_page(window, cx);
+            }
+            return;
+        }
+        self.pages.push(Entry {
+            content: page,
+            return_focus: window.focused(cx),
+            subscription: None,
+        });
+
+        self.toolbar.path.editing = false;
+        self.window.root_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn back_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(page) = self.pages.pop() {
+            page.restore_focus(window, cx);
+            cx.notify();
+        }
+    }
+}
+
+#[cfg(all(test, feature = "gui-tests"))]
+mod tests;

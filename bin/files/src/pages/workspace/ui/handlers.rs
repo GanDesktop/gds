@@ -29,6 +29,15 @@ impl Browser {
     ) {
         self.dispatch(Command::Menu, window, cx);
     }
+    pub(super) fn on_help(
+        &mut self,
+        _: &gds::ui::help::OpenHelp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch(Command::Help, window, cx);
+    }
+
     pub(super) fn on_settings(
         &mut self,
         _: &OpenSettings,
@@ -36,6 +45,14 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         self.dispatch(Command::Settings, window, cx);
+    }
+    pub(super) fn on_new_folder(
+        &mut self,
+        _: &NewFolder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch(Command::NewFolder, window, cx);
     }
     pub(super) fn on_new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         self.dispatch(Command::NewTab, window, cx);
@@ -411,7 +428,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let command = if self.settings.open || self.collection().is_some() {
+        let command = if !self.pages.is_empty() || self.collection().is_some() {
             Command::Cancel
         } else {
             Command::Back
@@ -427,7 +444,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings.open || self.collection().is_some() {
+        if !self.pages.is_empty() || self.collection().is_some() {
             return;
         }
         cx.stop_propagation();
@@ -457,12 +474,20 @@ impl Browser {
         move |this, _, window, cx| this.switch_tab(id, window, cx)
     }
 
-    pub(super) fn click_close_tab(
+    pub(super) fn click_tab_action(
         id: u64,
+        unpin: bool,
     ) -> impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) {
         move |this, _, window, cx| {
             cx.stop_propagation();
-            this.close_tab(id, window, cx);
+            if unpin {
+                if this.tab_slot(id).is_some_and(|tab| tab.pinned) {
+                    this.toggle_pin(id, cx);
+                }
+                this.window.focus.focus(window, cx);
+            } else {
+                this.close_tab(id, window, cx);
+            }
         }
     }
 
@@ -536,7 +561,11 @@ impl Browser {
                     .disabled(!pinned && !pinnable)
                     .on_click(on_pin),
                 )
-                .item(PopupMenuItem::new(i18n::text("close-this-tab", cx)).on_click(on_close))
+                .item(
+                    PopupMenuItem::new(i18n::text("close-this-tab", cx))
+                        .disabled(pinned)
+                        .on_click(on_close),
+                )
         }
     }
 

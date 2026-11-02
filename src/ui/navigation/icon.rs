@@ -1,7 +1,7 @@
 use super::*;
 use gds_uim::el;
 
-const PIN_BADGE_SIZE: f32 = 10.;
+const PIN_BADGE_SIZE: f32 = 12.;
 
 /// A row's own icon, marked with a corner badge when the row is pinned.
 ///
@@ -13,19 +13,17 @@ pub fn pinned_icon(icon: IconName, pinned: bool, cx: &App) -> AnyElement {
 }
 
 /// Apply the same corner marker to an application-provided navigation icon.
-pub fn with_pin(icon: impl IntoElement, pinned: bool, cx: &App) -> AnyElement {
+pub fn with_pin(icon: impl IntoElement, pinned: bool, _cx: &App) -> AnyElement {
     el! {
         .div { relative; flex_shrink_0; size: SIDEBAR_ICON_SIZE.px } [
             icon,
             @if (pinned)
                 .div {
-                    absolute; right_0; bottom_0;
+                    absolute; left: (-6.0).px; top: (-6.0).px;
                     flex; items_center; justify_center;
                     size: PIN_BADGE_SIZE.px;
                 } [
-                    IconName::Pin.Icon::new {
-                        size: PIN_BADGE_SIZE.px; text_color: $(cx.theme().muted_foreground),
-                    },
+                    IconName::Pin.Icon::new { size: PIN_BADGE_SIZE.px; },
                 ],
             @end,
         ]

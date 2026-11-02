@@ -218,6 +218,7 @@ impl Workspace {
             .any(|workspace| workspace.panel.read(cx).contains_focus(window, cx))
     }
 
+    #[cfg(all(test, feature = "gui-tests"))]
     pub(crate) fn has_running_terminals(&self, cx: &App) -> bool {
         self.terminals
             .workspaces

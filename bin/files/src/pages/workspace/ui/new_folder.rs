@@ -281,7 +281,7 @@ impl Browser {
     ) {
         if self.operations.in_progress
             || !self.device_path_accepts_task(&destination, cx)
-            || self.settings.open
+            || !self.pages.is_empty()
             || self.collection().is_some()
             || window.has_active_dialog(cx)
         {

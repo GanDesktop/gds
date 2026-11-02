@@ -1,5 +1,5 @@
 use gds_uim::{component, el};
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use super::{DIVIDER_HEIGHT, KEY_CONTEXT, KEY_STEP, MoveDown, MoveUp, State};
 

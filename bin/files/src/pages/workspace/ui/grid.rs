@@ -4,6 +4,7 @@ use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 use gds::ui::thumbnail::Thumbnail;
 use gds_uim::el;
+use gpui_kit::base::motion::Interpolate as _;
 use gpui_kit::{
     assets::IconName,
     component::{ActiveTheme, Icon, menu::ContextMenuExt},
@@ -136,7 +137,7 @@ struct TileContent {
     entry: directory::Entry,
     geometry: Geometry,
     thumbnails: Entity<ui::thumbnail::Cache>,
-    selected: bool,
+    selection: f32,
     appearance: EntryAppearance,
 }
 
@@ -146,18 +147,16 @@ impl TileContent {
         let geometry = self.geometry;
         let icon = FileIcon::for_entry(entry);
         let appearance = self.appearance;
-        let foreground = if self.selected {
-            cx.theme().accent_foreground
-        } else {
-            cx.theme().foreground
-        };
-        let icon_color = if self.selected {
-            foreground
-        } else if icon.base() == IconName::Folder {
+        let foreground = cx
+            .theme()
+            .foreground
+            .interpolate(&cx.theme().accent_foreground, self.selection);
+        let icon_color = (if icon.base() == IconName::Folder {
             cx.theme().primary
         } else {
             cx.theme().muted_foreground
-        };
+        })
+        .interpolate(&cx.theme().accent_foreground, self.selection);
         let media = match crate::features::file_preview::source(entry) {
             Some(source) => Thumbnail::new(self.thumbnails.clone(), source)
                 .fallback(icon.render(px(geometry.icon_size), icon_color))
@@ -187,7 +186,8 @@ impl TileContent {
                 w: $(geometry.width).px; h: $(geometry.tile_height).px; p: PADDING.px; gap: CONTENT_GAP.px;
                 rounded_lg; border_1; border_color: $(transparent_black());
                 text_color: foreground; overflow_hidden;
-                when: $self.selected, $(|tile| tile.bg(cx.theme().selection).border_color(cx.theme().primary));
+                bg: $(cx.theme().selection.opacity(self.selection));
+                border_color: $(cx.theme().primary.opacity(self.selection));
             } [
                 .div { relative; w_full; h: $(geometry.thumbnail_height).px; flex_shrink_0; flex; items_center; justify_center;
                     opacity: $appearance.opacity;
@@ -261,10 +261,10 @@ impl Browser {
             drag,
             geometry,
         };
-        let list = uniform_list("file-grid", geometry.rows(rows.len()), cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+        let list = uniform_list("file-grid", geometry.rows(rows.len()), cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
             range.map(|row| {
                 let tiles = (row * geometry.columns..((row + 1) * geometry.columns).min(rows.len()))
-                    .map(|index| this.grid_tile(index, &data, cx));
+                    .map(|index| this.grid_tile(index, &data, window, cx));
                 el! { .div { h: $(geometry.row_height).px; w_full; flex; items_center; gap: GAP.px; px: PADDING.px; } [..tiles] }.into_any_element()
             }).collect()
         }))
@@ -279,14 +279,36 @@ impl Browser {
         }.into_any_element()
     }
 
-    fn grid_tile(&self, index: usize, data: &Data, cx: &mut Context<Self>) -> AnyElement {
+    fn grid_tile(
+        &self,
+        index: usize,
+        data: &Data,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let entry = &data.rows[index];
         let selected = data.selected.contains(&entry.path);
+        let target_bounds = data.geometry.tile(index, Point::default(), px(0.));
+        let presented = gpui_kit::base::motion::transition(
+            format!("file-grid-layout:{}", entry.path.display()),
+            target_bounds,
+            gpui_kit::base::motion::Transition::new(super::motion::DURATION),
+            window,
+            cx,
+        );
+        let mut geometry = data.geometry;
+        geometry.width = presented.size.width.into();
+        let selection = super::motion::state_progress(
+            format!("file-grid-selection:{}", entry.path.display()),
+            selected,
+            window,
+            cx,
+        );
         let content = TileContent {
             entry: entry.clone(),
-            geometry: data.geometry,
+            geometry,
             thumbnails: self.files.thumbnails.clone(),
-            selected,
+            selection,
             appearance: EntryAppearance::of(entry, cx),
         };
         let source = crate::features::file_preview::source(entry);
@@ -338,14 +360,17 @@ impl Browser {
             $(content.render(Some(index), play.map(IntoElement::into_any_element), cx)) { # $("file-tile", index);
                 role: Role::ListItem; aria_label: $(entry.display_name.clone()); aria_selected: selected;
                 cursor_pointer;
+                left: $(presented.origin.x - target_bounds.origin.x);
+                top: $(presented.origin.y - target_bounds.origin.y);
                 on_click: on_click;
-                when: $(!selected), $(|tile| tile.hover(|tile| tile.bg(cx.theme().list_hover)));
+                when: $(!selected && selection == 0.), $(|tile| tile.hover(|tile| tile.bg(cx.theme().list_hover)));
             }
         };
         tile = tile
             .on_drag(data.drag.drag_for(entry), move |drag, offset, _, cx| {
                 let mut content = content.clone();
                 content.appearance = content.appearance.preview();
+                content.selection = if selected { 1. } else { 0. };
                 DragPreview::new(
                     drag,
                     offset,
@@ -357,7 +382,8 @@ impl Browser {
         if entry.kind == directory::EntryKind::Directory {
             tile = drag_drop::drop_target(tile, path, browser);
         }
-        tile.test_support()
+        let tile = tile
+            .test_support()
             .context_menu(move |menu, window, cx| {
                 let Some(browser) = menu_browser.upgrade() else {
                     return menu;
@@ -366,7 +392,8 @@ impl Browser {
                     this.entry_context_menu(menu_path.clone(), menu, window, cx)
                 })
             })
-            .into_any_element()
+            .into_any_element();
+        el! { .div { w: $(data.geometry.width).px; h: $(data.geometry.tile_height).px; flex_shrink_0; } [tile] }.into_any_element()
     }
 
     pub(super) fn grid_surface(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {

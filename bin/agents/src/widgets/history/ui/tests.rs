@@ -2,6 +2,7 @@ use super::*;
 use bas::model::{Owner, SessionMeta};
 use gpui_kit::{TestAppContext, WeakEntity};
 use std::cell::RefCell;
+use std::rc::Rc;
 use tokio::sync::mpsc;
 
 mod loading;

@@ -12,7 +12,7 @@ pub use footer::DialogFooter;
 use gds_uim::component;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{StyledExt as _, button::ButtonVariant};
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 pub const DIALOG_CONTEXT: &str = "Dialog";
 const ACTION_GAP: f32 = 8.;

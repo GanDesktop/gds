@@ -40,7 +40,6 @@ theme-reload = 重新读取主题
 theme-loaded = 已应用主题
 theme-opacity = 主界面背景不透明度
 sidebar-opacity = 侧边栏背景不透明度
-blur-status = 本版本未启用桌面背板模糊。
 settings-auto-apply = 更改立即生效并自动保存
 settings-apply-failed = 未应用更改：{ $error }
 settings-save-failed = 更改已生效，但未能保存：{ $error }
@@ -49,7 +48,6 @@ settings-migrate-failed = 未能把旧配置复制到当前应用的配置文件
 settings-terminal-note = 内嵌终端尚未接入。可以在当前文件夹打开外部终端。
 settings-shell-note = 外部终端使用系统默认终端或 GDS_TERMINAL 指定的程序。
 settings-shortcuts-note = 相同动作使用相同快捷键。键帽与提示读取实际绑定。按住 Ctrl 只显示 Ctrl 组合的提示，按住 Alt 只显示 Alt 组合的提示；提示省略你正按住的修饰键，按下其余键即可执行。刷新另兼容 F5，菜单另兼容 F10。
-settings-tab-prefix = 按住 Ctrl+Tab 后：H 主文件夹、R 最近、D 收藏、V 卷、N 网络、B 回收站，1–9 切换到第 1–9 个文件页签；松开 Tab 则循环到下一页签。按住 Ctrl+Shift+Tab 反向循环。输入框中 Ctrl+Tab 仍直接循环，不会输入目标字母。
 settings-page-actions = 页签与位置
 settings-trash-actions = 回收站操作
 settings-trash-note = 仅在回收站页生效；没有选中项或正在处理时不执行、不显示按键提示。
@@ -256,3 +254,25 @@ picker-save = 保存
 picker-name = 文件名
 picker-overwrite-title = 替换已有文件？
 picker-overwrite-message = 此位置已有同名文件。确认后，应用可以替换该文件。
+
+help = 帮助
+page-return = 返回
+
+help-application = 应用
+help-tabs = 标签页
+help-navigation = 路径导航
+help-view = 文件视图
+help-files = 文件操作
+help-selection = 文件选择
+help-locations = 卷与位置
+help-trash = 回收站
+help-terminal = 终端
+help-focus = 区域焦点
+help-notifications = 通知
+help-dialogs = 对话框
+
+help-select-tab = 选择第 1–9 个文件页签
+
+unpin-close-title = 取消固定并关闭页签？
+unpin-close-message = “{ $name }”已固定。
+unpin-close-confirm = 取消固定并关闭

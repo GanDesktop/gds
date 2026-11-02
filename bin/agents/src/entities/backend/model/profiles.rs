@@ -3,7 +3,7 @@
 use crate::shared::config::{ConnectionProfile, Document, Frontend, Store};
 use crate::shared::i18n::tr;
 use bas::service::tls::ConnectionOptions as Target;
-use gpui_kit::{App, AppContext, BorrowAppContext, Context, Entity, Global};
+use gpui_kit::{App, AppContext, Context, Entity, Global};
 
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;

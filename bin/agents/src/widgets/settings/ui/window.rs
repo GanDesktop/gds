@@ -3,8 +3,8 @@
 use crate::shared::i18n::tr;
 use gpui_kit::{
     App, AppContext, Bounds, Context, Entity, Focusable, Global, Render, Subscription, WeakEntity,
-    Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, component::Root,
-    prelude::*, px, size,
+    Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, component::Root, prelude::*, px,
+    size,
 };
 
 use crate::shared::lib::appearance as theme;
@@ -15,10 +15,7 @@ const HEIGHT: f32 = 820.;
 const MIN_WIDTH: f32 = 1000.;
 const MIN_HEIGHT: f32 = 640.;
 
-actions!(
-    settings_window,
-    [CloseWindow, NextPage, PreviousPage, ToggleSidebar]
-);
+pub(crate) use crate::shared::routes::{CloseWindow, NextPage, PreviousPage, ToggleSidebar};
 
 #[derive(Clone)]
 struct OpenWindow {
@@ -34,6 +31,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
     super::connections::bind_keys(cx);
     cx.bind_keys([
         gpui_kit::KeyBinding::new("escape", CloseWindow, Some("BasSettings")),
+        gpui_kit::KeyBinding::new("alt-left", CloseWindow, Some("BasSettings")),
         gpui_kit::KeyBinding::new(
             if cfg!(target_os = "macos") {
                 "cmd-w"

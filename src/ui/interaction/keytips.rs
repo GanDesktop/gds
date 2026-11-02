@@ -15,7 +15,7 @@ use std::{
 
 use gpui_kit::base::{Root, RootPlugin};
 use gpui_kit::component::{ActiveTheme, window_paddings};
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use crate::appearance::typography;
 use crate::ui::{HeldModifier, Shortcut, ShortcutBadge};
@@ -73,9 +73,6 @@ pub struct Keytips {
 #[derive(Default)]
 struct Staged {
     held: Option<HeldModifier>,
-    /// Whether the `Ctrl+Tab` prefix is armed. The armed prefix is its own
-    /// presentation layer: only the page targets it accepts stay visible.
-    prefix: bool,
     hints: HashMap<ElementId, Hint>,
 }
 
@@ -148,7 +145,6 @@ impl Keytips {
 ///
 /// The plugin also clears on window deactivation, which may lose the matching
 /// modifier release. Callers can explicitly clear during other focus transitions.
-/// The prefix presentation goes with it.
 pub fn release(window: &Window, cx: &mut App) {
     let Some(layer) = layer(window, cx) else {
         return;
@@ -158,23 +154,6 @@ pub fn release(window: &Window, cx: &mut App) {
     let mut staged = staged.borrow_mut();
     let changed = staged.release();
     drop(staged);
-    if changed {
-        cx.notify(id);
-    }
-}
-
-/// Tell the hint layer whether the `Ctrl+Tab` prefix is armed.
-///
-/// The armed prefix shows only the page targets and drops the prefix entry as
-/// well as every ordinary Ctrl key. It is idempotent and asks for a frame only
-/// when the mode really changes, so a view may set it on every render.
-pub fn set_prefix(window: &Window, cx: &mut App, armed: bool) {
-    let Some(layer) = layer(window, cx) else {
-        return;
-    };
-    let id = layer.entity_id();
-    let staged = layer.read(cx).staged.clone();
-    let changed = staged.borrow_mut().set_prefix(armed);
     if changed {
         cx.notify(id);
     }
@@ -238,12 +217,11 @@ impl Render for Keytips {
                 let id = this.entity_id();
                 window.on_next_frame(move |_, cx| cx.notify(id));
             }
-            let prefix = staged.prefix;
             let mut placed: Vec<_> = staged
                 .hints
                 .iter()
                 .filter_map(|(key, hint)| {
-                    let bindings = hint.presentation(window, cx, focus, held, prefix)?;
+                    let bindings = vec![hint.active_binding(window, cx, focus, held)?];
                     Some((
                         hint.bounds,
                         hint.placement,
@@ -285,47 +263,6 @@ impl Render for Keytips {
 }
 
 impl Hint {
-    /// The key combination(s) a label shows for this control right now.
-    ///
-    /// A plain control shows the one binding a press would run. A page key that
-    /// only runs behind the `Ctrl+Tab` prefix instead shows how to reach it: the
-    /// prefix entry followed by its target while the plain layer is up, and the
-    /// target alone while the prefix is armed. Ordinary controls keep their
-    /// labels out of the armed prefix, where their keys no longer apply.
-    fn presentation(
-        &self,
-        window: &Window,
-        cx: &mut App,
-        focus: &FocusHandle,
-        held: HeldModifier,
-        prefix: bool,
-    ) -> Option<Vec<KeyBinding>> {
-        let Some(target) = self.shortcut.prefix() else {
-            if prefix {
-                return None;
-            }
-            let binding = self.active_binding(window, cx, focus, held)?;
-            return Some(vec![binding]);
-        };
-        // Reaching a page target is a Ctrl+Tab path; the other group's press
-        // cannot show it.
-        if held != HeldModifier::Ctrl || !window.is_action_available(self.shortcut.action(), cx) {
-            return None;
-        }
-        let target_binding = self.shortcut.binding(window)?;
-        let target_binding = visible_binding(true, Some(target_binding), held)?;
-        if prefix {
-            return Some(vec![target_binding]);
-        }
-        let entry = target.entry().action();
-        if !window.is_action_available(entry, cx) {
-            return None;
-        }
-        let binding = window.highest_precedence_binding_for_action_in(entry, focus)?;
-        let entry = visible_binding(true, Some(binding), held)?;
-        Some(vec![entry, target_binding])
-    }
-
     /// The key a press would run right now: the focused scope must bind the
     /// action to a single keystroke *and* a handler for it must be on the
     /// dispatch path.
@@ -367,7 +304,7 @@ fn visible_binding(
 
 impl Staged {
     fn release(&mut self) -> bool {
-        self.set_held(None) | self.set_prefix(false)
+        self.set_held(None)
     }
 
     /// Arm one modifier group, or disarm both. Returns whether the layer needs
@@ -380,17 +317,6 @@ impl Staged {
         if held.is_none() {
             self.hints.clear();
         }
-        true
-    }
-
-    /// Switch between the plain Ctrl presentation and the armed prefix one.
-    /// Returns whether the layer needs a frame; an unchanged mode must not ask
-    /// for one, or the layer would redraw itself forever.
-    fn set_prefix(&mut self, armed: bool) -> bool {
-        if self.prefix == armed {
-            return false;
-        }
-        self.prefix = armed;
         true
     }
 

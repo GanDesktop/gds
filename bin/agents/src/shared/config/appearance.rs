@@ -1,5 +1,4 @@
 //! Shared appearance data and validation, independent of the desktop runtime.
-use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -124,7 +123,9 @@ impl Appearance {
     }
     /// # Errors
     /// Reports invalid JSON or preference values.
-    pub fn from_json(text: &str) -> Result<Self> {
+    #[cfg(test)]
+    pub fn from_json(text: &str) -> anyhow::Result<Self> {
+        use anyhow::Context as _;
         let preferences: Self =
             serde_json::from_str(text).context("invalid Agents appearance JSON")?;
         preferences.validate()?;

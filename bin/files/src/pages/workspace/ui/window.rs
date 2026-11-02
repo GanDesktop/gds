@@ -50,7 +50,6 @@ impl Browser {
                     ui::keytips::release(window, cx);
                     this.cancel_marquee(cx);
                     drag_drop::cancel_tab_hover(cx);
-                    this.tabs.prefix = None;
                     if this.window.held_modifier.take().is_some() {
                         cx.notify();
                     }

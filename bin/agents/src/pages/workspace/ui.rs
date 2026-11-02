@@ -75,6 +75,7 @@ pub(crate) mod shortcuts;
 
 const EVENT_BATCH: usize = 64;
 const LIST_OVERDRAW: f32 = 800.;
+#[cfg(all(test, feature = "gui-tests"))]
 const SIDEBAR_WIDTH: f32 = gds::appearance::tokens::SIDEBAR_WIDTH;
 const AGENT_ICON_SIZE: f32 = 16.;
 

@@ -40,7 +40,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings.open || window.has_active_dialog(cx) {
+        if !self.pages.is_empty() || window.has_active_dialog(cx) {
             return;
         }
         self.clear_list_selection(window, cx);
@@ -72,24 +72,22 @@ impl Browser {
 
     /// Whether the visible page accepts plain list-navigation keys.
     ///
-    /// A dialog or the application menu owns its own keys, an armed tab prefix
-    /// owns plain arrows, and an open editor owns every keystroke it receives.
+    /// A dialog, menu or editor owns every keystroke it receives.
     pub(super) fn list_keys_available(&self, window: &mut Window, cx: &mut App) -> bool {
-        !self.settings.open
+        self.pages.is_empty()
             && self.window.focus.contains_focused(window, cx)
             && !self.sidebar.regions.sidebar_focused(window, cx)
             && !notifications::is_focused(window, cx)
             && !self.menus.application_open
             && self.menus.context.is_none()
             && self.menus.sort.is_none()
-            && self.tabs.prefix.is_none()
             && !self.operations.rename.read(cx).is_open()
             && !window.has_active_dialog(cx)
             && !self.editing_input_focused(window, cx)
     }
 
     pub(super) fn file_selection_focused(&self, window: &Window, cx: &App) -> bool {
-        !self.settings.open
+        self.pages.is_empty()
             && self.collection().is_none()
             && (self.window.focus.is_focused(window)
                 || self
@@ -137,6 +135,50 @@ impl Browser {
             view.update(cx, |view, cx| {
                 view.move_cursor(delta, edge, modifiers.shift, cx)
             });
+            cx.stop_propagation();
+            window.prevent_default();
+            return;
+        }
+        if matches!(event.keystroke.key.as_str(), "pageup" | "pagedown") {
+            if let Some(slot) = self.active() {
+                let viewport = f32::from(slot.scroll.0.borrow().base_handle.bounds().size.height);
+                let (columns, row_height) = if self.grid_mode() {
+                    (slot.grid.columns, slot.grid.row_height)
+                } else {
+                    (1, gds::appearance::tokens::DataListStyle::ROW_HEIGHT)
+                };
+                let page_rows = (viewport / row_height).floor().max(1.) as usize;
+                let step = page_rows * columns;
+                let current = slot
+                    .cursor
+                    .as_ref()
+                    .or_else(|| slot.navigation.view().selected.last())
+                    .and_then(|path| slot.table_rows.iter().position(|entry| &entry.path == path))
+                    .unwrap_or(0);
+                let count = slot.table_rows.len();
+                if count > 0 {
+                    let index = if event.keystroke.key == "pageup" {
+                        current.saturating_sub(step)
+                    } else {
+                        (current + step).min(count - 1)
+                    };
+                    self.select(index, modifiers, cx);
+                    if let Some(slot) = self.active() {
+                        let scroll = &slot.scroll.0.borrow().base_handle;
+                        let direction = if event.keystroke.key == "pageup" {
+                            1.
+                        } else {
+                            -1.
+                        };
+                        let distance = px(page_rows as f32 * row_height);
+                        let mut offset = scroll.offset();
+                        offset.y =
+                            (offset.y + distance * direction).clamp(-scroll.max_offset().y, px(0.));
+                        scroll.set_offset(offset);
+                    }
+                    self.window.focus.focus(window, cx);
+                }
+            }
             cx.stop_propagation();
             window.prevent_default();
             return;

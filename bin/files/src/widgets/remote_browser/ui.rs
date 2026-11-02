@@ -208,6 +208,7 @@ impl View {
             return matches!(
                 command,
                 Command::Open
+                    | Command::NewFolder
                     | Command::Rename
                     | Command::Trash
                     | Command::DeletePermanent
@@ -249,6 +250,7 @@ impl View {
                 cx.notify();
             }
             Command::Paste => self.paste(cx),
+            Command::NewFolder => self.name_prompt(true, window, cx),
             Command::Rename => self.name_prompt(false, window, cx),
             Command::Trash | Command::DeletePermanent => self.confirm_delete(window, cx),
             Command::Favorite => cx.emit(Event::Favorite(self.address().clone())),

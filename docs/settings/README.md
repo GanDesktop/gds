@@ -75,7 +75,7 @@ macros/gds-settings-derive/                    配置类型与 UI 标注的派�
 src/appearance/typography.rs                字体与基准字号
 src/appearance/theme.rs + theme/            主题来源、语义配色和材质
 bin/files/src/widgets/settings/ui.rs           Files 设置中心与偏好模型
-bin/files/src/widgets/settings/ui/pages/       Files 的常规、外观、终端、快捷键和文件页
+bin/files/src/widgets/settings/ui/pages/       Files 的常规、外观、文件和终端页
 bin/files/src/widgets/settings/ui/controls.rs  Files 字段与公共控件之间的映射
 bin/files/src/entities/preferences/api.rs      Files 配置读取、旧配置导入和保存
 bin/agents/src/widgets/settings/ui.rs          Agents 设置中心与导航
@@ -89,3 +89,5 @@ Files 的列布局、标签／卷侧栏偏好和配置路径属于 Files，不�
 - 用户偏好页面不散落到主题模块、会话模块或公共协议层中。
 - 不为页面注册建立动态插件、通用表单语言或设置服务框架。
 - 窗口、文件标签、会话草稿和正在运行的任务不是设置页可以重建的数据。
+
+Files 的终端设置排在文件设置之后，提供默认开启的启用开关与逐行编辑的 Shell 参数。禁用后隐藏终端面板和操作入口；已有会话保留，重新启用后可再次展开。快捷键在独立帮助页（F1）查看。

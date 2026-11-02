@@ -34,17 +34,19 @@ pub(super) struct State {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MenuEntry {
     Settings,
+    Help,
     Logs,
     About,
 }
 
 impl MenuEntry {
     /// The rows of the application menu, in order.
-    const ROWS: [Self; 3] = [Self::Settings, Self::Logs, Self::About];
+    const ROWS: [Self; 4] = [Self::Settings, Self::Help, Self::Logs, Self::About];
 
     fn label_id(self) -> &'static str {
         match self {
             Self::Settings => Command::Settings.label_id(),
+            Self::Help => Command::Help.label_id(),
             Self::Logs => "logs-title",
             Self::About => "about",
         }
@@ -53,6 +55,7 @@ impl MenuEntry {
     fn icon(self) -> IconName {
         match self {
             Self::Settings => IconName::Settings,
+            Self::Help => IconName::BookOpen,
             Self::Logs => IconName::List,
             Self::About => IconName::Info,
         }
@@ -62,6 +65,7 @@ impl MenuEntry {
     fn command(self) -> Option<Command> {
         match self {
             Self::Settings => Some(Command::Settings),
+            Self::Help => Some(Command::Help),
             Self::About | Self::Logs => None,
         }
     }
@@ -84,6 +88,7 @@ impl MenuEntry {
             Self::Settings => {
                 Browser::menu_command(view.clone(), Command::Settings)(event, window, cx);
             }
+            Self::Help => Browser::menu_command(view.clone(), Command::Help)(event, window, cx),
             Self::About => Browser::show_about(view.clone(), window, cx),
             Self::Logs => {
                 let _ = view.update(cx, |browser, cx| browser.set_menu_open(false, cx));

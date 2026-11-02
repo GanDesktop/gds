@@ -13,4 +13,5 @@ files-terminal-hide = Hide terminal
 files-terminal-maximize = Maximize terminal dock
 files-terminal-restore = Restore terminal dock
 files-terminal-resize = Resize terminal dock
-files-terminal-settings-note = Shell options and scrollback limits apply to new sessions. Existing sessions stay running. Literal shell arguments can be set with terminal.shell_args in Files settings.toml; no shell command string is evaluated.
+
+files-terminal-enabled = Enable terminal

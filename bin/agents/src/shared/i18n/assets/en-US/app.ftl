@@ -879,7 +879,7 @@ shortcuts-workspace = Conversations
 shortcuts-settings = Settings navigation
 shortcuts-notifications = Notifications
 shortcuts-dialogs = Dialogs
-shortcuts-note = Keycaps follow the active bindings. Conversation actions apply in the workspace; settings navigation applies here.
+shortcuts-note = Keycaps follow the active bindings. Conversation actions apply in the workspace; settings navigation applies in Settings.
 
 theme-bamboo = Bamboo
 theme-retro = Retro
@@ -889,3 +889,6 @@ theme-high-contrast = High Contrast
 theme-aero = Aero
 appearance-builtin-theme = Built-in palette
 appearance-builtin-theme-help = Six palettes, each with light and dark variants.
+
+app-help = Help
+shortcuts-application = Application

@@ -223,12 +223,6 @@ impl Panel {
                 .any(|entry| entry.terminal.read(cx).contains_focus(window, cx))
     }
 
-    pub fn has_running_sessions(&self, cx: &App) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.terminal.read(cx).is_running(cx))
-    }
-
     pub fn shutdown(&mut self, cx: &mut Context<Self>) -> terminal::Shutdown {
         self.sealed = true;
         let shutdowns: Vec<_> = self
@@ -251,7 +245,14 @@ impl Panel {
         })
     }
 
-    fn on_new(&mut self, _: &NewTerminal, window: &mut Window, cx: &mut Context<Self>) {
+    fn paste_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(entry) = self.selected() {
+            let terminal = entry.terminal.clone();
+            terminal.update(cx, |terminal, cx| terminal.paste_paths(paths, window, cx));
+        }
+    }
+
+    pub(super) fn on_new(&mut self, _: &NewTerminal, window: &mut Window, cx: &mut Context<Self>) {
         if !window.has_active_dialog(cx)
             && let Some(cwd) = self.cwd.clone()
         {
@@ -323,7 +324,15 @@ impl Panel {
         focus_input.update(cx, |input, cx| input.focus(window, cx));
     }
 
-    fn on_close(&mut self, _: &CloseTerminal, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn on_close(
+        &mut self,
+        _: &CloseTerminal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
         if let Some(id) = self.active {
             self.request_close(id, window, cx);
         }
@@ -404,7 +413,7 @@ impl Panel {
     fn tab(&self, entry: &Entry, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let id = entry.id;
         let selected = self.active == Some(id);
-        let shortcut_target = selected && self.tabs_focus.is_focused(window);
+        let shortcut_target = selected && self.contains_focus(window, cx);
         let group = SharedString::from(format!("files-terminal-row-{id}"));
         let hint = Self::hint(entry, cx);
         let close_label = i18n::text("files-terminal-end", cx);
@@ -497,12 +506,9 @@ impl Render for Panel {
             .text_color(colors.sidebar_foreground)
             .key_context(TERMINAL_TABS_CONTEXT)
             .track_focus(&self.tabs_focus)
-            .on_action(cx.listener(Self::on_new))
-            .on_action(cx.listener(Self::on_close))
             .on_action(cx.listener(Self::on_next))
             .on_action(cx.listener(Self::on_previous))
             .on_action(cx.listener(Self::on_focus))
-            .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
             .children(self.entries.iter().map(|entry| self.tab(entry, window, cx)));
         let body = match self.selected() {
             Some(entry) => entry.terminal.clone().into_any_element(),
@@ -522,6 +528,9 @@ impl Render for Panel {
                 .into_any_element(),
         };
         div()
+            .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
+            .on_action(cx.listener(Self::on_new))
+            .on_action(cx.listener(Self::on_close))
             .on_action(cx.listener(Self::on_rename))
             .relative()
             .size_full()
@@ -530,7 +539,22 @@ impl Render for Panel {
             .flex()
             .overflow_hidden()
             .child(tabs)
-            .child(div().flex_1().min_h_0().min_w_0().h_full().child(body))
+            .child(
+                el! { .div { # "files-terminal-input"; test_support; flex_1; min_h_0; min_w_0; h_full; } }
+                    .on_drop(cx.listener(
+                        |panel, files: &super::super::drag_drop::FileDrag, window, cx| {
+                            panel.paste_paths(&files.paths(), window, cx);
+                        },
+                    ))
+                    .on_drop(cx.listener(|panel, files: &ExternalPaths, window, cx| {
+                        panel.paste_paths(files.paths(), window, cx);
+                    }))
+                    .drag_over::<super::super::drag_drop::FileDrag>(|style, _, _, cx| {
+                        style.bg(cx.theme().drop_target)
+                    })
+                    .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+                    .child(body),
+            )
             .child(
                 div()
                     .id("files-terminal-divider")

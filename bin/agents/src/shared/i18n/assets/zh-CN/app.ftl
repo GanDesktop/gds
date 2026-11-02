@@ -849,7 +849,7 @@ shortcuts-workspace = 会话
 shortcuts-settings = 设置导航
 shortcuts-notifications = 通知
 shortcuts-dialogs = 对话框
-shortcuts-note = 键帽显示当前绑定。会话操作在工作区生效，设置导航在此处生效。
+shortcuts-note = 键帽显示当前绑定。会话操作在工作区生效，设置导航在设置页生效。
 
 theme-bamboo = 竹林
 theme-retro = 怀旧
@@ -859,3 +859,6 @@ theme-high-contrast = 高对比
 theme-aero = Aero
 appearance-builtin-theme = 内置配色
 appearance-builtin-theme-help = 六套配色，各有浅色和深色版本。
+
+app-help = 帮助
+shortcuts-application = 应用

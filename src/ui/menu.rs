@@ -67,7 +67,7 @@ pub fn overlay(menu: Entity<PopupMenu>, position: Point<Pixels>, window: &Window
             .div {
                 w: $(window.bounds().size.width);
                 h: $(window.bounds().size.height);
-                on_scroll_wheel: $(|_, _, cx| cx.stop_propagation());
+                on_scroll: $(|_, _, cx| cx.stop_propagation());
             } [
                 .anchored {
                     position: position;

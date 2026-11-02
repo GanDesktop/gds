@@ -17,6 +17,7 @@ gpui_kit::actions!(workspace_pages, [Back]);
 
 pub(crate) fn bind_page_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("f1", gds::ui::help::OpenHelp, None),
         KeyBinding::new(
             "ctrl-`",
             crate::features::navigation::commands::ToggleTerminal,
@@ -41,7 +42,7 @@ pub(crate) fn bind_page_keys(cx: &mut App) {
 pub(crate) struct Host {
     active: ConnectionOptions,
     workspaces: HashMap<ConnectionOptions, Entity<Workspace>>,
-    pages: Vec<Page>,
+    pages: gds::ui::page::stack::Stack<Content>,
     focus: FocusHandle,
     compact_bounds: Option<Size<Pixels>>,
     workspace_events: Vec<Subscription>,
@@ -63,7 +64,7 @@ pub(crate) fn workspace_view(
         Host {
             active: active.clone(),
             workspaces: HashMap::from([(active, view)]),
-            pages: Vec::new(),
+            pages: Default::default(),
             focus: cx.focus_handle(),
             compact_bounds: None,
             workspace_events: vec![events],
@@ -147,6 +148,30 @@ impl Host {
         self.push_page(Content::Catalog(content), None, return_focus, window, cx);
     }
 
+    fn on_help(
+        &mut self,
+        _: &gds::ui::help::OpenHelp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.stop_propagation();
+        if self.closing || window.has_active_dialog(cx) {
+            return;
+        }
+        if let Some(index) = self
+            .pages
+            .iter()
+            .position(|page| matches!(page.content, Content::Help))
+        {
+            while self.pages.len() > index + 1 {
+                self.back(window, cx);
+            }
+            return;
+        }
+        let return_focus = window.focused(cx);
+        self.push_page(Content::Help, None, return_focus, window, cx);
+    }
+
     pub(crate) fn show_about(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self
             .pages
@@ -217,7 +242,7 @@ impl Host {
         self.pages.push(Page {
             content,
             return_focus,
-            _events: events,
+            subscription: events,
         });
         self.focus.focus(window, cx);
         cx.notify();
@@ -252,9 +277,7 @@ impl Host {
                 workspace.set_presented(true, window, cx)
             });
         }
-        if let Some(focus) = page.return_focus {
-            focus.focus(window, cx);
-        }
+        page.restore_focus(window, cx);
         cx.notify();
     }
 
@@ -293,12 +316,6 @@ impl Host {
             return;
         }
         self.finish_close(window, cx);
-    }
-
-    pub(crate) fn has_running_terminals(&self, cx: &App) -> bool {
-        self.workspaces
-            .values()
-            .any(|view| view.read(cx).has_running_terminals(cx))
     }
 
     pub(crate) fn shutdown_terminals(
@@ -436,7 +453,7 @@ impl Host {
     }
 
     fn prepare_to_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for page in &self.pages {
+        for page in self.pages.iter() {
             Self::prepare_page(page, window, cx);
         }
         crate::widgets::settings::window::unregister(window.window_handle().window_id(), cx);
@@ -457,11 +474,11 @@ impl Host {
         };
         window.set_window_title(page.content.title());
         if matches!(page.content, Content::Settings(_)) {
-            return page.content.element();
+            return page.content.element(cx);
         }
         let title = page.content.title();
         let id = page.content.id();
-        let content = page.content.element();
+        let content = page.content.element(cx);
         let sidebar_width = page.content.sidebar_width();
         let back = gds::ui::IconButton::new("page-return")
             .icon(gpui_kit::assets::IconName::ArrowLeft)
@@ -495,7 +512,9 @@ impl Host {
             .size_full()
             .flex()
             .flex_col()
-            .bg(gds::appearance::theme::content_background(cx))
+            .when(!matches!(page.content, Content::Help), |surface| {
+                surface.bg(gds::appearance::theme::content_background(cx))
+            })
             .key_context("BasWorkspacePage")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::on_back))
@@ -520,6 +539,7 @@ impl Render for Host {
             .size_full()
             .key_context("AgentsHost")
             .on_action(cx.listener(Self::on_toggle_terminal))
+            .on_action(cx.listener(Self::on_help))
             .child(content)
     }
 }

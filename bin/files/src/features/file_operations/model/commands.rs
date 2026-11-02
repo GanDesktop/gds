@@ -8,6 +8,7 @@ gpui_kit::actions!(
     [
         ApplicationMenu,
         OpenSettings,
+        NewFolder,
         NewTab,
         CloseTab,
         NextTab,
@@ -55,33 +56,24 @@ gpui_kit::actions!(
         FocusVolumes,
         FocusTabs,
         FocusContent,
-        TabPrefixHome,
-        TabPrefixRecent,
-        TabPrefixFavorites,
-        TabPrefixVolumes,
-        TabPrefixNetwork,
-        TabPrefixTrash,
-        TabPrefix1,
-        TabPrefix2,
-        TabPrefix3,
-        TabPrefix4,
-        TabPrefix5,
-        TabPrefix6,
-        TabPrefix7,
-        TabPrefix8,
-        TabPrefix9,
+        SelectTab1,
+        SelectTab2,
+        SelectTab3,
+        SelectTab4,
+        SelectTab5,
+        SelectTab6,
+        SelectTab7,
+        SelectTab8,
+        SelectTab9,
     ]
 );
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
+pub const FILE_TABLE_CONTEXT: &str = "FilesFileTable";
 /// Files owns multi-terminal navigation; it is distinct from PTY input.
 pub const TERMINAL_TABS_CONTEXT: &str = "FilesTerminalTabs";
-/// Key context of an armed `Ctrl+Tab` prefix.
-///
-/// The prefix target keys are bound only here, so they take precedence over the
-/// plain workspace bindings for the same strokes (`Ctrl+H`, `Ctrl+D`, ...) and
-/// stop applying as soon as the prefix ends.
-pub const TAB_PREFIX_CONTEXT: &str = "TabPrefix";
+/// The whole terminal half, including its header controls.
+pub const TERMINAL_CONTEXT: &str = "FilesTerminal";
 /// Key context of the settings workspace, active while settings replace the
 /// file workspace. Bindings here keep shortcuts from leaking between the two.
 pub const SETTINGS_CONTEXT: &str = "Settings";
@@ -92,6 +84,8 @@ pub const VOLUME_CONTEXT: &str = "Volume";
 pub enum Command {
     Menu,
     Settings,
+    Help,
+    NewFolder,
     NewTab,
     CloseTab,
     NextTab,
@@ -139,9 +133,11 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 47] = [
         Self::Menu,
         Self::Settings,
+        Self::Help,
+        Self::NewFolder,
         Self::NewTab,
         Self::CloseTab,
         Self::NextTab,
@@ -191,6 +187,8 @@ impl Command {
         match self {
             Self::Menu => "app-menu",
             Self::Settings => "settings",
+            Self::Help => "help",
+            Self::NewFolder => "new-folder",
             Self::NewTab => "new-tab",
             Self::CloseTab => "close-tab",
             Self::NextTab => "next-tab",
@@ -242,6 +240,8 @@ impl Command {
         match self {
             Self::Menu => Box::new(ApplicationMenu),
             Self::Settings => Box::new(OpenSettings),
+            Self::Help => Box::new(gds::ui::help::OpenHelp),
+            Self::NewFolder => Box::new(NewFolder),
             Self::NewTab => Box::new(NewTab),
             Self::CloseTab => Box::new(CloseTab),
             Self::NextTab => Box::new(NextTab),
@@ -292,6 +292,7 @@ impl Command {
     pub fn context(self) -> Option<&'static str> {
         match self {
             Self::Settings
+            | Self::Help
             | Self::Terminal
             | Self::Sidebar
             | Self::Cancel
@@ -328,6 +329,8 @@ impl Command {
         match self {
             Self::Menu => "alt-m",
             Self::Settings => "ctrl-,",
+            Self::Help => "f1",
+            Self::NewFolder => "ctrl-shift-n",
             Self::NewTab => "ctrl-n",
             Self::CloseTab => "ctrl-w",
             Self::NextTab => "ctrl-tab",
@@ -417,22 +420,24 @@ fn bindings(cx: &App) -> Vec<KeyBinding> {
         .into_iter()
         .chain([Command::Cancel])
         .map(|command| binding(command.default_stroke(), command, command.context(), cx));
-    // Ctrl+Tab cycles settings pages while the settings workspace has
-    // the key context; the file workspace keeps its own tab bindings.
+    // The same cycle keys navigate settings pages in their own context.
     let settings = [
         (Command::NextTab, "ctrl-tab"),
         (Command::PreviousTab, "ctrl-shift-tab"),
     ]
     .into_iter()
     .map(|(command, stroke)| binding(stroke, command, Some(SETTINGS_CONTEXT), cx));
-    // Registered last: at equal context depth the later binding wins, and the
-    // prefix targets have to beat the plain `Ctrl+H`/`Ctrl+D`/... workspace
-    // bindings while the prefix is armed.
     compatibility
         .chain(primary)
         .chain(settings)
-        .chain(tab_prefix_bindings(cx))
+        .chain(["Settings", "Help"].into_iter().flat_map(|context| {
+            ["alt-left", "ctrl-w"]
+                .into_iter()
+                .map(move |stroke| binding(stroke, Command::Cancel, Some(context), cx))
+        }))
+        .chain(ordinal_bindings(cx))
         .chain(terminal_bindings())
+        .chain(file_table_bindings())
         // Popup cancellation must win over the workspace's global Escape.
         // Otherwise it moves focus behind a menu while leaving that menu open.
         .chain([
@@ -452,46 +457,47 @@ fn bindings(cx: &App) -> Vec<KeyBinding> {
         .collect()
 }
 
-/// The page keys staged behind an armed `Ctrl+Tab` prefix.
-///
-/// `Ctrl+Tab` itself is still [`Command::NextTab`]: it arms the prefix instead
-/// of cycling, and only a release without a target key cycles. These bindings
-/// exist only in [`TAB_PREFIX_CONTEXT`], so the same strokes keep their plain
-/// meaning outside the prefix. Shift variants keep the targets reachable while
-/// `Ctrl+Shift+Tab` started the prefix.
-fn tab_prefix_bindings(cx: &App) -> Vec<KeyBinding> {
-    let context = Some(TAB_PREFIX_CONTEXT);
+/// Files owns file selection; remove only the native table actions so raw
+/// navigation reaches Browser and Tab retains Root's focus traversal.
+fn file_table_bindings() -> [KeyBinding; 11] {
+    use gpui_kit::base::actions::{
+        Cancel, SelectDown, SelectFirst, SelectLast, SelectNextColumn, SelectPageDown,
+        SelectPageUp, SelectPrevColumn, SelectUp,
+    };
+    fn unbind(stroke: &'static str, action: impl Action) -> KeyBinding {
+        KeyBinding::new(
+            stroke,
+            Unbind(action.name().into()),
+            Some("(FilesFileTable > DataTable) && !PopupMenu"),
+        )
+    }
+    [
+        unbind("tab", SelectNextColumn),
+        unbind("shift-tab", SelectPrevColumn),
+        unbind("up", SelectUp),
+        unbind("down", SelectDown),
+        unbind("left", SelectPrevColumn),
+        unbind("right", SelectNextColumn),
+        unbind("home", SelectFirst),
+        unbind("end", SelectLast),
+        unbind("pageup", SelectPageUp),
+        unbind("pagedown", SelectPageDown),
+        unbind("escape", Cancel),
+    ]
+}
+
+fn ordinal_bindings(cx: &App) -> Vec<KeyBinding> {
+    let context = Some(WORKSPACE_CONTEXT);
     vec![
-        action_binding("ctrl-shift-h", Box::new(TabPrefixHome), context, cx),
-        action_binding("ctrl-shift-r", Box::new(TabPrefixRecent), context, cx),
-        action_binding("ctrl-shift-d", Box::new(TabPrefixFavorites), context, cx),
-        action_binding("ctrl-shift-v", Box::new(TabPrefixVolumes), context, cx),
-        action_binding("ctrl-shift-n", Box::new(TabPrefixNetwork), context, cx),
-        action_binding("ctrl-shift-b", Box::new(TabPrefixTrash), context, cx),
-        action_binding("ctrl-shift-1", Box::new(TabPrefix1), context, cx),
-        action_binding("ctrl-shift-2", Box::new(TabPrefix2), context, cx),
-        action_binding("ctrl-shift-3", Box::new(TabPrefix3), context, cx),
-        action_binding("ctrl-shift-4", Box::new(TabPrefix4), context, cx),
-        action_binding("ctrl-shift-5", Box::new(TabPrefix5), context, cx),
-        action_binding("ctrl-shift-6", Box::new(TabPrefix6), context, cx),
-        action_binding("ctrl-shift-7", Box::new(TabPrefix7), context, cx),
-        action_binding("ctrl-shift-8", Box::new(TabPrefix8), context, cx),
-        action_binding("ctrl-shift-9", Box::new(TabPrefix9), context, cx),
-        action_binding("ctrl-h", Box::new(TabPrefixHome), context, cx),
-        action_binding("ctrl-r", Box::new(TabPrefixRecent), context, cx),
-        action_binding("ctrl-d", Box::new(TabPrefixFavorites), context, cx),
-        action_binding("ctrl-v", Box::new(TabPrefixVolumes), context, cx),
-        action_binding("ctrl-n", Box::new(TabPrefixNetwork), context, cx),
-        action_binding("ctrl-b", Box::new(TabPrefixTrash), context, cx),
-        action_binding("ctrl-1", Box::new(TabPrefix1), context, cx),
-        action_binding("ctrl-2", Box::new(TabPrefix2), context, cx),
-        action_binding("ctrl-3", Box::new(TabPrefix3), context, cx),
-        action_binding("ctrl-4", Box::new(TabPrefix4), context, cx),
-        action_binding("ctrl-5", Box::new(TabPrefix5), context, cx),
-        action_binding("ctrl-6", Box::new(TabPrefix6), context, cx),
-        action_binding("ctrl-7", Box::new(TabPrefix7), context, cx),
-        action_binding("ctrl-8", Box::new(TabPrefix8), context, cx),
-        action_binding("ctrl-9", Box::new(TabPrefix9), context, cx),
+        action_binding("ctrl-1", Box::new(SelectTab1), context, cx),
+        action_binding("ctrl-2", Box::new(SelectTab2), context, cx),
+        action_binding("ctrl-3", Box::new(SelectTab3), context, cx),
+        action_binding("ctrl-4", Box::new(SelectTab4), context, cx),
+        action_binding("ctrl-5", Box::new(SelectTab5), context, cx),
+        action_binding("ctrl-6", Box::new(SelectTab6), context, cx),
+        action_binding("ctrl-7", Box::new(SelectTab7), context, cx),
+        action_binding("ctrl-8", Box::new(SelectTab8), context, cx),
+        action_binding("ctrl-9", Box::new(SelectTab9), context, cx),
     ]
 }
 
@@ -500,7 +506,11 @@ fn terminal_bindings() -> Vec<KeyBinding> {
     use gds::ui::terminal::{
         Copy, INPUT_CONTEXT, Paste, ScrollBottom, ScrollPageDown, ScrollPageUp, ScrollTop,
     };
+    let whole_terminal = Some("GdsTerminal || FilesTerminalTabs || FilesTerminal");
     vec![
+        KeyBinding::new("ctrl-n", NewTerminal, whole_terminal),
+        KeyBinding::new("ctrl-w", CloseTerminal, whole_terminal),
+        KeyBinding::new("f6", ReturnFromTerminal, whole_terminal),
         KeyBinding::new("ctrl-shift-c", Copy, Some(INPUT_CONTEXT)),
         KeyBinding::new("ctrl-shift-v", Paste, Some(INPUT_CONTEXT)),
         KeyBinding::new("shift-pageup", ScrollPageUp, Some(INPUT_CONTEXT)),
@@ -509,10 +519,6 @@ fn terminal_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-end", ScrollBottom, Some(INPUT_CONTEXT)),
         KeyBinding::new("f2", RenameTerminal, Some(INPUT_CONTEXT)),
         KeyBinding::new("f2", RenameTerminal, Some(TERMINAL_TABS_CONTEXT)),
-        KeyBinding::new("f6", ReturnFromTerminal, Some(INPUT_CONTEXT)),
-        KeyBinding::new("f6", ReturnFromTerminal, Some(TERMINAL_TABS_CONTEXT)),
-        KeyBinding::new("ctrl-n", NewTerminal, Some(TERMINAL_TABS_CONTEXT)),
-        KeyBinding::new("ctrl-w", CloseTerminal, Some(TERMINAL_TABS_CONTEXT)),
         KeyBinding::new("down", NextTerminal, Some(TERMINAL_TABS_CONTEXT)),
         KeyBinding::new("up", PreviousTerminal, Some(TERMINAL_TABS_CONTEXT)),
         KeyBinding::new("enter", FocusTerminal, Some(TERMINAL_TABS_CONTEXT)),
@@ -537,7 +543,8 @@ fn action_binding(
     // Context predicates see the whole focus ancestry. Both terminal regions
     // exclude Files bindings; the panel's own tab-bar keys must not become
     // file-tab operations, and PTY input must keep its control characters.
-    let scoped = if action.partial_eq(&OpenSettings)
+    let scoped = if action.partial_eq(&gds::ui::help::OpenHelp)
+        || action.partial_eq(&OpenSettings)
         || action.partial_eq(&ToggleTerminal)
         || action.partial_eq(&FocusNotifications)
         || action.partial_eq(&CloseNotification)
@@ -547,8 +554,10 @@ fn action_binding(
         context.map(str::to_owned)
     } else {
         Some(match context {
-            Some(context) => format!("({context}) && !GdsTerminal && !FilesTerminalTabs"),
-            None => "!GdsTerminal && !FilesTerminalTabs".to_owned(),
+            Some(context) => {
+                format!("({context}) && !GdsTerminal && !FilesTerminalTabs && !FilesTerminal")
+            }
+            None => "!GdsTerminal && !FilesTerminalTabs && !FilesTerminal".to_owned(),
         })
     };
     let predicate = scoped.as_deref().map(|value| {
@@ -567,4 +576,24 @@ impl From<Command> for gds::ui::Shortcut {
     fn from(command: Command) -> Self {
         Self::new(command.action(), command.context())
     }
+}
+
+/// Direct binding for the `position + 1`-th file tab.
+///
+/// The strip is the cycle order, pinned tabs included; rows past the ninth have
+/// no key and therefore no hint.
+pub fn ordinal_shortcut(position: usize) -> Option<gds::ui::Shortcut> {
+    let action: Box<dyn Action> = match position {
+        0 => Box::new(SelectTab1),
+        1 => Box::new(SelectTab2),
+        2 => Box::new(SelectTab3),
+        3 => Box::new(SelectTab4),
+        4 => Box::new(SelectTab5),
+        5 => Box::new(SelectTab6),
+        6 => Box::new(SelectTab7),
+        7 => Box::new(SelectTab8),
+        8 => Box::new(SelectTab9),
+        _ => return None,
+    };
+    Some(gds::ui::Shortcut::new(action, Some(WORKSPACE_CONTEXT)))
 }

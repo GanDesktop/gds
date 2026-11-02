@@ -50,10 +50,10 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings.open {
+        if !self.pages.is_empty() {
             return;
         }
-        self.reset_tab_prefix();
+
         self.toolbar.path.editing = false;
         match command {
             Command::FocusLocations => {
@@ -137,7 +137,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         if !self.sidebar.regions.sidebar_focused(window, cx)
-            || self.settings.open
+            || !self.pages.is_empty()
             || self.menus.application_open
             || self.menus.context.is_some()
             || self.menus.sort.is_some()

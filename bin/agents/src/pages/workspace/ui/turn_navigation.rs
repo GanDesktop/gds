@@ -1,6 +1,6 @@
 //! Complete prompt navigation is a read-only catalog, not the loaded body window.
 use bas::model::{Message, Role};
-use gpui_kit::{ListOffset, ScrollDelta, ScrollWheelEvent};
+use gpui_kit::{ListOffset, ScrollDelta, ScrollEvent};
 use std::collections::BTreeMap;
 
 use super::*;
@@ -161,7 +161,7 @@ impl Workspace {
 
     pub(super) fn on_navigation_wheel(
         &mut self,
-        event: &ScrollWheelEvent,
+        event: &ScrollEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {

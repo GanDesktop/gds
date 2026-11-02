@@ -4,7 +4,6 @@ use crate::shared::i18n::tr;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::PathBuf,
-    rc::Rc,
 };
 
 use bas::{

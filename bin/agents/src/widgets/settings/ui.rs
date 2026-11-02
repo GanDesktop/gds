@@ -18,7 +18,7 @@ use gpui_kit::{
 
 mod form;
 pub(crate) mod pages;
-use pages::{acp, agents, appearance, connections, keybindings, terminal};
+use pages::{acp, agents, appearance, connections, terminal};
 pub(crate) mod window;
 
 pub(crate) enum Event {
@@ -50,7 +50,6 @@ enum Category {
     Appearance,
     Sessions,
     Connections,
-    Keybindings,
     Terminal,
     Agents,
     SessionManagement,
@@ -71,7 +70,6 @@ impl Scope {
                 Category::Appearance,
                 Category::Sessions,
                 Category::Connections,
-                Category::Keybindings,
                 Category::Terminal,
             ],
             Self::Backend => &[Category::SessionManagement, Category::Agents],
@@ -80,11 +78,10 @@ impl Scope {
 }
 
 impl Category {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 6] = [
         Self::Appearance,
         Self::Sessions,
         Self::Connections,
-        Self::Keybindings,
         Self::Terminal,
         Self::SessionManagement,
         Self::Agents,
@@ -100,7 +97,6 @@ impl Category {
             Self::Appearance => IconName::Palette,
             Self::Sessions => IconName::MessageSquare,
             Self::Connections => IconName::Server,
-            Self::Keybindings => IconName::Keyboard,
             Self::Terminal => IconName::Terminal,
             Self::Agents => IconName::Bot,
             Self::SessionManagement => IconName::Settings,
@@ -109,11 +105,9 @@ impl Category {
 
     fn scope(self) -> Scope {
         match self {
-            Self::Appearance
-            | Self::Sessions
-            | Self::Connections
-            | Self::Keybindings
-            | Self::Terminal => Scope::Frontend,
+            Self::Appearance | Self::Sessions | Self::Connections | Self::Terminal => {
+                Scope::Frontend
+            }
             Self::SessionManagement | Self::Agents => Scope::Backend,
         }
     }
@@ -123,7 +117,6 @@ impl Category {
             Self::Appearance => "settings-appearance",
             Self::Sessions => "settings-sessions",
             Self::Connections => "settings-connections",
-            Self::Keybindings => "settings-keybindings",
             Self::Terminal => "settings-terminal",
             Self::Agents => "settings-agents",
             Self::SessionManagement => "settings-session-management",
@@ -135,7 +128,6 @@ impl Category {
             Self::Appearance => tr!("settings-appearance"),
             Self::Sessions => tr!("settings-sessions"),
             Self::Connections => tr!("settings-connections"),
-            Self::Keybindings => tr!("settings-keybindings"),
             Self::Terminal => tr!("local-terminal-title"),
             Self::Agents => tr!("settings-agents"),
             Self::SessionManagement => tr!("settings-session-management"),
@@ -149,12 +141,6 @@ impl Category {
             .any(|word| query.contains(word))
         {
             return Self::Terminal;
-        }
-        if ["shortcut", "keybinding", "快捷键"]
-            .iter()
-            .any(|word| query.contains(word))
-        {
-            return Self::Keybindings;
         }
         if query == "acp"
             || [
@@ -208,7 +194,7 @@ impl Category {
 
 pub(crate) struct Settings {
     focus: FocusHandle,
-    page_focus: [FocusHandle; 7],
+    page_focus: [FocusHandle; 6],
     sidebar_compact: bool,
     search: Entity<InputState>,
     appearance: Entity<appearance::AppearancePage>,
@@ -293,13 +279,12 @@ impl Settings {
             let query = self.search.read(cx).value().to_string();
             if !query.trim().is_empty() {
                 let category = Category::for_query(&query);
-                if !matches!(self.category, Category::Agents | Category::Keybindings)
+                if !matches!(self.category, Category::Agents)
                     || matches!(
                         category,
                         Category::Sessions
                             | Category::Connections
                             | Category::SessionManagement
-                            | Category::Keybindings
                             | Category::Terminal
                     )
                 {
@@ -400,12 +385,6 @@ impl Settings {
                 self.category = Category::Terminal;
                 cx.notify();
             }
-            Category::Keybindings => {
-                self.search
-                    .update(cx, |input, cx| input.set_value("", window, cx));
-                self.category = Category::Keybindings;
-                cx.notify();
-            }
             Category::Connections => {
                 self.category = Category::Connections;
                 self.search
@@ -446,7 +425,6 @@ impl Settings {
             Category::Agents | Category::SessionManagement => {
                 self.agents.read(cx).settings_path().map(ToOwned::to_owned)
             }
-            Category::Keybindings => None,
             Category::Connections | Category::Terminal => {
                 Some(crate::shared::config::store(cx).path().to_owned())
             }
@@ -816,7 +794,6 @@ impl Render for Settings {
                 Category::Agents => self.agents.read(cx).save_status().unwrap_or_default(),
                 Category::SessionManagement => self.acp.read(cx).status(cx),
                 Category::Connections => self.connections.read(cx).status(cx),
-                Category::Keybindings => String::new(),
                 Category::Terminal => self.terminal.read(cx).message.clone(),
             }
         } else {
@@ -888,7 +865,6 @@ impl Render for Settings {
             Category::SessionManagement => self.acp.clone().into_any_element(),
             Category::Connections => self.connections.clone().into_any_element(),
             Category::Terminal => self.terminal.clone().into_any_element(),
-            Category::Keybindings => keybindings::render(self.search.read(cx).value().as_ref(), cx),
         };
         let header = self.header(cx).into_any_element();
         let feedback = crate::widgets::settings::ui::feedback(

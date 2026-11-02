@@ -92,7 +92,7 @@ enum DirectoryAction {
 impl DirectoryAction {
     fn command(self) -> Option<Command> {
         match self {
-            Self::NewFolder => None,
+            Self::NewFolder => Some(Command::NewFolder),
             Self::Paste => Some(Command::Paste),
             Self::Terminal | Self::InternalTerminal => None,
             Self::Refresh => Some(Command::Refresh),
@@ -177,12 +177,13 @@ impl Browser {
                 i18n::text("delete-permanently", cx),
             )
             .disabled(self.operations.in_progress);
-        let internal_terminal = self.picker.is_none().then(|| {
-            items.item(
-                MenuAction::InternalTerminal,
-                i18n::text("files-terminal-open-here", cx),
-            )
-        });
+        let internal_terminal =
+            (self.picker.is_none() && self.settings.preferences.terminal_enabled()).then(|| {
+                items.item(
+                    MenuAction::InternalTerminal,
+                    i18n::text("files-terminal-open-here", cx),
+                )
+            });
         let terminal = items.item(
             MenuAction::Terminal,
             i18n::text("terminal-open-external", cx),
@@ -203,7 +204,7 @@ impl Browser {
                 item: trash; item: delete;
                 separator;
                 @if (let Some(item) = internal_terminal) item: item; @end;
-                item: terminal;
+                @if (self.settings.preferences.terminal_enabled()) item: terminal; @end;
             }
         }
     }
@@ -272,12 +273,14 @@ impl Browser {
         let internal_terminal = self
             .picker
             .is_none()
-            .then(|| DirectoryAction::InternalTerminal.item(view.clone(), target.clone(), cx));
+            .then_some(())
+            .filter(|_| self.settings.preferences.terminal_enabled())
+            .map(|_| DirectoryAction::InternalTerminal.item(view.clone(), target.clone(), cx));
         let terminal = DirectoryAction::Terminal.item(view.clone(), target.clone(), cx);
         let refresh = DirectoryAction::Refresh.item(view, target, cx);
         el! { menu { item: new_folder; separator; item: paste; separator;
             @if (let Some(item) = internal_terminal) item: item; @end;
-            item: terminal; item: refresh;
+            @if (self.settings.preferences.terminal_enabled()) item: terminal; @end; item: refresh;
         } }
     }
 

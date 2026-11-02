@@ -1,6 +1,7 @@
 use super::*;
 use crate::appearance::typography;
 use gds_uim::el;
+use gpui_kit::IntoElement;
 use gpui_kit::component::ActiveTheme as _;
 
 const KEY_HEIGHT: f32 = 22.;

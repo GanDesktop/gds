@@ -5,7 +5,7 @@ mod state;
 
 use gds_uim::{component, el};
 use gpui_kit::component::StyledExt as _;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use handle::{Resize, SplitHandle};
 pub use state::{State, constrained_height};
@@ -34,6 +34,14 @@ pub struct VerticalSplit {
     label: SharedString,
     #[attr(any_element, option)]
     divider_background: Option<AnyElement>,
+    /// Host-sampled reveal progress; resizing keeps the stored expanded height.
+    #[attr]
+    bottom_progress: f32,
+    #[attr]
+    collapsed_bottom_height: f32,
+    /// Expand the bottom pane over the top without changing its preferred split.
+    #[attr]
+    bottom_maximized_progress: f32,
     style: StyleRefinement,
 }
 
@@ -45,6 +53,9 @@ impl VerticalSplit {
             bottom: div().into_any_element(),
             label: SharedString::default(),
             divider_background: None,
+            bottom_progress: 1.,
+            collapsed_bottom_height: 0.,
+            bottom_maximized_progress: 0.,
             style: StyleRefinement::default(),
         }
     }
@@ -59,7 +70,12 @@ impl Styled for VerticalSplit {
 impl RenderOnce for VerticalSplit {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.state.read(cx);
-        let height = state.height();
+        let progress = self.bottom_progress.clamp(0., 1.);
+        let maximized = self.bottom_maximized_progress.clamp(0., 1.);
+        let resizable = progress == 1. && maximized == 0.;
+        let available = f32::from(state.bounds.get().size.height);
+        let collapsed = (available - self.collapsed_bottom_height).max(0.);
+        let height = collapsed + (state.height() * (1. - maximized) - collapsed) * progress;
         let bounds = state.bounds.clone();
         let measure_state = self.state.downgrade();
         let release_state = self.state.downgrade();
@@ -109,16 +125,16 @@ impl RenderOnce for VerticalSplit {
         .size_full();
         let dragged_state = self.state.clone();
         let divider = el! {
-            .div { relative; flex_shrink_0; w_full; h: DIVIDER_HEIGHT.px } [
+            .div { relative; flex_shrink_0; w_full; h: $(DIVIDER_HEIGHT * progress * (1. - maximized)).px } [
                 ..$(self.divider_background),
-                $(SplitHandle::new(self.state.clone()).label(self.label)),
+                @if (resizable) $(SplitHandle::new(self.state.clone()).label(self.label)), @end,
             ]
         };
         el! {
             .div { # "vertical-split"; relative; flex; flex_col; size_full; min_h_0; overflow_hidden;
                 refine_style: $&self.style;
                 on_drag_move: $(move |event: &DragMoveEvent<Resize>, _, cx| {
-                    if event.drag(cx).state != dragged_state {
+                    if !resizable || event.drag(cx).state != dragged_state {
                         return;
                     }
                     dragged_state.update(cx, |state, cx| {
@@ -126,9 +142,13 @@ impl RenderOnce for VerticalSplit {
                     });
                 });
             } [
-                .div { flex; flex_col; flex_shrink_0; h: height.px; min_h_0; overflow_hidden } [$(self.top)],
+                .div { flex; flex_col; flex_shrink_0; h: height.px; min_h_0; overflow_hidden;
+                    when: $(progress == 0.), $(|pane| pane.h_auto().flex_1());
+                } [$(self.top)],
                 divider,
-                .div { flex; flex_col; flex_1; min_h_0; overflow_hidden } [$(self.bottom)],
+                .div { flex; flex_col; flex_1; min_h_0; overflow_hidden;
+                    when: $(progress == 0.), $(|pane| pane.flex_none().h(px(self.collapsed_bottom_height)));
+                } [$(self.bottom)],
                 measure,
             ]
         }

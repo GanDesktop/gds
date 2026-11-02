@@ -6,6 +6,7 @@ use std::{
 
 use gds_uim::el;
 use gpui_kit::{
+    IntoElement,
     assets::IconName,
     component::{ActiveTheme, Icon},
     prelude::*,

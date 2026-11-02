@@ -13,4 +13,5 @@ files-terminal-hide = 收起终端
 files-terminal-maximize = 最大化终端面板
 files-terminal-restore = 还原终端面板
 files-terminal-resize = 调整终端面板高度
-files-terminal-settings-note = Shell 选项与滚屏上限应用于新会话，已有会话继续运行。可在 Files 的 settings.toml 中通过 terminal.shell_args 设置独立参数；不会将其当作 shell 命令求值。
+
+files-terminal-enabled = 启用终端

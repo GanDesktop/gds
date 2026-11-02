@@ -1,6 +1,7 @@
 use super::keycap::Keycap;
 use super::*;
 use gds_uim::el;
+use gpui_kit::IntoElement;
 
 #[derive(Clone, IntoElement)]
 pub struct ShortcutBadge {

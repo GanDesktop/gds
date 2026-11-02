@@ -6,7 +6,7 @@ use crate::ui::*;
 use gds_uim::el;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{Disableable as _, Selectable as _, button::ButtonVariants as _};
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 #[derive(IntoElement)]
 pub struct IconButton {

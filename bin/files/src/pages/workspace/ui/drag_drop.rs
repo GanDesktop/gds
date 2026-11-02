@@ -91,7 +91,7 @@ impl FileDrag {
         Self::shared(vec![DragItem::new(entry)].into())
     }
 
-    fn paths(&self) -> Vec<PathBuf> {
+    pub(super) fn paths(&self) -> Vec<PathBuf> {
         self.entries.iter().map(|item| item.path.clone()).collect()
     }
 
@@ -342,7 +342,7 @@ fn transferable_sources(destination: &Path, sources: Vec<PathBuf>) -> Vec<PathBu
 
 impl Browser {
     fn can_accept_file_drop(&self) -> bool {
-        !self.operations.in_progress && !self.settings.open && self.collection().is_none()
+        !self.operations.in_progress && self.pages.is_empty() && self.collection().is_none()
     }
 
     /// In-app drags move by default; holding the secondary modifier copies.

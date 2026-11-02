@@ -14,7 +14,7 @@ Early on, we're focusing on Niri + NixOS + DMS, filling in the desktop apps that
 
 ### Files
 
-[![GDS Files file manager](bin/files/docs/assets/overview.png)](bin/files/README.md)
+[![GDS Files file manager](bin/files/docs/assets/file-browsing.gif)](bin/files/README.md)
 
 GDS Files is a native file manager for everyday browsing and organizing, with a familiar interface, an integrated terminal, and full keyboard controls.
 

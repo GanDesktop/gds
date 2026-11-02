@@ -174,11 +174,11 @@ gds-uim = { git = "https://github.com/GanDesktop/gds-uim", rev = "90f5424edf6ba9
 # The picker matches raw (possibly non-UTF-8) basenames, so globbing is done on
 # `Path` values instead of hand-rolled `String` matching.
 globset = { version = "0.4", optional = true }
-gpui-kit = { version = "=0.8.1", optional = true }
+gpui-kit = { version = "=0.9.0", optional = true, features = ["gpui-fast"] }
 # Kit's RustEmbed sources must stay self-contained in installed dev builds too.
 rust-embed = { version = "8", optional = true, features = ["debug-embed"] }
-gpui = { package = "gpui-pre", version = "=0.3.10", optional = true }
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.10", optional = true }
+gpui = { package = "gpui-fast", version = "=0.1.13", optional = true }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.11", optional = true }
 
 # Header-only dimension/colour probing needs these decoders; every feature here
 # is already enabled by GPUI, so the resolved dependency set does not change.
@@ -254,5 +254,5 @@ toml = { version = "0.9", optional = true }
 
 [patch.crates-io]
 trash = { git = "https://github.com/GanDesktop/trash-rs", branch = "fix/freedesktop-trashinfo-reviewed" }
-gpui-pre = { git = "https://github.com/GanDesktop/gpui-pre", branch = "gds-0.3.10" }
-gpui-pre-linux = { git = "https://github.com/GanDesktop/gpui-pre-linux", branch = "gds-0.3.10" }
+gpui-fast = { git = "https://github.com/GanDesktop/gpui-fast", branch = "gds-0.1.13" }
+gpui-fast-linux = { git = "https://github.com/GanDesktop/gpui-fast-linux", branch = "gds-0.1.13" }

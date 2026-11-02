@@ -20,6 +20,7 @@ fn modified_preferences() -> Preferences {
             sidebar_opacity: 0.8,
         },
         animations_enabled: Some(false),
+        terminal_enabled: None,
         language: Some(Language::English),
         time_format: Format::Absolute,
         font: typography::Preferences {

@@ -72,6 +72,8 @@ pub(crate) fn menu_item(profile: &crate::shared::config::ConnectionProfile) -> P
     let id = format!("connection-menu-{}", profile.id);
     PopupMenuItem::element(move |_, cx| {
         let hint = hint.clone();
+        // Labels fill the allocated column without contributing their untruncated
+        // text width to the enclosing menu row's intrinsic size.
         el! {
             .div {
                 # $(id.clone());
@@ -93,8 +95,8 @@ pub(crate) fn menu_item(profile: &crate::shared::config::ConnectionProfile) -> P
                     test_support;
                     role: Role::Label;
                     aria_label: $(name.clone());
-                    w_full;
-                    min_w_0;
+                    w_0;
+                    min_w_full;
                     truncate;
                     text_size: crate::shared::ui::SMALL;
                 } [$(name.clone())],
@@ -103,8 +105,8 @@ pub(crate) fn menu_item(profile: &crate::shared::config::ConnectionProfile) -> P
                     test_support;
                     role: Role::Label;
                     aria_label: $(address.clone());
-                    w_full;
-                    min_w_0;
+                    w_0;
+                    min_w_full;
                     truncate;
                     text_size: crate::shared::ui::SMALL;
                     text_color: $(cx.theme().muted_foreground);

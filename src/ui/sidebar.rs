@@ -11,7 +11,7 @@ mod tests;
 
 use gds_uim::{component, el};
 use gpui_kit::component::StyledExt;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use super::container::container_traits;
 pub use content::SideBarContent;

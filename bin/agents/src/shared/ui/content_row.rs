@@ -2,29 +2,20 @@
 
 mod actions;
 mod content;
-mod description;
 mod leading;
 mod title;
 
 pub(crate) use actions::ContentRowActions;
 pub(crate) use content::ContentRowContent;
-pub(crate) use description::ContentRowDescription;
 pub(crate) use leading::ContentRowLeading;
 pub(crate) use title::ContentRowTitle;
 
 use gds_uim::el;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 // Forward container behavior to the rendered div without adding a layout node.
 macro_rules! row_traits {
     ($component:ident) => {
-        impl $component {
-            pub(crate) fn id(mut self, id: impl Into<gpui_kit::ElementId>) -> Self {
-                self.base.interactivity().element_id = Some(id.into());
-                self
-            }
-        }
-
         impl gpui_kit::Styled for $component {
             fn style(&mut self) -> &mut gpui_kit::StyleRefinement {
                 self.base.style()
@@ -60,6 +51,13 @@ impl Default for ContentRow {
         Self {
             base: el! { .div { w_full; min_w_0; flex; items_center; gap_2; } },
         }
+    }
+}
+
+impl ContentRow {
+    pub(crate) fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.base.interactivity().element_id = Some(id.into());
+        self
     }
 }
 

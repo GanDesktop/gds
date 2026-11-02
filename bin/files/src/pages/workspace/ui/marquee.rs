@@ -226,7 +226,10 @@ impl Browser {
     /// Ctrl/Shift marquees still know what they started from.
     fn marquee_press(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.files.marquee.clear();
-        if event.button != MouseButton::Left || self.settings.open || self.collection().is_some() {
+        if event.button != MouseButton::Left
+            || !self.pages.is_empty()
+            || self.collection().is_some()
+        {
             return;
         }
         let bounds = *self.files.marquee.bounds.borrow();

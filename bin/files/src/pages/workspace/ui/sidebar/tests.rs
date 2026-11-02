@@ -145,6 +145,13 @@ async fn sidebar_motion_keeps_files_geometry_scroll_and_terminal_boundary(cx: &m
     })
     .expect("populate sidebar");
     cx.run_until_parked();
+    // Measure the sidebar only after the terminal's height transition settles.
+    cx.executor().advance_clock(super::super::motion::DURATION);
+    cx.update_window(window.into(), |_, window, cx| {
+        window.simulate_next_frame(cx);
+    })
+    .expect("finish terminal reveal");
+    cx.run_until_parked();
     let initial = cx
         .update_window(window.into(), |_, window, cx| {
             browser.update(cx, |this, _| {
@@ -214,6 +221,24 @@ async fn sidebar_motion_keeps_files_geometry_scroll_and_terminal_boundary(cx: &m
         window.render_frame(cx);
         assert_eq!(browser.read(cx).width(), tokens::COLLAPSED_SIDEBAR_WIDTH);
         let collapsed = Geometry::capture(browser.read(cx), window, cx);
+        let meter = (0..8)
+            .step_by(2)
+            .filter_map(|index| window.try_find(format!("sidebar-volume-fixture-{index}-capacity")))
+            .find(|meter| meter.visible())
+            .expect("collapsed volumes keep a visible capacity meter");
+        let bounds = meter.bounds().scale(window.scale_factor());
+        let track: gpui_kit::Background = {
+            use gpui_kit::component::ActiveTheme;
+            let color: gpui_kit::Background = cx.theme().tokens.progress_bar.into();
+            color.opacity(0.2)
+        };
+        assert!(
+            window
+                .painted_quads()
+                .iter()
+                .any(|quad| quad.bounds == bounds && quad.background == track),
+            "capacity track must not fade with sidebar labels"
+        );
         initial.assert_vertical_layout(&collapsed);
         assert!(collapsed.icon.origin.x >= middle.icon.origin.x);
         assert!(
@@ -262,7 +287,7 @@ async fn sidebar_motion_keeps_files_geometry_scroll_and_terminal_boundary(cx: &m
             "width must not expand volumes"
         );
         browser.update(cx, |this, cx| {
-            this.settings.open = true;
+            this.show_page(super::super::pages::Page::Settings, window, cx);
             cx.notify();
         });
         for collapsed in [true, false] {

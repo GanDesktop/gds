@@ -33,3 +33,9 @@ fn terminal_launch_uses_real_available_directory_or_home() {
     std::fs::write(&file, "fixture").expect("write file fixture");
     assert_eq!(launch_cwd(Some(&file), true, home.path()), home.path());
 }
+
+#[cfg(feature = "gui-tests")]
+mod motion;
+
+#[cfg(all(feature = "gui-tests", unix))]
+mod drop;

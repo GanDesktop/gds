@@ -2,7 +2,7 @@ use super::*;
 use crate::shared::i18n::tr;
 use bas::service::{HistoryLocation, HistoryOverview, HistoryOverviewEntry, HistoryWindow};
 use gpui_kit::InputEvent as _;
-use gpui_kit::{Modifiers, ScrollDelta, ScrollWheelEvent, point};
+use gpui_kit::{Modifiers, ScrollDelta, ScrollEvent, point};
 
 fn body(meta: &SessionMeta, first: u64, last: u64, frontier: u64) -> HistoryWindow {
     let mut snapshot = meta.clone();
@@ -533,7 +533,7 @@ fn alt_wheel_moves_between_complete_markers_without_pixel_scrolling(cx: &mut Tes
         window.render_frame(cx);
         let position = window.find("turn-marker-19").bounds().center();
         window.dispatch_event(
-            ScrollWheelEvent {
+            ScrollEvent {
                 position,
                 delta: ScrollDelta::Lines(point(0., 1.)),
                 modifiers: Modifiers {
@@ -558,7 +558,7 @@ fn alt_wheel_moves_between_complete_markers_without_pixel_scrolling(cx: &mut Tes
             17
         );
         window.dispatch_event(
-            ScrollWheelEvent {
+            ScrollEvent {
                 position,
                 delta: ScrollDelta::Lines(point(0., 1.)),
                 modifiers: Modifiers {
@@ -583,7 +583,7 @@ fn alt_wheel_moves_between_complete_markers_without_pixel_scrolling(cx: &mut Tes
             15
         );
         window.dispatch_event(
-            ScrollWheelEvent {
+            ScrollEvent {
                 position,
                 delta: ScrollDelta::Lines(point(0., -1.)),
                 modifiers: Modifiers {
@@ -609,7 +609,7 @@ fn alt_wheel_moves_between_complete_markers_without_pixel_scrolling(cx: &mut Tes
         );
         let list = fixture.view.read(cx).selected.timeline.list.clone();
         window.dispatch_event(
-            ScrollWheelEvent {
+            ScrollEvent {
                 position: list.viewport_bounds().center(),
                 delta: ScrollDelta::Lines(point(0., 1.)),
                 modifiers: Modifiers {

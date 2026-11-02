@@ -95,11 +95,13 @@ impl Places {
         widths
     }
 
+    #[cfg(test)]
     pub fn set_columns(&mut self, location: impl Into<Location>, columns: Layout) {
         self.settings_mut(ViewScope::Location(location.into()))
             .columns = Some(columns);
     }
 
+    #[cfg(test)]
     pub fn clear_columns(&mut self, location: impl Into<Location>) -> bool {
         self.settings_mut(ViewScope::Location(location.into()))
             .columns

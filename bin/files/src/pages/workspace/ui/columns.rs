@@ -608,7 +608,7 @@ impl Browser {
     /// the visible folder and Ctrl+D bookmarks it, so neither may run while the
     /// folder is still being replaced.
     pub(super) fn folder_settled(&self) -> bool {
-        !self.settings.open
+        self.pages.is_empty()
             && self.collection().is_none()
             && self.active().is_some_and(|slot| {
                 slot.files_available()

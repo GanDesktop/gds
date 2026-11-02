@@ -12,7 +12,11 @@ pub struct Preferences {
         help = "gds-terminal-settings-shell-hint"
     )]
     pub shell: Option<PathBuf>,
-    // Literal arguments remain available in configuration; never parse a shell command string.
+    #[setting(
+        label = "gds-terminal-settings-arguments",
+        help = "gds-terminal-settings-arguments-hint",
+        kind = "string_list"
+    )]
     pub shell_args: Vec<String>,
     #[setting(label = "gds-terminal-settings-login")]
     pub login_shell: bool,

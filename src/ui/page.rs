@@ -3,10 +3,11 @@
 mod content;
 mod header;
 mod notice;
+pub mod stack;
 mod table;
 
 use gds_uim::el;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use super::container::container_traits;
 pub use content::PageContent;

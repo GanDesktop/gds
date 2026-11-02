@@ -67,6 +67,8 @@ GDS Portal 的包和 NixOS 模块独立放在 `packaging/nix/portal/`，图形�
 
 开发入口直接求值 [shell.nix](../shell.nix)，按 [flake.lock](../flake.lock) 的 revision 与 NAR hash 获取依赖，并和 flake 共用 [开发环境定义](../packaging/nix/dev-shell.nix)。这避免对整个项目做 flake 源快照：未置于 Git 中的工作目录，其 `.gitignore` 不会替 `nix develop` 排除 `target/`，反复快照会占用大量 Nix store 空间。请使用 `just dev <应用>` / `just shell`，而不是在这种目录中直接运行裸 `nix develop`。
 
+从 `steam-run` 等 FHS 环境启动时，宿主可能通过 `NIX_CFLAGS_LINK=-L/usr/lib -L/usr/lib32` 注入系统库路径，使 Nix 的 ALSA 等库与另一版本的 glibc 混用，出现 `undefined reference to sqrtf@GLIBC_2.43` 等链接错误。开发环境会重置这个变量，让链接使用锁定的 Nix 工具链和库；遇到此问题应检查库搜索路径，而不是补装 ALSA 或反复清空 Cargo 缓存。
+
 保持图形会话提供的 `XDG_RUNTIME_DIR`、`WAYLAND_DISPLAY` 和 D-Bus 环境。不要为 GPUI 设置 `QT_QPA_PLATFORMTHEME`，也不要修改 Niri / DMS 配置来运行本应用。非 Nix 环境需要相应 Rust 工具链、Wayland/X11、xkbcommon、字体栈和 Vulkan/GL 运行库。
 
 ```sh
@@ -114,11 +116,13 @@ cargo tree --no-default-features --features portal --edges normal,build
 
 ## 第三方补丁
 
-第三方源码在 GanDesktop 的独立仓库维护，通过 Git 分支引用，由 `Cargo.lock` 固定提交；不将源码复制进本项目。当前 GPUI 基于发布的 `0.3.10` 包快照，保留包名和版本：
+第三方源码在 GanDesktop 的独立仓库维护，通过 Git 分支引用，由 `Cargo.lock` 固定提交；不将源码复制进本项目。当前使用 GPUI Kit `0.9.0` 的 `gpui-fast` feature，补丁基于发布的 GPUI Fast `0.1.13` 包快照，保留包名和版本：
 
-- [gpui-pre / gds-0.3.10](https://github.com/GanDesktop/gpui-pre/tree/gds-0.3.10)：外部父窗口与调用方激活 token 的公共接口。
-- [gpui-pre-linux / gds-0.3.10](https://github.com/GanDesktop/gpui-pre-linux/tree/gds-0.3.10)：对应 Wayland / X11 实现。
+- [gpui-fast / gds-0.1.13](https://github.com/GanDesktop/gpui-fast/tree/gds-0.1.13)：外部父窗口与调用方激活 token 的公共接口；外部文件拖入恢复鼠标输入模式，修复键盘操作后放下事件无法命中目标的问题。
+- [gpui-fast-linux / gds-0.1.13](https://github.com/GanDesktop/gpui-fast-linux/tree/gds-0.1.13)：对应 Wayland / X11 实现。
 - [trash-rs / fix/freedesktop-trashinfo-reviewed](https://github.com/GanDesktop/trash-rs/tree/fix/freedesktop-trashinfo-reviewed)：回收站记录解析与路径解析修复，保留 `trash` 包名及 `5.2.9` 版本。
+
+Fast 补丁从原 `gpui-pre` / `gpui-pre-linux` 的 `gds-0.3.11` 分支迁移。应用的 `gpui` 宏依赖也指向 `gpui-fast`；HTTP 客户端沿用 Fast 共用的 `gpui-pre-http-client` 协议类型。Kit 的 feature 为叠加启用，依赖图中仍可出现未被应用选用的 `gpui-pre`，这不表示运行时混用了两套 GPUI。
 
 两份 GPUI 补丁配套更新，各自的 `PATCHES.md` 记录来源与范围。更新补丁分支后，同步本项目 `Cargo.lock` 和 `packaging/nix/cargo-lock.nix` 中的源码 hash；本仓库不保留 vendor 源码。
 

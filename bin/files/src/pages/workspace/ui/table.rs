@@ -13,6 +13,7 @@ use gds::{
 };
 use gds_uim::{el, m};
 use gpui_kit::assets::IconName;
+use gpui_kit::base::motion::Interpolate as _;
 use gpui_kit::component::{
     ActiveTheme, Icon,
     menu::PopupMenu,
@@ -80,20 +81,18 @@ struct NameContent {
 }
 
 impl NameContent {
-    fn new(entry: &Entry, selected: bool, cx: &App) -> Self {
+    fn new(entry: &Entry, selection: f32, cx: &App) -> Self {
         let icon = FileIcon::for_entry(entry);
-        let foreground = if selected {
-            cx.theme().accent_foreground
-        } else {
-            cx.theme().foreground
-        };
-        let icon_color = if selected {
-            foreground
-        } else if icon.base() == IconName::Folder {
+        let foreground = cx
+            .theme()
+            .foreground
+            .interpolate(&cx.theme().accent_foreground, selection);
+        let icon_color = (if icon.base() == IconName::Folder {
             cx.theme().primary
         } else {
             cx.theme().muted_foreground
-        };
+        })
+        .interpolate(&cx.theme().accent_foreground, selection);
         Self {
             name: entry.display_name.clone().into(),
             icon,
@@ -398,15 +397,24 @@ impl FileTable {
         }
     }
 
+    fn selection_progress(&self, entry: &Entry, window: &mut Window, cx: &mut App) -> f32 {
+        super::motion::state_progress(
+            format!("file-row-selection:{}", entry.path.display()),
+            self.selected.contains(&entry.path),
+            window,
+            cx,
+        )
+    }
+
     fn render_name(
         &self,
         row_ix: usize,
         entry: &Entry,
+        selection: f32,
         window: &Window,
         cx: &Context<TableState<Self>>,
     ) -> AnyElement {
-        let selected = self.selected.contains(&entry.path);
-        let content = NameContent::new(entry, selected, cx);
+        let content = NameContent::new(entry, selection, cx);
         let tooltip = EntryPresentation::name_hint(content.name.clone());
         let hint_enabled = self.suppressed_hint.as_ref() != Some(&entry.path)
             && self
@@ -426,7 +434,7 @@ impl FileTable {
         .inset_0();
         el! {
             .div {
-                # $("file-name", row_ix); flex; items_center; size_full; min_w_0; overflow_hidden;
+                # $("file-name", row_ix); test_support; flex; items_center; size_full; min_w_0; overflow_hidden;
                 on_any_mouse_down: on_mouse_down; on_hover: on_hover;
                 @if (hint_enabled) tooltip_show_delay: TOOLTIP_DELAY; tooltip: tooltip; @end;
             } [
@@ -442,14 +450,14 @@ impl FileTable {
         text: impl IntoElement,
         emphasis: bool,
         right_aligned: bool,
+        selection: f32,
         cx: &Context<TableState<Self>>,
     ) -> AnyElement {
         let appearance = EntryAppearance::of(entry, cx);
-        let foreground = if self.selected.contains(&entry.path) {
-            cx.theme().accent_foreground
-        } else {
-            cx.theme().muted_foreground
-        };
+        let foreground = cx
+            .theme()
+            .muted_foreground
+            .interpolate(&cx.theme().accent_foreground, selection);
         let weight = if emphasis {
             FontWeight::SEMIBOLD
         } else {
@@ -473,19 +481,26 @@ impl FileTable {
         &self,
         row_ix: usize,
         entry: &Entry,
+        selection: f32,
         cx: &Context<TableState<Self>>,
     ) -> AnyElement {
         let Some(permissions) = entry.details.permissions.as_ref() else {
-            return self.render_meta(entry, SharedString::from(UNKNOWN_VALUE), false, false, cx);
+            return self.render_meta(
+                entry,
+                SharedString::from(UNKNOWN_VALUE),
+                false,
+                false,
+                selection,
+                cx,
+            );
         };
         let appearance = EntryAppearance::of(entry, cx);
         let text: SharedString = permissions.symbols().into();
         let octal = SharedString::from(permissions.octal());
-        let foreground = if self.selected.contains(&entry.path) {
-            cx.theme().accent_foreground
-        } else {
-            cx.theme().muted_foreground
-        };
+        let foreground = cx
+            .theme()
+            .muted_foreground
+            .interpolate(&cx.theme().accent_foreground, selection);
         let tooltip =
             move |window: &mut Window, cx: &mut App| Tooltip::new(octal.clone()).build(window, cx);
         el! {
@@ -578,7 +593,7 @@ impl TableDelegate for FileTable {
     fn render_tr(
         &mut self,
         row_ix: usize,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
         let row = el! { .div { # $("file-row", row_ix); } };
@@ -586,9 +601,10 @@ impl TableDelegate for FileTable {
             return row;
         };
         let selected = self.selected.contains(&entry.path);
+        let selection = self.selection_progress(entry, window, cx);
         let on_click = self.row_click_handler(row_ix, entry.path.clone());
         let drag = self.drag.drag_for(entry);
-        let mut content = NameContent::new(entry, selected, cx);
+        let mut content = NameContent::new(entry, if selected { 1. } else { 0. }, cx);
         content.appearance = content.appearance.preview();
         let bounds = self.name_bounds.clone();
         bounds.borrow_mut().remove(&row_ix);
@@ -598,11 +614,11 @@ impl TableDelegate for FileTable {
                 cursor_pointer;
                 on_click: on_click;
             } [
-                @if (selected)
+                @if (selection > 0.)
                     .div {
                         absolute; inset_0; top: DataListStyle::SELECTION_INSET.px; bottom: DataListStyle::SELECTION_INSET.px;
                         rounded: DataListStyle::ROW_RADIUS.px;
-                        bg: $(cx.theme().selection);
+                        bg: $(cx.theme().selection.opacity(selection));
                     },
                 @end,
             ]
@@ -656,22 +672,24 @@ impl TableDelegate for FileTable {
         let Some(column) = self.layout.columns().get(col_ix).copied() else {
             return el! { .div }.into_any_element();
         };
+        let selection = self.selection_progress(entry, window, cx);
         match column {
-            LayoutColumn::Name => self.render_name(row_ix, entry, window, cx),
-            LayoutColumn::Permissions => self.render_permissions(row_ix, entry, cx),
+            LayoutColumn::Name => self.render_name(row_ix, entry, selection, window, cx),
+            LayoutColumn::Permissions => self.render_permissions(row_ix, entry, selection, cx),
             LayoutColumn::Owner => {
                 let owner = EntryPresentation::owner(entry, cx);
-                self.render_meta(entry, owner.text, owner.current, false, cx)
+                self.render_meta(entry, owner.text, owner.current, false, selection, cx)
             }
             LayoutColumn::Group => {
                 let text = EntryPresentation::group(entry);
-                self.render_meta(entry, text, false, false, cx)
+                self.render_meta(entry, text, false, false, selection, cx)
             }
             LayoutColumn::Modified => self.render_meta(
                 entry,
                 Timestamp::new(("file-modified", row_ix), entry.modified),
                 false,
                 false,
+                selection,
                 cx,
             ),
             LayoutColumn::Accessed => self.render_meta(
@@ -679,19 +697,20 @@ impl TableDelegate for FileTable {
                 Timestamp::new(("file-accessed", row_ix), entry.details.accessed),
                 false,
                 false,
+                selection,
                 cx,
             ),
             LayoutColumn::Type => {
                 let text = EntryPresentation::type_label(entry, cx);
-                self.render_meta(entry, text, false, false, cx)
+                self.render_meta(entry, text, false, false, selection, cx)
             }
             LayoutColumn::DetailedType => {
                 let text = EntryPresentation::detailed_type(entry, cx);
-                self.render_meta(entry, text, false, false, cx)
+                self.render_meta(entry, text, false, false, selection, cx)
             }
             LayoutColumn::Size => {
                 let text = EntryPresentation::size_label(entry, cx);
-                self.render_meta(entry, text, false, true, cx)
+                self.render_meta(entry, text, false, true, selection, cx)
             }
         }
     }

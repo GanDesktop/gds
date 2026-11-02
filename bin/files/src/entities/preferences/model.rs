@@ -50,6 +50,8 @@ pub struct Preferences {
     pub font: typography::Preferences,
     pub files: FilesPreferences,
     pub terminal: gds::ui::terminal::Preferences,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_enabled: Option<bool>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +65,10 @@ pub enum ApplyError {
 }
 
 impl Preferences {
+    pub fn terminal_enabled(&self) -> bool {
+        self.terminal_enabled.unwrap_or(true)
+    }
+
     /// Apply shared presentation changes to an initialized application.
     /// Application-specific values are handled by the caller.
     ///

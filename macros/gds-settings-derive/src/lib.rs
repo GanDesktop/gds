@@ -150,10 +150,11 @@ fn expand(input: DeriveInput) -> syn::Result<Tokens> {
                     Some("font") => quote!(#api::Kind::Font),
                     Some("language") => quote!(#api::Kind::Language),
                     Some("text") => quote!(#api::Kind::Text),
+                    Some("string_list") => quote!(#api::Kind::StringList),
                     Some(_) => {
                         return Err(syn::Error::new(
                             field.span(),
-                            "kind must be font, language or text; primitive types and enums are inferred",
+                            "kind must be font, language, text or string_list; primitive types and enums are inferred",
                         ));
                     }
                     None => match type_name.as_str() {

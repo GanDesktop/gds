@@ -20,7 +20,9 @@ mod localization;
 mod locations;
 mod marquee;
 mod menu;
+mod motion;
 mod new_folder;
+mod pages;
 mod picker;
 mod place_pages;
 mod preview;
@@ -309,6 +311,7 @@ impl OpenTab {
 pub struct Browser {
     window: window::State,
     settings: settings::State,
+    pages: gds::ui::page::stack::Stack<pages::Page>,
 
     locations: locations::State,
     tabs: tabs::State,
@@ -364,6 +367,7 @@ impl Browser {
             picker: picker.map(|options| picker::State::new(options, window, cx)),
             window: host,
             settings,
+            pages: Default::default(),
         };
         Self::install_terminal_close_handler(window, cx);
         this.subscribe(window, cx);
@@ -488,7 +492,7 @@ impl Browser {
         slot.picker = self.picker_projection();
         self.tabs.items.push(slot);
         self.tabs.active_id = id;
-        self.settings.open = false;
+        self.pages.clear();
         self.toolbar.path.editing = false;
         self.sidebar
             .regions
@@ -498,7 +502,7 @@ impl Browser {
             self.sync_filter_input(window, cx);
             self.window.focus.focus(window, cx);
         }
-        self.dismiss_tab_prefix();
+
         self.refresh_tab(id, cx);
     }
 
@@ -650,7 +654,7 @@ impl Browser {
     /// connect. A row advertises exactly this target, so a hint never names a
     /// tab the press would not really switch to.
     fn tab_cycle_targets(&self) -> (Option<u64>, Option<u64>) {
-        if self.settings.open {
+        if !self.pages.is_empty() {
             return (None, None);
         }
         let ids: Vec<u64> = self.tabs.items.iter().map(|tab| tab.id).collect();
@@ -683,7 +687,7 @@ impl Browser {
         }
         self.save_tab_view(self.tabs.active_id, cx);
         self.tabs.active_id = id;
-        self.settings.open = false;
+        self.pages.clear();
         self.toolbar.path.editing = false;
         if let Some(index) = self.tabs.items.iter().position(|slot| slot.id == id) {
             self.sidebar.regions.tabs_scroll.scroll_to_item(index);
@@ -692,7 +696,7 @@ impl Browser {
         self.refresh_if_hidden_changed(cx);
         self.enter_location(cx);
         file_clipboard::refresh(cx);
-        self.dismiss_tab_prefix();
+
         self.window.focus.focus(window, cx);
         cx.notify();
     }
@@ -715,10 +719,14 @@ impl Browser {
     }
 
     fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.tabs.items.iter().any(|tab| tab.id == id) {
+        let Some(tab) = self.tab_slot(id) else {
             return;
+        };
+        if tab.pinned {
+            self.confirm_close_pinned_tab(id, window, cx);
+        } else {
+            self.close_tab_approved(id, window, cx);
         }
-        self.close_tab_approved(id, window, cx);
     }
 
     fn close_tab_approved(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
@@ -764,7 +772,7 @@ impl Browser {
     /// `Ctrl+D` works in both directions: it adds the location when it is not
     /// bookmarked and removes it when it is, exactly like the star button.
     fn favorite_current_location(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings.open
+        if !self.pages.is_empty()
             || self.current_tab().is_none_or(|slot| slot.is_loading())
             || self.editing_input_focused(window, cx)
         {
@@ -926,6 +934,7 @@ impl Browser {
             && !matches!(
                 command,
                 Command::Settings
+                    | Command::Help
                     | Command::Terminal
                     | Command::FocusNotifications
                     | Command::CloseNotification
@@ -939,6 +948,26 @@ impl Browser {
         // active, but workspace shortcuts must not run behind it.
         if self.operations.rename.read(cx).is_open() || window.has_active_dialog(cx) {
             return;
+        }
+        if !self.pages.is_empty() {
+            if matches!(command, Command::Cancel | Command::Back | Command::CloseTab) {
+                self.back_page(window, cx);
+                return;
+            }
+            if !matches!(
+                command,
+                Command::Settings
+                    | Command::Help
+                    | Command::Sidebar
+                    | Command::Terminal
+                    | Command::FocusNotifications
+                    | Command::CloseNotification
+                    | Command::CloseAllNotifications
+            ) && !(self.pages.current() == Some(&pages::Page::Settings)
+                && matches!(command, Command::NextTab | Command::PreviousTab))
+            {
+                return;
+            }
         }
         if command == Command::Cancel
             && let Some(cancel) = &self.operations.remote_paste_cancel
@@ -958,6 +987,7 @@ impl Browser {
                     | Command::CloseAllNotifications
                     | Command::Menu
                     | Command::Settings
+                    | Command::Help
                     | Command::Terminal
                     | Command::Sidebar
                     | Command::Cancel
@@ -969,6 +999,9 @@ impl Browser {
         // Close the controlled menu before handling its chosen command.
         if self.menus.application_open && command != Command::Menu {
             self.menus.application_open = false;
+            if matches!(command, Command::Settings | Command::Help) {
+                self.window.focus.focus(window, cx);
+            }
             if command == Command::Cancel {
                 self.window.focus.focus(window, cx);
                 cx.notify();
@@ -1002,6 +1035,7 @@ impl Browser {
             if matches!(
                 command,
                 Command::Open
+                    | Command::NewFolder
                     | Command::OpenInNewTab
                     | Command::Copy
                     | Command::Cut
@@ -1015,7 +1049,7 @@ impl Browser {
                 return;
             }
         }
-        if !self.settings.open
+        if self.pages.is_empty()
             && !self.editing_input_focused(window, cx)
             && !window.has_active_dialog(cx)
         {
@@ -1039,7 +1073,7 @@ impl Browser {
                 // Settings keeps its own way back, and the path editor's text
                 // lives only in its widget: opening the menu there would discard
                 // it. Every location page keeps the menu.
-                if self.settings.open || self.editing_path(window, cx) {
+                if !self.pages.is_empty() || self.editing_path(window, cx) {
                     return;
                 }
                 if self.menus.application_open {
@@ -1051,6 +1085,7 @@ impl Browser {
                     self.menus.application_open = true;
                 }
             }
+            Command::Help => self.show_page(pages::Page::Help, window, cx),
             Command::Settings => {
                 // Leaving the file workspace unmounts the menu, so take focus
                 // back from it before its handle disappears.
@@ -1058,15 +1093,19 @@ impl Browser {
                     self.menus.application_open = false;
                     self.window.focus.focus(window, cx);
                 }
-                self.reset_tab_prefix();
+
                 // The content region is about to unmount. Keep window actions
                 // reachable until a settings control takes focus.
-                self.window.root_focus.focus(window, cx);
-                self.settings.open = true;
+                self.show_page(pages::Page::Settings, window, cx);
                 self.toolbar.path.editing = false;
                 self.settings.view.update(cx, |view, cx| {
                     view.set_preferences(self.settings.preferences.clone(), window, cx)
                 });
+            }
+            Command::NewFolder => {
+                if let Some(path) = self.current_path() {
+                    self.request_new_folder(path, window, cx);
+                }
             }
             Command::NewTab => self.open_tab(self.locations.home.clone(), false, window, cx),
             Command::CloseTab => {
@@ -1080,17 +1119,14 @@ impl Browser {
                     self.close_tab(self.tabs.active_id, window, cx);
                 }
             }
-            // Ctrl+Tab arms the file tab prefix while browsing; Settings keeps
-            // cycling its own pages because the prefix belongs to the file
-            // workspace context.
             Command::NextTab | Command::PreviousTab => {
                 let backwards = matches!(command, Command::PreviousTab);
-                if self.settings.open {
+                if self.pages.current() == Some(&pages::Page::Settings) {
                     self.settings
                         .view
                         .update(cx, |view, cx| view.cycle_page(backwards, window, cx));
                 } else {
-                    self.arm_tab_prefix(backwards, window, cx);
+                    self.cycle_tab(backwards, window, cx);
                 }
             }
             Command::Sidebar => {
@@ -1127,7 +1163,7 @@ impl Browser {
                 }
             }
             Command::Filter => {
-                if !self.settings.open && self.collection().is_none() {
+                if self.pages.is_empty() && self.collection().is_none() {
                     self.toolbar.filter.input.update(cx, |input, cx| {
                         input.focus(window, cx);
                         input.select_all(window, cx);
@@ -1201,7 +1237,7 @@ impl Browser {
                 }
             }
             Command::Details => {
-                if !self.settings.open
+                if self.pages.is_empty()
                     && self.collection().is_none()
                     && !window.has_active_dialog(cx)
                 {
@@ -1339,7 +1375,7 @@ impl Browser {
                 drag_drop::cancel_tab_hover(cx);
                 if !cx.stop_active_drag(window) {
                     if self.sidebar.regions.sidebar_focused(window, cx) {
-                        if !self.settings.open {
+                        if self.pages.is_empty() {
                             self.cancel_clipboard_cut(cx);
                         }
                         self.window.focus.focus(window, cx);
@@ -1354,9 +1390,8 @@ impl Browser {
                     // transient modes (settings, path editing) are cancelled.
                     // A picker leaves the window only once those are closed,
                     // so the first Esc still closes its own local modes.
-                    let local_mode = self.settings.open
+                    let local_mode = !self.pages.is_empty()
                         || self.toolbar.path.editing
-                        || self.tabs.prefix.is_some()
                         || notifications::is_focused(window, cx)
                         || self
                             .toolbar
@@ -1370,9 +1405,9 @@ impl Browser {
                         cx.notify();
                         return;
                     }
-                    self.reset_tab_prefix();
+
                     self.toolbar.path.editing = false;
-                    self.settings.open = false;
+                    self.pages.clear();
                     // Copy contents remain available after Escape.
                     file_clipboard::refresh(cx);
                     self.window.focus.focus(window, cx);
@@ -1424,6 +1459,8 @@ fn report_directory_warnings(snapshot: &directory::DirectorySnapshot, cx: &mut A
         i18n::count("warning-count", snapshot.warnings.len(), cx),
     );
     for warning in &snapshot.warnings {
+        tracing::warn!(path = %warning.path.display(), operation = ?warning.operation,
+            error_kind = ?warning.error_kind, "{}", warning.message);
         let path = warning
             .path
             .as_os_str()

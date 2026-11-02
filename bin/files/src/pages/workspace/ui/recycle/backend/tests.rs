@@ -135,7 +135,6 @@ fn restores_payload_and_removes_its_record() {
     let outcomes = perform(Action::Restore, vec![entry]);
 
     assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0].id, id);
     assert_eq!(outcomes[0].original_path, parent.join("note.txt"));
     assert!(
         outcomes[0].result.is_ok(),

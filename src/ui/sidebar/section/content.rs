@@ -1,5 +1,5 @@
 use gds_uim::el;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use super::super::super::container::container_traits;
 

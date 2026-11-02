@@ -128,11 +128,14 @@ impl Browser {
             let bar = Self::capacity_bar(
                 format!("{id}-capacity"),
                 self.devices.service.read(cx).capacity(&volume.id),
-                false,
+                presentation.width() < 120.,
                 cx,
             )
             .selected(selected);
-            Some(el! { .div { px: GAP.px; w_full; min_w_0; overflow_hidden; opacity: $(presentation.label_opacity()); } [bar] }.into_any_element())
+            Some(
+                el! { .div { px: GAP.px; w_full; min_w_0; overflow_hidden; } [bar] }
+                    .into_any_element(),
+            )
         };
         let nav = NavItem::new(
             id.clone(),

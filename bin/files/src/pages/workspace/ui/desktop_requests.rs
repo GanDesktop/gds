@@ -16,7 +16,7 @@ impl Browser {
         if command.operation == Operation::Properties {
             self.open_desktop_properties(&command, cx);
         }
-        self.settings.open = false;
+        self.pages.clear();
         for target in command.targets {
             let existing = self
                 .tabs

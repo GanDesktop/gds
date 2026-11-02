@@ -189,10 +189,10 @@ impl<V: Default> Navigation<V> {
         self.history_index
     }
     pub fn can_go_back(&self) -> bool {
-        self.history_index > 0
+        self.back_location().is_some()
     }
     pub fn can_go_forward(&self) -> bool {
-        self.history_index + 1 < self.history.len()
+        self.forward_location().is_some()
     }
     pub fn is_loading(&self) -> bool {
         self.pending.is_some()
@@ -219,6 +219,7 @@ impl<V: Default> Navigation<V> {
     ) -> LoadRequest {
         self.begin(location, path, options, Destination::Open)
     }
+    #[cfg(test)]
     pub fn prepare_back(
         &mut self,
         path: Option<PathBuf>,
@@ -227,6 +228,7 @@ impl<V: Default> Navigation<V> {
         let index = self.history_index.checked_sub(1)?;
         self.prepare_history(index, path, options)
     }
+    #[cfg(test)]
     pub fn prepare_forward(
         &mut self,
         path: Option<PathBuf>,

@@ -15,3 +15,6 @@ gds-terminal-settings-font-size = 字号
 gds-terminal-settings-scrollback = 滚屏行数（新会话）
 gds-terminal-settings-cursor-blink = 光标闪烁
 gds-terminal-settings-alt-escape = Alt 发送 Escape
+
+gds-terminal-settings-arguments = Shell 参数
+gds-terminal-settings-arguments-hint = 每行一个参数

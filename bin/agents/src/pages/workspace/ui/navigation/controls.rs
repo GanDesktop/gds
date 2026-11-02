@@ -159,7 +159,7 @@ impl Workspace {
         )
     }
 
-    pub(in crate::pages::workspace) fn set_sidebar_view(
+    pub(in crate::pages::workspace::ui) fn set_sidebar_view(
         &mut self,
         view: View,
         cx: &mut Context<Self>,

@@ -28,7 +28,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme, Disableable as _, Icon, Selectable as _, button::ButtonVariants as _,
 };
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 const ITEM_GAP: f32 = 8.;
 const ITEM_RADIUS: f32 = 6.;

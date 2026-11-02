@@ -248,10 +248,9 @@ impl Service {
                 service.apply(observation, cx);
                 cx.notify();
             });
-            Ok(OperationOutcome {
-                mount_point: result?,
-                snapshot: snapshot?,
-            })
+            let mount_point = result?;
+            snapshot?;
+            Ok(OperationOutcome { mount_point })
         }))
     }
 }

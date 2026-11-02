@@ -312,7 +312,7 @@ impl Workspace {
                     hover: {
                         bg: $(cx.theme().list_hover);
                     };
-                    on_scroll_wheel: $(cx.listener(|this, event, window, cx| {
+                    on_scroll: $(cx.listener(|this, event, window, cx| {
                                 this.on_navigation_wheel(event, window, cx);
                                 cx.stop_propagation();
                     }));

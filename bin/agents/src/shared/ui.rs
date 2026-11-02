@@ -7,8 +7,7 @@ pub(crate) mod input;
 pub(crate) mod input_geometry;
 pub(crate) mod time;
 pub(crate) use content_row::{
-    ContentRow, ContentRowActions, ContentRowContent, ContentRowDescription, ContentRowLeading,
-    ContentRowTitle,
+    ContentRow, ContentRowActions, ContentRowContent, ContentRowLeading, ContentRowTitle,
 };
 pub(crate) use feedback::{Feedback, copy_button, message as feedback};
 pub(crate) use gds::ui::button::Button;

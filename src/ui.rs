@@ -15,6 +15,7 @@ pub mod capacity;
 mod container;
 pub mod disclosure;
 pub mod frame;
+pub mod help;
 pub mod list;
 pub mod logs;
 pub mod menu;
@@ -33,6 +34,5 @@ pub use list::ListSurface;
 pub use navigation::{NavItem, hover_action, pinned_icon, with_pin};
 pub use page::ContentPage;
 pub use shortcut::{
-    HeldModifier, PrefixTarget, Shortcut, ShortcutBadge, ShortcutHint, command_tooltip,
-    shortcut_tooltip,
+    HeldModifier, Shortcut, ShortcutBadge, ShortcutHint, command_tooltip, shortcut_tooltip,
 };

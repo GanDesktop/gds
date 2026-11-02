@@ -1,6 +1,6 @@
 use gds_uim::{component, el};
 use gpui_kit::component::{ActiveTheme, StyledExt};
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 /// Shared typography for sidebar section labels, following the rem base.
 #[component]

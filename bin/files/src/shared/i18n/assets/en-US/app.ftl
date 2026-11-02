@@ -40,7 +40,6 @@ theme-reload = Reload theme
 theme-loaded = Theme applied
 theme-opacity = Main background opacity
 sidebar-opacity = Sidebar background opacity
-blur-status = Desktop background blur is not enabled in this version.
 settings-auto-apply = Changes apply and save automatically
 settings-apply-failed = Changes were not applied: { $error }
 settings-save-failed = Changes are active but could not be saved: { $error }
@@ -49,7 +48,6 @@ settings-migrate-failed = Previous settings could not be copied to this applicat
 settings-terminal-note = The embedded terminal is not connected yet. Open an external terminal in the current folder instead.
 settings-shell-note = Uses the system default terminal or the program specified by GDS_TERMINAL.
 settings-shortcuts-note = Equivalent actions share their shortcuts. Keycaps and hints use the active bindings. Hold Ctrl to reveal only Ctrl combinations and Alt to reveal only Alt ones; each hint drops the modifier you are holding, so press the remaining keys. F5 also works for refresh, and F10 also opens the menu.
-settings-tab-prefix = Hold Ctrl+Tab, then press H for Home, R for Recent, D for Favorites, V for Volumes, N for Network, or B for Trash; 1–9 switch to the 1st–9th file tab. Releasing Tab without a target cycles to the next tab, and Ctrl+Shift+Tab cycles backwards. In an input box Ctrl+Tab still cycles directly and types no target letter.
 settings-page-actions = Tabs and locations
 settings-trash-actions = Trash actions
 settings-trash-note = Apply only on the Trash page; with no selection or while an operation runs they neither execute nor show key hints.
@@ -265,3 +263,25 @@ picker-save = Save
 picker-name = File name
 picker-overwrite-title = Replace existing file?
 picker-overwrite-message = This location already contains this file. The application will be allowed to replace it.
+
+help = Help
+page-return = Back
+
+help-application = Application
+help-tabs = Tabs
+help-navigation = Navigation
+help-view = File view
+help-files = File operations
+help-selection = Selection
+help-locations = Volumes and locations
+help-trash = Trash
+help-terminal = Terminal
+help-focus = Focus navigation
+help-notifications = Notifications
+help-dialogs = Dialogs
+
+help-select-tab = Select file tab 1–9
+
+unpin-close-title = Unpin and close tab?
+unpin-close-message = “{ $name }” is pinned.
+unpin-close-confirm = Unpin and close

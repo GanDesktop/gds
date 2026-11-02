@@ -1,7 +1,7 @@
 mod reset;
 
 use gds_uim::el;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 pub use reset::SettingReset;
 
 use super::super::CONTROL_GAP;

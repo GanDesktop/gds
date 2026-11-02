@@ -63,6 +63,8 @@ fn menu_rows_keep_full_labels_inside_fixed_width(cx: &mut gpui_kit::TestAppConte
         |window, cx| {
             let menu = PopupMenu::build(window, cx, |menu, _, _| {
                 crate::shared::ui::menu(menu)
+                    .min_w(px(crate::shared::ui::MENU_WIDTH))
+                    .max_w(px(crate::shared::ui::MENU_WIDTH))
                     .check_side(Side::Right)
                     .item(super::menu_item(&profile).checked(true))
             });
@@ -79,7 +81,11 @@ fn menu_rows_keep_full_labels_inside_fixed_width(cx: &mut gpui_kit::TestAppConte
         for item in [name, address] {
             assert!(item.bounds().size.width > px(0.));
             assert!(item.bounds().left() >= px(0.));
-            assert!(item.bounds().right() < px(crate::shared::ui::MENU_WIDTH));
+            assert!(
+                item.bounds().right() < px(crate::shared::ui::MENU_WIDTH),
+                "label bounds: {:?}",
+                item.bounds()
+            );
         }
         assert_eq!(
             window.find("connection-menu-long").label(),

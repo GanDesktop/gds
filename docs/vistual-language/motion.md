@@ -13,8 +13,11 @@ The shared appearance layer owns the effective reduced-motion value: `!animation
 - **Added:** shared `DisclosureIcon` artwork for Files' volumes/locations headings and Agents' workspace groups. A right-facing chevron rotates a quarter-turn toward expanded state over **140 ms, ease-out cubic**, using Kit's target transition. The host retains the accessible name, expanded semantics, tooltip and existing click target. The icon and label slots do not change size or alignment.
 - **Retained:** the existing **160 ms, ease-out cubic** sidebar width transition, sampled once by the host and shared across the whole column. See [sidebar presentation](sidebar.md#continuous-presentation).
 - **Reused without another wrapper:** Kit dialogs, notifications, dropdowns, loading spinners and their reduced-motion behavior. Notification lifetime remains independent of decorative animation.
-- **Deliberately immediate:** section content insertion/removal, chat/tool disclosures, output panels and settings groups. Content retains its established focus, scrolling and mount/unmount rules; this change does not hold invisible exiting controls in the tree. Animating long or rapidly changing content has insufficient benefit to justify extra layout and focus complexity.
-- **Not animated:** streaming text, virtual-list rows, terminal cells, editor/input text, glass opacity or surface backgrounds. No per-file timers, repeated text entrance, whole-panel scale or duplicated translucent layers.
+- **Files workspace:** details width, terminal dock height, and volumes/locations content height use **160 ms, ease-out cubic** target transitions. Exiting content remains clipped until the reveal ends. Split resizing retains the expanded preferred height; the divider is interactive only when fully expanded. Terminal maximize and restore use the same transition, shrinking the workspace and divider continuously while preserving the preferred split height. Terminal sessions survive hiding the dock.
+- **Files selection:** tab, file-row and grid-tile highlights and foreground colors crossfade over **160 ms, ease-out cubic**. Selection and keyboard actions take effect immediately. Tab content gently enters from 88% opacity after switching, while the initial window contents appear immediately.
+- **Files grid:** visible tiles transition their bounds using stable file-path identities while the virtual list retains its target row geometry. Newly visible tiles adopt their initial bounds immediately.
+- **Deliberately immediate:** chat/tool disclosures and settings groups retain their established visibility and focus rules.
+- **Not animated:** streaming text, table rows, terminal cells, editor/input text, glass opacity or surface backgrounds. No per-file timers, repeated text entrance, whole-panel scale or duplicated translucent layers.
 
 ## Component anatomy
 
@@ -22,7 +25,7 @@ The shared appearance layer owns the effective reduced-motion value: `!animation
 Existing disclosure control (host: label, tooltip, expanded state, click/focus)
 ├─ DisclosureIcon (shared: fixed-size decorative chevron)
 └─ Existing label
-Existing content (host: immediate visibility and focus rules)
+Existing content (host: visibility, reveal progress and focus rules)
 ```
 
 Create `DisclosureIcon::default()`, supply a stable section identity with `id`, and set `expanded` from the actual displayed state. Size is optional. Keep the component inside the existing control; it is not a second button. IDs must identify the section, not a position that changes when filtering a list.

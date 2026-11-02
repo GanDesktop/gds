@@ -11,11 +11,10 @@ pub fn init(cx: &mut gpui_kit::App) {
         use gpui_kit::component::Theme;
         let seeded = !cx.has_global::<Theme>();
         if seeded {
-            cx.set_global(Theme {
-                font_family: typography::system_family(),
-                mono_font_family: typography::system_mono_family(),
-                ..Default::default()
-            });
+            let mut theme = Theme::default();
+            theme.font_family = typography::system_family();
+            theme.mono_font_family = typography::system_mono_family();
+            cx.set_global(theme);
         }
         seeded
     };

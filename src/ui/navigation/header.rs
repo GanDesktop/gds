@@ -1,7 +1,7 @@
 use super::{ITEM_GAP, SIDEBAR_ITEM_HEIGHT};
 use crate::ui::container::container_traits;
 use gds_uim::el;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 #[derive(IntoElement)]
 pub struct NavItemHeader {
     base: Div,

@@ -123,3 +123,36 @@ fn mouse_sgr_release_and_legacy_bounds_are_explicit() {
     );
     assert!(mouse_bytes(0, 223, 0, false, Modifiers::default(), TermMode::NONE).is_none());
 }
+
+#[cfg(unix)]
+#[test]
+fn dropped_paths_round_trip_without_shell_expansion_or_submission() {
+    let paths = [
+        "/tmp/a b",
+        "/tmp/a'b",
+        "/tmp/a\\b",
+        "/tmp/中文 $(echo injected); $HOME",
+    ]
+    .map(std::path::PathBuf::from);
+    let text = super::path_text(&paths).expect("quoted paths");
+    assert!(!text.contains(['\n', '\r']));
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("set -- {text}; printf '%s\\0' \"$@\""))
+        .output()
+        .expect("POSIX shell");
+    assert!(output.status.success());
+    let expected = paths
+        .iter()
+        .flat_map(|p| p.to_str().unwrap().bytes().chain([0]))
+        .collect::<Vec<_>>();
+    assert_eq!(output.stdout, expected);
+    assert_eq!(
+        super::paste_bytes(&text, TermMode::empty()),
+        text.as_bytes()
+    );
+    assert_eq!(
+        super::paste_bytes(&text, TermMode::BRACKETED_PASTE),
+        format!("\x1b[200~{text}\x1b[201~").as_bytes()
+    );
+}

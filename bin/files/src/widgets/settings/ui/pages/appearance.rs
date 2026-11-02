@@ -56,8 +56,6 @@ impl View {
                 border_b_1; border_color: $(cx.theme().border);
             } [sample_text]
         };
-        let font_note = SettingNote::new(text("font-fallback-note", cx));
-        let blur_note = SettingNote::new(text("blur-status", cx));
         el! {
             .div { flex; flex_col } [
                 source_row,
@@ -69,8 +67,6 @@ impl View {
                 sidebar_opacity,
                 $(self.font.clone()),
                 sample,
-                .div { pt_4 } [font_note],
-                .div { pt_2 } [blur_note],
             ]
         }
     }

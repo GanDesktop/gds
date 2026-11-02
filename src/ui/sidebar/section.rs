@@ -3,7 +3,7 @@ mod header;
 mod title;
 
 use gds_uim::el;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use super::super::container::container_traits;
 pub use content::SideBarSectionContent;

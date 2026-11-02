@@ -65,7 +65,6 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct Outcome {
-    pub id: OsString,
     pub original_path: PathBuf,
     pub result: Result<(), Error>,
 }
@@ -73,6 +72,7 @@ pub struct Outcome {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("the recycle bin is only supported on Linux")]
+    #[cfg(not(target_os = "linux"))]
     Unsupported,
     #[error(transparent)]
     Trash(#[from] trash::Error),
@@ -164,10 +164,8 @@ pub fn perform(action: Action, entries: Vec<Entry>) -> Vec<Outcome> {
     entries
         .into_iter()
         .map(|entry| {
-            let id = entry.id.clone();
             let original_path = entry.original_path.clone();
             Outcome {
-                id,
                 original_path,
                 result: entry.apply(action),
             }

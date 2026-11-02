@@ -387,7 +387,7 @@ impl Workspace {
                 flex_1;
                 min_h_0;
                 w_full;
-                on_scroll_wheel: $(cx.listener(Self::on_navigation_wheel));
+                on_scroll: $(cx.listener(Self::on_navigation_wheel));
             } [
                 $(list(self.selected.timeline.list.clone(), move |index, _, cx| {
                             view.update(cx, |this, cx| this.render_item(index, cx))

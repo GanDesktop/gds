@@ -4,7 +4,7 @@ use std::time::SystemTime;
 
 use fluent_bundle::FluentArgs;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use crate::{
     appearance::tokens::TOOLTIP_DELAY,

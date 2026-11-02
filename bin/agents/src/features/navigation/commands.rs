@@ -1,4 +1,4 @@
-//! Workspace action identities and the metadata shown in settings.
+//! Workspace action identities and the metadata shown in Help.
 use crate::shared::i18n::tr;
 use gpui_kit::{Action, actions};
 
@@ -39,7 +39,7 @@ actions!(
     ]
 );
 
-pub(crate) fn settings_entries() -> Vec<(&'static str, gds::ui::Shortcut)> {
+pub(crate) fn shortcut_entries() -> Vec<(&'static str, gds::ui::Shortcut)> {
     let actions: Vec<(&str, Box<dyn Action>)> = vec![
         (tr!("session-new"), Box::new(NewSession)),
         (tr!("session-rename"), Box::new(RenameThread)),

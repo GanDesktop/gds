@@ -35,7 +35,7 @@ impl Workspace {
             Button::application_menu("app-menu", application.icon)
                 .accessibility_label(tr!("app-menu"))
                 .tooltip(tr!("app-menu")),
-            3,
+            4,
             false,
             move |menu, window, _| {
                 let parent = window.window_handle();
@@ -73,6 +73,14 @@ impl Workspace {
                                     settings.update(cx, |this, cx| this.open_settings(window, cx));
                             });
                         }),
+                    )
+                    .item(
+                        application_item(tr!("app-help"), Some(Box::new(gds::ui::help::OpenHelp)))
+                            .on_click(move |_, window, cx| {
+                                menus::in_parent(parent, window, cx, |window, cx| {
+                                    window.dispatch_action(Box::new(gds::ui::help::OpenHelp), cx);
+                                });
+                            }),
                     )
                     .item(application_item(tr!("app-about"), None).on_click(
                         move |_, window, cx| {

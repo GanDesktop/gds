@@ -175,6 +175,7 @@ impl Browser {
         let expanded = !self.settings.preferences.files.sidebar.locations_collapsed
             || self.sidebar.regions.locations.is_focused(window)
             || self.sidebar.regions.locations.contains_focused(window, cx);
+        let progress = motion::state_progress("files-locations", expanded, window, cx);
         let on_toggle = cx.listener(Self::toggle_locations);
         let heading = {
             let label = el! {
@@ -195,7 +196,7 @@ impl Browser {
                 ]
             }
         };
-        let content = expanded.then(|| {
+        let content = (progress > 0.).then(|| {
             let locations = LocationTarget::ALL
                 .into_iter()
                 .map(|target| {
@@ -206,12 +207,13 @@ impl Browser {
             el! {
                 .SideBarSectionContent::default { # "locations-list"; min_h_0; overflow_y_scroll;
                     track_scroll: $&self.sidebar.regions.locations_scroll; gap: ROW_GAP.px;
+                    h: $((LocationTarget::ALL.len() as f32 * (tokens::SIDEBAR_ITEM_HEIGHT + ROW_GAP) - ROW_GAP) * progress).px;
                 } [..locations]
             }
         });
         let section = el! {
             .SideBarSection::default { # "sidebar-locations"; flex_shrink_1; min_h_0; overflow_hidden;
-                px: tokens::SIDEBAR_PADDING.px; pb: tokens::SIDEBAR_PADDING.px; gap: ROW_GAP.px;
+                px: tokens::SIDEBAR_PADDING.px; pb: tokens::SIDEBAR_PADDING.px; gap: $(ROW_GAP * progress).px;
             } [heading, ..content]
         };
         ui::region::surface(
@@ -254,21 +256,22 @@ impl Browser {
         let expanded = !self.settings.preferences.files.sidebar.volumes_collapsed
             || self.sidebar.regions.volumes.is_focused(window)
             || self.sidebar.regions.volumes.contains_focused(window, cx);
+        let progress = motion::state_progress("files-volumes", expanded, window, cx);
         let heading = self.device_heading(window, cx);
         // A large terminal dock must not let the fixed locations consume every
         // pixel of the tab strip. Locations scroll only when space is scarce.
         let workspace_minimum = MIN_TABS_HEIGHT
-            + if show_volumes && expanded {
-                MIN_DEVICES_HEIGHT + ui::split::DIVIDER_HEIGHT
-            } else if show_volumes {
+            + if show_volumes {
                 HEADER_HEIGHT
+                    + (MIN_DEVICES_HEIGHT + ui::split::DIVIDER_HEIGHT - HEADER_HEIGHT) * progress
             } else {
                 0.
             };
-        let workspace = if show_volumes && expanded {
+        let workspace = if show_volumes {
             let device_area = el! {
                 .SideBarSection::default { size_full; min_h_0; px: tokens::SIDEBAR_PADDING.px } [
                     heading,
+                    @if (progress > 0.)
                     .SideBarSectionContent::default { # "sidebar-devices"; flex_1; min_h_0; overflow_y_scroll;
                         gap: ROW_GAP.px; pb: ROW_GAP.px;
                         track_scroll: $&self.sidebar.regions.volumes_scroll;
@@ -279,6 +282,7 @@ impl Browser {
                             } [t!(@cx, "device-none")],
                         @end,
                     ],
+                    @end,
                 ]
             }
             .into_any_element();
@@ -304,6 +308,8 @@ impl Browser {
                 .update(cx, |state, _| state.default_bottom(default_bottom));
             ui::split::VerticalSplit::new(self.sidebar.split.clone())
                 .top(tabs)
+                .bottom_progress(progress)
+                .collapsed_bottom_height(HEADER_HEIGHT)
                 .bottom(device_area)
                 .label(i18n::text("sidebar-resize", cx))
                 .into_any_element()

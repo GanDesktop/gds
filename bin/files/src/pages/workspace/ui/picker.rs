@@ -286,7 +286,7 @@ impl Browser {
         self.picker
             .as_ref()
             .is_some_and(|picker| !picker.completing && !picker.filter_menu_open)
-            && !self.settings.open
+            && self.pages.is_empty()
             && !self.menus.application_open
             && !self.toolbar.path.editing
             && !self.operations.rename.read(cx).is_open()

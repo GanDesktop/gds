@@ -88,6 +88,7 @@ pub enum Error {
         operation: Option<Box<Error>>,
     },
     #[error("atomic no-replace file transfers are currently supported only on Linux")]
+    #[cfg(not(target_os = "linux"))]
     UnsupportedPlatform,
 }
 
@@ -179,9 +180,6 @@ impl Batch {
     }
     pub fn destination(&self) -> &Path {
         &self.request.destination
-    }
-    pub fn mode(&self) -> Mode {
-        self.request.mode
     }
 
     /// Run on a background executor. Each item retains its own outcome and original paths.

@@ -69,18 +69,6 @@ fn legacy_path() -> Result<PathBuf, Error> {
     Ok(directories.config_dir().join("gds/settings.toml"))
 }
 
-/// Load this application's preferences. A missing configuration uses defaults.
-///
-/// This reads the application path only; startup should use [`load_startup`]
-/// so previously saved suite-wide preferences are imported once.
-///
-/// # Errors
-/// Returns errors for unavailable user directories and inaccessible or
-/// malformed configuration instead of silently replacing it with defaults.
-pub fn load() -> Result<Preferences, Error> {
-    load_from(&path()?)
-}
-
 /// Load the preferences that apply at application start.
 ///
 /// The application configuration takes priority. When it does not exist yet, a
@@ -110,6 +98,7 @@ pub fn save(preferences: &Preferences) -> Result<(), Error> {
 
 /// # Errors
 /// Returns configuration inspection, read or parse errors.
+#[cfg(test)]
 fn load_from(path: &Path) -> Result<Preferences, Error> {
     if metadata(path)?.is_none() {
         return Ok(Preferences::default());

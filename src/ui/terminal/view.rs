@@ -163,9 +163,12 @@ impl View {
     }
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            let bytes = input::paste_bytes(&text, self.mode());
-            self.input(&bytes, cx);
+            self.paste_text(&text, cx);
         }
+    }
+    pub(super) fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let bytes = input::paste_bytes(text, self.mode());
+        self.input(&bytes, cx);
     }
     fn scroll_page_up(&mut self, _: &ScrollPageUp, _: &mut Window, cx: &mut Context<Self>) {
         self.scroll_display(Scroll::PageUp, cx);
@@ -245,6 +248,11 @@ impl View {
         cx.notify();
     }
     fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        // A file drag belongs to the host's drop target, not PTY mouse reporting.
+        // Let MouseUp bubble so its on_drop handler receives the payload.
+        if cx.has_active_drag() {
+            return;
+        }
         if !self.selecting && self.mode().intersects(TermMode::MOUSE_MODE) && !event.modifiers.shift
         {
             self.mouse_report(
@@ -288,7 +296,7 @@ impl View {
             }
         }
     }
-    fn scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn scroll(&mut self, event: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         let delta = match event.delta {
             ScrollDelta::Lines(lines) => lines.y,
             ScrollDelta::Pixels(delta) => {
@@ -375,7 +383,7 @@ impl Render for View {
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::mouse_up))
             .on_mouse_up(MouseButton::Right, cx.listener(Self::mouse_up))
             .on_mouse_move(cx.listener(Self::mouse_move))
-            .on_scroll_wheel(cx.listener(Self::scroll))
+            .on_scroll(cx.listener(Self::scroll))
             .child(grid::Grid { view: cx.entity() })
             .when_some(self.error.clone(), |this, error| {
                 this.child(

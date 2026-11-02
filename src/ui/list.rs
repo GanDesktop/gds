@@ -3,7 +3,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gds_uim::el;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 use crate::appearance::tokens::DataListStyle;
 

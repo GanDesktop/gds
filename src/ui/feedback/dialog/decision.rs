@@ -9,7 +9,7 @@ use gpui_kit::component::{
     Icon,
     button::{ButtonVariant, ButtonVariants},
 };
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 
 /// One dialog decision as rendered in a footer.
 #[gds_uim::component]

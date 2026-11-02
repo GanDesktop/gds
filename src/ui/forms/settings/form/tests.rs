@@ -29,6 +29,8 @@ struct Preferences {
     language: Option<crate::i18n::Language>,
     #[setting(label = "form-font-family", kind = "font")]
     family: Option<String>,
+    #[setting(label = "test-arguments", kind = "string_list")]
+    arguments: Vec<String>,
     preserved: Vec<String>,
 }
 
@@ -41,6 +43,7 @@ impl Default for Preferences {
             opacity: None,
             language: None,
             family: None,
+            arguments: Vec::new(),
             preserved: vec!["keep".into()],
         }
     }
@@ -67,7 +70,7 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::i18n::install_resources(crate::i18n::Language::English,
-            &["test-enabled = Enabled\ntest-name = Name\ntest-count = Count\ntest-opacity = Opacity\n"], cx)
+            &["test-enabled = Enabled\ntest-name = Name\ntest-count = Count\ntest-opacity = Opacity\ntest-arguments = Arguments\n"], cx)
             .expect("test catalog");
     });
     let mut editor = None;
@@ -208,4 +211,33 @@ fn common_catalogs_preserve_system_choices_and_uninstalled_fonts(cx: &mut TestAp
         }
         assert!(fixture.editor.read(cx).value().language.is_none());
     });
+}
+
+#[gpui_kit::test]
+fn shell_arguments_edit_as_literal_lines_and_reset(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("config-field-arguments", cx);
+        window.input(
+            "--private\nliteral argument with spaces\n$(echo literal)",
+            cx,
+        );
+    })
+    .expect("edit literal arguments");
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        assert_eq!(
+            fixture.editor.read(cx).value().arguments,
+            [
+                "--private",
+                "literal argument with spaces",
+                "$(echo literal)"
+            ]
+        );
+        window.render_frame(cx);
+        window.click("config-reset-arguments", cx);
+        assert!(fixture.editor.read(cx).value().arguments.is_empty());
+        assert_eq!(fixture.editor.read(cx).value().preserved, ["keep"]);
+    })
+    .expect("reset only arguments");
 }

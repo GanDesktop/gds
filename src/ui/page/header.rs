@@ -3,7 +3,7 @@ mod title;
 
 pub use actions::PageActions;
 use gds_uim::el;
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{IntoElement, prelude::*, *};
 pub use title::PageTitle;
 
 use super::super::container::container_traits;

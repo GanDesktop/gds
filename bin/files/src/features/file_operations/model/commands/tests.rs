@@ -151,13 +151,19 @@ fn popup_keys_take_precedence_over_workspace_commands(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn volumes_prefix_keeps_plain_ctrl_v_for_paste(cx: &mut TestAppContext) {
+fn direct_tab_numbers_leave_location_shortcuts_unchanged(cx: &mut TestAppContext) {
     let keymap = Keymap::new(cx.update(|cx| bindings(cx)));
-    for stroke in ["ctrl-v", "ctrl-shift-v"] {
+    for (stroke, action) in [
+        (
+            "ctrl-1",
+            Box::new(super::SelectTab1) as Box<dyn gpui_kit::Action>,
+        ),
+        ("ctrl-9", Box::new(super::SelectTab9)),
+    ] {
         let (resolved, pending) =
-            keymap.bindings_for_input(&[keystroke(stroke)], &context("Workspace TabPrefix"));
+            keymap.bindings_for_input(&[keystroke(stroke)], &context(WORKSPACE_CONTEXT));
         assert!(!pending);
-        assert!(resolved[0].action().partial_eq(&super::TabPrefixVolumes));
+        assert!(resolved[0].action().partial_eq(action.as_ref()));
     }
     let (resolved, _) =
         keymap.bindings_for_input(&[keystroke("ctrl-v")], &context(WORKSPACE_CONTEXT));
@@ -198,10 +204,14 @@ fn region_access_keys_preserve_address_editing_and_column_configuration(cx: &mut
 #[gpui_kit::test]
 fn file_bindings_do_not_capture_terminal_input_or_terminal_tabs(cx: &mut TestAppContext) {
     let keymap = Keymap::new(cx.update(|cx| bindings(cx)));
-    for terminal_context in ["GdsTerminal", super::TERMINAL_TABS_CONTEXT] {
-        // An armed prefix or Volume ancestor must not override the terminal.
+    for terminal_context in [
+        "GdsTerminal",
+        super::TERMINAL_TABS_CONTEXT,
+        super::TERMINAL_CONTEXT,
+    ] {
+        // A file or Volume ancestor must not override the terminal.
         let contexts = vec![
-            KeyContext::parse("Workspace Volume TabPrefix").expect("workspace context"),
+            KeyContext::parse("Workspace Volume").expect("workspace context"),
             KeyContext::parse(terminal_context).expect("terminal context"),
         ];
         for stroke in [
@@ -236,7 +246,7 @@ fn file_bindings_do_not_capture_terminal_input_or_terminal_tabs(cx: &mut TestApp
                     );
                 }
             }
-            assert!(!pending, "Files cannot arm a prefix from terminal input");
+            assert!(!pending, "terminal keys must resolve immediately");
         }
         for command in [
             Command::Settings,
@@ -257,10 +267,16 @@ fn file_bindings_do_not_capture_terminal_input_or_terminal_tabs(cx: &mut TestApp
 #[gpui_kit::test]
 fn files_owns_terminal_capability_bindings_and_tab_navigation(cx: &mut TestAppContext) {
     let keymap = Keymap::new(cx.update(|cx| bindings(cx)));
-    let inputs = context("Workspace GdsTerminal");
+    let inputs = vec![
+        KeyContext::parse("Workspace").unwrap(),
+        KeyContext::parse(super::TERMINAL_CONTEXT).unwrap(),
+        KeyContext::parse("GdsTerminal").unwrap(),
+    ];
     let tabs = context("Workspace FilesTerminalTabs");
-    let input_actions: [(&str, Box<dyn gpui_kit::Action>); 8] = [
+    let input_actions: [(&str, Box<dyn gpui_kit::Action>); 10] = [
         ("f2", Box::new(super::RenameTerminal)),
+        ("ctrl-n", Box::new(super::NewTerminal)),
+        ("ctrl-w", Box::new(super::CloseTerminal)),
         ("ctrl-shift-c", Box::new(gds::ui::terminal::Copy)),
         ("ctrl-shift-v", Box::new(gds::ui::terminal::Paste)),
         ("shift-pageup", Box::new(gds::ui::terminal::ScrollPageUp)),
@@ -292,7 +308,7 @@ fn files_owns_terminal_capability_bindings_and_tab_navigation(cx: &mut TestAppCo
         assert!(!pending);
         assert_eq!(resolved.len(), 1);
         assert!(resolved[0].action().partial_eq(expected.as_ref()));
-        if stroke != "f6" && stroke != "f2" {
+        if !matches!(stroke, "f6" | "f2" | "ctrl-n" | "ctrl-w") {
             assert!(
                 keymap
                     .bindings_for_input(&[keystroke(stroke)], &inputs)

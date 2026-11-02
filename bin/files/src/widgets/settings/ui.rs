@@ -37,7 +37,7 @@ pub struct View {
     page: Page,
     /// One focus target per page, so page cycling keeps keyboard navigation
     /// inside the visible page and blurs controls on the page being left.
-    page_focus: [FocusHandle; 5],
+    page_focus: [FocusHandle; 4],
     general: Entity<PreferencesEditor>,
     source: ChoiceControl<theme::Source>,
     builtin: ChoiceControl<theme::BuiltinTheme>,

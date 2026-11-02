@@ -170,13 +170,8 @@ fn settings_cycle_pages_without_dispatching_workspace_shortcuts(cx: &mut TestApp
         window.render_frame(cx);
         assert!(window.find("settings-reset").visible());
         assert!(window.try_find("appearance-composer-enter").is_none());
-        window.click("settings-keybindings", cx);
-        window.render_frame(cx);
-        assert!(window.find("settings-keybindings-page").visible());
-        window.click("settings-search", cx);
-        window.input("archive", cx);
-        window.render_frame(cx);
-        assert!(window.find("settings-keybindings-page").visible());
+        assert!(window.try_find("settings-keybindings").is_none());
+        window.click("settings-connections", cx);
         window.press("ctrl-tab", cx);
         window.render_frame(cx);
         assert!(window.find("local-terminal-settings").visible());
@@ -193,4 +188,53 @@ fn settings_cycle_pages_without_dispatching_workspace_shortcuts(cx: &mut TestApp
         assert!(fixture.view.read(cx).window.presented)
     })
     .expect("workspace restored");
+}
+
+#[gpui_kit::test]
+fn help_returns_to_settings_and_restores_the_workspace_draft(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.composer.input.update(cx, |input, cx| {
+                input.set_value("draft before help", window, cx);
+            });
+            view.open_settings(window, cx);
+        });
+    })
+    .expect("open settings");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("settings-search", cx);
+        let settings_focus = window.focused(cx).expect("settings focus");
+        assert!(window.try_find("settings-keybindings").is_none());
+        window.press("f1", cx);
+        window.render_frame(cx);
+        assert!(window.find("help-page").visible());
+        window.press("f1", cx);
+        window.render_frame(cx);
+        window.press("alt-left", cx);
+        window.render_frame(cx);
+        assert!(window.find("settings").visible());
+        assert!(settings_focus.is_focused(window));
+        window.click("settings-return", cx);
+    })
+    .expect("return from settings");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(fixture.view.read(cx).window.presented);
+        assert_eq!(
+            fixture.view.read(cx).composer.input.read(cx).value(),
+            "draft before help"
+        );
+        window.press("f1", cx);
+        window.render_frame(cx);
+        assert!(window.find("help-page").visible());
+        window.click("page-return", cx);
+        window.render_frame(cx);
+        assert!(fixture.view.read(cx).window.presented);
+    })
+    .expect("help navigation");
+    cx.update(|cx| assert_eq!(cx.windows().len(), 1));
 }

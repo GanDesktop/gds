@@ -7,7 +7,6 @@ pub(super) struct State {
     pub preferences: configuration::Preferences,
     pub view: Entity<widget::View>,
     pub theme_reload: Entity<gds::appearance::theme::HotReload>,
-    pub open: bool,
 }
 
 impl State {
@@ -25,7 +24,6 @@ impl State {
                 cx,
             ),
             preferences,
-            open: false,
         }
     }
 }
@@ -65,6 +63,10 @@ impl Browser {
         }
         let hidden_changed =
             preferences.files.show_hidden != self.settings.preferences.files.show_hidden;
+        if !preferences.terminal_enabled() {
+            self.terminal.visible = false;
+            self.terminal.maximized = false;
+        }
         self.settings.preferences = preferences.clone();
         self.apply_terminal_preferences(cx);
         if appearance_changed {

@@ -115,7 +115,7 @@ struct DirectoryTarget {
 
 impl DirectoryTarget {
     fn capture(browser: &Browser, path: PathBuf) -> Option<Self> {
-        if browser.settings.open || browser.collection().is_some() {
+        if !browser.pages.is_empty() || browser.collection().is_some() {
             return None;
         }
         let slot = browser.active()?;
@@ -126,7 +126,7 @@ impl DirectoryTarget {
     }
 
     fn still_current(&self, browser: &Browser) -> bool {
-        !browser.settings.open
+        browser.pages.is_empty()
             && browser.collection().is_none()
             && browser.active().is_some_and(|slot| {
                 slot.files_available()
@@ -302,7 +302,7 @@ impl Browser {
             if has_focused_input && !closing_path_input {
                 return;
             }
-            if browser.settings.open
+            if !browser.pages.is_empty()
                 || browser.collection().is_some()
                 || browser.tabs.active_id != origin_tab
             {
@@ -314,7 +314,7 @@ impl Browser {
     }
 
     pub(super) fn selected_visible_paths(&self) -> Vec<PathBuf> {
-        if self.settings.open || self.collection().is_some() {
+        if !self.pages.is_empty() || self.collection().is_some() {
             return Vec::new();
         }
         let Some(slot) = self.active().filter(|slot| slot.files_available()) else {
@@ -512,7 +512,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> PopupMenu {
         let menu = gds::ui::menu::popup(menu);
-        if self.settings.open || self.collection().is_some() {
+        if !self.pages.is_empty() || self.collection().is_some() {
             return menu;
         }
         let Some(slot) = self.active() else {

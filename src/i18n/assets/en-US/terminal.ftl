@@ -15,3 +15,6 @@ gds-terminal-settings-font-size = Font size
 gds-terminal-settings-scrollback = Scrollback lines (new sessions)
 gds-terminal-settings-cursor-blink = Blink cursor
 gds-terminal-settings-alt-escape = Alt sends Escape
+
+gds-terminal-settings-arguments = Shell arguments
+gds-terminal-settings-arguments-hint = One argument per line

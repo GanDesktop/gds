@@ -1,7 +1,6 @@
 mod appearance;
 mod files;
 mod general;
-mod keybindings;
 mod terminal;
 
 use gpui_kit::{Context, Div, assets::IconName};
@@ -13,25 +12,17 @@ pub enum Page {
     General,
     Appearance,
     Terminal,
-    Keybindings,
     Files,
 }
 
 impl Page {
-    pub const ALL: [Self; 5] = [
-        Self::General,
-        Self::Appearance,
-        Self::Terminal,
-        Self::Keybindings,
-        Self::Files,
-    ];
+    pub const ALL: [Self; 4] = [Self::General, Self::Appearance, Self::Files, Self::Terminal];
 
     pub fn label_id(self) -> &'static str {
         match self {
             Self::General => "settings-general",
             Self::Appearance => "settings-appearance",
             Self::Terminal => "settings-terminal",
-            Self::Keybindings => "settings-keybindings",
             Self::Files => "settings-files",
         }
     }
@@ -41,7 +32,6 @@ impl Page {
             Self::General => IconName::Settings,
             Self::Appearance => IconName::Palette,
             Self::Terminal => IconName::Terminal,
-            Self::Keybindings => IconName::Keyboard,
             Self::Files => IconName::Folder,
         }
     }
@@ -51,9 +41,8 @@ impl Page {
         match self {
             Self::General => 0,
             Self::Appearance => 1,
-            Self::Terminal => 2,
-            Self::Keybindings => 3,
-            Self::Files => 4,
+            Self::Terminal => 3,
+            Self::Files => 2,
         }
     }
 
@@ -62,7 +51,6 @@ impl Page {
             Self::General => view.render_general(cx),
             Self::Appearance => view.render_appearance(cx),
             Self::Terminal => view.render_terminal(cx),
-            Self::Keybindings => view.render_keybindings(cx),
             Self::Files => view.render_files(cx),
         }
     }

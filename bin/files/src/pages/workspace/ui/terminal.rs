@@ -24,6 +24,7 @@ const COLLAPSED_ACTION_INSET: f32 =
 /// Sessions and selection belong to this window, never a file location.
 pub(super) struct State {
     pub dock: Option<Dock>,
+    focus: FocusHandle,
     pub visible: bool,
     pub maximized: bool,
     pub split: Entity<ui::split::State>,
@@ -35,6 +36,7 @@ impl State {
     pub(super) fn new(preferences: &configuration::Preferences, cx: &mut App) -> Self {
         Self {
             dock: None,
+            focus: cx.focus_handle(),
             visible: false,
             maximized: false,
             split: cx.new(|cx| {
@@ -76,18 +78,23 @@ fn launch_cwd(path: Option<&Path>, available: bool, home: &Path) -> PathBuf {
 
 impl Browser {
     pub(super) fn terminal_visible(&self) -> bool {
-        self.terminal.visible && self.picker.is_none() && !self.settings.open
+        self.settings.preferences.terminal_enabled()
+            && self.terminal.visible
+            && self.picker.is_none()
+            && self.pages.is_empty()
     }
 
     pub(super) fn terminal_focused(&self, window: &Window, cx: &App) -> bool {
-        self.terminal
-            .dock
-            .as_ref()
-            .is_some_and(|dock| dock.panel.read(cx).contains_focus(window, cx))
+        self.terminal.focus.contains_focused(window, cx)
+            || self
+                .terminal
+                .dock
+                .as_ref()
+                .is_some_and(|dock| dock.panel.read(cx).contains_focus(window, cx))
     }
 
     fn terminal_cwd(&self, cx: &App) -> Option<PathBuf> {
-        if self.picker.is_some() {
+        if self.picker.is_some() || !self.settings.preferences.terminal_enabled() {
             return None;
         }
         let slot = self.active();
@@ -106,7 +113,7 @@ impl Browser {
 
     /// Creating the window's empty panel does not start a shell.
     fn ensure_terminal(&mut self, cx: &mut Context<Self>) -> Option<Entity<Panel>> {
-        if self.picker.is_some() {
+        if self.picker.is_some() || !self.settings.preferences.terminal_enabled() {
             return None;
         }
         if self.terminal.closing {
@@ -136,8 +143,8 @@ impl Browser {
         let Some(panel) = self.ensure_terminal(cx) else {
             return;
         };
-        self.settings.open = false;
-        self.reset_tab_prefix();
+        self.pages.clear();
+
         self.toolbar.path.editing = false;
         self.terminal.visible = !self.terminal.visible;
         if self.terminal.visible {
@@ -154,7 +161,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.picker.is_some() || self.settings.open {
+        if self.picker.is_some() || !self.pages.is_empty() {
             return;
         }
         let available = self.active().is_some_and(|slot| slot.files_available())
@@ -163,7 +170,7 @@ impl Browser {
         let Some(panel) = self.ensure_terminal(cx) else {
             return;
         };
-        self.reset_tab_prefix();
+
         self.toolbar.path.editing = false;
         self.terminal.visible = true;
         // Each request starts a fresh session; existing PTYs are never redirected.
@@ -215,7 +222,7 @@ impl Browser {
         if window.has_active_dialog(cx) || self.operations.rename.read(cx).is_open() {
             return;
         }
-        if !self.terminal_focused(window, cx) || self.settings.open {
+        if !self.terminal_focused(window, cx) || !self.pages.is_empty() {
             cx.propagate();
             return;
         }
@@ -235,7 +242,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings.open || self.collection().is_some() || window.has_active_dialog(cx) {
+        if !self.pages.is_empty() || self.collection().is_some() || window.has_active_dialog(cx) {
             return;
         }
         let Some(cwd) = self.terminal_cwd(cx) else {
@@ -263,13 +270,25 @@ impl Browser {
     pub(super) fn terminal_workspace(
         &self,
         workspace: AnyElement,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if !self.terminal_visible() {
+        if !self.settings.preferences.terminal_enabled() {
             return workspace;
         }
+        let progress =
+            super::motion::state_progress("files-terminal", self.terminal_visible(), window, cx);
+        let maximized_progress = super::motion::state_progress(
+            "files-terminal-maximize",
+            self.terminal.maximized,
+            window,
+            cx,
+        );
         let Some(dock) = self.terminal.dock.as_ref() else {
-            return workspace;
+            return ui::split::VerticalSplit::new(self.terminal.split.clone())
+                .top(workspace)
+                .bottom_progress(0.)
+                .into_any_element();
         };
         let panel = dock.panel.clone();
         let maximized = self.terminal.maximized;
@@ -280,7 +299,7 @@ impl Browser {
                 IconName::Maximize2
             })
             .label(i18n::text(
-                if maximized {
+                if maximized && self.terminal_visible() {
                     "files-terminal-restore"
                 } else {
                     "files-terminal-maximize"
@@ -359,6 +378,10 @@ impl Browser {
             .h(px(tokens::TERMINAL_HEADER_HEIGHT));
         let dock = div()
             .id("files-terminal-dock")
+            .key_context(TERMINAL_CONTEXT)
+            .track_focus(&self.terminal.focus)
+            .on_action(window.listener_for(&panel, Panel::on_new))
+            .on_action(window.listener_for(&panel, Panel::on_close))
             .test_support()
             .flex()
             .flex_col()
@@ -377,20 +400,26 @@ impl Browser {
                     .overflow_hidden()
                     .child(panel),
             );
-        if maximized {
-            dock.into_any_element()
-        } else {
-            let divider = frame
-                .workspace(div().into_any_element(), div().into_any_element(), cx)
-                .flex_none()
-                .size_full();
-            ui::split::VerticalSplit::new(self.terminal.split.clone())
-                .top(workspace)
-                .bottom(dock)
-                .label(i18n::text("files-terminal-resize", cx))
-                .divider_background(divider)
-                .into_any_element()
-        }
+        let divider = frame
+            .workspace(div().into_any_element(), div().into_any_element(), cx)
+            .flex_none()
+            .size_full();
+        ui::split::VerticalSplit::new(self.terminal.split.clone())
+            .top(if progress == 1. && maximized_progress == 1. {
+                div().into_any_element()
+            } else {
+                workspace
+            })
+            .bottom_progress(progress)
+            .bottom_maximized_progress(maximized_progress)
+            .bottom(if progress > 0. {
+                dock.into_any_element()
+            } else {
+                div().into_any_element()
+            })
+            .label(i18n::text("files-terminal-resize", cx))
+            .divider_background(divider)
+            .into_any_element()
     }
 
     pub(super) fn on_terminal_split(
