@@ -62,14 +62,15 @@ impl Browser {
             Some(Collection::Volumes) => {
                 let id = self.volume_action_target(cx)?;
                 let index = self
-                    .storage
+                    .devices
+                    .service
                     .read(cx)
                     .snapshot
                     .volumes
                     .iter()
                     .filter(|volume| volume.visible)
                     .position(|volume| volume.id == id)?;
-                let handle = &self.volume_table.read(cx).vertical_scroll_handle;
+                let handle = &self.devices.table.read(cx).vertical_scroll_handle;
                 handle.scroll_to_item(index, ScrollStrategy::Nearest);
                 Some((
                     Target::Volume(id),
@@ -82,19 +83,21 @@ impl Browser {
                 ))
             }
             Some(Collection::Trash) => {
-                let selected = self.trash.selection();
+                let selected = self.collections.trash.selection();
                 let index = self
+                    .collections
                     .trash
                     .cursor_index()
-                    .filter(|&index| selected.contains(&self.trash.rows()[index].id))
+                    .filter(|&index| selected.contains(&self.collections.trash.rows()[index].id))
                     .or_else(|| {
-                        self.trash
+                        self.collections
+                            .trash
                             .rows()
                             .iter()
                             .position(|entry| selected.contains(&entry.id))
                     })?;
-                let id = self.trash.rows()[index].id.clone();
-                let handle = self.trash.scroll_handle(cx);
+                let id = self.collections.trash.rows()[index].id.clone();
+                let handle = self.collections.trash.scroll_handle(cx);
                 handle.scroll_to_item(index, ScrollStrategy::Nearest);
                 Some((
                     Target::Trash { id, selected },
@@ -177,19 +180,19 @@ impl Browser {
         let Some((target, _)) = self.selection_menu_target(cx) else {
             return;
         };
-        let origin = (self.active_id, self.collection());
+        let origin = (self.tabs.active_id, self.collection());
         let browser = cx.entity().downgrade();
         // Let the selected row scroll into view before positioning its menu.
         window.on_next_frame(move |window, cx| {
             let prepared = browser
                 .update(cx, |view, cx| {
                     if !view.list_keys_available(window, cx)
-                        || (view.active_id, view.collection()) != origin
+                        || (view.tabs.active_id, view.collection()) != origin
                     {
                         return None;
                     }
                     let (current, anchor) = view.selection_menu_target(cx)?;
-                    (current == target).then(|| (anchor.position(), view.focus.clone()))
+                    (current == target).then(|| (anchor.position(), view.window.focus.clone()))
                 })
                 .ok()
                 .flatten();
@@ -241,15 +244,16 @@ impl Browser {
             let dismiss =
                 cx.subscribe_in(&menu, window, move |view, _, _: &DismissEvent, _, cx| {
                     if view
-                        .keyboard_menu
+                        .menus
+                        .context
                         .as_ref()
                         .is_some_and(|open| open.menu.entity_id() == menu_id)
                     {
-                        view.keyboard_menu = None;
+                        view.menus.context = None;
                         cx.notify();
                     }
                 });
-            view.keyboard_menu = Some(OpenMenu {
+            view.menus.context = Some(OpenMenu {
                 menu: menu.clone(),
                 position,
                 _dismiss: dismiss,
@@ -262,7 +266,8 @@ impl Browser {
         window.on_next_frame(move |window, cx| {
             if browser.upgrade().is_some_and(|view| {
                 view.read(cx)
-                    .keyboard_menu
+                    .menus
+                    .context
                     .as_ref()
                     .is_some_and(|open| open.menu.entity_id() == menu_id)
             }) && let Some(menu) = opening.upgrade()
@@ -274,7 +279,7 @@ impl Browser {
     }
 
     pub(super) fn render_selection_menu(&self, window: &Window) -> Option<AnyElement> {
-        let open = self.keyboard_menu.as_ref()?;
+        let open = self.menus.context.as_ref()?;
         Some(ui::menu::overlay(open.menu.clone(), open.position, window))
     }
 
@@ -304,7 +309,7 @@ impl Browser {
             let target = location.clone();
             let label = i18n::text(
                 if command == Command::Favorite {
-                    if self.places.is_favorite(&location) {
+                    if self.locations.places.is_favorite(&location) {
                         "place-favorite-remove"
                     } else {
                         "place-favorite-add"
@@ -318,7 +323,9 @@ impl Browser {
                 Command::Open | Command::OpenInNewTab => IconName::Folder,
                 Command::Copy => IconName::Copy,
                 Command::CopyPaths => IconName::ClipboardCopy,
-                Command::Favorite if self.places.is_favorite(&location) => IconName::StarOff,
+                Command::Favorite if self.locations.places.is_favorite(&location) => {
+                    IconName::StarOff
+                }
                 Command::Favorite => IconName::Star,
                 Command::Refresh => IconName::RefreshCw,
                 _ => unreachable!("place menu actions have icons"),

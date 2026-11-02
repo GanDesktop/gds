@@ -307,7 +307,7 @@ pub(super) fn tab_drop_target(
             };
             let browser_view = target.read(cx);
             let on_current =
-                browser_view.active_id == tab_id && browser_view.collection().is_none();
+                browser_view.tabs.active_id == tab_id && browser_view.collection().is_none();
             let hover = TabHover {
                 session: file_drag_session(cx),
                 tab_id,
@@ -342,7 +342,7 @@ fn transferable_sources(destination: &Path, sources: Vec<PathBuf>) -> Vec<PathBu
 
 impl Browser {
     fn can_accept_file_drop(&self) -> bool {
-        !self.file_operation_in_progress && !self.settings_open && self.collection().is_none()
+        !self.operations.in_progress && !self.settings.open && self.collection().is_none()
     }
 
     /// In-app drags move by default; holding the secondary modifier copies.
@@ -416,8 +416,8 @@ impl Browser {
                 return;
             }
         };
-        self.file_operation_in_progress = true;
-        self.file_operation_paths = batch
+        self.operations.in_progress = true;
+        self.operations.paths = batch
             .paths()
             .iter()
             .cloned()
@@ -430,7 +430,7 @@ impl Browser {
         cx.spawn(async move |this, cx| {
             let report = work.await;
             if let Err(closed) = this.update(cx, |this, cx| {
-                this.file_operation_in_progress = false;
+                this.operations.in_progress = false;
                 this.finish_transfer(report, None, cx);
             }) {
                 tracing::warn!("Drop result arrived after the view closed: {closed}");

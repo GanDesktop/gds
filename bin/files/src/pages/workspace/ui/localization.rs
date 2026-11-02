@@ -16,10 +16,10 @@ impl Browser {
         window.set_window_title(i18n::text("app-title", cx).as_ref());
         let path_placeholder = i18n::text("path-placeholder", cx);
         let filter_placeholder = i18n::text("filter-placeholder", cx);
-        self.path_input.update(cx, |input, cx| {
+        self.toolbar.path.input.update(cx, |input, cx| {
             input.set_placeholder(path_placeholder, window, cx);
         });
-        self.filter_input.update(cx, |input, cx| {
+        self.toolbar.filter.input.update(cx, |input, cx| {
             input.set_placeholder(filter_placeholder, window, cx);
         });
         cx.notify();

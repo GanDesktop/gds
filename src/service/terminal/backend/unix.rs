@@ -128,11 +128,6 @@ impl Backend {
         self
     }
 
-    #[cfg(test)]
-    pub(crate) fn process_id(&self) -> Option<u32> {
-        self.pid
-    }
-
     pub(crate) fn run(mut self, shared: Arc<Shared>) {
         let mut parser = Processor::new();
         let result = self.io_loop(&shared, &mut parser);

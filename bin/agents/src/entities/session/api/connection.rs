@@ -331,14 +331,6 @@ impl Connection {
             .send(command)
             .map_err(|error| Box::new(error.0))
     }
-
-    #[cfg(all(test, feature = "gui-tests"))]
-    pub fn for_test(commands: mpsc::UnboundedSender<Command>) -> Self {
-        Self {
-            commands,
-            task: None,
-        }
-    }
 }
 
 impl Drop for Connection {
@@ -346,15 +338,6 @@ impl Drop for Connection {
         // Closing the command sender lets the worker drain its disk writes.
         self.task.take();
     }
-}
-
-#[cfg(test)]
-async fn run(
-    client: Client,
-    commands: mpsc::UnboundedReceiver<Command>,
-    updates: mpsc::Sender<Update>,
-) {
-    run_cached(client, commands, updates, None).await;
 }
 
 async fn run_cached(
@@ -872,12 +855,6 @@ async fn execute(mut client: Client, command: Command) -> Update {
             unreachable!("control commands are handled by run")
         }
     }
-}
-
-#[cfg(test)]
-async fn watch(client: Client, updates: mpsc::Sender<Update>, session: SessionId, epoch: u64) {
-    let (store, _) = history::Store::new(None);
-    watch_cached(client, updates, session, epoch, None, store).await;
 }
 
 async fn watch_cached(

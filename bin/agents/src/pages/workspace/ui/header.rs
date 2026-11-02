@@ -36,6 +36,7 @@ impl Workspace {
                 flex;
                 items_center;
                 gap_1;
+                block_mouse_except_scroll;
             } [
                 content,
             ]

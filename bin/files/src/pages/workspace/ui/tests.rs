@@ -1,5 +1,113 @@
 use super::cycle_neighbour;
 
+#[gpui_kit::test]
+fn tab_reaches_collapsed_locations_and_file_navigation(cx: &mut gpui_kit::TestAppContext) {
+    use super::*;
+    use gpui_kit::{component::Root, test::TestWindowExt};
+
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().expect("workspace fixture");
+    for name in ["a", "b"] {
+        std::fs::create_dir(root.path().join(name)).expect("child directory");
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("unpolled device runtime");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::shared::i18n::install(gds::i18n::Language::English, cx).expect("translations");
+        crate::features::file_operations::commands::register(cx);
+    });
+    let mut browser = None;
+    let window = cx.open_window(size(px(1100.), px(740.)), |window, cx| {
+        let view = cx.new(|cx| {
+            let mut preferences = configuration::Preferences::default();
+            preferences.files.sidebar.locations_collapsed = true;
+            Browser::new(
+                LaunchOptions {
+                    runtime: runtime.handle().clone(),
+                    places: Ok(Places::default()),
+                    start: root.path().to_owned(),
+                    home: root.path().to_owned(),
+                    preferences,
+                    startup_error: None,
+                    picker: None,
+                },
+                window,
+                cx,
+            )
+        });
+        browser = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let browser = browser.expect("workspace");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.activate_window();
+        window.click("back", cx);
+        window.click("edit-path", cx);
+        assert!(browser.read(cx).toolbar.path.editing);
+        window.press("escape", cx);
+        window.click("application-menu", cx);
+        assert!(browser.read(cx).menus.application_open);
+        window.press("escape", cx);
+        assert!(!browser.read(cx).menus.application_open);
+        window.press("ctrl-l", cx);
+        let mut reached_locations = false;
+        let mut reached_files = false;
+        for _ in 0..64 {
+            window.press("tab", cx);
+            if browser
+                .read(cx)
+                .sidebar
+                .regions
+                .locations
+                .is_focused(window)
+            {
+                reached_locations = true;
+                window.press("down", cx);
+                assert!(browser.read(cx).sidebar.regions.location == LocationTarget::Recent);
+            }
+            if browser.read(cx).window.focus.is_focused(window) {
+                reached_files = true;
+                window.press("down", cx);
+                assert_eq!(
+                    browser.read(cx).selected_visible_paths(),
+                    [root.path().join("a")]
+                );
+                window.press("down", cx);
+                assert_eq!(
+                    browser.read(cx).selected_visible_paths(),
+                    [root.path().join("b")]
+                );
+                window.press("up", cx);
+                assert_eq!(
+                    browser.read(cx).selected_visible_paths(),
+                    [root.path().join("a")]
+                );
+            }
+            if reached_locations && reached_files {
+                break;
+            }
+        }
+        assert!(
+            reached_locations,
+            "Tab must reach the collapsed locations group"
+        );
+        assert!(reached_files, "Tab must enter file selection");
+        window.press("alt-l", cx);
+        window.press("home", cx);
+        window.press("down", cx);
+        window.press("enter", cx);
+    })
+    .expect("keyboard navigation");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(browser.read(cx).current_location(), Location::Recent);
+    });
+}
+
 /// The page-cycle keys and the per-tab hints share one target function: the
 /// strip order is the cycle order, the ends connect, one tab has no neighbour
 /// and two tabs point both directions at the same row.
@@ -102,7 +210,7 @@ fn sidebar_locations_and_addresses_navigate_one_tab_and_share_back_forward(
     };
     cx.update_window(window.into(), |_, window, cx| {
         browser.update(cx, |this, cx| {
-            let storage = this.storage.clone();
+            let storage = this.devices.service.clone();
             storage.update(cx, |storage, cx| {
                 storage.snapshot = storage::Snapshot {
                     volumes: vec![storage::Volume {
@@ -124,7 +232,7 @@ fn sidebar_locations_and_addresses_navigate_one_tab_and_share_back_forward(
                 };
                 cx.notify();
             });
-            assert_eq!(this.tabs.len(), 1);
+            assert_eq!(this.tabs.items.len(), 1);
             this.show_location(Location::Recent, window, cx);
             this.show_location(Location::Favorites, window, cx);
             this.show_volume(id.clone(), window, cx);
@@ -134,7 +242,7 @@ fn sidebar_locations_and_addresses_navigate_one_tab_and_share_back_forward(
     cx.run_until_parked();
     cx.update_window(window.into(), |_, _, cx| {
         browser.update(cx, |this, cx| {
-            assert_eq!(this.tabs.len(), 1);
+            assert_eq!(this.tabs.items.len(), 1);
             assert!(matches!(this.current_location(), Location::Volume { .. }));
             assert_eq!(this.current_path(), Some(mount.clone()));
             this.navigate_history(Command::Back, cx);
@@ -160,7 +268,7 @@ fn sidebar_locations_and_addresses_navigate_one_tab_and_share_back_forward(
     cx.run_until_parked();
     cx.update(|cx| {
         let this = browser.read(cx);
-        assert_eq!(this.tabs.len(), 1);
+        assert_eq!(this.tabs.items.len(), 1);
         assert_eq!(this.current_path(), Some(mount));
     });
 
@@ -181,16 +289,16 @@ fn sidebar_locations_and_addresses_navigate_one_tab_and_share_back_forward(
         cx.run_until_parked();
         cx.update_window(window.into(), |_, window, cx| {
             assert_eq!(browser.read(cx).current_location(), location);
-            assert!(!browser.read(cx).path_editing);
-            window.click("location-display", cx);
+            assert!(!browser.read(cx).toolbar.path.editing);
+            window.click("edit-path", cx);
             let this = browser.read(cx);
-            assert!(this.path_editing);
-            assert_eq!(this.path_input.read(cx).value().as_ref(), address);
+            assert!(this.toolbar.path.editing);
+            assert_eq!(this.toolbar.path.input.read(cx).value().as_ref(), address);
             window.press("escape", cx);
-            assert!(!browser.read(cx).path_editing);
+            assert!(!browser.read(cx).toolbar.path.editing);
             assert_eq!(browser.read(cx).current_location(), location);
         })
-        .expect("click and cancel address editing");
+        .expect("reopen and cancel address editing");
         cx.run_until_parked();
     }
 
@@ -210,7 +318,7 @@ fn sidebar_locations_and_addresses_navigate_one_tab_and_share_back_forward(
         window.input("location://missing", cx);
         window.press("enter", cx);
         let this = browser.read(cx);
-        assert!(this.path_editing);
+        assert!(this.toolbar.path.editing);
         assert_eq!(this.current_location(), Location::Favorites);
         assert_eq!(
             this.current_tab().expect("tab").navigation.history().len(),
@@ -227,10 +335,17 @@ fn sidebar_locations_and_addresses_navigate_one_tab_and_share_back_forward(
             browser.read(cx).current_path().as_deref(),
             Some(root.path())
         );
-        assert_eq!(browser.read(cx).tabs.len(), 1);
+        assert_eq!(browser.read(cx).tabs.items.len(), 1);
         window.press("ctrl-l", cx);
         assert_eq!(
-            browser.read(cx).path_input.read(cx).value().as_ref(),
+            browser
+                .read(cx)
+                .toolbar
+                .path
+                .input
+                .read(cx)
+                .value()
+                .as_ref(),
             root.path().to_string_lossy()
         );
     })

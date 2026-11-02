@@ -290,9 +290,9 @@ impl Render for State {
 
 impl Browser {
     pub(super) fn request_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open
+        if self.settings.open
             || self.collection().is_some()
-            || self.file_operation_in_progress
+            || self.operations.in_progress
             || window.has_active_dialog(cx)
             || window.focused_input(cx).is_some()
             || !self.file_selection_focused(window, cx)
@@ -313,7 +313,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.file_operation_in_progress || self.rename.read(cx).is_open() {
+        if self.operations.in_progress || self.operations.rename.read(cx).is_open() {
             return;
         }
         let Some(original) = path.file_name().map(OsStr::to_os_string) else {
@@ -329,10 +329,11 @@ impl Browser {
             cx.notify();
             return;
         };
-        self.rename
+        self.operations
+            .rename
             .update(cx, |state, cx| state.begin(path, original, window, cx));
         let browser = cx.entity().downgrade();
-        let rename = self.rename.clone();
+        let rename = self.operations.rename.clone();
         // Let a closing context menu leave the focus tree before the dialog is
         // recorded as its own return target.
         window.on_next_frame(move |window, cx| {
@@ -392,36 +393,40 @@ impl Browser {
             let Some(browser) = browser.upgrade() else {
                 return;
             };
-            let origin_tab = browser.read(cx).active_id;
+            let origin_tab = browser.read(cx).tabs.active_id;
             browser.update(cx, |_, cx| cx.notify());
             Self::restore_file_focus(browser.downgrade(), origin_tab, window);
         }
     }
 
     fn confirm_rename(&mut self, cx: &mut Context<Self>) -> bool {
-        self.rename.update(cx, |state, cx| {
+        self.operations.rename.update(cx, |state, cx| {
             state.refresh_error(cx);
             cx.notify();
         });
-        if self.file_operation_in_progress {
+        if self.operations.in_progress {
             return false;
         }
-        let valid = self.rename.read(cx).error.is_none();
+        let valid = self.operations.rename.read(cx).error.is_none();
         if !valid {
             return false;
         }
-        let Some(request) = self.rename.update(cx, |state, cx| state.take(cx)) else {
+        let Some(request) = self
+            .operations
+            .rename
+            .update(cx, |state, cx| state.take(cx))
+        else {
             return false;
         };
         if !self.device_path_accepts_task(&request.source, cx) {
             notifications::error(i18n::text("device-path-unavailable", cx), cx);
             return true;
         }
-        self.file_operation_in_progress = true;
-        self.file_operation_paths = vec![request.source.clone()];
+        self.operations.in_progress = true;
+        self.operations.paths = vec![request.source.clone()];
         notifications::Operation::start(i18n::text("rename-working", cx), cx);
         let source = request.source.clone();
-        let origin_tab = self.active_id;
+        let origin_tab = self.tabs.active_id;
         let work = cx
             .background_executor()
             .spawn(async move { request.execute() });
@@ -446,7 +451,7 @@ impl Browser {
         result: Result<PathBuf, Error>,
         cx: &mut Context<Self>,
     ) {
-        self.file_operation_in_progress = false;
+        self.operations.in_progress = false;
         let report = match result {
             Ok(destination) => {
                 let name = destination

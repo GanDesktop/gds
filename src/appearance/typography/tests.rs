@@ -25,16 +25,6 @@ fn legacy_configuration_keeps_the_system_font_and_the_current_size() {
 }
 
 #[test]
-fn the_default_size_scales_explicit_text_by_one() {
-    assert_eq!(Preferences::default().scale(), 1.0);
-    let larger = Preferences {
-        size: MAX_SIZE,
-        ..Preferences::default()
-    };
-    assert_eq!(larger.scale(), MAX_SIZE / DEFAULT_SIZE);
-}
-
-#[test]
 fn non_finite_and_out_of_range_sizes_are_rejected() {
     for value in [
         f32::NAN,

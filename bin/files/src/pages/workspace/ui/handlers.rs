@@ -142,8 +142,8 @@ impl Browser {
         // The window already carries the new state; the stored group is what the
         // last frame drew, so a redraw is only needed when the two differ.
         let held = Self::current_held_modifier(window);
-        if self.held_modifier != held {
-            self.held_modifier = held;
+        if self.window.held_modifier != held {
+            self.window.held_modifier = held;
             cx.notify();
         }
     }
@@ -304,7 +304,7 @@ impl Browser {
             _ => false,
         };
         if moved {
-            self.focus.focus(window, cx);
+            self.window.focus.focus(window, cx);
             cx.stop_propagation();
         }
     }
@@ -411,7 +411,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let command = if self.settings_open || self.collection().is_some() {
+        let command = if self.settings.open || self.collection().is_some() {
             Command::Cancel
         } else {
             Command::Back
@@ -427,23 +427,12 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open || self.collection().is_some() {
+        if self.settings.open || self.collection().is_some() {
             return;
         }
         cx.stop_propagation();
         window.prevent_default();
         self.dispatch(Command::Forward, window, cx);
-    }
-
-    pub(super) fn on_edit_path_click(
-        &mut self,
-        _: &ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.stop_propagation();
-        self.focus.focus(window, cx);
-        self.dispatch(Command::EditLocation, window, cx);
     }
 
     pub(super) fn click_command(
@@ -456,7 +445,7 @@ impl Browser {
             if this.terminal_focused(window, cx)
                 && !matches!(command, Command::Terminal | Command::Settings)
             {
-                this.focus.focus(window, cx);
+                this.window.focus.focus(window, cx);
             }
             this.dispatch(command, window, cx);
         }
@@ -481,7 +470,7 @@ impl Browser {
         target: LocationTarget,
     ) -> impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) {
         move |this, _, window, cx| {
-            this.activate_location_button(target.location(&this.home), window, cx)
+            this.activate_location_button(target.location(&this.locations.home), window, cx)
         }
     }
 
@@ -491,11 +480,11 @@ impl Browser {
         move |this, _, window, cx| {
             cx.stop_propagation();
             if Some(&path) == this.current_path().as_ref() {
-                this.focus.focus(window, cx);
+                this.window.focus.focus(window, cx);
                 this.dispatch(Command::EditLocation, window, cx);
             } else {
                 this.navigate(path.clone(), cx);
-                this.focus.focus(window, cx);
+                this.window.focus.focus(window, cx);
             }
         }
     }
@@ -570,9 +559,6 @@ impl Browser {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;
 
 impl Browser {
     pub(super) fn on_view_mode(

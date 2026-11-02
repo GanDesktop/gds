@@ -40,7 +40,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open || window.has_active_dialog(cx) {
+        if self.settings.open || window.has_active_dialog(cx) {
             return;
         }
         self.clear_list_selection(window, cx);
@@ -49,7 +49,7 @@ impl Browser {
     pub(super) fn clear_list_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.collection() {
             Some(Collection::Volumes) => self.set_selected_volume(None),
-            Some(Collection::Trash) => self.trash.clear_selection(),
+            Some(Collection::Trash) => self.collections.trash.clear_selection(),
             Some(Collection::Recent | Collection::Favorites | Collection::Network) => {
                 if let Some(slot) = self.current_tab_mut() {
                     slot.navigation.view_mut().place = None;
@@ -66,7 +66,7 @@ impl Browser {
                 }
             }
         }
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -75,25 +75,26 @@ impl Browser {
     /// A dialog or the application menu owns its own keys, an armed tab prefix
     /// owns plain arrows, and an open editor owns every keystroke it receives.
     pub(super) fn list_keys_available(&self, window: &mut Window, cx: &mut App) -> bool {
-        !self.settings_open
-            && self.focus.contains_focused(window, cx)
-            && !self.regions.sidebar_focused(window, cx)
+        !self.settings.open
+            && self.window.focus.contains_focused(window, cx)
+            && !self.sidebar.regions.sidebar_focused(window, cx)
             && !notifications::is_focused(window, cx)
-            && !self.menu_open
-            && self.keyboard_menu.is_none()
-            && self.sort_menu.is_none()
-            && self.tab_prefix.is_none()
-            && !self.rename.read(cx).is_open()
+            && !self.menus.application_open
+            && self.menus.context.is_none()
+            && self.menus.sort.is_none()
+            && self.tabs.prefix.is_none()
+            && !self.operations.rename.read(cx).is_open()
             && !window.has_active_dialog(cx)
             && !self.editing_input_focused(window, cx)
     }
 
     pub(super) fn file_selection_focused(&self, window: &Window, cx: &App) -> bool {
-        !self.settings_open
+        !self.settings.open
             && self.collection().is_none()
-            && (self.focus.is_focused(window)
+            && (self.window.focus.is_focused(window)
                 || self
-                    .file_table
+                    .files
+                    .table
                     .read(cx)
                     .focus_handle(cx)
                     .contains_focused(window, cx))
@@ -159,7 +160,7 @@ impl Browser {
             if let Some(slot) = self.active() {
                 slot.scroll_to_entry(index);
             }
-            self.focus.focus(window, cx);
+            self.window.focus.focus(window, cx);
             cx.stop_propagation();
             window.prevent_default();
             return;
@@ -202,7 +203,7 @@ impl Browser {
         if let Some(slot) = self.active() {
             slot.scroll_to_entry(index);
         }
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -237,7 +238,7 @@ impl Browser {
         };
         // The cursor moves only; Enter is what opens the selected record.
         if self.move_place_cursor(collection, motion, cx) {
-            self.focus.focus(window, cx);
+            self.window.focus.focus(window, cx);
             cx.stop_propagation();
             window.prevent_default();
         }
@@ -286,7 +287,7 @@ impl Browser {
             if let Location::Directory(path) = location {
                 self.activate_path(path.into(), cx);
             } else {
-                self.navigate_location(self.active_id, location, cx);
+                self.navigate_location(self.tabs.active_id, location, cx);
             }
         }
     }
@@ -423,7 +424,7 @@ impl Browser {
         {
             slot.scroll_to_entry(index);
         }
-        self.places.set_sort(location, sort);
+        self.locations.places.set_sort(location, sort);
         self.save_places(cx);
         cx.notify();
     }

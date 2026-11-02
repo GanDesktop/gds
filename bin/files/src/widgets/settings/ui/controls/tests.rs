@@ -224,7 +224,8 @@ fn changing_and_resetting_builtin_palette_applies_without_changing_mode(
     use gds::appearance::theme::{self, BuiltinTheme};
     cx.update(|cx| {
         gpui_kit::init(cx);
-        let previous = modified_preferences();
+        let mut previous = modified_preferences();
+        previous.appearance.source = Source::Builtin;
         theme::apply(&previous.appearance, cx).expect("initial embedded palette");
         let original = theme::Colors::current(cx);
         let mut changed = previous.clone();

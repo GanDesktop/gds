@@ -163,20 +163,20 @@ impl Browser {
         let cut = items.item(MenuAction::Cut, i18n::text("cut-files", cx));
         let paste = items
             .item(MenuAction::Paste, i18n::text("paste-files", cx))
-            .disabled(self.file_operation_in_progress);
+            .disabled(self.operations.in_progress || !crate::shared::lib::clipboard::can_paste(cx));
         let copy_path = items.item(MenuAction::CopyPaths, i18n::text("copy-path", cx));
         let rename = items
             .item(MenuAction::Rename, i18n::text("rename", cx))
-            .disabled(self.file_operation_in_progress);
+            .disabled(self.operations.in_progress);
         let trash = items
             .item(MenuAction::Trash, i18n::text("move-to-trash", cx))
-            .disabled(self.file_operation_in_progress);
+            .disabled(self.operations.in_progress);
         let delete = items
             .item(
                 MenuAction::DeletePermanent,
                 i18n::text("delete-permanently", cx),
             )
-            .disabled(self.file_operation_in_progress);
+            .disabled(self.operations.in_progress);
         let internal_terminal = self.picker.is_none().then(|| {
             items.item(
                 MenuAction::InternalTerminal,
@@ -237,13 +237,13 @@ impl Browser {
         );
         let trash = items
             .item(MenuAction::Trash, i18n::count("trash-selected", count, cx))
-            .disabled(self.file_operation_in_progress);
+            .disabled(self.operations.in_progress);
         let delete = items
             .item(
                 MenuAction::DeletePermanent,
                 i18n::count("delete-selected", count, cx),
             )
-            .disabled(self.file_operation_in_progress);
+            .disabled(self.operations.in_progress);
         el! {
             menu {
                 @if (let Some(item) = open_directories) item: item; separator; @end;
@@ -265,10 +265,10 @@ impl Browser {
         let view = cx.entity().downgrade();
         let new_folder = DirectoryAction::NewFolder
             .item(view.clone(), target.clone(), cx)
-            .disabled(self.file_operation_in_progress);
+            .disabled(self.operations.in_progress);
         let paste = DirectoryAction::Paste
             .item(view.clone(), target.clone(), cx)
-            .disabled(self.file_operation_in_progress);
+            .disabled(self.operations.in_progress || !crate::shared::lib::clipboard::can_paste(cx));
         let internal_terminal = self
             .picker
             .is_none()

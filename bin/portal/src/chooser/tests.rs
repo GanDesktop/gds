@@ -331,3 +331,6 @@ async fn shutdown_cancels_and_reaps_native_save_requests() {
     );
     fixture.finish().await;
 }
+
+const CHOOSER: &str = "org.freedesktop.impl.portal.FileChooser";
+const REQUEST: &str = "org.freedesktop.impl.portal.Request";

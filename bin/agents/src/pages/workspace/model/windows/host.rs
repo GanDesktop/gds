@@ -478,9 +478,6 @@ impl Host {
             .flex_1()
             .min_w_0()
             .child(title)
-            .when(sidebar_width.is_none(), |controls| {
-                controls.child(gds::ui::WindowDragArea)
-            })
             .into_any_element();
         let frame = sidebar_width.map_or_else(gds::ui::Frame::without_sidebar, |width| {
             gds::ui::Frame::default().sidebar_width(width)

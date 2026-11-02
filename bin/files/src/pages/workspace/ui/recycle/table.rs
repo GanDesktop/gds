@@ -205,7 +205,7 @@ impl TrashTable {
             if let Some(browser) = browser.upgrade() {
                 browser.update(cx, |browser, cx| {
                     browser.select_trash(row_ix, event.modifiers(), cx);
-                    browser.focus.focus(window, cx);
+                    browser.window.focus.focus(window, cx);
                 });
             }
         }
@@ -463,7 +463,7 @@ impl Browser {
             return menu;
         }
         self.select_trash_row_for_menu(row_ix);
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         super::view::entry_menu(self, menu, cx)
     }
 }

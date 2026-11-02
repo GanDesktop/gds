@@ -17,6 +17,24 @@ use gpui_kit::{
     prelude::*,
 };
 
+pub(super) struct State {
+    pub service: Entity<storage::Service>,
+    pub table: Entity<gpui_kit::component::table::TableState<table::VolumeTable>>,
+    pub defaults: std::collections::HashMap<VolumeId, PathBuf>,
+    pub pending_removals: Vec<DeviceAction>,
+}
+
+impl State {
+    pub(super) fn new(runtime: Handle, window: &mut Window, cx: &mut Context<Browser>) -> Self {
+        Self {
+            service: storage::Service::shared(runtime, cx),
+            table: table::VolumeTable::make_state(cx.entity().downgrade(), window, cx),
+            defaults: std::collections::HashMap::new(),
+            pending_removals: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Availability {
     Available,
@@ -101,14 +119,14 @@ impl Browser {
         _: Entity<storage::Service>,
         cx: &mut Context<Self>,
     ) {
-        let snapshot = &self.storage.read(cx).snapshot;
+        let snapshot = &self.devices.service.read(cx).snapshot;
         if self
             .selected_volume()
             .is_some_and(|id| snapshot.volume(id).is_none_or(|volume| !volume.visible))
         {
             self.set_selected_volume(None);
         }
-        for slot in &mut self.tabs {
+        for slot in &mut self.tabs.items {
             let was_available = slot.files_available();
             if let Some(location) = &mut slot.device {
                 location.update(snapshot);
@@ -131,7 +149,7 @@ impl Browser {
     }
 
     pub(super) fn device_path_available(&self, path: &Path, cx: &App) -> bool {
-        let service = self.storage.read(cx);
+        let service = self.devices.service.read(cx);
         if service.removal_in_progress(path) {
             return false;
         }
@@ -158,7 +176,7 @@ impl Browser {
         {
             return true;
         }
-        self.tabs.iter().all(|slot| {
+        self.tabs.items.iter().all(|slot| {
             slot.device.as_ref().is_none_or(|location| {
                 location.availability == Availability::Available
                     || location.root.as_os_str().is_empty()
@@ -169,8 +187,9 @@ impl Browser {
 
     pub(super) fn device_path_accepts_task(&self, path: &Path, cx: &App) -> bool {
         self.device_path_available(path, cx)
-            && !self.pending_removals.iter().any(|action| {
-                self.storage
+            && !self.devices.pending_removals.iter().any(|action| {
+                self.devices
+                    .service
                     .read(cx)
                     .snapshot
                     .removal_volumes(action)
@@ -185,9 +204,9 @@ impl Browser {
     }
 
     fn device_is_busy(&self, id: &VolumeId, cx: &App) -> bool {
-        let service = self.storage.read(cx);
+        let service = self.devices.service.read(cx);
         service.is_busy(id)
-            || self.pending_removals.iter().any(|action| {
+            || self.devices.pending_removals.iter().any(|action| {
                 let scope = DeviceAction::PowerOff(action.volume().clone());
                 service
                     .snapshot
@@ -198,20 +217,22 @@ impl Browser {
     }
 
     fn device_has_tasks(&self, action: &DeviceAction, cx: &App) -> bool {
-        if self.file_operation_in_progress && self.file_operation_paths.is_empty() {
+        if self.operations.in_progress && self.operations.paths.is_empty() {
             return true;
         }
-        self.storage
+        self.devices
+            .service
             .read(cx)
             .snapshot
             .removal_volumes(action)
             .iter()
             .any(|volume| {
                 volume.mount_points.iter().any(|root| {
-                    self.file_operation_paths
+                    self.operations
+                        .paths
                         .iter()
-                        .filter(|_| self.file_operation_in_progress)
-                        .chain(self.trash.task_paths().iter())
+                        .filter(|_| self.operations.in_progress)
+                        .chain(self.collections.trash.task_paths().iter())
                         .any(|path| path.starts_with(root))
                 })
             })
@@ -235,14 +256,21 @@ impl Browser {
             .id
             .stable
             .as_ref()
-            .and_then(|identity| self.preferences.files.volume_mount_points.get(identity))
-            .or_else(|| self.volume_defaults.get(&volume.id));
+            .and_then(|identity| {
+                self.settings
+                    .preferences
+                    .files
+                    .volume_mount_points
+                    .get(identity)
+            })
+            .or_else(|| self.devices.defaults.get(&volume.id));
         Self::default_root(volume, preferred.map(PathBuf::as_path))
     }
 
     fn set_default_volume_root(&mut self, id: &VolumeId, root: PathBuf, cx: &mut Context<Self>) {
         if !self
-            .storage
+            .devices
+            .service
             .read(cx)
             .snapshot
             .volume(id)
@@ -251,15 +279,16 @@ impl Browser {
             return;
         }
         if let Some(identity) = &id.stable {
-            self.preferences
+            self.settings
+                .preferences
                 .files
                 .volume_mount_points
                 .insert(identity.clone(), root);
-            if let Err(error) = configuration::save(&self.preferences) {
+            if let Err(error) = configuration::save(&self.settings.preferences) {
                 report_settings_failure("settings-save-failed", error, cx);
             }
         } else {
-            self.volume_defaults.insert(id.clone(), root);
+            self.devices.defaults.insert(id.clone(), root);
         }
         self.refresh_mounted_volume(id, cx);
         cx.notify();
@@ -277,7 +306,7 @@ impl Browser {
     }
 
     fn volume_location(&self, id: &VolumeId, cx: &App) -> Option<Location> {
-        let volume = self.storage.read(cx).snapshot.volume(id)?;
+        let volume = self.devices.service.read(cx).snapshot.volume(id)?;
         let identity = self.volume_identity(&volume.id, cx);
         Some(Location::Volume {
             identity,
@@ -301,7 +330,7 @@ impl Browser {
     }
 
     fn mount_for_target(&mut self, id: VolumeId, target: Reconnect, cx: &mut Context<Self>) {
-        let Some(volume) = self.storage.read(cx).snapshot.volume(&id).cloned() else {
+        let Some(volume) = self.devices.service.read(cx).snapshot.volume(&id).cloned() else {
             return;
         };
         if self.device_is_busy(&id, cx) {
@@ -322,7 +351,7 @@ impl Browser {
             notifications::info(i18n::text("device-not-browsable", cx), cx);
             return;
         }
-        let task = self.storage.update(cx, |service, cx| {
+        let task = self.devices.service.update(cx, |service, cx| {
             service.operate(DeviceAction::Mount(id.clone()), cx)
         });
         let task = match task {
@@ -357,7 +386,8 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         if !self
-            .storage
+            .devices
+            .service
             .read(cx)
             .snapshot
             .volume(&volume)
@@ -397,7 +427,8 @@ impl Browser {
             location: slot.location(),
         };
         let volume = self
-            .storage
+            .devices
+            .service
             .read(cx)
             .snapshot
             .reconnect(&location.volume)
@@ -418,7 +449,8 @@ impl Browser {
             return;
         }
         let count = self
-            .storage
+            .devices
+            .service
             .read(cx)
             .snapshot
             .removal_volumes(&action)
@@ -451,7 +483,7 @@ impl Browser {
                 footer: $(ui::DialogActions::default().primary_label(confirm.clone()).primary_icon(IconName::Check).cancel_label(cancel.clone()));
                 on_ok: $(move |_, _, cx| {
                     let _ = browser.update(cx, |browser, cx| {
-                        if browser.device_has_tasks(&action, cx) { browser.pending_removals.push(action.clone()); cx.notify(); }
+                        if browser.device_has_tasks(&action, cx) { browser.devices.pending_removals.push(action.clone()); cx.notify(); }
                         else { browser.start_device_operation(action.clone(), cx); }
                     });
                     true
@@ -461,9 +493,9 @@ impl Browser {
     }
 
     pub(super) fn drain_device_removals(&mut self, cx: &mut Context<Self>) {
-        for action in std::mem::take(&mut self.pending_removals) {
+        for action in std::mem::take(&mut self.devices.pending_removals) {
             if self.device_has_tasks(&action, cx) {
-                self.pending_removals.push(action);
+                self.devices.pending_removals.push(action);
             } else {
                 self.start_device_operation(action, cx);
             }
@@ -475,7 +507,8 @@ impl Browser {
         let mounted_volume =
             matches!(action, DeviceAction::Mount(_)).then(|| action.volume().clone());
         let task = self
-            .storage
+            .devices
+            .service
             .update(cx, |service, cx| service.operate(action, cx));
         let task = match task {
             Ok(task) => task,
@@ -505,6 +538,7 @@ impl Browser {
     fn refresh_mounted_volume(&mut self, id: &VolumeId, cx: &mut Context<Self>) {
         let ids: Vec<_> = self
             .tabs
+            .items
             .iter()
             .filter(|slot| {
                 slot.device

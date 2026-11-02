@@ -16,10 +16,11 @@ impl Browser {
         if command.operation == Operation::Properties {
             self.open_desktop_properties(&command, cx);
         }
-        self.settings_open = false;
+        self.settings.open = false;
         for target in command.targets {
             let existing = self
                 .tabs
+                .items
                 .iter()
                 .find(|slot| slot.path() == Some(target.directory.as_path()))
                 .map(|slot| slot.id);
@@ -28,7 +29,7 @@ impl Browser {
             } else {
                 self.open_tab(target.directory, false, window, cx);
             }
-            let id = self.active_id;
+            let id = self.tabs.active_id;
             if let Some(slot) = self.tab_slot_mut(id) {
                 slot.filter.clear();
                 slot.reveal_hidden = target.selection.iter().any(|path| {
@@ -40,10 +41,12 @@ impl Browser {
             self.sync_filter_input(window, cx);
             self.refresh_tab(id, cx);
             if command.operation == Operation::Properties {
-                self.places.set_details(self.current_location(), true);
+                self.locations
+                    .places
+                    .set_details(self.current_location(), true);
             }
         }
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         if command.startup_id.is_empty() {
             window.activate_window();
         } else if let Err(error) = window.activate_with_token(&command.startup_id) {
@@ -78,7 +81,7 @@ impl Browser {
                             continue;
                         }
                     };
-                    let thumbnails = this.thumbnails.clone();
+                    let thumbnails = this.files.thumbnails.clone();
                     let title = entry.display_name.clone();
                     let options = WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(

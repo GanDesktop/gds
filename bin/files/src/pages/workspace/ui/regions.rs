@@ -47,53 +47,57 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open {
+        if self.settings.open {
             return;
         }
         self.reset_tab_prefix();
-        self.path_editing = false;
+        self.toolbar.path.editing = false;
         match command {
             Command::FocusLocations => {
                 self.scroll_region_location();
-                self.regions.locations.focus(window, cx);
+                self.sidebar.regions.locations.focus(window, cx);
             }
             Command::FocusTabs => {
                 if self
+                    .sidebar
                     .regions
                     .tab
-                    .is_none_or(|id| !self.tabs.iter().any(|tab| tab.id == id))
+                    .is_none_or(|id| !self.tabs.items.iter().any(|tab| tab.id == id))
                 {
-                    self.regions.tab = self
+                    self.sidebar.regions.tab = self
                         .tabs
+                        .items
                         .iter()
-                        .find(|tab| tab.id == self.active_id)
-                        .or(self.tabs.first())
+                        .find(|tab| tab.id == self.tabs.active_id)
+                        .or(self.tabs.items.first())
                         .map(|tab| tab.id);
                 }
                 self.scroll_region_tab();
-                self.regions.tabs.focus(window, cx);
+                self.sidebar.regions.tabs.focus(window, cx);
             }
             Command::FocusVolumes => {
-                self.regions.reveal_volumes = true;
+                self.sidebar.regions.reveal_volumes = true;
                 let ids = self.region_volumes(cx);
                 if self
+                    .sidebar
                     .regions
                     .volume
                     .as_ref()
                     .is_none_or(|id| !ids.contains(id))
                 {
-                    self.regions.volume = ids.first().cloned();
+                    self.sidebar.regions.volume = ids.first().cloned();
                 }
-                self.regions.volumes.focus(window, cx);
+                self.sidebar.regions.volumes.focus(window, cx);
             }
-            Command::FocusContent => self.focus.focus(window, cx),
+            Command::FocusContent => self.window.focus.focus(window, cx),
             _ => unreachable!("only region commands are routed here"),
         }
         cx.notify();
     }
 
     fn region_volumes(&self, cx: &App) -> Vec<storage::VolumeId> {
-        self.storage
+        self.devices
+            .service
             .read(cx)
             .snapshot
             .volumes
@@ -106,19 +110,20 @@ impl Browser {
     fn scroll_region_location(&self) {
         if let Some(index) = LocationTarget::ALL
             .iter()
-            .position(|target| *target == self.regions.location)
+            .position(|target| *target == self.sidebar.regions.location)
         {
-            self.regions.locations_scroll.scroll_to_item(index);
+            self.sidebar.regions.locations_scroll.scroll_to_item(index);
         }
     }
 
     fn scroll_region_tab(&self) {
         if let Some(index) = self
             .tabs
+            .items
             .iter()
-            .position(|tab| Some(tab.id) == self.regions.tab)
+            .position(|tab| Some(tab.id) == self.sidebar.regions.tab)
         {
-            self.regions.tabs_scroll.scroll_to_item(index);
+            self.sidebar.regions.tabs_scroll.scroll_to_item(index);
         }
     }
 
@@ -128,13 +133,13 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.regions.sidebar_focused(window, cx)
-            || self.settings_open
-            || self.menu_open
-            || self.keyboard_menu.is_some()
-            || self.sort_menu.is_some()
+        if !self.sidebar.regions.sidebar_focused(window, cx)
+            || self.settings.open
+            || self.menus.application_open
+            || self.menus.context.is_some()
+            || self.menus.sort.is_some()
             || window.has_active_dialog(cx)
-            || self.rename.read(cx).is_open()
+            || self.operations.rename.read(cx).is_open()
             || event.keystroke.modifiers.modified()
         {
             return;
@@ -142,31 +147,35 @@ impl Browser {
         let Some(motion) = Motion::for_key(&event.keystroke.key) else {
             return;
         };
-        if self.regions.locations.is_focused(window) {
+        if self.sidebar.regions.locations.contains_focused(window, cx) {
             let current = LocationTarget::ALL
                 .iter()
-                .position(|target| *target == self.regions.location);
+                .position(|target| *target == self.sidebar.regions.location);
             if let Some(index) = motion.target(current, LocationTarget::ALL.len()) {
-                self.regions.location = LocationTarget::ALL[index];
+                self.sidebar.regions.location = LocationTarget::ALL[index];
                 self.scroll_region_location();
+                self.sidebar.regions.locations.focus(window, cx);
             }
-        } else if self.regions.tabs.is_focused(window) {
+        } else if self.sidebar.regions.tabs.contains_focused(window, cx) {
             let current = self
                 .tabs
+                .items
                 .iter()
-                .position(|tab| Some(tab.id) == self.regions.tab);
-            if let Some(index) = motion.target(current, self.tabs.len()) {
-                self.regions.tab = Some(self.tabs[index].id);
+                .position(|tab| Some(tab.id) == self.sidebar.regions.tab);
+            if let Some(index) = motion.target(current, self.tabs.items.len()) {
+                self.sidebar.regions.tab = Some(self.tabs.items[index].id);
                 self.scroll_region_tab();
+                self.sidebar.regions.tabs.focus(window, cx);
             }
-        } else if self.regions.volumes.is_focused(window) {
+        } else if self.sidebar.regions.volumes.contains_focused(window, cx) {
             let ids = self.region_volumes(cx);
             let current = ids
                 .iter()
-                .position(|id| Some(id) == self.regions.volume.as_ref());
+                .position(|id| Some(id) == self.sidebar.regions.volume.as_ref());
             if let Some(index) = motion.target(current, ids.len()) {
-                self.regions.volume = Some(ids[index].clone());
-                self.regions.volumes_scroll.scroll_to_item(index);
+                self.sidebar.regions.volume = Some(ids[index].clone());
+                self.sidebar.regions.volumes_scroll.scroll_to_item(index);
+                self.sidebar.regions.volumes.focus(window, cx);
             }
         }
         cx.stop_propagation();
@@ -175,14 +184,18 @@ impl Browser {
     }
 
     pub(super) fn activate_region(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.regions.locations.is_focused(window) {
-            self.show_location(self.regions.location.location(&self.home), window, cx);
-        } else if self.regions.tabs.is_focused(window) {
-            if let Some(id) = self.regions.tab {
+        if self.sidebar.regions.locations.is_focused(window) {
+            self.show_location(
+                self.sidebar.regions.location.location(&self.locations.home),
+                window,
+                cx,
+            );
+        } else if self.sidebar.regions.tabs.is_focused(window) {
+            if let Some(id) = self.sidebar.regions.tab {
                 self.switch_tab(id, window, cx);
             }
-        } else if self.regions.volumes.is_focused(window)
-            && let Some(id) = self.regions.volume.clone()
+        } else if self.sidebar.regions.volumes.is_focused(window)
+            && let Some(id) = self.sidebar.regions.volume.clone()
         {
             self.show_volume(id, window, cx);
         }

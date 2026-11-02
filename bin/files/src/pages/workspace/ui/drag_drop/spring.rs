@@ -132,7 +132,12 @@ pub(super) fn wait_then_switch(
                 };
                 browser.update(cx, |browser, cx| {
                     // The row may have been closed while the wait ran.
-                    if browser.tabs.iter().any(|tab| tab.id == pending.tab_id) {
+                    if browser
+                        .tabs
+                        .items
+                        .iter()
+                        .any(|tab| tab.id == pending.tab_id)
+                    {
                         browser.switch_tab(pending.tab_id, window, cx);
                     }
                 });

@@ -164,7 +164,8 @@ impl Bridge {
     /// Reports invalid URI lists or an unavailable clipboard provider.
     pub fn write_uris(&self, uris: Vec<String>, cx: &mut App) -> Task<Result<(), Error>> {
         let checked = parse_uri_list(&uris.join("\n"));
-        match self.backend {
+        let copyable = checked.as_ref().is_ok_and(|uris| copyable_uris(uris));
+        let write = match self.backend {
             #[cfg(target_os = "linux")]
             Backend::Wayland => cx
                 .background_executor()
@@ -178,7 +179,16 @@ impl Bridge {
                 }
                 Task::ready(checked.map(|_| ()))
             }
-        }
+        };
+        cx.spawn(async move |cx| {
+            write.await?;
+            cx.update(|cx| {
+                cx.default_global::<state::Cache>()
+                    .record_uri_copy(copyable);
+                cx.refresh_windows();
+            });
+            Ok(())
+        })
     }
 
     pub fn read_uris(&self, cx: &mut App) -> Task<Result<Option<(Mode, Vec<String>)>, Error>> {
@@ -298,6 +308,14 @@ fn parse_uri_list(text: &str) -> Result<Vec<String>, Error> {
     Ok(uris)
 }
 
+fn copyable_uris(uris: &[String]) -> bool {
+    !uris.is_empty()
+        && uris.iter().all(|uri| {
+            gds::service::remote::Address::parse(uri).is_ok()
+                || url::Url::parse(uri).is_ok_and(|uri| uri.to_file_path().is_ok())
+        })
+}
+
 /// Whether `path` is one of the sources of the current in-application cut.
 ///
 /// This reads only the cached intent; no clipboard or filesystem I/O happens
@@ -314,6 +332,12 @@ pub fn current(cx: &App) -> Option<Arc<Snapshot>> {
         .and_then(state::Cache::current)
 }
 
+/// Whether the last validated offer contains local files or copyable remote URIs.
+pub fn can_paste(cx: &App) -> bool {
+    cx.try_global::<state::Cache>()
+        .is_some_and(state::Cache::can_paste)
+}
+
 /// Re-read file contents on activation or returning from a file interaction.
 ///
 /// Callers invoke this on window activation or on a returning file-row click;
@@ -327,9 +351,22 @@ pub fn refresh(cx: &mut App) {
     let read = bridge.read(cx);
     cx.spawn(async move |cx| {
         let current = read.await;
+        let (current, remote_copy) = match current {
+            Ok(None) | Err(Error::InvalidUri(_)) => {
+                match cx.update(|cx| bridge.read_uris(cx)).await {
+                    Ok(offer) => {
+                        let copyable = offer
+                            .is_some_and(|(mode, uris)| mode == Mode::Copy && copyable_uris(&uris));
+                        (Ok(None), copyable)
+                    }
+                    Err(error) => (Err(error), false),
+                }
+            }
+            result => (result, false),
+        };
         let changed = cx.update(|cx| {
             cx.default_global::<state::Cache>()
-                .reconcile(generation, current)
+                .reconcile(generation, current, remote_copy)
         });
         if changed {
             cx.update(|cx| cx.refresh_windows());
@@ -342,7 +379,7 @@ pub fn refresh(cx: &mut App) {
 pub fn clear(cx: &mut App) {
     let changed = {
         let cache = cx.default_global::<state::Cache>();
-        let had_files = cache.current().is_some();
+        let had_files = cache.can_paste();
         cache.clear();
         had_files
     };

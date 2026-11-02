@@ -103,3 +103,9 @@ fn managed_settings_can_be_read_but_never_replaced() {
     assert!(path.is_symlink());
     assert_eq!(std::fs::read_to_string(source).expect("source"), "{}");
 }
+
+impl Store {
+    pub(crate) fn at(path: PathBuf) -> Self {
+        Self::new(Some(path))
+    }
+}

@@ -63,12 +63,6 @@ impl Default for Cache {
 
 impl Global for Cache {}
 
-#[cfg(all(test, feature = "gui-tests"))]
-#[derive(Default)]
-struct RenderedSources(HashMap<SharedString, SharedString>);
-#[cfg(all(test, feature = "gui-tests"))]
-impl Global for RenderedSources {}
-
 /// Displays the agent's SVG as a themed alpha mask, or its original bitmap.
 #[derive(IntoElement)]
 pub(crate) struct AgentIcon {
@@ -101,15 +95,6 @@ impl AgentIcon {
 
 impl RenderOnce for AgentIcon {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        #[cfg(all(test, feature = "gui-tests"))]
-        {
-            if cx.try_global::<RenderedSources>().is_none() {
-                cx.set_global(RenderedSources::default());
-            }
-            cx.global_mut::<RenderedSources>()
-                .0
-                .insert(self.id.clone(), self.uri.clone());
-        }
         let artwork = cached(&self.uri, cx);
         let color = self.color.unwrap_or_else(|| cx.theme().foreground);
         let (kind, content) = match artwork {

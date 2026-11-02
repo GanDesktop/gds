@@ -283,19 +283,20 @@ impl Browser {
 
     pub(super) fn load_trash(&mut self, cx: &mut Context<Self>) {
         if !backend::supported() {
-            self.trash
+            self.collections
+                .trash
                 .fail(i18n::text("recycle-unsupported", cx).to_string());
             cx.notify();
             return;
         }
-        let generation = self.trash.begin_load();
+        let generation = self.collections.trash.begin_load();
         let work = cx
             .background_executor()
             .spawn(async move { backend::list() });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             if let Err(error) = this.update(cx, |this, cx| {
-                match this.trash.apply_load(generation, result) {
+                match this.collections.trash.apply_load(generation, result) {
                     Load::Stale => {}
                     Load::Applied => cx.notify(),
                     Load::Failed(message) => {
@@ -327,7 +328,7 @@ impl Browser {
         modifiers: Modifiers,
         cx: &mut Context<Self>,
     ) {
-        self.trash.select(index, modifiers);
+        self.collections.trash.select(index, modifiers);
         cx.notify();
     }
 
@@ -335,23 +336,23 @@ impl Browser {
         if self.collection() != Some(Collection::Trash) {
             return;
         }
-        self.trash.select_all();
+        self.collections.trash.select_all();
         cx.notify();
     }
 
     pub(super) fn select_trash_row_for_menu(&mut self, index: usize) {
-        if !self.trash.is_selected_at(index) {
-            self.trash.select(index, Modifiers::default());
+        if !self.collections.trash.is_selected_at(index) {
+            self.collections.trash.select(index, Modifiers::default());
         }
     }
 
     pub(super) fn restore_selected_trash(&mut self, cx: &mut Context<Self>) {
-        let entries = self.trash.selected_entries();
+        let entries = self.collections.trash.selected_entries();
         self.start_trash_operation(Action::Restore, entries, cx);
     }
 
     pub(super) fn request_trash_purge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let entries = self.trash.selected_entries();
+        let entries = self.collections.trash.selected_entries();
         self.confirm_purge_entries(entries, window, cx);
     }
 
@@ -361,7 +362,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.trash.is_busy() || entries.is_empty() {
+        if self.collections.trash.is_busy() || entries.is_empty() {
             return;
         }
         view::Confirmation::open(
@@ -374,12 +375,12 @@ impl Browser {
     }
 
     pub(super) fn request_empty_trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.trash.is_busy() {
+        if self.collections.trash.is_busy() {
             return;
         }
         // Freeze exactly the rows the user is looking at; anything deleted into
         // Trash after this point is not part of the confirmed request.
-        let entries = self.trash.rows().to_vec();
+        let entries = self.collections.trash.rows().to_vec();
         if entries.is_empty() {
             return;
         }
@@ -398,7 +399,7 @@ impl Browser {
         entries: Vec<Entry>,
         cx: &mut Context<Self>,
     ) {
-        if entries.is_empty() || self.trash.is_busy() {
+        if entries.is_empty() || self.collections.trash.is_busy() {
             return;
         }
         if matches!(action, Action::Restore)
@@ -409,8 +410,8 @@ impl Browser {
             notifications::error(i18n::text("device-path-unavailable", cx), cx);
             return;
         }
-        self.trash.set_busy(true);
-        self.trash.task_paths = entries
+        self.collections.trash.set_busy(true);
+        self.collections.trash.task_paths = entries
             .iter()
             .map(|entry| entry.original_path.clone())
             .collect();
@@ -437,8 +438,8 @@ impl Browser {
         outcomes: Vec<Outcome>,
         cx: &mut Context<Self>,
     ) {
-        self.trash.set_busy(false);
-        self.trash.task_paths.clear();
+        self.collections.trash.set_busy(false);
+        self.collections.trash.task_paths.clear();
         if matches!(action, Action::Restore) {
             // A payload that already moved back belongs to its folder again
             // even when the trash record cleanup failed afterwards.
@@ -473,18 +474,19 @@ impl Browser {
         if self.collection() != Some(Collection::Trash) {
             return false;
         }
-        let current = self.trash.cursor_index();
-        let Some(index) = motion.target(current, self.trash.rows().len()) else {
+        let current = self.collections.trash.cursor_index();
+        let Some(index) = motion.target(current, self.collections.trash.rows().len()) else {
             return false;
         };
-        self.trash.select(
+        self.collections.trash.select(
             index,
             Modifiers {
                 shift: extend,
                 ..Default::default()
             },
         );
-        self.trash
+        self.collections
+            .trash
             .table
             .update(cx, |table, cx| table.scroll_to_row(index, cx));
         cx.notify();
@@ -508,7 +510,7 @@ impl Browser {
             return;
         };
         if self.move_trash_cursor(motion, modifiers.shift, cx) {
-            self.focus.focus(window, cx);
+            self.window.focus.focus(window, cx);
             cx.stop_propagation();
             window.prevent_default();
         }

@@ -175,7 +175,7 @@ enum Ending {
 
 impl Browser {
     pub(super) fn cancel_clipboard_cut(&self, cx: &mut Context<Self>) -> bool {
-        if self.file_operation_in_progress {
+        if self.operations.in_progress {
             return false;
         }
         let Some(cancel) = file_clipboard::cancel_cut(cx) else {
@@ -254,8 +254,8 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.file_operation_in_progress
-            || self.settings_open
+        if self.operations.in_progress
+            || self.settings.open
             || self.collection().is_some()
             || !self.device_path_accepts_task(&destination, cx)
         {
@@ -263,10 +263,10 @@ impl Browser {
         }
         let clipboard = Bridge::new(cx);
         let read = clipboard.read(cx);
-        let origin_tab = self.active_id;
-        self.file_operation_in_progress = true;
+        let origin_tab = self.tabs.active_id;
+        self.operations.in_progress = true;
         // Until the clipboard arrives, the source volumes are unknown.
-        self.file_operation_paths.clear();
+        self.operations.paths.clear();
         notifications::Operation::start(i18n::text("paste-working", cx), cx);
         cx.spawn_in(window, async move |this, cx| {
             let result = read.await;
@@ -331,7 +331,7 @@ impl Browser {
                     );
                     return;
                 }
-                browser.file_operation_paths = paste
+                browser.operations.paths = paste
                     .pending
                     .iter()
                     .cloned()
@@ -513,7 +513,7 @@ impl Browser {
 
     fn cancel_paste(&mut self, paste: Paste, window: &mut Window, cx: &mut Context<Self>) {
         if paste.succeeded.is_empty() && paste.failures.is_empty() {
-            self.file_operation_in_progress = false;
+            self.operations.in_progress = false;
             notifications::Operation::finish(
                 notifications::Report::new(
                     notifications::Level::Info,
@@ -547,7 +547,7 @@ impl Browser {
     }
 
     fn fail_paste(&mut self, message: String, level: notifications::Level, cx: &mut Context<Self>) {
-        self.file_operation_in_progress = false;
+        self.operations.in_progress = false;
         notifications::Operation::finish(notifications::Report::new(level, message), cx);
         cx.notify();
     }
@@ -561,7 +561,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         let origin_tab = paste.origin_tab;
-        self.file_operation_in_progress = false;
+        self.operations.in_progress = false;
         let summary = paste.summary(clipboard_error);
         self.finish_summary(summary, ending, cx);
         Self::restore_file_focus(cx.entity().downgrade(), origin_tab, window);

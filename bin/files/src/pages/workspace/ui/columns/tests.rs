@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::entities::file::columns::{Column, Layout};
 
-use super::{Editor, Scope, sort_column, sort_for, sort_key};
+use super::{Editor, Scope, sort_for};
 use crate::entities::file::sorting::{Direction, Key, Sort};
 use crate::entities::location::places::Places;
 
@@ -15,18 +15,6 @@ fn editor_with(columns: &[Column]) -> Editor {
     let mut editor = Editor::new();
     editor.load(Path::new("/a"), layout_of(columns), false);
     editor
-}
-
-#[test]
-fn every_column_has_its_own_sort_key() {
-    let mut keys = Vec::new();
-    for column in Column::ALL {
-        let key = sort_key(column);
-        assert_eq!(sort_column(key), column);
-        assert!(!keys.contains(&key));
-        keys.push(key);
-    }
-    assert_eq!(keys.len(), Column::ALL.len());
 }
 
 #[test]
@@ -129,13 +117,6 @@ fn confirming_a_draft_yields_a_normalized_layout() {
         [Column::Owner, Column::Name, Column::Type].as_slice()
     );
     assert!(request.layout.contains(Column::Name));
-}
-
-#[test]
-fn a_hidden_sort_key_resolves_to_a_column_that_is_not_visible() {
-    let layout = layout_of(&[Column::Name, Column::Size]);
-    assert!(layout.contains(sort_column(Key::Size)));
-    assert!(!layout.contains(sort_column(Key::Modified)));
 }
 
 #[test]

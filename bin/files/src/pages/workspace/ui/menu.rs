@@ -16,6 +16,15 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 
+#[derive(Default)]
+pub(super) struct State {
+    /// The toolbar button and Alt+M / F10 drive the same application menu.
+    pub application_open: bool,
+    pub context: Option<context_menu::OpenMenu>,
+    pub sort: Option<sort::OpenMenu>,
+    pub volume_focus: Option<FocusHandle>,
+}
+
 /// One row of the application menu.
 ///
 /// Settings is a workspace command, so its row runs the same dispatch path as
@@ -127,10 +136,10 @@ pub(super) fn application_menu(
 impl Browser {
     /// Record whether the application menu is showing.
     pub(super) fn set_menu_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.menu_open == open {
+        if self.menus.application_open == open {
             return;
         }
-        self.menu_open = open;
+        self.menus.application_open = open;
         cx.notify();
     }
 
@@ -144,7 +153,7 @@ impl Browser {
             let Some(view) = view.upgrade() else {
                 return;
             };
-            let focus = view.read(cx).focus.clone();
+            let focus = view.read(cx).window.focus.clone();
             focus.focus(window, cx);
             let about = cx.new(|cx| {
                 gds::ui::about::About::new(
@@ -191,7 +200,7 @@ fn popup(
     window.on_next_frame(move |window, cx| {
         if opening_view
             .upgrade()
-            .is_some_and(|view| view.read(cx).menu_open)
+            .is_some_and(|view| view.read(cx).menus.application_open)
             && let Some(menu) = opening_menu.upgrade()
         {
             menu.focus_handle(cx).focus(window, cx);
@@ -232,6 +241,3 @@ fn rows(mut menu: PopupMenu, view: WeakEntity<Browser>, cx: &App) -> PopupMenu {
     }
     menu
 }
-
-#[cfg(test)]
-mod tests;

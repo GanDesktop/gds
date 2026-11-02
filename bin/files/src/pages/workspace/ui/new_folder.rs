@@ -195,7 +195,7 @@ impl NewFolderDialog {
             let Some(browser) = this.browser.upgrade() else {
                 return;
             };
-            let focus = browser.read(cx).focus.clone();
+            let focus = browser.read(cx).window.focus.clone();
             focus.focus(window, cx);
             let form = this.form.clone();
             window.open_alert_dialog(cx, Self::builder(this.clone()));
@@ -259,7 +259,7 @@ impl NewFolderDialog {
                 && let Some(browser) = this.browser.upgrade()
             {
                 browser.update(cx, |browser, cx| {
-                    browser.file_operation_in_progress = false;
+                    browser.operations.in_progress = false;
                     cx.notify();
                 });
             }
@@ -279,9 +279,9 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.file_operation_in_progress
+        if self.operations.in_progress
             || !self.device_path_accepts_task(&destination, cx)
-            || self.settings_open
+            || self.settings.open
             || self.collection().is_some()
             || window.has_active_dialog(cx)
         {
@@ -291,8 +291,8 @@ impl Browser {
             return;
         };
         let default = i18n::text("new-folder-default-name", cx).to_string();
-        self.file_operation_in_progress = true;
-        self.file_operation_paths = vec![destination.clone()];
+        self.operations.in_progress = true;
+        self.operations.paths = vec![destination.clone()];
         // Suggesting a name probes the destination; a slow or network mount
         // must not block the UI while the dialog is being prepared.
         let directory = destination.clone();
@@ -327,7 +327,7 @@ impl Browser {
         let suggestion = match suggested {
             Ok(suggestion) => suggestion,
             Err(error) => {
-                self.file_operation_in_progress = false;
+                self.operations.in_progress = false;
                 notifications::Report::new(notifications::Level::Error, error.to_string()).show(cx);
                 cx.notify();
                 return;
@@ -347,7 +347,7 @@ impl Browser {
 
     fn start_new_folder(&mut self, request: Request, origin_tab: u64, cx: &mut Context<Self>) {
         if !self.device_path_available(&request.directory, cx) {
-            self.file_operation_in_progress = false;
+            self.operations.in_progress = false;
             notifications::error(i18n::text("device-path-unavailable", cx), cx);
             cx.notify();
             return;
@@ -374,7 +374,7 @@ impl Browser {
         result: Result<PathBuf, Error>,
         cx: &mut Context<Self>,
     ) {
-        self.file_operation_in_progress = false;
+        self.operations.in_progress = false;
         let report = match result {
             Ok(destination) => {
                 if let Some(slot) = self.tab_slot_mut(origin_tab)

@@ -555,11 +555,12 @@ impl Browser {
 
     /// Recompute the preview from current selection state during render.
     pub(super) fn sync_preview(&mut self, cx: &mut Context<Self>) {
-        if !self.details_visible() || self.settings_open || self.collection().is_some() {
+        if !self.details_visible() || self.settings.open || self.collection().is_some() {
             return;
         }
         let target = self.preview_target();
-        self.preview
+        self.files
+            .preview
             .update(cx, |preview, cx| preview.sync(target, cx));
     }
 }

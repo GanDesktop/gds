@@ -212,7 +212,7 @@ impl FileTable {
             let browser = delegate.browser.clone();
             cx.defer(move |cx| {
                 let _ = browser.update(cx, |browser, cx| {
-                    browser.places.set_widths(location, changed);
+                    browser.locations.places.set_widths(location, changed);
                     browser.save_places(cx);
                     cx.notify();
                 });
@@ -516,7 +516,7 @@ impl FileTable {
             if let Some(browser) = browser.upgrade() {
                 browser.update(cx, |browser, cx| {
                     browser.select(row_ix, event.modifiers(), cx);
-                    browser.focus.focus(window, cx);
+                    browser.window.focus.focus(window, cx);
                     if event.click_count() == 2 {
                         browser.activate_path(path.clone(), cx);
                     }

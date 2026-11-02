@@ -15,7 +15,7 @@ impl Browser {
         if window.modifiers().control || window.modifiers().platform {
             self.open_location_tab(Location::Remote(address), false, Some(window), cx);
         } else {
-            self.navigate_location(self.active_id, Location::Remote(address), cx);
+            self.navigate_location(self.tabs.active_id, Location::Remote(address), cx);
         }
     }
 
@@ -27,11 +27,13 @@ impl Browser {
         saved: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let connected = self.connector.read(cx).session(address).is_some();
-        let connecting =
-            self.connector.read(cx).pending().is_some_and(|pending| {
-                pending.address.connection_key() == address.connection_key()
-            });
+        let connected = self.remote.connector.read(cx).session(address).is_some();
+        let connecting = self
+            .remote
+            .connector
+            .read(cx)
+            .pending()
+            .is_some_and(|pending| pending.address.connection_key() == address.connection_key());
         let protocol = match address.protocol() {
             Protocol::Sftp => "SFTP",
             Protocol::Smb => "SMB",
@@ -55,7 +57,8 @@ impl Browser {
             disabled: connecting; on_click: on_open;
         } };
         let on_save = cx.listener(move |this, _, _, cx| {
-            this.places
+            this.locations
+                .places
                 .set_remote_favorite(save_address.clone(), !saved);
             this.save_places(cx);
             cx.notify();
@@ -93,8 +96,9 @@ impl Browser {
     }
 
     pub(super) fn render_network_page(&self, cx: &mut Context<Self>) -> AnyElement {
-        let connector = self.connector.read(cx);
+        let connector = self.remote.connector.read(cx);
         let saved = self
+            .locations
             .places
             .favorites
             .iter()
@@ -131,8 +135,8 @@ impl Browser {
                 .collect();
             sections.push(Self::network_section("remote-connected-servers", rows, cx));
         }
-        if !self.network.paths.is_empty() {
-            let rows = self.network.paths.iter().enumerate().map(|(index, path)| {
+        if !self.collections.network.discovery.paths.is_empty() {
+            let rows = self.collections.network.discovery.paths.iter().enumerate().map(|(index, path)| {
                 let target = path.clone();
                 el! { .div { # $("mounted-network", index); flex; items_center; gap_3; p_3; rounded: DataListStyle::ROW_RADIUS.px; border_1; border_color: $cx.theme().border; min_w_0 } [
                     (IconName::Folder).Icon::new { size: 20.0.px },
@@ -141,7 +145,7 @@ impl Browser {
                         .div { text_xs; text_color: $cx.theme().muted_foreground; truncate } [$(path.display().to_string())],
                     ],
                     format!("open-network-mount-{index}").ui::IconButton::new { icon: IconName::FolderOpen; label: $i18n::text("remote-open", cx);
-                        on_click: $(cx.listener(move |this, _, _, cx| this.navigate_tab(this.active_id, target.clone(), cx)));
+                        on_click: $(cx.listener(move |this, _, _, cx| this.navigate_tab(this.tabs.active_id, target.clone(), cx)));
                     },
                 ] }.into_any_element()
             }).collect();
@@ -156,7 +160,7 @@ impl Browser {
         let on_refresh = cx.listener(|this, _, _, cx| this.refresh_network(cx));
         let refresh = el! { "refresh-network".ui::IconButton::new {
             icon: IconName::RefreshCw; label: $i18n::text("refresh", cx);
-            disabled: $self.network.loading; on_click: on_refresh;
+            disabled: $self.collections.network.discovery.loading; on_click: on_refresh;
         } };
         el! { .ContentPage::default { # "network-page" } [
             .PageHeader::default [
@@ -172,19 +176,19 @@ impl Browser {
                             .div { text_xs; text_color: $cx.theme().muted_foreground; truncate } [$(address.to_string())],
                         ],
                         "cancel-network-connection".ui::IconButton::new { icon: IconName::X; label: $i18n::text("operation-cancel", cx);
-                            on_click: $(cx.listener(|this, _, _, cx| this.connector.update(cx, |connector, cx| connector.cancel(cx))));
+                            on_click: $(cx.listener(|this, _, _, cx| this.remote.connector.update(cx, |connector, cx| connector.cancel(cx))));
                         },
                     ],
                 ],
             @end,
-            @if (self.network.loading)
+            @if (self.collections.network.discovery.loading)
                 .PageNotice::default [.div { flex; items_center; gap_2; text_xs; text_color: $cx.theme().muted_foreground } [.Spinner::new { small; }, $i18n::text("network-loading", cx)]],
             @end,
-            @if (let Some(error) = &self.network.error)
+            @if (let Some(error) = &self.collections.network.discovery.error)
                 .PageNotice::default [.div { text_xs; text_color: $cx.theme().danger } [$(error.clone())]],
             @end,
             .PageContent::default [
-                @if (empty && !connecting && !self.network.loading)
+                @if (empty && !connecting && !self.collections.network.discovery.loading)
                     .div { flex; flex_col; flex_1; items_center; justify_center; gap_3; text_color: $cx.theme().muted_foreground } [
                         (IconName::Network).Icon::new { size: 32.0.px },
                         .div [$i18n::text("remote-network-empty", cx)],

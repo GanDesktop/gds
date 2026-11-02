@@ -5,7 +5,8 @@ use super::*;
 
 impl Browser {
     pub(super) fn volume_can_open(&self, id: &VolumeId, cx: &App) -> bool {
-        self.storage
+        self.devices
+            .service
             .read(cx)
             .snapshot
             .volume(id)
@@ -24,7 +25,8 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         if self
-            .storage
+            .devices
+            .service
             .read(cx)
             .snapshot
             .volume(&id)
@@ -33,12 +35,12 @@ impl Browser {
             return;
         }
         self.set_selected_volume(Some(id));
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         cx.notify();
     }
 
     pub(in super::super) fn volume_action_target(&self, cx: &App) -> Option<VolumeId> {
-        if self.settings_open {
+        if self.settings.open {
             return None;
         }
         let id = if self.collection() == Some(Collection::Volumes) {
@@ -48,7 +50,8 @@ impl Browser {
                 .and_then(|slot| slot.device.as_ref())
                 .map(|device| &device.volume)
         }?;
-        self.storage
+        self.devices
+            .service
             .read(cx)
             .snapshot
             .volume(id)
@@ -57,7 +60,7 @@ impl Browser {
     }
 
     pub(super) fn volume_command_enabled(&self, id: &VolumeId, command: Command, cx: &App) -> bool {
-        let Some(volume) = self.storage.read(cx).snapshot.volume(id) else {
+        let Some(volume) = self.devices.service.read(cx).snapshot.volume(id) else {
             return false;
         };
         if !volume.visible || self.device_is_busy(id, cx) {
@@ -130,7 +133,8 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> bool {
         let volumes: Vec<_> = self
-            .storage
+            .devices
+            .service
             .read(cx)
             .snapshot
             .volumes
@@ -145,7 +149,8 @@ impl Browser {
             return false;
         };
         self.set_selected_volume(Some(volumes[index].clone()));
-        self.volume_table
+        self.devices
+            .table
             .read(cx)
             .vertical_scroll_handle
             .scroll_to_item(index, ScrollStrategy::Nearest);
@@ -169,7 +174,7 @@ impl Browser {
         if let Some(motion) = Motion::for_key(&event.keystroke.key)
             && self.move_volume_cursor(motion, cx)
         {
-            self.focus.focus(window, cx);
+            self.window.focus.focus(window, cx);
             cx.stop_propagation();
             window.prevent_default();
         }

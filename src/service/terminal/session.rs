@@ -419,8 +419,6 @@ pub(crate) struct Shared {
 
 struct Handle {
     shared: Arc<Shared>,
-    #[cfg(test)]
-    pid: Option<u32>,
 }
 
 impl Drop for Handle {
@@ -482,19 +480,13 @@ impl Session {
             if shared.state.shutdown.load(Ordering::Acquire) {
                 return Err(Error::Closed);
             }
-            #[cfg(test)]
-            let pid = backend.process_id();
             let worker_shared = shared.clone();
             // Backend::drop also reaps if thread creation fails after spawning.
             std::thread::Builder::new()
                 .name("gds-terminal-io".into())
                 .spawn(move || backend.run(worker_shared))
                 .map_err(anyhow::Error::from)?;
-            Ok(Self(Arc::new(Handle {
-                shared,
-                #[cfg(test)]
-                pid,
-            })))
+            Ok(Self(Arc::new(Handle { shared })))
         }
     }
 
@@ -625,10 +617,6 @@ impl Session {
     }
     pub fn title(&self) -> Option<String> {
         lock(&self.0.shared.state.metadata).title.clone()
-    }
-    #[cfg(test)]
-    pub fn process_id(&self) -> Option<u32> {
-        self.0.pid
     }
 }
 

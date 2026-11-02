@@ -19,6 +19,32 @@ const CONFIRMATION_WIDTH: f32 = 480.;
 const NAME_PREVIEW_LIMIT: usize = 5;
 const CONFIRMATION_GAP: f32 = 8.;
 
+pub(super) struct State {
+    pub rename: Entity<super::rename::State>,
+    pub in_progress: bool,
+    pub paths: Vec<PathBuf>,
+    pub remote_paste_cancel: Option<tokio_util::sync::CancellationToken>,
+}
+
+impl State {
+    pub(super) fn new(window: &mut Window, cx: &mut App) -> Self {
+        Self {
+            rename: cx.new(|cx| super::rename::State::new(window, cx)),
+            in_progress: false,
+            paths: Vec::new(),
+            remote_paste_cancel: None,
+        }
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        if let Some(cancel) = &self.remote_paste_cancel {
+            cancel.cancel();
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Selection {
     tab_id: u64,
@@ -89,7 +115,7 @@ struct DirectoryTarget {
 
 impl DirectoryTarget {
     fn capture(browser: &Browser, path: PathBuf) -> Option<Self> {
-        if browser.settings_open || browser.collection().is_some() {
+        if browser.settings.open || browser.collection().is_some() {
             return None;
         }
         let slot = browser.active()?;
@@ -100,7 +126,7 @@ impl DirectoryTarget {
     }
 
     fn still_current(&self, browser: &Browser) -> bool {
-        !browser.settings_open
+        !browser.settings.open
             && browser.collection().is_none()
             && browser.active().is_some_and(|slot| {
                 slot.files_available()
@@ -158,7 +184,7 @@ impl Confirmation {
             let Some(browser) = this.browser.upgrade() else {
                 return;
             };
-            let focus = browser.read(cx).focus.clone();
+            let focus = browser.read(cx).window.focus.clone();
             focus.focus(window, cx);
             window.open_alert_dialog(cx, Self::builder(this));
         });
@@ -222,7 +248,7 @@ impl Confirmation {
                 && let Some(browser) = this.browser.upgrade()
             {
                 browser.update(cx, |browser, cx| {
-                    browser.file_operation_in_progress = false;
+                    browser.operations.in_progress = false;
                     cx.notify();
                 });
             }
@@ -265,28 +291,30 @@ impl Browser {
             };
             let has_focused_input = window.focused_input(cx).is_some();
             let browser = view.read(cx);
-            let closing_path_input = !browser.path_editing
+            let closing_path_input = !browser.toolbar.path.editing
                 && browser
-                    .path_input
+                    .toolbar
+                    .path
+                    .input
                     .read(cx)
                     .focus_handle(cx)
                     .contains_focused(window, cx);
             if has_focused_input && !closing_path_input {
                 return;
             }
-            if browser.settings_open
+            if browser.settings.open
                 || browser.collection().is_some()
-                || browser.active_id != origin_tab
+                || browser.tabs.active_id != origin_tab
             {
                 return;
             }
-            let focus = browser.focus.clone();
+            let focus = browser.window.focus.clone();
             focus.focus(window, cx);
         });
     }
 
     pub(super) fn selected_visible_paths(&self) -> Vec<PathBuf> {
-        if self.settings_open || self.collection().is_some() {
+        if self.settings.open || self.collection().is_some() {
             return Vec::new();
         }
         let Some(slot) = self.active().filter(|slot| slot.files_available()) else {
@@ -319,7 +347,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.file_operation_in_progress {
+        if self.operations.in_progress {
             return;
         }
         let Some(selection) = Selection::capture(self) else {
@@ -343,8 +371,8 @@ impl Browser {
                 return;
             }
         };
-        self.file_operation_in_progress = true;
-        self.file_operation_paths = batch.paths().to_vec();
+        self.operations.in_progress = true;
+        self.operations.paths = batch.paths().to_vec();
         let request = Request {
             origin_tab: selection.tab_id,
             kind,
@@ -370,7 +398,7 @@ impl Browser {
             .iter()
             .any(|path| !self.device_path_available(path, cx))
         {
-            self.file_operation_in_progress = false;
+            self.operations.in_progress = false;
             notifications::error(i18n::text("device-path-unavailable", cx), cx);
             cx.notify();
             return;
@@ -400,7 +428,7 @@ impl Browser {
     }
 
     fn finish_file_operation(&mut self, report: operations::Report, cx: &mut Context<Self>) {
-        self.file_operation_in_progress = false;
+        self.operations.in_progress = false;
         let succeeded = report.succeeded_paths();
         let failed = report.items.len() - succeeded.len();
         let level = if failed == 0 {
@@ -437,7 +465,7 @@ impl Browser {
     pub(super) fn clear_completed_selection(&mut self, paths: &[PathBuf]) {
         let completed: HashSet<_> = paths.iter().collect();
         // Directory refresh is asynchronous; key repeat must not resubmit completed targets.
-        for slot in &mut self.tabs {
+        for slot in &mut self.tabs.items {
             {
                 let tab = &mut slot.navigation;
                 tab.view_mut()
@@ -472,7 +500,7 @@ impl Browser {
         let Some(target) = DirectoryTarget::capture(self, path) else {
             return menu;
         };
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         self.directory_menu(menu, Arc::new(target), cx)
     }
 
@@ -484,7 +512,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> PopupMenu {
         let menu = gds::ui::menu::popup(menu);
-        if self.settings_open || self.collection().is_some() {
+        if self.settings.open || self.collection().is_some() {
             return menu;
         }
         let Some(slot) = self.active() else {
@@ -506,7 +534,7 @@ impl Browser {
         if !tab.view().selected.contains(&path) {
             self.select(visible_index, Modifiers::default(), cx);
         }
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         let Some(selection) = Selection::capture(self) else {
             return menu;
         };

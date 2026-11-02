@@ -228,11 +228,15 @@ fn final_handle_drop_stops_jobs_and_reaps_direct_child_without_worker_arc_cycle(
     let child_pid_file = directory.path().join("job.pid");
     let session = Session::spawn(options(
         directory.path().to_owned(),
-        "trap '' HUP; sleep 60 & echo $! > job.pid; printf READY; wait",
+        "trap '' HUP; echo $$ > shell.pid; sleep 60 & echo $! > job.pid; printf READY; wait",
     ))
     .expect("spawn PTY");
     wait_until(|| screen(&session).contains("READY"));
-    let pid = session.process_id().expect("Unix child PID");
+    let pid: i32 = std::fs::read_to_string(directory.path().join("shell.pid"))
+        .expect("shell pid")
+        .trim()
+        .parse()
+        .expect("numeric shell pid");
     let job: i32 = std::fs::read_to_string(&child_pid_file)
         .expect("background job pid")
         .trim()
@@ -253,7 +257,7 @@ fn final_handle_drop_stops_jobs_and_reaps_direct_child_without_worker_arc_cycle(
     );
     wait_until(|| *updates.borrow());
     assert_eq!(
-        waitpid(Pid::from_raw(pid as i32), Some(WaitPidFlag::WNOHANG)),
+        waitpid(Pid::from_raw(pid), Some(WaitPidFlag::WNOHANG)),
         Err(Errno::ECHILD),
         "worker must reap its direct child"
     );
@@ -305,11 +309,15 @@ fn application_quit_waits_for_workers_and_rejects_later_spawns() {
     let directory = tempfile::tempdir().expect("test directory");
     let session = Session::spawn(options(
         directory.path().to_owned(),
-        "trap '' HUP; printf READY; while :; do read value; done",
+        "trap '' HUP; echo $$ > shell.pid; printf READY; while :; do read value; done",
     ))
     .expect("spawn PTY");
     wait_until(|| screen(&session).contains("READY"));
-    let pid = session.process_id().expect("Unix PID");
+    let pid: i32 = std::fs::read_to_string(directory.path().join("shell.pid"))
+        .expect("shell pid")
+        .trim()
+        .parse()
+        .expect("numeric shell pid");
     let updates = session.updates();
     // Weak registry entries must still find workers after UI handles are gone.
     drop(session);
@@ -340,9 +348,8 @@ fn in_place_directory_change_is_rejected_but_manual_cd_and_jobs_work() {
         ..SpawnOptions::default()
     })
     .expect("interactive shell");
-    let pid = session.process_id();
     session
-        .write(b"stty -echo; PS1=''; printf 'READY_%s\\n' switch\r")
+        .write(b"stty -echo; PS1=''; original_pid=$$; printf 'READY_%s\\n' switch\r")
         .expect("prepare prompt");
     wait_until(|| screen(&session).contains("READY_switch"));
     assert!(matches!(
@@ -354,15 +361,10 @@ fn in_place_directory_change_is_rejected_but_manual_cd_and_jobs_work() {
         .write(&super::super::directory::command(&target).unwrap())
         .expect("manual cd");
     session
-        .write(b"printf '\\033]2;%s\\007' \"$PWD\"\r")
+        .write(b"[ \"$original_pid\" = \"$$\" ] && printf '\\033]2;%s\\007' \"$PWD\"\r")
         .expect("inspect cwd through process title");
     wait_until(|| session.title().as_deref() == target.to_str());
     assert_eq!(session.title().as_deref(), target.to_str());
-    assert_eq!(
-        session.process_id(),
-        pid,
-        "cd must preserve the original instance"
-    );
 
     session
         .write(b"sh -c 'printf BUSY_%s\\n foreground; sleep 30'; printf JOB_FINISHED\r")

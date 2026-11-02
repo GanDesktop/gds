@@ -92,14 +92,6 @@ impl Default for SessionOutbox {
 }
 
 impl SessionOutbox {
-    #[cfg(test)]
-    pub fn turn(&self) -> Option<TurnId> {
-        match &self.dispatch {
-            Dispatch::Submitting { turn, .. } => Some(*turn),
-            _ => None,
-        }
-    }
-
     pub fn unknown(&self) -> Option<&Arc<PromptSubmission>> {
         match &self.dispatch {
             Dispatch::Submitting {
@@ -251,11 +243,6 @@ impl SessionOutbox {
         };
         assert!(self.prioritize(index, interrupt));
         composition
-    }
-
-    #[cfg(test)]
-    pub fn begin_edit(&mut self, composition: Draft) -> Option<Draft> {
-        self.begin_edit_at(0, composition)
     }
 
     pub fn begin_edit_at(&mut self, index: usize, composition: Draft) -> Option<Draft> {

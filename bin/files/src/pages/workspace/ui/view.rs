@@ -8,7 +8,6 @@ use gds::{
 };
 use gds_uim::el;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::breadcrumb::BreadcrumbItem;
 use gpui_kit::component::empty::{Empty as EmptyState, EmptyDescription};
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, button::ButtonVariants, menu::ContextMenuExt, table::DataTable,
@@ -41,20 +40,20 @@ const SHOW_LOCATION_SCOPE: bool = false;
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_picker_name(window, cx);
-        if std::mem::take(&mut self.filter_sync_pending) {
+        if std::mem::take(&mut self.toolbar.filter.sync_pending) {
             self.sync_filter_input(window, cx);
         }
         // Take the press state from the window on every frame: a release that
         // happened while a dialog held focus never reaches this view's listener,
         // and must still hide the close controls.
-        self.held_modifier = Self::current_held_modifier(window);
+        self.window.held_modifier = Self::current_held_modifier(window);
         self.drain_device_removals(cx);
         self.sync_terminal_cwd(window, cx);
-        if self.settings_open
+        if self.settings.open
             || self.collection().is_some()
-            || self.menu_open
-            || self.keyboard_menu.is_some()
-            || self.sort_menu.is_some()
+            || self.menus.application_open
+            || self.menus.context.is_some()
+            || self.menus.sort.is_some()
             || self.picker.is_some()
             || window.has_active_dialog(cx)
         {
@@ -62,28 +61,29 @@ impl Render for Browser {
         }
         // The hint layer shows either the plain Ctrl keys or the keys an armed
         // prefix accepts; the mode is idempotent and only a change redraws it.
-        ui::keytips::set_prefix(window, cx, self.tab_prefix.is_some());
+        ui::keytips::set_prefix(window, cx, self.tabs.prefix.is_some());
         // Settings replaces the toolbar; every location page keeps the menu, so
         // only entering Settings drops a menu that was open over the workspace.
-        if self.settings_open {
-            self.menu_open = false;
+        if self.settings.open {
+            self.menus.application_open = false;
         }
-        if self.settings_open || self.collection().is_some() {
-            self.sort_menu = None;
+        if self.settings.open || self.collection().is_some() {
+            self.menus.sort = None;
         }
         let frame = Frame::default().sidebar_width(self.width());
         let toolbar = self.render_toolbar(&frame, window, cx);
-        let body = if self.settings_open {
-            el! { .div { flex_1; min_h_0 } [$(self.settings_view.clone())] }.into_any_element()
+        let body = if self.settings.open {
+            el! { .div { flex_1; min_h_0 } [$(self.settings.view.clone())] }.into_any_element()
         } else {
             let content = self.render_content(window, cx);
             let content = ui::region::surface(
                 "content-region",
-                &self.focus,
+                &self.window.focus,
                 Command::FocusContent,
                 window,
                 cx,
             )
+            .aria_label(self.current_location().label(cx))
             .flex()
             .flex_col()
             .flex_1()
@@ -95,7 +95,7 @@ impl Render for Browser {
                 .into_any_element();
             self.terminal_workspace(workspace, cx)
         };
-        let extras = if self.settings_open {
+        let extras = if self.settings.open {
             Vec::new()
         } else {
             self.render_picker_extras(self.picker_actions_available(window, cx), cx)
@@ -119,16 +119,16 @@ impl Render for Browser {
             self.render_footer_controls(window, cx),
             cx,
         );
-        let mut context = KeyContext::parse(if self.settings_open {
+        let mut context = KeyContext::parse(if self.settings.open {
             SETTINGS_CONTEXT
         } else {
             WORKSPACE_CONTEXT
         })
         .expect("bundled key contexts are valid");
-        if self.tab_prefix.is_some() {
+        if self.tabs.prefix.is_some() {
             context.add(TAB_PREFIX_CONTEXT);
         }
-        if !self.settings_open
+        if !self.settings.open
             && (self.collection() == Some(Collection::Volumes)
                 || self.current_tab().is_some_and(|slot| slot.device.is_some()))
         {
@@ -137,14 +137,14 @@ impl Render for Browser {
         // The picker decisions exist only on the picker page itself. Settings
         // replaces the workspace context, and a dialog owns its own context, so
         // neither can pick up `Alt+A` / `Alt+C` from here.
-        if self.picker.is_some() && !self.settings_open {
+        if self.picker.is_some() && !self.settings.open {
             context.add(picker::PICKER_CONTEXT);
         }
         let notification_overlay = notifications::overlay_for(window, cx);
         let selection_menu = self.render_selection_menu(window);
         el! {
             .div {
-                # "gds-files"; key_context: $context; track_focus: $&self.root_focus;
+                # "gds-files"; key_context: $context; track_focus: $&self.window.root_focus;
                 size_full; flex; flex_col; overflow_hidden;
                 text_color: $cx.theme().foreground; text_size: tokens::SMALL;
                 on_action: (cx, Self::on_application_menu).Context::listener;
@@ -252,7 +252,7 @@ impl Browser {
 
     fn render_toolbar(&self, frame: &Frame, window: &mut Window, cx: &mut Context<Self>) -> Div {
         // Settings owns its return control; location navigation stays in the workspace.
-        let secondary = self.settings_open;
+        let secondary = self.settings.open;
         let menu = if secondary {
             let on_click = cx.listener(Self::click_command(Command::Cancel));
             el! {
@@ -263,10 +263,10 @@ impl Browser {
             }
             .into_any_element()
         } else {
-            menu::application_menu(self.menu_open, cx.entity().downgrade(), cx)
+            menu::application_menu(self.menus.application_open, cx.entity().downgrade(), cx)
         };
         let sidebar = self.command_button("sidebar", IconName::PanelLeft, Command::Sidebar, cx);
-        let content = if self.settings_open {
+        let content = if self.settings.open {
             el! { .div { flex_1; px: ITEM_GAP.px } [$i18n::text("settings", cx)] }
                 .into_any_element()
         } else {
@@ -299,11 +299,12 @@ impl Browser {
     }
 
     fn render_path(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        if self.path_editing {
+        if self.toolbar.path.editing {
             return div()
                 .flex_1()
                 .min_w_0()
-                .child(ui::field::input(&self.path_input, cx))
+                .block_mouse_except_scroll()
+                .child(ui::field::input(&self.toolbar.path.input, cx))
                 .into_any_element();
         }
         if let Some(location) = self
@@ -322,18 +323,10 @@ impl Browser {
                 .child(destination)
                 .into_any_element();
         }
-        if let Location::Remote(address) = self.current_location() {
-            return div()
-                .id("remote-address")
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .cursor_text()
-                .on_click(cx.listener(Self::on_edit_path_click))
-                .child(address.to_string())
-                .into_any_element();
-        }
-        let content = if self.current_path().is_none() {
+        let content = if let Location::Remote(address) = self.current_location() {
+            el! { .div { flex_1; min_w_0; px: CAPTION_PADDING.px; truncate } [$(address.to_string())] }
+                .into_any_element()
+        } else if self.current_path().is_none() {
             el! { .div { flex_1; min_w_0; px: CAPTION_PADDING.px; truncate } [$(self.current_location().display_address())] }
                 .into_any_element()
         } else {
@@ -352,21 +345,24 @@ impl Browser {
                     cx.theme().muted_foreground
                 };
                 let on_click = cx.listener(Self::click_path(segment.path));
-                crumbs.push(el! {
-                    .div { # $("crumb", index); flex_shrink_0; h: tokens::ICON_BUTTON_SIZE.px; rounded: ITEM_RADIUS.px;
-                        hover: { bg: $(gds::appearance::theme::Colors::current(cx).hover()); };
-                    } [label.BreadcrumbItem::new { flex; items_center; h_full; px_1; text_color: color; on_click: on_click }]
-                }.into_any_element());
+                crumbs.push(
+                    el! {
+                        ($("crumb", index)).Button::new { ghost; small; flex_shrink_0;
+                            h: tokens::ICON_BUTTON_SIZE.px; px_1; text_color: color;
+                            label: label; on_click: on_click;
+                        }
+                    }
+                    .into_any_element(),
+                );
             }
             el! {
                 .div { # "breadcrumbs"; flex_1; min_w_0; flex; items_center; gap: SMALL_GAP.px; overflow_x_scroll } [..crumbs]
             }.into_any_element()
         };
         let edit = self.command_button("edit-path", IconName::Pencil, Command::EditLocation, cx);
-        let on_edit = cx.listener(Self::on_edit_path_click);
         el! {
             .div {
-                # "location-display"; cursor_text; on_click: on_edit;
+                # "location-display";
                 flex_1; min_w_0; flex; items_center; mx: CAPTION_PADDING.px;
                 rounded: ITEM_RADIUS.px; border_1; border_color: $cx.theme().border;
             } [
@@ -374,7 +370,6 @@ impl Browser {
                 edit,
             ]
         }
-        .test_support()
         .into_any_element()
     }
 
@@ -387,10 +382,11 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = slot.id;
-        let compact = self.sidebar_collapsed;
+        let compact = self.sidebar.collapsed;
         let row_height = gds::appearance::typography::scaled(TAB_HEIGHT, cx);
-        let selected = id == self.active_id;
-        let cursor = self.regions.tabs.is_focused(window) && self.regions.tab == Some(id);
+        let selected = id == self.tabs.active_id;
+        let cursor =
+            self.sidebar.regions.tabs.is_focused(window) && self.sidebar.regions.tab == Some(id);
         let title: SharedString = self.tab_title(slot, cx).into();
         let path: SharedString = slot
             .path()
@@ -404,7 +400,7 @@ impl Browser {
         let menu = Self::tab_menu(cx.entity().downgrade(), id, slot.pinned);
         // Hovering this row or holding Ctrl reveals its X; otherwise the space
         // stays reserved, so a press or release never reflows the strip.
-        let show_close = self.revealing_tab_close() || self.hovered_tab == Some(id);
+        let show_close = self.revealing_tab_close() || self.tabs.hovered == Some(id);
         // A row with a pending press loses on_hover on mouse movement. Keep
         // the close button's press off that row until its click completes.
         let on_close_down = |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
@@ -458,7 +454,7 @@ impl Browser {
         // two rows show them, every other numbered row shows the path to its own
         // key. While the prefix is armed only those target keys are shown.
         let adjacent = cycle_targets.0 == Some(id) || cycle_targets.1 == Some(id);
-        let prefix_armed = self.tab_prefix.is_some();
+        let prefix_armed = self.tabs.prefix.is_some();
         let mut hints = Vec::new();
         if !prefix_armed {
             hints.extend(self.render_tab_cycle_hints(
@@ -637,7 +633,7 @@ impl Browser {
         let label = i18n::text(id, cx);
         let nav = el! {
             (id, icon, label).NavItem::new {
-                compact: $self.sidebar_collapsed;
+                compact: $self.sidebar.collapsed;
                 selected: $self.location_selected(target);
                 on_click: on_click;
             }
@@ -650,7 +646,8 @@ impl Browser {
             format!("location-prefix-hint-{id}").into(),
             tabs::location_shortcut(target),
         );
-        let cursor = self.regions.locations.is_focused(window) && self.regions.location == target;
+        let cursor = self.sidebar.regions.locations.is_focused(window)
+            && self.sidebar.regions.location == target;
         el! { .div { relative; w_full } [nav, hint,
             @if (cursor) $(ui::region::focus_ring(cx)), @end,
         ] }
@@ -670,9 +667,9 @@ impl Browser {
             .div {
                 # "location-scope"; size_full; flex; items_center;
                 text_xs; text_color: $cx.theme().muted_foreground;
-                @if (self.sidebar_collapsed) justify_center; @else px: CONTENT_PADDING.px; @end;
+                @if (self.sidebar.collapsed) justify_center; @else px: CONTENT_PADDING.px; @end;
             } [
-                @if (!self.settings_open) $i18n::text("local", cx), @end,
+                @if (!self.settings.open) $i18n::text("local", cx), @end,
             ]
         }
         .into_any_element()
@@ -684,7 +681,8 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> ContentPage {
-        let title: SharedString = if self.current_location() == Location::from(&self.home) {
+        let title: SharedString = if self.current_location() == Location::from(&self.locations.home)
+        {
             // Use the localized name for the home directory.
             i18n::text("home", cx)
         } else {
@@ -693,11 +691,14 @@ impl Browser {
                 .unwrap_or_default()
                 .into()
         };
-        let favorite = self.places.is_favorite(self.current_place_location());
+        let favorite = self
+            .locations
+            .places
+            .is_favorite(self.current_place_location());
         let on_favorite = cx.listener(Self::on_favorite);
         let hidden = self
             .command_button("hidden", IconName::Eye, Command::Hidden, cx)
-            .active(self.preferences.files.show_hidden);
+            .active(self.settings.preferences.files.show_hidden);
         let refresh = self.command_button("refresh", IconName::RefreshCw, Command::Refresh, cx);
         let details = self
             .command_button("details", IconName::Info, Command::Details, cx)
@@ -712,7 +713,7 @@ impl Browser {
         );
         let filter = el! {
             .div { relative; w: FILTER_WIDTH.px; min_w: 96.0.px; flex_shrink_1 } [
-                ($&self.filter_input, cx).ui::field::input { small; cleanable: true; prefix: IconName::Search.Icon::new },
+                ($&self.toolbar.filter.input, cx).ui::field::input { small; cleanable: true; prefix: IconName::Search.Icon::new },
                 filter_hint,
             ]
         };
@@ -784,7 +785,7 @@ impl Browser {
         {
             return self.render_device_unavailable(cx);
         }
-        let sort = super::columns::sort_for(&self.current_location(), &self.places);
+        let sort = super::columns::sort_for(&self.current_location(), &self.locations.places);
         if let Some(slot) = self.active_mut()
             && slot.sort != sort
         {
@@ -863,7 +864,7 @@ impl Browser {
                     # "preview-panel"; w: PREVIEW_WIDTH.px; flex_shrink_0; h_full; min_h_0;
                     flex; flex_col; overflow_hidden; border_l_1; border_color: $cx.theme().border;
                 } [
-                    .div { flex_1; min_h_0; min_w_0; flex; flex_col; overflow_hidden } [$(self.preview.clone())],
+                    .div { flex_1; min_h_0; min_w_0; flex; flex_col; overflow_hidden } [$(self.files.preview.clone())],
                 ]
             }
         });
@@ -923,13 +924,13 @@ impl Browser {
                 },
             layout: self.columns_layout(&self.current_location()).clone(),
             location: self.current_location(),
-            widths: self.places.column_widths(self.current_location()),
+            widths: self.locations.places.column_widths(self.current_location()),
         };
-        table::FileTable::sync_state(&self.file_table, data, cx);
+        table::FileTable::sync_state(&self.files.table, data, cx);
         let height =
             DataListStyle::HEADER_HEIGHT + DataListStyle::ROW_HEIGHT * slot.visible.len() as f32;
         let table = el! {
-            ($&self.file_table).DataTable::new {
+            ($&self.files.table).DataTable::new {
                 bordered: false;
                 with_size: $(gpui_kit::component::Size::Size(px(DataListStyle::ROW_HEIGHT)));
                 header_row_height: DataListStyle::HEADER_HEIGHT.px;
@@ -996,7 +997,7 @@ impl Browser {
     /// filter group, read-only mark, cancel and confirm sit where the terminal
     /// control sits in a browser window; leaving picker mode restores it.
     fn render_footer_controls(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        if self.settings_open {
+        if self.settings.open {
             return el! { .div }.into_any_element();
         }
         if self.picker.is_some() {
@@ -1020,7 +1021,7 @@ impl Browser {
 
     fn render_status(&self, cx: &App) -> AnyElement {
         let mut labels = Vec::new();
-        if self.settings_open {
+        if self.settings.open {
             labels.push(i18n::text("settings-auto-apply", cx));
         } else if self
             .current_tab()
@@ -1035,7 +1036,8 @@ impl Browser {
             }
         } else if self.collection() == Some(Collection::Volumes) {
             let count = self
-                .storage
+                .devices
+                .service
                 .read(cx)
                 .snapshot
                 .volumes
@@ -1044,11 +1046,15 @@ impl Browser {
                 .count();
             labels.push(i18n::count("volume-count", count, cx));
         } else if self.collection() == Some(Collection::Trash) {
-            if self.trash.is_loading() {
+            if self.collections.trash.is_loading() {
                 labels.push(i18n::text("recycle-loading", cx));
             }
-            labels.push(i18n::count("item-count", self.trash.rows().len(), cx));
-            let selected = self.trash.selected_count();
+            labels.push(i18n::count(
+                "item-count",
+                self.collections.trash.rows().len(),
+                cx,
+            ));
+            let selected = self.collections.trash.selected_count();
             if selected > 0 {
                 labels.push(i18n::count("selection-count", selected, cx));
             }

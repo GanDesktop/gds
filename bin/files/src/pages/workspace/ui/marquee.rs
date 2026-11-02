@@ -161,7 +161,7 @@ impl Default for State {
 impl Browser {
     /// Remove a marquee when its file surface is hidden by a page or popup.
     pub(super) fn discard_marquee(&self) {
-        self.marquee.clear();
+        self.files.marquee.clear();
     }
 
     /// Wrap the file list area so blank-space presses can start a marquee.
@@ -172,8 +172,8 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.marquee_discard_stale();
-        let bounds = Rc::clone(&self.marquee.bounds);
-        let drag = Rc::clone(&self.marquee.drag);
+        let bounds = Rc::clone(&self.files.marquee.bounds);
+        let drag = Rc::clone(&self.files.marquee.drag);
         let overlay = canvas(
             move |canvas_bounds: Bounds<Pixels>, _: &mut Window, _: &mut App| {
                 *bounds.borrow_mut() = canvas_bounds;
@@ -209,7 +209,7 @@ impl Browser {
     /// Returns whether a marquee was running. An armed press that never crossed
     /// the threshold is dropped silently, so the key keeps its other meanings.
     pub(super) fn cancel_marquee(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(drag) = self.marquee.drag.borrow_mut().take() else {
+        let Some(drag) = self.files.marquee.drag.borrow_mut().take() else {
             return false;
         };
         if !drag.started {
@@ -225,11 +225,11 @@ impl Browser {
     /// Record the press before the blank-space handler clears the selection, so
     /// Ctrl/Shift marquees still know what they started from.
     fn marquee_press(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.marquee.clear();
-        if event.button != MouseButton::Left || self.settings_open || self.collection().is_some() {
+        self.files.marquee.clear();
+        if event.button != MouseButton::Left || self.settings.open || self.collection().is_some() {
             return;
         }
-        let bounds = *self.marquee.bounds.borrow();
+        let bounds = *self.files.marquee.bounds.borrow();
         if !bounds.contains(&event.position) {
             return;
         }
@@ -276,7 +276,7 @@ impl Browser {
                 DataListStyle::HEADER_HEIGHT
             },
         };
-        *self.marquee.drag.borrow_mut() = Some(drag);
+        *self.files.marquee.drag.borrow_mut() = Some(drag);
         cx.notify();
     }
 
@@ -286,7 +286,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(mut drag) = self.marquee.drag.borrow_mut().take() else {
+        let Some(mut drag) = self.files.marquee.drag.borrow_mut().take() else {
             return;
         };
         // A page switch mid-drag drops the marquee without touching any
@@ -295,7 +295,7 @@ impl Browser {
             cx.notify();
             return;
         }
-        let bounds = *self.marquee.bounds.borrow();
+        let bounds = *self.files.marquee.bounds.borrow();
         let max = point(
             bounds.origin.x + bounds.size.width,
             bounds.origin.y + bounds.size.height,
@@ -305,11 +305,11 @@ impl Browser {
             let dx = f32::from(current.x - drag.start.x);
             let dy = f32::from(current.y - drag.start.y);
             if dx.hypot(dy) < DRAG_THRESHOLD {
-                *self.marquee.drag.borrow_mut() = Some(drag);
+                *self.files.marquee.drag.borrow_mut() = Some(drag);
                 return;
             }
             drag.started = true;
-            self.focus.focus(window, cx);
+            self.window.focus.focus(window, cx);
         }
         drag.current = current;
         let hits = self.marquee_hits(drag.rect(), bounds);
@@ -317,13 +317,13 @@ impl Browser {
         let cursor = drag.cursor.clone();
         let anchor = drag.anchor.clone();
         let merge = drag.merge;
-        *self.marquee.drag.borrow_mut() = Some(drag);
+        *self.files.marquee.drag.borrow_mut() = Some(drag);
         self.marquee_write_selection(&hits, merge, &selection, cursor, anchor, cx);
         cx.notify();
     }
 
     fn marquee_release(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.marquee.drag.borrow_mut().take().is_some() {
+        if self.files.marquee.drag.borrow_mut().take().is_some() {
             cx.notify();
         }
     }
@@ -462,20 +462,21 @@ impl Browser {
     /// Whether `origin` is still the page the marquee may write to.
     fn marquee_origin_current(&self, origin: &Origin) -> bool {
         self.collection().is_none()
-            && self.active_id == origin.tab_id
+            && self.tabs.active_id == origin.tab_id
             && self.current_path().as_ref() == Some(&origin.path)
     }
 
     /// Drop a marquee whose page is gone, without editing another page.
     fn marquee_discard_stale(&self) {
         let stale = self
+            .files
             .marquee
             .drag
             .borrow()
             .as_ref()
             .is_some_and(|drag| !self.marquee_origin_current(&drag.origin));
         if stale {
-            self.marquee.clear();
+            self.files.marquee.clear();
         }
     }
 }

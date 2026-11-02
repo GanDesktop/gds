@@ -20,10 +20,6 @@ use crate::protocol::{Options, Picker, Response};
 
 pub const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.gds";
 pub const OBJECT_PATH: &str = "/org/freedesktop/portal/desktop";
-#[cfg(test)]
-pub const CHOOSER: &str = "org.freedesktop.impl.portal.FileChooser";
-#[cfg(test)]
-pub const REQUEST: &str = "org.freedesktop.impl.portal.Request";
 const TERMINATE_TIMEOUT: Duration = Duration::from_secs(3);
 
 struct Request {

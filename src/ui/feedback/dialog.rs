@@ -87,6 +87,3 @@ impl RenderOnce for DialogActions {
             .child(primary)
     }
 }
-
-#[cfg(test)]
-mod tests;

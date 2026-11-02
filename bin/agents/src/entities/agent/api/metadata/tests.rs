@@ -55,7 +55,7 @@ fn ipc_and_tcp_metadata_have_distinct_cache_entries(cx: &mut TestAppContext) {
     ];
     cx.update(|cx| {
         for (index, target) in targets.iter().enumerate() {
-            for_test(
+            publish_fixture(
                 target.clone(),
                 &catalog(vec![entry(
                     "agent",
@@ -83,7 +83,7 @@ fn metadata_is_shared_but_isolated_by_server_and_retains_removed_thread_artwork(
     let first = address(bas::service::DEFAULT_PORT);
     let second = address(bas::service::DEFAULT_PORT.wrapping_add(1));
     cx.update(|cx| {
-        for_test(
+        publish_fixture(
             first.clone(),
             &catalog(vec![entry(
                 "same-agent",
@@ -96,7 +96,7 @@ fn metadata_is_shared_but_isolated_by_server_and_retains_removed_thread_artwork(
     });
     let shared = cx.update(|cx| entity(cx).expect("shared metadata"));
     cx.update(|cx| {
-        for_test(
+        publish_fixture(
             second.clone(),
             &catalog(vec![entry(
                 "same-agent",
@@ -135,7 +135,7 @@ fn pending_catalog_task_survives_initialization_and_failure_preserves_loaded_ico
 ) {
     let server = address(bas::service::DEFAULT_PORT);
     cx.update(|cx| {
-        for_test(
+        publish_fixture(
             server.clone(),
             &catalog(vec![entry("pi-acp", Source::Registry, "old.svg", None)]),
             cx,
@@ -195,4 +195,15 @@ fn pending_catalog_task_survives_initialization_and_failure_preserves_loaded_ico
             Some("new.svg")
         )
     });
+}
+
+fn publish_fixture(server: Target, catalog: &Catalog, cx: &mut App) {
+    if cx.try_global::<crate::entities::agent::Changes>().is_none() {
+        cx.set_global(crate::entities::agent::Changes::default());
+    }
+    if cx.try_global::<Shared>().is_none() {
+        let metadata = cx.new(|cx| Metadata::new(None, cx));
+        cx.set_global(Shared(metadata));
+    }
+    publish(server, catalog, cx);
 }

@@ -850,7 +850,7 @@ impl Render for Settings {
             .div { flex; items_center; gap_3; w_full } [
                 sidebar,
                 .div { flex_1; min_w_0; truncate } [tr!("settings-title")],
-                .div { # "settings-search"; test_support; w: 260.0.px } [
+                .div { # "settings-search"; test_support; w: 260.0.px; block_mouse_except_scroll } [
                     $(crate::shared::ui::input::placeholder(&self.search, gds::ui::field::input(&self.search, cx).small())),
                 ],
             ]

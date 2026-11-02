@@ -44,10 +44,10 @@ fn adding_a_network_location_keeps_the_network_page_and_loading_can_be_cancelled
         browser.update(cx, |this, cx| {
             this.show_location(Location::Network, window, cx);
             this.add_network_location(window, cx);
-            assert_eq!(this.tabs.len(), 1);
+            assert_eq!(this.tabs.items.len(), 1);
             assert!(!this.current_tab().expect("tab").navigation.is_loading());
-            let tab = this.active_id;
-            this.connector.update(cx, |_, cx| {
+            let tab = this.tabs.active_id;
+            this.remote.connector.update(cx, |_, cx| {
                 cx.emit(Connected {
                     tab,
                     address: address.clone(),
@@ -61,16 +61,21 @@ fn adding_a_network_location_keeps_the_network_page_and_loading_can_be_cancelled
     cx.update_window(window.into(), |_, window, cx| {
         window.close_all_dialogs(cx);
         browser.update(cx, |this, cx| {
-            assert_eq!(this.tabs.len(), 1);
+            assert_eq!(this.tabs.items.len(), 1);
             assert_eq!(this.current_location(), Location::Network);
-            assert!(this.places.is_favorite(Location::Remote(address.clone())));
+            assert!(
+                this.locations
+                    .places
+                    .is_favorite(Location::Remote(address.clone()))
+            );
             assert!(
                 !this
+                    .locations
                     .places
                     .recent
                     .contains(&Location::Remote(address.clone()))
             );
-            let tab = this.active_id;
+            let tab = this.tabs.active_id;
             let request = this
                 .tab_slot_mut(tab)
                 .expect("tab")
@@ -100,7 +105,7 @@ fn adding_a_network_location_keeps_the_network_page_and_loading_can_be_cancelled
             );
             assert_eq!(this.current_location(), Location::Network);
             this.open_location_tab(Location::Remote(address.clone()), false, Some(window), cx);
-            assert_eq!(this.tabs.len(), 2);
+            assert_eq!(this.tabs.items.len(), 2);
             assert!(
                 this.current_tab()
                     .expect("new remote tab")
@@ -116,7 +121,7 @@ fn adding_a_network_location_keeps_the_network_page_and_loading_can_be_cancelled
                     .navigation
                     .is_loading()
             );
-            assert_eq!(this.tabs.len(), 2);
+            assert_eq!(this.tabs.items.len(), 2);
         });
     })
     .expect("saved position and cancelled navigation");

@@ -2,6 +2,27 @@
 
 use super::*;
 
+pub(super) struct State {
+    pub items: Vec<OpenTab>,
+    pub active_id: u64,
+    pub next_id: u64,
+    /// The hovered row reveals its close control alongside the held Ctrl group.
+    pub hovered: Option<u64>,
+    pub prefix: Option<TabPrefix>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            active_id: 0,
+            next_id: 1,
+            hovered: None,
+            prefix: None,
+        }
+    }
+}
+
 /// An armed `Ctrl+Tab` prefix.
 pub(super) struct TabPrefix {
     backwards: bool,
@@ -43,19 +64,19 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open || window.has_active_dialog(cx) {
+        if self.settings.open || window.has_active_dialog(cx) {
             return;
         }
-        if self.tab_prefix.is_some() {
+        if self.tabs.prefix.is_some() {
             // Auto-repeat while Tab is held: the first press already armed it.
             return;
         }
-        self.tab_prefix = Some(TabPrefix {
+        self.tabs.prefix = Some(TabPrefix {
             backwards,
             tab_down: true,
             consumed: false,
         });
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -69,19 +90,19 @@ impl Browser {
         if event.keystroke.key != "tab" {
             return;
         }
-        if !self.focus.is_focused(window) {
-            if self.tab_prefix.take().is_some() {
+        if !self.window.focus.is_focused(window) {
+            if self.tabs.prefix.take().is_some() {
                 cx.notify();
             }
             return;
         }
-        let Some(prefix) = self.tab_prefix.take() else {
+        let Some(prefix) = self.tabs.prefix.take() else {
             return;
         };
         if !prefix.tab_down {
             return;
         }
-        if prefix.consumed || self.settings_open || window.has_active_dialog(cx) {
+        if prefix.consumed || self.settings.open || window.has_active_dialog(cx) {
             cx.notify();
             return;
         }
@@ -99,14 +120,16 @@ impl Browser {
         if window.has_active_dialog(cx) {
             return;
         }
-        let Some(prefix) = self.tab_prefix.as_mut() else {
+        let Some(prefix) = self.tabs.prefix.as_mut() else {
             return;
         };
         prefix.consumed = true;
         match target {
-            Target::Location(target) => self.show_location(target.location(&self.home), window, cx),
+            Target::Location(target) => {
+                self.show_location(target.location(&self.locations.home), window, cx)
+            }
             Target::Tab(index) => {
-                if let Some(id) = self.tabs.get(index).map(|slot| slot.id) {
+                if let Some(id) = self.tabs.items.get(index).map(|slot| slot.id) {
                     self.switch_tab(id, window, cx);
                 }
             }
@@ -119,14 +142,14 @@ impl Browser {
     /// released, so a later release cannot cycle a second time, while its
     /// target bindings stop applying because the prefix was taken.
     pub(super) fn dismiss_tab_prefix(&mut self) {
-        if let Some(prefix) = &mut self.tab_prefix {
+        if let Some(prefix) = &mut self.tabs.prefix {
             prefix.consumed = true;
         }
     }
 
     /// Drop the prefix completely, without committing its cycle.
     pub(super) fn reset_tab_prefix(&mut self) {
-        self.tab_prefix = None;
+        self.tabs.prefix = None;
     }
 
     pub(super) fn show_location(
@@ -135,16 +158,16 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings_open = false;
-        self.navigate_location(self.active_id, location, cx);
+        self.settings.open = false;
+        self.navigate_location(self.tabs.active_id, location, cx);
         self.sync_filter_input(window, cx);
         self.dismiss_tab_prefix();
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         cx.notify();
     }
 
     pub(super) fn location_selected(&self, target: LocationTarget) -> bool {
-        self.current_location() == target.location(&self.home)
+        self.current_location() == target.location(&self.locations.home)
     }
 
     /// Toggle a tab row's hover state so its close control follows the pointer.
@@ -152,13 +175,13 @@ impl Browser {
         move |this, hovered, _, cx| {
             let next = if *hovered {
                 Some(id)
-            } else if this.hovered_tab == Some(id) {
+            } else if this.tabs.hovered == Some(id) {
                 None
             } else {
                 return;
             };
-            if this.hovered_tab != next {
-                this.hovered_tab = next;
+            if this.tabs.hovered != next {
+                this.tabs.hovered = next;
                 cx.notify();
             }
         }
@@ -172,7 +195,7 @@ impl Browser {
         if self.collection() != Some(Collection::Recent) {
             return;
         }
-        self.places.clear_recent();
+        self.locations.places.clear_recent();
         if let Some(slot) = self.current_tab_mut() {
             slot.navigation.view_mut().place = None;
         }

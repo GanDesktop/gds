@@ -267,7 +267,7 @@ impl TableDelegate for LocationTable {
             if self
                 .browser
                 .upgrade()
-                .is_some_and(|browser| browser.read(cx).network.loading)
+                .is_some_and(|browser| browser.read(cx).collections.network.discovery.loading)
             {
                 "network-loading"
             } else {

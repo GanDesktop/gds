@@ -13,24 +13,68 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Sizable, table::DataTable};
 use gpui_kit::prelude::*;
 
+pub(super) struct State {
+    pub recent: Entity<gpui_kit::component::table::TableState<table::LocationTable>>,
+    pub favorites: Favorites,
+    pub network: NetworkPage,
+    pub trash: recycle::State,
+}
+
+pub(super) struct Favorites {
+    pub table: Entity<gpui_kit::component::table::TableState<table::LocationTable>>,
+    pub loading: bool,
+}
+
+pub(super) struct NetworkPage {
+    pub table: Entity<gpui_kit::component::table::TableState<table::LocationTable>>,
+    pub discovery: Network,
+}
+
+impl State {
+    pub(super) fn new(window: &mut Window, cx: &mut Context<Browser>) -> Self {
+        let mut table = |collection| {
+            table::LocationTable::make_state(cx.entity().downgrade(), collection, window, cx)
+        };
+        Self {
+            recent: table(Collection::Recent),
+            favorites: Favorites {
+                table: table(Collection::Favorites),
+                loading: false,
+            },
+            network: NetworkPage {
+                table: table(Collection::Network),
+                discovery: Network::default(),
+            },
+            trash: recycle::State::new(cx.entity().downgrade(), window, cx),
+        }
+    }
+}
+
 impl Browser {
     pub(super) fn place_table(
         &self,
         collection: Collection,
     ) -> Option<&Entity<gpui_kit::component::table::TableState<table::LocationTable>>> {
         match collection {
-            Collection::Recent => Some(&self.recent_table),
-            Collection::Favorites => Some(&self.favorites_table),
-            Collection::Network => Some(&self.network_table),
+            Collection::Recent => Some(&self.collections.recent),
+            Collection::Favorites => Some(&self.collections.favorites.table),
+            Collection::Network => Some(&self.collections.network.table),
             _ => None,
         }
     }
 
     pub(super) fn place_locations(&self, collection: Collection) -> Option<Vec<Location>> {
         let locations = match collection {
-            Collection::Favorites => self.places.favorites.clone(),
-            Collection::Recent => self.places.recent.clone(),
-            Collection::Network => self.network.paths.iter().map(Location::from).collect(),
+            Collection::Favorites => self.locations.places.favorites.clone(),
+            Collection::Recent => self.locations.places.recent.clone(),
+            Collection::Network => self
+                .collections
+                .network
+                .discovery
+                .paths
+                .iter()
+                .map(Location::from)
+                .collect(),
             _ => return None,
         };
         Some(
@@ -60,7 +104,7 @@ impl Browser {
         if let Some(slot) = self.current_tab_mut() {
             slot.navigation.view_mut().place = Some(location);
         }
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -68,11 +112,13 @@ impl Browser {
         let Some(location) = self.selected_place() else {
             return;
         };
-        if remove_only && !self.places.is_favorite(&location) {
+        if remove_only && !self.locations.places.is_favorite(&location) {
             return;
         }
-        self.places.toggle_favorite(&location);
-        if self.collection() == Some(Collection::Favorites) && !self.places.is_favorite(&location) {
+        self.locations.places.toggle_favorite(&location);
+        if self.collection() == Some(Collection::Favorites)
+            && !self.locations.places.is_favorite(&location)
+        {
             if let Some(slot) = self.current_tab_mut() {
                 slot.navigation.view_mut().place = None;
             }
@@ -93,21 +139,21 @@ impl Browser {
     }
 
     pub(super) fn refresh_network(&mut self, cx: &mut Context<Self>) {
-        if self.network.loading {
+        if self.collections.network.discovery.loading {
             return;
         }
-        self.network.loading = true;
-        self.network.error = None;
+        self.collections.network.discovery.loading = true;
+        self.collections.network.discovery.error = None;
         let work = cx.background_executor().spawn(async { network::read() });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ =
                 this.update(cx, |browser, cx| {
-                    browser.network.loading = false;
-                    browser.network.loaded = true;
+                    browser.collections.network.discovery.loading = false;
+                    browser.collections.network.discovery.loaded = true;
                     match result {
                         Ok(paths) => {
-                            for slot in &mut browser.tabs {
+                            for slot in &mut browser.tabs.items {
                                 if slot.navigation.location() == &Location::Network {
                                     if slot.navigation.view().place.as_ref().is_some_and(
                                         |location| {
@@ -120,9 +166,11 @@ impl Browser {
                                     }
                                 }
                             }
-                            browser.network.paths = paths;
+                            browser.collections.network.discovery.paths = paths;
                         }
-                        Err(error) => browser.network.error = Some(error.to_string()),
+                        Err(error) => {
+                            browser.collections.network.discovery.error = Some(error.to_string())
+                        }
                     }
                     cx.notify();
                 });
@@ -132,31 +180,31 @@ impl Browser {
     }
 
     pub(super) fn refresh_favorites(&mut self, cx: &mut Context<Self>) {
-        if self.favorites_loading {
+        if self.collections.favorites.loading {
             return;
         }
-        let Some(work) = self.places.reload() else {
+        let Some(work) = self.locations.places.reload() else {
             return;
         };
-        let work = AbortOnDropHandle::new(self.runtime.spawn(work));
-        self.favorites_loading = true;
-        let previous = self.places.favorites.clone();
+        let work = AbortOnDropHandle::new(self.window.runtime.spawn(work));
+        self.collections.favorites.loading = true;
+        let previous = self.locations.places.favorites.clone();
         cx.spawn(async move |this, cx| {
             let result = work
                 .await
                 .map_err(crate::entities::location::places::Error::from)
                 .and_then(std::convert::identity);
             let _ = this.update(cx, |browser, cx| {
-                browser.favorites_loading = false;
+                browser.collections.favorites.loading = false;
                 match result {
                     Ok(places)
-                        if browser.places.favorites == previous
-                            && !browser.places_saving
-                            && !browser.places.has_pending() =>
+                        if browser.locations.places.favorites == previous
+                            && !browser.locations.saving
+                            && !browser.locations.places.has_pending() =>
                     {
-                        browser.places.refresh_favorites(places);
-                        let favorites = &browser.places.favorites;
-                        for slot in &mut browser.tabs {
+                        browser.locations.places.refresh_favorites(places);
+                        let favorites = &browser.locations.places.favorites;
+                        for slot in &mut browser.tabs.items {
                             if slot.navigation.location() == &Location::Favorites {
                                 if slot
                                     .navigation
@@ -194,8 +242,8 @@ impl Browser {
         let has_selection = selected.is_some();
         let favorite = selected
             .as_ref()
-            .is_some_and(|path| self.places.is_favorite(path));
-        let loading = self.favorites_loading;
+            .is_some_and(|path| self.locations.places.is_favorite(path));
+        let loading = self.collections.favorites.loading;
         let table_state = self
             .place_table(collection)
             .expect("folder collection has a table");

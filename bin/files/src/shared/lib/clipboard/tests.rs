@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use gpui_kit::{ClipboardEntry, ClipboardItem, ExternalPaths};
 
-use super::{Error, Identity, Mode, Snapshot, fallback, protocol::Formats, state::Cache};
+use super::{
+    Error, Identity, Mode, Snapshot, copyable_uris, fallback, protocol::Formats, state::Cache,
+};
 
 #[test]
 fn file_formats_round_trip_intent_and_original_names() {
@@ -256,13 +258,13 @@ fn stale_cut_validation_cannot_override_a_newer_intent() {
         .begin_refresh()
         .expect("the newer intent validates at once");
 
-    assert!(!cache.reconcile(generation, Ok(Some(cut))));
+    assert!(!cache.reconcile(generation, Ok(Some(cut)), false));
     assert!(cache.is_cut(&b) && !cache.is_cut(&a));
     assert!(
         cache.begin_refresh().is_none(),
         "a stale completion must not release the newer read"
     );
-    assert!(!cache.reconcile(validating_generation, Ok(Some(newer))));
+    assert!(!cache.reconcile(validating_generation, Ok(Some(newer)), false));
     assert!(cache.is_cut(&b));
 }
 
@@ -281,21 +283,21 @@ fn cut_validation_adopts_republished_paths_and_clears_replaced_content() {
 
     // A partial cut paste republishes the remaining paths with a fresh identity.
     let republished = Snapshot::new(Mode::Cut, vec![b.clone()]).expect("republished cut");
-    assert!(!cache.reconcile(stale_generation, Ok(Some(cut.clone()))));
+    assert!(!cache.reconcile(stale_generation, Ok(Some(cut.clone())), false));
     assert!(
         cache.begin_refresh().is_none(),
         "the stale completion must not release the newer read"
     );
-    cache.reconcile(generation, Ok(Some(republished)));
+    cache.reconcile(generation, Ok(Some(republished)), false);
     assert!(cache.is_cut(&b) && !cache.is_cut(&a));
 
     let generation = cache.begin_refresh().expect("validation read");
-    assert!(cache.reconcile(generation, Ok(None)));
+    assert!(cache.reconcile(generation, Ok(None), false));
     assert!(!cache.has_cut(), "ordinary text ends the cut intent");
 
     cache.record_write(&cut);
     let generation = cache.begin_refresh().expect("validation read");
-    assert!(!cache.reconcile(generation, Err(Error::Changed)));
+    assert!(!cache.reconcile(generation, Err(Error::Changed), false));
     assert!(
         cache.has_cut(),
         "an unreadable clipboard is not evidence of replacement"
@@ -306,23 +308,39 @@ fn cut_validation_adopts_republished_paths_and_clears_replaced_content() {
 fn copy_contents_refresh_after_external_replacement_and_text_clears_the_summary() {
     let copy = Snapshot::new(Mode::Copy, vec![PathBuf::from("/tmp/copied")]).expect("copy");
     let mut cache = Cache::default();
+    assert!(!cache.can_paste());
     let generation = cache
         .begin_refresh()
         .expect("initial read without a cached cut");
-    assert!(cache.reconcile(generation, Ok(Some(copy.clone()))));
+    assert!(cache.reconcile(generation, Ok(Some(copy.clone())), false));
     assert_eq!(cache.current().as_deref(), Some(&copy));
+    assert!(cache.can_paste());
     assert!(!cache.has_cut());
 
     let cut = Snapshot::new(Mode::Cut, vec![PathBuf::from("/tmp/new-cut")]).expect("cut");
     let generation = cache.begin_refresh().expect("refresh copied contents");
-    assert!(cache.reconcile(generation, Ok(Some(cut.clone()))));
+    assert!(cache.reconcile(generation, Ok(Some(cut.clone())), false));
     assert_eq!(cache.current().as_deref(), Some(&cut));
     assert!(cache.is_cut(&cut.paths[0]));
 
     let generation = cache.begin_refresh().expect("text replacement");
-    assert!(cache.reconcile(generation, Ok(None)));
+    assert!(cache.reconcile(generation, Ok(None), false));
     assert!(cache.current().is_none());
     assert!(!cache.has_cut());
+    assert!(!cache.can_paste());
+
+    let stale = cache.begin_refresh().expect("read before remote copy");
+    cache.record_uri_copy(true);
+    assert!(cache.can_paste());
+    assert!(cache.current().is_none());
+    assert!(!cache.reconcile(stale, Ok(None), false));
+    assert!(
+        cache.can_paste(),
+        "an older read cannot disable a new remote copy"
+    );
+    let generation = cache.begin_refresh().expect("text replaces remote copy");
+    assert!(cache.reconcile(generation, Ok(None), false));
+    assert!(!cache.can_paste());
 }
 
 #[test]
@@ -334,11 +352,11 @@ fn cancelling_cut_invalidates_old_reads_and_clears_both_summary_and_markers() {
     let expected = cache.begin_cancel().expect("cancel owned cut");
     assert!(cache.begin_cancel().is_none());
     assert!(cache.begin_refresh().is_none());
-    assert!(!cache.reconcile(generation, Ok(Some(cut.clone()))));
+    assert!(!cache.reconcile(generation, Ok(Some(cut.clone())), false));
     cache.finish_cancel(&expected, true);
     assert!(cache.current().is_none());
     assert!(!cache.is_cut(&cut.paths[0]));
-    assert!(!cache.reconcile(generation, Ok(Some(cut))));
+    assert!(!cache.reconcile(generation, Ok(Some(cut)), false));
 }
 
 #[test]
@@ -371,7 +389,7 @@ fn foreign_cut_contents_can_be_shown_without_claiming_cancellation_ownership() {
     };
     let mut cache = Cache::default();
     let generation = cache.begin_refresh().expect("external file offer");
-    cache.reconcile(generation, Ok(Some(foreign.clone())));
+    cache.reconcile(generation, Ok(Some(foreign.clone())), false);
     assert_eq!(cache.current().as_deref(), Some(&foreign));
     assert!(cache.begin_cancel().is_none());
 }
@@ -393,6 +411,8 @@ fn remote_uri_offers_preserve_local_cut_intent_and_do_not_promote_ordinary_text(
         .expect("files");
     assert_eq!(mode, Mode::Copy);
     assert_eq!(uris, ["sftp://alice@host/team/a%20b.txt"]);
+    assert!(copyable_uris(&uris));
+    assert!(!copyable_uris(&["https://example.com/file.txt".into()]));
     let cut =
         Snapshot::new(Mode::Cut, vec![PathBuf::from("/tmp/中文 空格.txt")]).expect("selection");
     let encoded = fallback::Clipboard::encode(&cut).expect("private local cut");

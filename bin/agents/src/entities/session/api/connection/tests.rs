@@ -835,3 +835,26 @@ async fn missing_session_stops_retrying_and_reports_an_actionable_error() {
             .is_empty()
     );
 }
+
+#[cfg(feature = "gui-tests")]
+impl Connection {
+    pub fn for_test(commands: mpsc::UnboundedSender<Command>) -> Self {
+        Self {
+            commands,
+            task: None,
+        }
+    }
+}
+
+async fn run(
+    client: Client,
+    commands: mpsc::UnboundedReceiver<Command>,
+    updates: mpsc::Sender<Update>,
+) {
+    run_cached(client, commands, updates, None).await;
+}
+
+async fn watch(client: Client, updates: mpsc::Sender<Update>, session: SessionId, epoch: u64) {
+    let (store, _) = super::history::Store::new(None);
+    watch_cached(client, updates, session, epoch, None, store).await;
+}

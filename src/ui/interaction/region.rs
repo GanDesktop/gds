@@ -15,13 +15,15 @@ pub fn surface(
     cx: &mut App,
 ) -> Stateful<Div> {
     let active = focus.contains_focused(window, cx);
+    let focus = focus.clone().tab_stop(true);
     let hint = keytips::anchor(window, cx, format!("{id}-hint").into(), command.into());
     div()
         .id(id)
         .relative()
         .min_w_0()
         .min_h_0()
-        .track_focus(focus)
+        .track_focus(&focus)
+        .role(Role::Group)
         .border_1()
         .border_color(if active {
             cx.theme().ring

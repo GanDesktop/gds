@@ -5,7 +5,8 @@ use gds_uim::el;
 
 impl Browser {
     pub(super) fn volume_can_rename(&self, id: &VolumeId, cx: &App) -> bool {
-        self.storage
+        self.devices
+            .service
             .read(cx)
             .snapshot
             .volume(id)
@@ -24,7 +25,8 @@ impl Browser {
             return;
         }
         let volume = self
-            .storage
+            .devices
+            .service
             .read(cx)
             .snapshot
             .volume(&id)
@@ -42,7 +44,7 @@ impl Browser {
             let Some(view) = browser.upgrade() else {
                 return;
             };
-            let focus = view.read(cx).focus.clone();
+            let focus = view.read(cx).window.focus.clone();
             focus.focus(window, cx);
             let focus_input = input.clone();
             window.open_alert_dialog(cx, move |dialog, _, cx| {
@@ -63,7 +65,7 @@ impl Browser {
                             let label = input.read(cx).value().to_string();
                             browser.update(cx, |browser, cx| {
                                 if browser.volume_can_rename(&id, cx) {
-                                    let unchanged = browser.storage.read(cx).snapshot.volume(&id)
+                                    let unchanged = browser.devices.service.read(cx).snapshot.volume(&id)
                                         .is_some_and(|volume| volume.label == label);
                                     if !unchanged {
                                         browser.start_device_operation(DeviceAction::SetLabel { volume: id.clone(), label }, cx);

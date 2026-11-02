@@ -43,7 +43,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let snapshot = self.storage.read(cx).snapshot.clone();
+        let snapshot = self.devices.service.read(cx).snapshot.clone();
         snapshot
             .volumes
             .iter()
@@ -65,7 +65,7 @@ impl Browser {
             ));
         }
         if let Some(storage::CapacityState::Ready(capacity)) =
-            self.storage.read(cx).capacity(&volume.id)
+            self.devices.service.read(cx).capacity(&volume.id)
         {
             lines.push(Self::capacity_label(*capacity, cx).to_string());
         }
@@ -110,7 +110,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let compact = self.sidebar_collapsed;
+        let compact = self.sidebar.collapsed;
         let id = format!("sidebar-volume-{}", volume.object);
         let selected = self
             .current_tab()
@@ -127,7 +127,7 @@ impl Browser {
         } else {
             let bar = Self::capacity_bar(
                 format!("{id}-capacity"),
-                self.storage.read(cx).capacity(&volume.id),
+                self.devices.service.read(cx).capacity(&volume.id),
                 compact,
                 cx,
             )
@@ -141,9 +141,10 @@ impl Browser {
         )
         .tooltip_text(self.volume_details(volume, cx))
         .tooltip_enabled(
-            self.keyboard_menu.is_none()
+            self.menus.context.is_none()
                 && self
-                    .volume_menu_focus
+                    .menus
+                    .volume_focus
                     .as_ref()
                     .is_none_or(|focus| !focus.contains_focused(window, cx)),
         )
@@ -156,8 +157,8 @@ impl Browser {
                 .into_iter()
                 .collect(),
         );
-        let cursor = self.regions.volumes.is_focused(window)
-            && self.regions.volume.as_ref() == Some(&volume.id);
+        let cursor = self.sidebar.regions.volumes.is_focused(window)
+            && self.sidebar.regions.volume.as_ref() == Some(&volume.id);
         el! { .div { # id; relative; w_full; flex_shrink_0 } [nav,
             @if (cursor) $(ui::region::focus_ring(cx)), @end,
         ] }
@@ -176,7 +177,7 @@ impl Browser {
             let focus = menu.focus_handle(cx);
             let available = browser
                 .update(cx, |view, cx| {
-                    view.volume_menu_focus = Some(focus);
+                    view.menus.volume_focus = Some(focus);
                     cx.notify();
                     if view.collection() == Some(Collection::Volumes) {
                         view.select_volume(id.clone(), window, cx);
@@ -211,7 +212,7 @@ impl Browser {
         cx: &App,
     ) -> PopupMenu {
         menu = ui::menu::popup(menu);
-        let Some(volume) = self.storage.read(cx).snapshot.volume(id) else {
+        let Some(volume) = self.devices.service.read(cx).snapshot.volume(id) else {
             return menu;
         };
         let target_matches = self.volume_action_target(cx).as_ref() == Some(id);
@@ -305,7 +306,7 @@ impl Browser {
                 return menu;
             };
             let view = view.read(cx);
-            let Some(volume) = view.storage.read(cx).snapshot.volume(&id).cloned() else {
+            let Some(volume) = view.devices.service.read(cx).snapshot.volume(&id).cloned() else {
                 return menu;
             };
             let selected = view.default_volume_root(&volume);
@@ -332,7 +333,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let service = self.storage.read(cx);
+        let service = self.devices.service.read(cx);
         let rows: Vec<_> = service
             .snapshot
             .volumes
@@ -351,7 +352,7 @@ impl Browser {
             f32::from(window.bounds().size.width) - self.width() - ContentPage::TABLE_INSET * 2.;
         let row_count = rows.len();
         table::VolumeTable::sync(
-            &self.volume_table,
+            &self.devices.table,
             rows,
             self.selected_volume().cloned(),
             width,
@@ -372,14 +373,15 @@ impl Browser {
         let on_unmount = cx.listener(Self::click_command(Command::UnmountVolume));
         let on_refresh = cx.listener(Self::click_command(Command::Refresh));
         let table = el! {
-            ($&self.volume_table).gpui_kit::component::table::DataTable::new {
+            ($&self.devices.table).gpui_kit::component::table::DataTable::new {
                 bordered: false; with_size: $(gpui_kit::component::Size::Size(px(tokens::DataListStyle::ROW_HEIGHT)));
                 header_row_height: tokens::DataListStyle::HEADER_HEIGHT.px;
                 into_any_element;
             }
         };
         let scroll = self
-            .volume_table
+            .devices
+            .table
             .read(cx)
             .vertical_scroll_handle
             .0

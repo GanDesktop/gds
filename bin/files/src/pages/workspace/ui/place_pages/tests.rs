@@ -68,7 +68,7 @@ fn mixed_favorites_share_selection_copy_open_and_remove(cx: &mut gpui_kit::TestA
         window.press("up", cx);
         assert_eq!(browser.read(cx).selected_place(), Some(remote.clone()));
         window.press("ctrl-enter", cx);
-        assert_eq!(browser.read(cx).tabs.len(), 2);
+        assert_eq!(browser.read(cx).tabs.items.len(), 2);
         assert_eq!(
             browser
                 .read(cx)
@@ -89,16 +89,29 @@ fn mixed_favorites_share_selection_copy_open_and_remove(cx: &mut gpui_kit::TestA
         window.render_frame(cx);
         window.click(("location-row", 1usize), cx);
         window.press("delete", cx);
-        assert!(!browser.read(cx).places.is_favorite(&remote));
-        assert!(browser.read(cx).places.is_favorite(&local));
+        assert!(!browser.read(cx).locations.places.is_favorite(&remote));
+        assert!(browser.read(cx).locations.places.is_favorite(&local));
         assert!(root.path().exists());
         browser.update(cx, |view, cx| {
             view.show_location(Location::Network, window, cx)
         });
         window.render_frame(cx);
         window.press("ctrl-d", cx);
-        assert!(browser.read(cx).places.is_favorite(Location::Network));
-        assert!(browser.read(cx).places.recent.contains(&Location::Network));
+        assert!(
+            browser
+                .read(cx)
+                .locations
+                .places
+                .is_favorite(Location::Network)
+        );
+        assert!(
+            browser
+                .read(cx)
+                .locations
+                .places
+                .recent
+                .contains(&Location::Network)
+        );
     })
     .expect("remove bookmark and bookmark a virtual page");
 }

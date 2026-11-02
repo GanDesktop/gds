@@ -209,7 +209,9 @@ impl TileContent {
 
 impl Browser {
     pub(super) fn view_mode(&self) -> ViewMode {
-        self.places.effective_view_mode(self.current_location())
+        self.locations
+            .places
+            .effective_view_mode(self.current_location())
     }
 
     pub(super) fn grid_mode(&self) -> bool {
@@ -229,8 +231,10 @@ impl Browser {
             return;
         }
         self.discard_marquee();
-        self.keyboard_menu = None;
-        self.places.set_view_mode(self.current_location(), mode);
+        self.menus.context = None;
+        self.locations
+            .places
+            .set_view_mode(self.current_location(), mode);
         self.save_places(cx);
         if let Some(slot) = self.active_mut() {
             slot.scroll
@@ -239,7 +243,7 @@ impl Browser {
                 .base_handle
                 .set_offset(point(px(0.), px(0.)));
         }
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -281,7 +285,7 @@ impl Browser {
         let content = TileContent {
             entry: entry.clone(),
             geometry: data.geometry,
-            thumbnails: self.thumbnails.clone(),
+            thumbnails: self.files.thumbnails.clone(),
             selected,
             appearance: EntryAppearance::of(entry, cx),
         };
@@ -302,7 +306,7 @@ impl Browser {
                 return;
             };
             this.select(index, event.modifiers(), cx);
-            this.focus.focus(window, cx);
+            this.window.focus.focus(window, cx);
             if event.click_count() == 2 {
                 this.activate_path(target.clone(), cx);
             }
@@ -318,7 +322,7 @@ impl Browser {
                 return;
             };
             this.select(index, Modifiers::default(), cx);
-            this.focus.focus(window, cx);
+            this.window.focus.focus(window, cx);
             this.activate_path(play_path.clone(), cx);
         });
         let play = (is_video && self.picker.is_none()).then(|| {

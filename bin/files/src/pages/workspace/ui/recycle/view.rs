@@ -58,9 +58,9 @@ pub(super) fn render_trash(
 }
 
 fn header_actions(browser: &Browser, cx: &mut Context<Browser>) -> Vec<AnyElement> {
-    let busy = browser.trash.is_busy();
-    let has_selection = browser.trash.selected_count() > 0;
-    let empty = browser.trash.rows().is_empty();
+    let busy = browser.collections.trash.is_busy();
+    let has_selection = browser.collections.trash.selected_count() > 0;
+    let empty = browser.collections.trash.rows().is_empty();
     let on_restore = cx.listener(Browser::on_trash_restore);
     let on_purge = cx.listener(Browser::on_trash_purge);
     let on_empty = cx.listener(Browser::on_trash_empty);
@@ -110,7 +110,7 @@ fn header_actions(browser: &Browser, cx: &mut Context<Browser>) -> Vec<AnyElemen
 }
 
 fn render_body(browser: &Browser, window: &mut Window, cx: &mut Context<Browser>) -> AnyElement {
-    let state = &browser.trash;
+    let state = &browser.collections.trash;
     if state.rows().is_empty() {
         if let Some(error) = state.error() {
             return message_state(
@@ -181,13 +181,13 @@ fn message_state(
 fn render_table(browser: &Browser, window: &mut Window, cx: &mut Context<Browser>) -> AnyElement {
     let content_width = f32::from(window.bounds().size.width) - browser.width() - TABLE_INSET * 2.;
     let data = table::Data {
-        rows: browser.trash.entries.clone(),
-        selected: browser.trash.selection(),
+        rows: browser.collections.trash.entries.clone(),
+        selected: browser.collections.trash.selection(),
         content_width,
     };
-    TrashTable::sync_state(&browser.trash.table, data, cx);
+    TrashTable::sync_state(&browser.collections.trash.table, data, cx);
     let table = el! {
-        ($&browser.trash.table).DataTable::new {
+        ($&browser.collections.trash.table).DataTable::new {
             bordered: false;
             with_size: $(gpui_kit::component::Size::Size(px(DataListStyle::ROW_HEIGHT)));
             header_row_height: DataListStyle::HEADER_HEIGHT.px;
@@ -196,7 +196,7 @@ fn render_table(browser: &Browser, window: &mut Window, cx: &mut Context<Browser
     };
     let menu = area_menu(
         cx.entity().downgrade(),
-        !browser.trash.is_busy() && !browser.trash.rows().is_empty(),
+        !browser.collections.trash.is_busy() && !browser.collections.trash.rows().is_empty(),
     );
     let area = PageTableArea::default()
         .id("trash-table-area")
@@ -204,6 +204,7 @@ fn render_table(browser: &Browser, window: &mut Window, cx: &mut Context<Browser
         .context_menu(menu)
         .into_any_element();
     let scroll = browser
+        .collections
         .trash
         .table
         .read(cx)
@@ -215,7 +216,7 @@ fn render_table(browser: &Browser, window: &mut Window, cx: &mut Context<Browser
     gds::ui::ListSurface::new(
         "trash-selection-surface",
         area,
-        browser.trash.rows().len(),
+        browser.collections.trash.rows().len(),
         scroll,
     )
     .inset_x(px(TABLE_INSET))
@@ -311,9 +312,9 @@ fn area_menu(
 pub(super) fn entry_menu(browser: &Browser, menu: PopupMenu, cx: &Context<Browser>) -> PopupMenu {
     let menu = menu::popup(menu);
     let view = cx.entity().downgrade();
-    let entries = browser.trash.selected_entries();
+    let entries = browser.collections.trash.selected_entries();
     let count = entries.len();
-    let busy = browser.trash.is_busy();
+    let busy = browser.collections.trash.is_busy();
     let restore_label = if count == 1 {
         i18n::text("recycle-restore", cx)
     } else {
@@ -357,7 +358,7 @@ pub(super) fn entry_menu(browser: &Browser, menu: PopupMenu, cx: &Context<Browse
         }
     };
     let empty = {
-        let can_empty = !busy && !browser.trash.rows().is_empty();
+        let can_empty = !busy && !browser.collections.trash.rows().is_empty();
         let on_click = empty_action(view);
         let render = menu_row(
             i18n::text("recycle-empty-action", cx),
@@ -369,7 +370,7 @@ pub(super) fn entry_menu(browser: &Browser, menu: PopupMenu, cx: &Context<Browse
                 icon: $(Intent::EmptyTrash.icon());
             }
         }
-        .disabled(busy || browser.trash.rows().is_empty())
+        .disabled(busy || browser.collections.trash.rows().is_empty())
     };
     el! {
         menu {
@@ -480,7 +481,7 @@ impl Confirmation {
             let Some(browser) = this.browser.upgrade() else {
                 return;
             };
-            let focus = browser.read(cx).focus.clone();
+            let focus = browser.read(cx).window.focus.clone();
             focus.focus(window, cx);
             window.open_alert_dialog(cx, Self::builder(this));
         });
@@ -544,7 +545,7 @@ impl Confirmation {
             window.on_next_frame(move |window, cx| {
                 if let Some(browser) = browser.upgrade() {
                     browser.update(cx, |browser, cx| {
-                        browser.focus.focus(window, cx);
+                        browser.window.focus.focus(window, cx);
                     });
                 }
             });

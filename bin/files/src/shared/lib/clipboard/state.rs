@@ -1,4 +1,4 @@
-//! Cached file clipboard contents shared by the footer and entry appearance.
+//! Cached file clipboard contents for commands, the footer, and cut appearance.
 
 use std::{collections::HashSet, path::Path, path::PathBuf, sync::Arc};
 
@@ -9,6 +9,7 @@ use super::{Error, Mode, Snapshot};
 #[derive(Default)]
 pub(super) struct Cache {
     snapshot: Option<Arc<Snapshot>>,
+    remote_copy: bool,
     cut_paths: HashSet<PathBuf>,
     generation: u64,
     refreshing: bool,
@@ -20,6 +21,10 @@ impl Global for Cache {}
 impl Cache {
     pub(super) fn current(&self) -> Option<Arc<Snapshot>> {
         self.snapshot.clone()
+    }
+
+    pub(super) fn can_paste(&self) -> bool {
+        self.snapshot.is_some() || self.remote_copy
     }
 
     pub(super) fn is_cut(&self, path: &Path) -> bool {
@@ -36,11 +41,17 @@ impl Cache {
         self.replace(Some(written.clone()));
     }
 
+    pub(super) fn record_uri_copy(&mut self, copyable: bool) {
+        self.replace(None);
+        self.remote_copy = copyable;
+    }
+
     pub(super) fn clear(&mut self) {
         self.replace(None);
     }
 
     fn replace(&mut self, snapshot: Option<Snapshot>) {
+        self.remote_copy = false;
         self.generation = self.generation.wrapping_add(1);
         self.refreshing = false;
         self.cancelling = false;
@@ -82,6 +93,7 @@ impl Cache {
         &mut self,
         generation: u64,
         current: Result<Option<Snapshot>, Error>,
+        remote_copy: bool,
     ) -> bool {
         if generation != self.generation {
             return false;
@@ -90,10 +102,11 @@ impl Cache {
         let Ok(current) = current else {
             return false;
         };
-        if self.snapshot.as_deref() == current.as_ref() {
+        if self.snapshot.as_deref() == current.as_ref() && self.remote_copy == remote_copy {
             return false;
         }
         self.replace(current);
+        self.remote_copy = remote_copy;
         true
     }
 

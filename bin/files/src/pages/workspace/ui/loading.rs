@@ -6,7 +6,7 @@ use gpui_kit::component::{ActiveTheme, button::ButtonVariants, spinner::Spinner}
 
 impl Browser {
     pub(super) fn render_remote_unopened(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tab = self.active_id;
+        let tab = self.tabs.active_id;
         let destination = match self.current_location() {
             Location::Remote(address) => address.to_string(),
             _ => String::new(),
@@ -36,10 +36,11 @@ impl Browser {
             _ => location.label(cx).to_string(),
         };
         let connecting = self
+            .remote
             .connector
             .read(cx)
             .pending()
-            .is_some_and(|p| p.tab == self.active_id);
+            .is_some_and(|p| p.tab == self.tabs.active_id);
         el! { .div { # "location-loading"; flex; flex_col; flex_1; size_full; items_center; justify_center; gap_4; px_6 } [
             .Spinner::new,
             .div { font_medium } [$i18n::text(if connecting { "remote-connecting" } else { "remote-loading-folder" }, cx)],

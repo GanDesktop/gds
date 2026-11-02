@@ -150,18 +150,6 @@ pub(crate) fn publish(server: Target, catalog: &Catalog, cx: &mut App) {
     }
 }
 
-#[cfg(all(test, feature = "gui-tests"))]
-pub(crate) fn for_test(server: Target, catalog: &Catalog, cx: &mut App) {
-    if cx.try_global::<crate::entities::agent::Changes>().is_none() {
-        cx.set_global(crate::entities::agent::Changes::default());
-    }
-    if cx.try_global::<Shared>().is_none() {
-        let metadata = cx.new(|cx| Metadata::new(None, cx));
-        cx.set_global(Shared(metadata));
-    }
-    publish(server, catalog, cx);
-}
-
 fn merge_icons(
     icons: &mut BTreeMap<String, String>,
     commands: &mut BTreeMap<String, Command>,

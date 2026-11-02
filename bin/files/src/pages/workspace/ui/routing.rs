@@ -24,7 +24,8 @@ impl Browser {
     pub(super) fn volume_identity(&self, volume: &storage::VolumeId, cx: &App) -> VolumeIdentity {
         if let Some(stable) = &volume.stable {
             if self
-                .storage
+                .devices
+                .service
                 .read(cx)
                 .snapshot
                 .volumes
@@ -43,8 +44,10 @@ impl Browser {
         match location {
             Location::Directory(path) => {
                 let path = PathBuf::from(path);
-                let device =
-                    devices::DeviceLocation::capture(&self.storage.read(cx).snapshot, &path);
+                let device = devices::DeviceLocation::capture(
+                    &self.devices.service.read(cx).snapshot,
+                    &path,
+                );
                 let location = device.as_ref().map_or_else(
                     || location.clone(),
                     |device| Location::Volume {
@@ -59,7 +62,7 @@ impl Browser {
                 }
             }
             Location::Volume { identity, relative } => {
-                let snapshot = &self.storage.read(cx).snapshot;
+                let snapshot = &self.devices.service.read(cx).snapshot;
                 let mut matches = snapshot.volumes.iter().filter(|volume| match identity {
                     VolumeIdentity::Stable(id) => volume.id.stable.as_ref() == Some(id),
                     VolumeIdentity::Attachment(id) => &volume.id.attachment == id,
@@ -111,10 +114,11 @@ impl Browser {
             return;
         };
         let collection = Collection::from_location(slot.navigation.location());
-        let scroll = if id == self.active_id {
+        let scroll = if id == self.tabs.active_id {
             match collection {
                 Some(Collection::Volumes) => Some(f32::from(
-                    self.volume_table
+                    self.devices
+                        .table
                         .read(cx)
                         .vertical_scroll_handle
                         .0
@@ -140,8 +144,8 @@ impl Browser {
         } else {
             None
         };
-        let trash = (id == self.active_id && collection == Some(Collection::Trash))
-            .then(|| self.trash.view(cx));
+        let trash = (id == self.tabs.active_id && collection == Some(Collection::Trash))
+            .then(|| self.collections.trash.view(cx));
         if let Some(slot) = self.tab_slot_mut(id) {
             slot.save_scroll();
             if let Some(scroll) = scroll {
@@ -161,13 +165,14 @@ impl Browser {
         match self.collection() {
             Some(Collection::Trash) => {
                 let view = slot.navigation.view().trash.clone();
-                self.trash.restore_view(view, cx);
-                if !self.trash.is_loading() {
+                self.collections.trash.restore_view(view, cx);
+                if !self.collections.trash.is_loading() {
                     self.load_trash(cx);
                 }
             }
             Some(Collection::Volumes) => {
-                self.volume_table
+                self.devices
+                    .table
                     .read(cx)
                     .vertical_scroll_handle
                     .0
@@ -185,7 +190,7 @@ impl Browser {
                         .base_handle
                         .set_offset(point(px(0.), px(offset)));
                 }
-                if collection == Collection::Network && !self.network.loaded {
+                if collection == Collection::Network && !self.collections.network.discovery.loaded {
                     self.refresh_network(cx);
                 }
             }
@@ -206,14 +211,14 @@ impl Browser {
                     _ => slot.path().and_then(Path::parent).map(Location::from),
                 };
                 if let Some(location) = location {
-                    self.navigate_location(self.active_id, location, cx);
+                    self.navigate_location(self.tabs.active_id, location, cx);
                 }
                 return;
             }
             _ => return,
         };
         if let Some(index) = index {
-            self.navigate_history_entry(self.active_id, index, cx);
+            self.navigate_history_entry(self.tabs.active_id, index, cx);
         }
     }
 
@@ -238,8 +243,8 @@ impl Browser {
             return;
         }
         let resolved = self.resolve_location(&location, cx);
-        let options = self.read_options(self.active_id);
-        self.save_tab_view(self.active_id, cx);
+        let options = self.read_options(self.tabs.active_id);
+        self.save_tab_view(self.tabs.active_id, cx);
         let Some(slot) = self.current_tab_mut() else {
             return;
         };
@@ -250,22 +255,23 @@ impl Browser {
         if let Some(request) = request {
             self.start_request(id, request, cx);
         }
-        self.path_editing = false;
+        self.toolbar.path.editing = false;
     }
 
     pub(super) fn tab_title(&self, slot: &OpenTab, cx: &App) -> String {
         if let Location::Volume { identity, relative } = slot.navigation.location() {
             if relative.is_empty() {
-                if let Some(volume) = self
-                    .storage
-                    .read(cx)
-                    .snapshot
-                    .volumes
-                    .iter()
-                    .find(|volume| match identity {
-                        VolumeIdentity::Stable(id) => volume.id.stable.as_ref() == Some(id),
-                        VolumeIdentity::Attachment(id) => &volume.id.attachment == id,
-                    })
+                if let Some(volume) =
+                    self.devices
+                        .service
+                        .read(cx)
+                        .snapshot
+                        .volumes
+                        .iter()
+                        .find(|volume| match identity {
+                            VolumeIdentity::Stable(id) => volume.id.stable.as_ref() == Some(id),
+                            VolumeIdentity::Attachment(id) => &volume.id.attachment == id,
+                        })
                 {
                     return volume.name.clone();
                 }

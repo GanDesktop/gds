@@ -251,6 +251,8 @@ gds-agents --enable-logs --compact
 
 公共 `Frame`、导航条目、键帽与设置控件都在公共库中；Files 专属渲染与具名事件处理器留在二进制模块。明显归属对象的构造、状态同步和呈现方法放在对应 `impl` 中。一次性原生显示检查脚本和数据放在临时目录，不保留到项目；常驻测试只覆盖关键工作流与非显然行为。
 
+Files 的 `pages/workspace/ui::Browser` 按功能组合窗口状态。`window` 管理窗口资源、焦点和订阅；`locations`、`tabs`、`sidebar`、`toolbar` 分别管理位置持久化、标签集合、侧栏区域和输入；`content`、`place_pages`、`devices`、`remote` 保存对应内容的呈现与加载状态；设置、菜单、文件操作、终端及选择器各归所属模块。组内继续按功能收拢，例如 `toolbar.path` / `toolbar.filter`、`collections.favorites` / `collections.network`。各组的构造与同步代码留在同名 UI 子模块，`Browser::new` 负责组装和启动；这些状态仍属于工作区页面，沿用 `<module>.rs` 配合 `<module>/`，不扩大切片公开接口。单个标签的导航、选择和滚动仍由 `OpenTab` 持有，终端会话保持窗口级生命周期。
+
 ### UIM 写法
 
 在使用处导入 `el`、`m` 和翻译宏，分别写 `el!`、`m!`、`tr!` / `t!`。元素 ID 统一用 `# expression`。路径、常量和宏调用直接作为 DSL 值；只有字段访问、Rust 方法链、运算等需要 Rust 语义的表达式才使用 `$()`。

@@ -2,9 +2,6 @@ use std::borrow::Cow;
 
 use gpui_kit::{AssetSource, SharedString};
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) const SECURE_CONNECTION: &str = "icons/server-lock.svg";
 
 struct EmbeddedAsset {

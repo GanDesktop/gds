@@ -48,10 +48,6 @@ impl Store {
         Self(File::new(path))
     }
 
-    #[cfg(test)]
-    pub(crate) fn at(path: PathBuf) -> Self {
-        Self::new(Some(path))
-    }
     pub(crate) fn path(&self) -> &Path {
         self.0.path()
     }

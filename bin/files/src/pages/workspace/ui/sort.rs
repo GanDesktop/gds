@@ -22,16 +22,16 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if open == self.sort_menu.is_some() {
+        if open == self.menus.sort.is_some() {
             return;
         }
         if !open {
-            self.sort_menu = None;
-            self.focus.focus(window, cx);
+            self.menus.sort = None;
+            self.window.focus.focus(window, cx);
             cx.notify();
             return;
         }
-        if self.settings_open
+        if self.settings.open
             || self.collection().is_some()
             || self.editing_path(window, cx)
             || window.has_active_dialog(cx)
@@ -42,8 +42,8 @@ impl Browser {
             return;
         };
         self.discard_marquee();
-        self.keyboard_menu = None;
-        self.menu_open = false;
+        self.menus.context = None;
+        self.menus.application_open = false;
         let browser = cx.entity().downgrade();
         let menu = PopupMenu::build(window, cx, move |menu, _, cx| {
             let mut menu = ui::menu::popup(menu);
@@ -82,15 +82,16 @@ impl Browser {
         let menu_id = menu.entity_id();
         let dismiss = cx.subscribe_in(&menu, window, move |this, _, _: &DismissEvent, _, cx| {
             if this
-                .sort_menu
+                .menus
+                .sort
                 .as_ref()
                 .is_some_and(|open| open.menu.entity_id() == menu_id)
             {
-                this.sort_menu = None;
+                this.menus.sort = None;
                 cx.notify();
             }
         });
-        self.sort_menu = Some(OpenMenu {
+        self.menus.sort = Some(OpenMenu {
             menu: menu.clone(),
             _dismiss: dismiss,
         });
@@ -100,7 +101,8 @@ impl Browser {
             if browser.upgrade().is_some_and(|browser| {
                 browser
                     .read(cx)
-                    .sort_menu
+                    .menus
+                    .sort
                     .as_ref()
                     .is_some_and(|open| open.menu.entity_id() == menu_id)
             }) && let Some(menu) = menu.upgrade()
@@ -117,7 +119,7 @@ impl Browser {
             .control_icon(IconName::ArrowDownWideNarrow)
             .accessibility_label(label.clone())
             .tooltip_with_shortcut(label, Shortcut::from(Command::Sort));
-        let menu = self.sort_menu.as_ref().map(|open| open.menu.clone());
+        let menu = self.menus.sort.as_ref().map(|open| open.menu.clone());
         let on_open =
             cx.listener(|this, open: &bool, window, cx| this.set_sort_menu_open(*open, window, cx));
         Popover::new("file-sort-popover")

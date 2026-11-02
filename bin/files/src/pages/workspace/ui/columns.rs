@@ -601,14 +601,14 @@ impl Render for ColumnDragPreview {
 impl Browser {
     /// The layout that applies at a location, otherwise the database defaults.
     pub(super) fn columns_layout(&self, location: &Location) -> &Layout {
-        self.places.effective_columns(location)
+        self.locations.places.effective_columns(location)
     }
 
     /// A loaded file view with no pending navigation. The column editor freezes
     /// the visible folder and Ctrl+D bookmarks it, so neither may run while the
     /// folder is still being replaced.
     pub(super) fn folder_settled(&self) -> bool {
-        !self.settings_open
+        !self.settings.open
             && self.collection().is_none()
             && self.active().is_some_and(|slot| {
                 slot.files_available()
@@ -618,7 +618,7 @@ impl Browser {
     }
 
     pub(super) fn columns_available(&self) -> bool {
-        self.folder_settled() && !self.file_operation_in_progress
+        self.folder_settled() && !self.operations.in_progress
     }
 
     /// Open the column editor only after navigation settles, so its frozen
@@ -626,7 +626,7 @@ impl Browser {
     pub(super) fn open_columns_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.columns_available()
             || window.has_active_dialog(cx)
-            || self.column_editor.read(cx).is_open()
+            || self.files.columns.read(cx).is_open()
         {
             return;
         }
@@ -634,13 +634,13 @@ impl Browser {
             return;
         };
         let location = self.current_location();
-        let overrides = self.places.columns_for(&location).is_some();
+        let overrides = self.locations.places.columns_for(&location).is_some();
         let layout = self.columns_layout(&location).clone();
-        self.column_editor.update(cx, |editor, cx| {
+        self.files.columns.update(cx, |editor, cx| {
             editor.load(Target { path, location }, layout, overrides);
             cx.notify();
         });
-        let editor = self.column_editor.clone();
+        let editor = self.files.columns.clone();
         let browser = cx.entity().downgrade();
         // Let a closing popup leave the focus tree before the dialog records its
         // own return target.
@@ -749,7 +749,7 @@ impl Browser {
             let Some(browser) = browser.upgrade() else {
                 return;
             };
-            let origin_tab = browser.read(cx).active_id;
+            let origin_tab = browser.read(cx).tabs.active_id;
             browser.update(cx, |_, cx| cx.notify());
             Self::restore_file_focus(browser.downgrade(), origin_tab, window);
         }
@@ -769,7 +769,11 @@ impl Browser {
                     cx.notify();
                 });
                 window.close_dialog(cx);
-                Self::restore_file_focus(browser.downgrade(), browser.read(cx).active_id, window);
+                Self::restore_file_focus(
+                    browser.downgrade(),
+                    browser.read(cx).tabs.active_id,
+                    window,
+                );
             }
         }
     }
@@ -798,11 +802,11 @@ impl Browser {
         layout: Layout,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.places_load_error.is_some() {
+        if self.locations.load_error.is_some() {
             report_column_state_unavailable(cx);
             return false;
         }
-        self.places.set_columns(&location, layout);
+        self.locations.places.set_columns(&location, layout);
         self.save_places(cx);
         true
     }
@@ -815,12 +819,12 @@ impl Browser {
         layout: Layout,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.places_load_error.is_some() {
+        if self.locations.load_error.is_some() {
             report_column_state_unavailable(cx);
             return false;
         }
-        self.places.set_default_columns(layout);
-        self.places.clear_columns(&location);
+        self.locations.places.set_default_columns(layout);
+        self.locations.places.clear_columns(&location);
         self.save_places(cx);
         true
     }
@@ -836,11 +840,11 @@ impl Browser {
         else {
             return true;
         };
-        if self.places_load_error.is_some() {
+        if self.locations.load_error.is_some() {
             report_column_state_unavailable(cx);
             return false;
         }
-        self.places.clear_columns(&location);
+        self.locations.places.clear_columns(&location);
         self.save_places(cx);
         self.reproject_columns(cx);
         true
@@ -851,8 +855,8 @@ impl Browser {
     /// A sort key whose column is now hidden falls back to the default ordering
     /// so the table never keeps an ordering with no visible header arrow.
     pub(super) fn reproject_columns(&mut self, cx: &mut Context<Self>) {
-        for slot in &mut self.tabs {
-            let sort = sort_for(&slot.location(), &self.places);
+        for slot in &mut self.tabs.items {
+            let sort = sort_for(&slot.location(), &self.locations.places);
             slot.sort = sort;
             slot.refresh_visible();
         }

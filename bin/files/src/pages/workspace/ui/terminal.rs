@@ -18,6 +18,38 @@ pub(super) const MIN_CONTENT_HEIGHT: f32 = sidebar::MIN_TABS_HEIGHT
 pub(super) const MIN_DOCK_HEIGHT: f32 = 160.;
 pub(super) const DEFAULT_DOCK_HEIGHT: f32 = 280.;
 
+/// Sessions and selection belong to this window, never a file location.
+pub(super) struct State {
+    pub dock: Option<Dock>,
+    pub visible: bool,
+    pub maximized: bool,
+    pub split: Entity<ui::split::State>,
+    pub close_pending: Option<CloseTarget>,
+    pub closing: bool,
+}
+
+impl State {
+    pub(super) fn new(preferences: &configuration::Preferences, cx: &mut App) -> Self {
+        Self {
+            dock: None,
+            visible: false,
+            maximized: false,
+            split: cx.new(|cx| {
+                let mut split = ui::split::State::new(
+                    preferences.files.terminal_content_height,
+                    MIN_CONTENT_HEIGHT,
+                    MIN_DOCK_HEIGHT,
+                    cx,
+                );
+                split.default_bottom(DEFAULT_DOCK_HEIGHT);
+                split
+            }),
+            close_pending: None,
+            closing: false,
+        }
+    }
+}
+
 pub(super) struct Dock {
     pub panel: Entity<Panel>,
     cwd: Option<PathBuf>,
@@ -41,11 +73,12 @@ fn launch_cwd(path: Option<&Path>, available: bool, home: &Path) -> PathBuf {
 
 impl Browser {
     pub(super) fn terminal_visible(&self) -> bool {
-        self.terminal_visible && self.picker.is_none() && !self.settings_open
+        self.terminal.visible && self.picker.is_none() && !self.settings.open
     }
 
     pub(super) fn terminal_focused(&self, window: &Window, cx: &App) -> bool {
         self.terminal
+            .dock
             .as_ref()
             .is_some_and(|dock| dock.panel.read(cx).contains_focus(window, cx))
     }
@@ -64,7 +97,7 @@ impl Browser {
                         .path()
                         .is_some_and(|path| self.device_path_available(path, cx))
             }),
-            &self.home,
+            &self.locations.home,
         ))
     }
 
@@ -73,14 +106,14 @@ impl Browser {
         if self.picker.is_some() {
             return None;
         }
-        if self.terminal_closing {
+        if self.terminal.closing {
             return None;
         }
-        if let Some(dock) = &self.terminal {
+        if let Some(dock) = &self.terminal.dock {
             return Some(dock.panel.clone());
         }
         let cwd = self.terminal_cwd(cx);
-        let preferences = self.preferences.terminal.clone();
+        let preferences = self.settings.preferences.terminal.clone();
         let panel = cx.new(|cx| {
             let mut panel = Panel::new(cx);
             panel.set_preferences(preferences, cx);
@@ -88,7 +121,7 @@ impl Browser {
             panel
         });
         let changes = cx.observe(&panel, |_, _, cx| cx.notify());
-        self.terminal = Some(Dock {
+        self.terminal.dock = Some(Dock {
             panel: panel.clone(),
             cwd,
             _changes: changes,
@@ -100,14 +133,14 @@ impl Browser {
         let Some(panel) = self.ensure_terminal(cx) else {
             return;
         };
-        self.settings_open = false;
+        self.settings.open = false;
         self.reset_tab_prefix();
-        self.path_editing = false;
-        self.terminal_visible = !self.terminal_visible;
-        if self.terminal_visible {
+        self.toolbar.path.editing = false;
+        self.terminal.visible = !self.terminal.visible;
+        if self.terminal.visible {
             panel.update(cx, |panel, cx| panel.reveal(window, cx));
         } else {
-            self.focus.focus(window, cx);
+            self.window.focus.focus(window, cx);
         }
         cx.notify();
     }
@@ -118,18 +151,18 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.picker.is_some() || self.settings_open {
+        if self.picker.is_some() || self.settings.open {
             return;
         }
         let available = self.active().is_some_and(|slot| slot.files_available())
             && self.device_path_available(&cwd, cx);
-        let cwd = launch_cwd(Some(&cwd), available, &self.home);
+        let cwd = launch_cwd(Some(&cwd), available, &self.locations.home);
         let Some(panel) = self.ensure_terminal(cx) else {
             return;
         };
         self.reset_tab_prefix();
-        self.path_editing = false;
-        self.terminal_visible = true;
+        self.toolbar.path.editing = false;
+        self.terminal.visible = true;
         // Each request starts a fresh session; existing PTYs are never redirected.
         panel.update(cx, |panel, cx| panel.open(cwd, window, cx));
         cx.notify();
@@ -150,6 +183,7 @@ impl Browser {
                     if this.terminal_visible()
                         && this
                             .terminal
+                            .dock
                             .as_ref()
                             .is_some_and(|dock| dock.panel == panel)
                         && panel.read(cx).needs_initial_reveal()
@@ -160,7 +194,7 @@ impl Browser {
             });
         }
         let cwd = self.terminal_cwd(cx);
-        let Some(dock) = self.terminal.as_mut() else {
+        let Some(dock) = self.terminal.dock.as_mut() else {
             return;
         };
         if dock.cwd != cwd {
@@ -175,10 +209,10 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if window.has_active_dialog(cx) || self.rename.read(cx).is_open() {
+        if window.has_active_dialog(cx) || self.operations.rename.read(cx).is_open() {
             return;
         }
-        if !self.terminal_focused(window, cx) || self.settings_open {
+        if !self.terminal_focused(window, cx) || self.settings.open {
             cx.propagate();
             return;
         }
@@ -186,9 +220,9 @@ impl Browser {
     }
 
     fn restore_terminal_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.terminal_maximized = false;
-        self.focus.focus(window, cx);
-        Self::restore_file_focus(cx.entity().downgrade(), self.active_id, window);
+        self.terminal.maximized = false;
+        self.window.focus.focus(window, cx);
+        Self::restore_file_focus(cx.entity().downgrade(), self.tabs.active_id, window);
         cx.notify();
     }
 
@@ -198,7 +232,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open || self.collection().is_some() || window.has_active_dialog(cx) {
+        if self.settings.open || self.collection().is_some() || window.has_active_dialog(cx) {
             return;
         }
         let Some(cwd) = self.terminal_cwd(cx) else {
@@ -206,7 +240,7 @@ impl Browser {
             return;
         };
         // Do not ensure/reveal here: this operation only targets an existing selection.
-        let Some(dock) = self.terminal.as_ref() else {
+        let Some(dock) = self.terminal.dock.as_ref() else {
             return;
         };
         dock.panel
@@ -214,11 +248,11 @@ impl Browser {
     }
 
     fn maximize_terminal(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dock) = self.terminal.as_ref() else {
+        let Some(dock) = self.terminal.dock.as_ref() else {
             return;
         };
         let panel = dock.panel.clone();
-        self.terminal_maximized = !self.terminal_maximized;
+        self.terminal.maximized = !self.terminal.maximized;
         panel.update(cx, |panel, cx| panel.focus(window, cx));
         cx.notify();
     }
@@ -231,11 +265,11 @@ impl Browser {
         if !self.terminal_visible() {
             return workspace;
         }
-        let Some(dock) = self.terminal.as_ref() else {
+        let Some(dock) = self.terminal.dock.as_ref() else {
             return workspace;
         };
         let panel = dock.panel.clone();
-        let maximized = self.terminal_maximized;
+        let maximized = self.terminal.maximized;
         let maximize = ui::IconButton::new("files-terminal-maximize")
             .icon(if maximized {
                 IconName::Minimize2
@@ -263,7 +297,7 @@ impl Browser {
             .min_w_0()
             .px(px(tokens::SIDEBAR_PADDING))
             .text_color(cx.theme().muted_foreground)
-            .when(!self.sidebar_collapsed, |this| {
+            .when(!self.sidebar.collapsed, |this| {
                 this.child(
                     ui::sidebar::SideBarSectionTitle::new(title)
                         .flex_1()
@@ -336,7 +370,7 @@ impl Browser {
                 .workspace(div().into_any_element(), div().into_any_element(), cx)
                 .flex_none()
                 .size_full();
-            ui::split::VerticalSplit::new(self.terminal_split.clone())
+            ui::split::VerticalSplit::new(self.terminal.split.clone())
                 .top(workspace)
                 .bottom(dock)
                 .label(i18n::text("files-terminal-resize", cx))
@@ -351,23 +385,24 @@ impl Browser {
         event: &ui::split::Changed,
         cx: &mut Context<Self>,
     ) {
-        self.preferences.files.terminal_content_height = Some(event.0);
-        if let Err(error) = configuration::save(&self.preferences) {
+        self.settings.preferences.files.terminal_content_height = Some(event.0);
+        if let Err(error) = configuration::save(&self.settings.preferences) {
             report_settings_failure("settings-save-failed", &error, cx);
         }
     }
 
     pub(super) fn apply_terminal_preferences(&self, cx: &mut Context<Self>) {
-        if let Some(dock) = &self.terminal {
+        if let Some(dock) = &self.terminal.dock {
             let panel = dock.panel.clone();
             panel.update(cx, |panel, cx| {
-                panel.set_preferences(self.preferences.terminal.clone(), cx)
+                panel.set_preferences(self.settings.preferences.terminal.clone(), cx)
             });
         }
     }
 
     fn closing_panels(&self, _: CloseTarget) -> Vec<Entity<Panel>> {
         self.terminal
+            .dock
             .iter()
             .map(|dock| dock.panel.clone())
             .collect()
@@ -389,7 +424,7 @@ impl Browser {
         window.on_window_should_close(cx, move |window, cx| {
             owner
                 .update(cx, |this, cx| {
-                    if this.terminal_close_pending.is_some() {
+                    if this.terminal.close_pending.is_some() {
                         return false;
                     }
                     if this.closing_panels(CloseTarget::Window).is_empty() {
@@ -408,7 +443,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.terminal_close_pending.is_some() {
+        if self.terminal.close_pending.is_some() {
             return;
         }
         self.finish_terminal_close(target, window, cx);
@@ -420,13 +455,13 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.terminal_closing {
+        if self.terminal.closing {
             return;
         }
         // Shutdown futures include in-flight spawns and worker cleanup, so the
         // final window cannot quit before the last PTY has actually stopped.
-        self.terminal_closing = true;
-        self.terminal_close_pending = Some(target);
+        self.terminal.closing = true;
+        self.terminal.close_pending = Some(target);
         let shutdowns: Vec<_> = self
             .closing_panels(target)
             .into_iter()
@@ -438,8 +473,8 @@ impl Browser {
                 shutdown.await;
             }
             if let Err(error) = this.update_in(cx, |this, window, _cx| {
-                this.terminal_closing = false;
-                this.terminal_close_pending = None;
+                this.terminal.closing = false;
+                this.terminal.close_pending = None;
                 match target {
                     CloseTarget::Window => window.remove_window(),
                 }

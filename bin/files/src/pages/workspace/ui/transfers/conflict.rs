@@ -160,7 +160,7 @@ impl ConflictDialog {
             let Some(browser) = this.browser.upgrade() else {
                 return;
             };
-            let focus = browser.read(cx).focus.clone();
+            let focus = browser.read(cx).window.focus.clone();
             focus.focus(window, cx);
             let form = this.form.clone();
             window.open_alert_dialog(cx, Self::builder(this.clone()));

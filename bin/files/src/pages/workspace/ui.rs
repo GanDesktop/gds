@@ -3,6 +3,7 @@ use gds::appearance::tokens;
 mod breadcrumb;
 mod clipboard_status;
 mod columns;
+mod content;
 mod context_menu;
 #[cfg(target_os = "linux")]
 mod desktop_requests;
@@ -16,6 +17,7 @@ mod handlers;
 mod history;
 mod loading;
 mod localization;
+mod locations;
 mod marquee;
 mod menu;
 mod new_folder;
@@ -28,13 +30,16 @@ mod remote;
 mod rename;
 mod routing;
 mod selection;
+mod settings;
 mod sidebar;
 mod sort;
 mod table;
 mod tabs;
 mod terminal;
+mod toolbar;
 mod transfers;
 mod view;
+mod window;
 
 use std::{
     path::{Path, PathBuf},
@@ -46,7 +51,6 @@ use tokio_util::task::AbortOnDropHandle;
 use crate::entities::location::volumes as storage;
 use crate::entities::preferences as configuration;
 use crate::features::file_operations::commands::*;
-use crate::widgets::settings;
 use gds::{i18n, service::desktop, ui, ui::notifications};
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -301,79 +305,26 @@ impl OpenTab {
     }
 }
 
+/// The window composes feature-owned state; tab-local browsing stays in `OpenTab`.
 pub struct Browser {
-    connector: Entity<crate::features::connect_server::Connector>,
-    window: AnyWindowHandle,
-    remote_requests: std::collections::HashMap<u64, LoadRequest>,
-    runtime: Handle,
-    desktop: desktop::Desktop,
-    root_focus: FocusHandle,
-    focus: FocusHandle,
-    regions: regions::State,
-    path_input: Entity<InputState>,
-    filter_input: Entity<InputState>,
-    filter_sync_pending: bool,
-    preview: Entity<preview::View>,
-    thumbnails: Entity<ui::thumbnail::Cache>,
-    rename: Entity<rename::State>,
-    settings_view: Entity<settings::View>,
-    theme_reload: Entity<gds::appearance::theme::HotReload>,
-    file_table: Entity<gpui_kit::component::table::TableState<table::FileTable>>,
-    marquee: marquee::State,
-    column_editor: Entity<columns::Editor>,
-    preferences: configuration::Preferences,
-    places: Places,
-    pinned_paths: Vec<PathBuf>,
-    places_load_error: Option<String>,
-    places_saving: bool,
-    storage: Entity<storage::Service>,
-    sidebar_split: Entity<ui::split::State>,
-    pending_removals: Vec<storage::DeviceAction>,
-    home: PathBuf,
-    tabs: Vec<OpenTab>,
-    volume_table: Entity<gpui_kit::component::table::TableState<devices::table::VolumeTable>>,
-    volume_defaults: std::collections::HashMap<storage::VolumeId, PathBuf>,
-    active_id: u64,
-    next_id: u64,
-    /// The tab row the pointer is over, so its close control follows hover as
-    /// well as the held Ctrl group.
-    hovered_tab: Option<u64>,
-    /// State of an armed `Ctrl+Tab` prefix, if any.
-    tab_prefix: Option<tabs::TabPrefix>,
-    sidebar_collapsed: bool,
-    /// The modifier group the window currently holds down, tracked so the tab
-    /// close controls can be revealed and hidden again without a per-control
-    /// timer.
-    held_modifier: Option<ui::HeldModifier>,
-    /// Whether the application menu is showing. The toolbar button and
-    /// `Alt+M` / `F10` both drive this one flag.
-    menu_open: bool,
-    keyboard_menu: Option<context_menu::OpenMenu>,
-    sort_menu: Option<sort::OpenMenu>,
-    volume_menu_focus: Option<FocusHandle>,
-    settings_open: bool,
-    /// Sessions and selection belong to this window, never a file location.
-    terminal: Option<terminal::Dock>,
-    terminal_visible: bool,
-    terminal_maximized: bool,
-    terminal_split: Entity<ui::split::State>,
-    terminal_close_pending: Option<terminal::CloseTarget>,
-    terminal_closing: bool,
-    path_editing: bool,
-    file_operation_in_progress: bool,
-    remote_paste_cancel: Option<tokio_util::sync::CancellationToken>,
-    file_operation_paths: Vec<PathBuf>,
+    window: window::State,
+    settings: settings::State,
+
+    locations: locations::State,
+    tabs: tabs::State,
+    sidebar: sidebar::State,
+    toolbar: toolbar::State,
+
+    files: content::State,
+    collections: place_pages::State,
+    devices: devices::State,
+    remote: remote::State,
+
+    menus: menu::State,
+    operations: file_actions::State,
+    terminal: terminal::State,
     /// The picker session, when this window is a file picker.
     picker: Option<picker::State>,
-    recent_table: Entity<gpui_kit::component::table::TableState<place_pages::table::LocationTable>>,
-    favorites_table:
-        Entity<gpui_kit::component::table::TableState<place_pages::table::LocationTable>>,
-    network_table:
-        Entity<gpui_kit::component::table::TableState<place_pages::table::LocationTable>>,
-    network: place_pages::Network,
-    favorites_loading: bool,
-    trash: recycle::State,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl Browser {
@@ -396,198 +347,52 @@ impl Browser {
         // Root plugins are captured when this window's root is created, which
         // happens after the view is built, so the hint layer is installed here.
         ui::keytips::install(cx);
-        let focus = cx.focus_handle();
-        focus.focus(window, cx);
-        let path_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder(i18n::text("path-placeholder", cx)));
-        let filter_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(i18n::text("filter-placeholder", cx))
-        });
-        let settings_view = cx
-            .new(|cx| settings::View::new(preferences.clone(), tokens::SIDEBAR_WIDTH, window, cx));
-        let theme_reload =
-            gds::appearance::theme::HotReload::shared(preferences.appearance.clone(), window, cx);
-        let file_table = table::FileTable::make_state(cx.entity().downgrade(), window, cx);
-        let volume_table =
-            devices::table::VolumeTable::make_state(cx.entity().downgrade(), window, cx);
-        let trash = recycle::State::new(cx.entity().downgrade(), window, cx);
-        let recent_table = place_pages::table::LocationTable::make_state(
-            cx.entity().downgrade(),
-            Collection::Recent,
-            window,
-            cx,
-        );
-        let favorites_table = place_pages::table::LocationTable::make_state(
-            cx.entity().downgrade(),
-            Collection::Favorites,
-            window,
-            cx,
-        );
-        let network_table = place_pages::table::LocationTable::make_state(
-            cx.entity().downgrade(),
-            Collection::Network,
-            window,
-            cx,
-        );
-        let column_editor = cx.new(|_| columns::Editor::new());
-        let thumbnails = cx.new(|_| ui::thumbnail::Cache::default());
-        cx.observe(&thumbnails, |_, _, cx| cx.notify()).detach();
-        let preview = cx.new(|cx| preview::View::new(thumbnails.clone(), cx));
-        let rename = cx.new(|cx| rename::State::new(window, cx));
-        let storage = storage::Service::shared(runtime.clone(), cx);
-        let sidebar_split = cx.new(|cx| {
-            ui::split::State::new(
-                preferences.files.sidebar.tabs_height,
-                sidebar::MIN_TABS_HEIGHT,
-                sidebar::MIN_DEVICES_HEIGHT,
-                cx,
-            )
-        });
-        let terminal_split = cx.new(|cx| {
-            let mut split = ui::split::State::new(
-                preferences.files.terminal_content_height,
-                terminal::MIN_CONTENT_HEIGHT,
-                terminal::MIN_DOCK_HEIGHT,
-                cx,
-            );
-            split.default_bottom(terminal::DEFAULT_DOCK_HEIGHT);
-            split
-        });
-        Self::install_terminal_close_handler(window, cx);
-        let subscriptions = vec![
-            cx.observe(&terminal_split, |_, _, cx| cx.notify()),
-            cx.subscribe(&terminal_split, Self::on_terminal_split),
-            cx.subscribe_in(&path_input, window, Self::on_path_input),
-            cx.subscribe_in(&filter_input, window, Self::on_filter_input),
-            cx.subscribe_in(&settings_view, window, Self::on_settings_event),
-            cx.observe(&storage, Self::on_storage_changed),
-            cx.observe(&sidebar_split, |_, _, cx| cx.notify()),
-            cx.subscribe(&sidebar_split, Self::on_sidebar_split),
-            // Refresh both the footer contents and cut markers on activation.
-            cx.observe_window_activation(window, |this, window, cx| {
-                if window.is_window_active() {
-                    file_clipboard::refresh(cx);
-                } else {
-                    // An Alt release outside this window is never delivered
-                    // here, so hint labels must not survive deactivation.
-                    ui::keytips::release(window, cx);
-                    this.cancel_marquee(cx);
-                    drag_drop::cancel_tab_hover(cx);
-                    // A release outside this window is never delivered, so an
-                    // armed tab prefix must not survive into the next focus and
-                    // commit a cycle the user never finished.
-                    this.tab_prefix = None;
-                    // The close controls follow the same press state, and a
-                    // release outside this window would leave them showing.
-                    if this.held_modifier.take().is_some() {
-                        cx.notify();
-                    }
-                }
-            }),
-        ];
-        let (places, state_error) = match places {
-            Ok(places) => (places, None),
-            Err(error) => (Places::default(), Some(error.to_string())),
-        };
-        if let Some(shutdown) = places.shutdown() {
-            let runtime = runtime.clone();
-            App::on_app_quit(cx, move |_| {
-                let shutdown = shutdown.clone();
-                let runtime = runtime.clone();
-                async move {
-                    if let Err(error) = runtime
-                        .spawn(async move { shutdown.run().await })
-                        .await
-                        .map_err(crate::entities::location::places::Error::from)
-                        .and_then(std::convert::identity)
-                    {
-                        tracing::error!(%error, "Cannot save Files state during shutdown");
-                    }
-                }
-            })
-            .detach();
-        }
+        let host = window::State::new(runtime, window, cx);
+        let settings = settings::State::new(preferences, window, cx);
         let mut this = Self {
-            connector: cx.new(|_| crate::features::connect_server::Connector::new(runtime.clone())),
-            window: window.window_handle(),
-            remote_requests: std::collections::HashMap::new(),
-            runtime,
-            desktop: desktop::Desktop::default(),
-            root_focus: cx.focus_handle(),
-            focus,
-            regions: regions::State::new(cx),
-            path_input,
-            filter_input,
-            filter_sync_pending: false,
-            preview,
-            thumbnails,
-            rename,
-            settings_view,
-            theme_reload,
-            file_table,
-            marquee: marquee::State::default(),
-            column_editor,
-            preferences,
-            pinned_paths: places.pinned.iter().map(PathBuf::from).collect(),
-            places,
-            places_load_error: state_error.clone(),
-            places_saving: false,
-            storage,
-            sidebar_split,
-            pending_removals: Vec::new(),
-            home,
-            tabs: Vec::new(),
-            volume_table,
-            volume_defaults: std::collections::HashMap::new(),
-            active_id: 0,
-            next_id: 1,
-            hovered_tab: None,
-            tab_prefix: None,
-            sidebar_collapsed: false,
-            held_modifier: None,
-            menu_open: false,
-            keyboard_menu: None,
-            sort_menu: None,
-            volume_menu_focus: None,
-            settings_open: false,
-            terminal: None,
-            terminal_visible: false,
-            terminal_maximized: false,
-            terminal_split,
-            terminal_close_pending: None,
-            terminal_closing: false,
-            path_editing: false,
-            file_operation_in_progress: false,
-            remote_paste_cancel: None,
-            file_operation_paths: Vec::new(),
+            locations: locations::State::new(home, places, &host.runtime, cx),
+            tabs: tabs::State::default(),
+            sidebar: sidebar::State::new(&settings.preferences, cx),
+            toolbar: toolbar::State::new(window, cx),
+            files: content::State::new(window, cx),
+            collections: place_pages::State::new(window, cx),
+            devices: devices::State::new(host.runtime.clone(), window, cx),
+            remote: remote::State::new(host.runtime.clone(), cx),
+            menus: menu::State::default(),
+            operations: file_actions::State::new(window, cx),
+            terminal: terminal::State::new(&settings.preferences, cx),
             picker: picker.map(|options| picker::State::new(options, window, cx)),
-            recent_table,
-            favorites_table,
-            network_table,
-            network: place_pages::Network::default(),
-            favorites_loading: false,
-            trash,
-            _subscriptions: subscriptions,
+            window: host,
+            settings,
         };
+        Self::install_terminal_close_handler(window, cx);
+        this.subscribe(window, cx);
         this.install_remote_events(cx);
         if let Some(error) = startup_error {
             notifications::error(error, cx);
         }
-        if let Some(error) = state_error {
+        if let Some(error) = this.locations.load_error.clone() {
             // Reported once; `save_places` stays disabled so an unreadable database
             // is never overwritten with empty state.
             notifications::error(error, cx);
         }
-        let pinned: Vec<_> = this.places.pinned.iter().map(PathBuf::from).collect();
+        let pinned: Vec<_> = this
+            .locations
+            .places
+            .pinned
+            .iter()
+            .map(PathBuf::from)
+            .collect();
         for path in pinned {
             this.open_tab(path, true, window, cx);
         }
         if let Some(tab) = this
             .tabs
+            .items
             .iter()
             .find(|tab| tab.path() == Some(start.as_path()))
         {
-            this.active_id = tab.id;
+            this.tabs.active_id = tab.id;
         } else {
             this.open_tab(start, false, window, cx);
         }
@@ -596,10 +401,10 @@ impl Browser {
     }
 
     fn current_tab(&self) -> Option<&OpenTab> {
-        self.tab_slot(self.active_id)
+        self.tab_slot(self.tabs.active_id)
     }
     fn current_tab_mut(&mut self) -> Option<&mut OpenTab> {
-        self.tab_slot_mut(self.active_id)
+        self.tab_slot_mut(self.tabs.active_id)
     }
     fn collection(&self) -> Option<Collection> {
         self.current_tab()
@@ -612,14 +417,14 @@ impl Browser {
         self.current_tab_mut().filter(|tab| tab.path().is_some())
     }
     fn tab_slot(&self, id: u64) -> Option<&OpenTab> {
-        self.tabs.iter().find(|slot| slot.id == id)
+        self.tabs.items.iter().find(|slot| slot.id == id)
     }
     fn tab_slot_mut(&mut self, id: u64) -> Option<&mut OpenTab> {
-        self.tabs.iter_mut().find(|slot| slot.id == id)
+        self.tabs.items.iter_mut().find(|slot| slot.id == id)
     }
 
     fn width(&self) -> f32 {
-        if self.sidebar_collapsed {
+        if self.sidebar.collapsed {
             tokens::COLLAPSED_SIDEBAR_WIDTH
         } else {
             tokens::SIDEBAR_WIDTH
@@ -628,7 +433,7 @@ impl Browser {
 
     fn current_location(&self) -> Location {
         self.current_tab()
-            .map_or_else(|| Location::from(&self.home), OpenTab::location)
+            .map_or_else(|| Location::from(&self.locations.home), OpenTab::location)
     }
 
     fn current_place_location(&self) -> Location {
@@ -639,7 +444,9 @@ impl Browser {
     }
 
     fn details_visible(&self) -> bool {
-        self.places.details_visible(self.current_location())
+        self.locations
+            .places
+            .details_visible(self.current_location())
     }
 
     fn current_path(&self) -> Option<PathBuf> {
@@ -678,19 +485,22 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         let resolved = self.resolve_location(&location, cx);
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.tabs.next_id;
+        self.tabs.next_id += 1;
         let mut slot = OpenTab::new(id, resolved.location, resolved.path, pinned);
         slot.device = resolved.device;
         slot.picker = self.picker_projection();
-        self.tabs.push(slot);
-        self.active_id = id;
-        self.settings_open = false;
-        self.path_editing = false;
-        self.regions.tabs_scroll.scroll_to_item(self.tabs.len() - 1);
+        self.tabs.items.push(slot);
+        self.tabs.active_id = id;
+        self.settings.open = false;
+        self.toolbar.path.editing = false;
+        self.sidebar
+            .regions
+            .tabs_scroll
+            .scroll_to_item(self.tabs.items.len() - 1);
         if let Some(window) = window {
             self.sync_filter_input(window, cx);
-            self.focus.focus(window, cx);
+            self.window.focus.focus(window, cx);
         }
         self.dismiss_tab_prefix();
         self.refresh_tab(id, cx);
@@ -704,7 +514,7 @@ impl Browser {
             self.load_remote(id, request.clone(), address.clone(), cx);
             return;
         }
-        self.remote_requests.remove(&id);
+        self.remote.requests.remove(&id);
         let expected = self.resolve_location(request.location(), cx).device;
         if request.path().is_none() {
             self.finish_request(id, &request, Ok(None), expected, cx);
@@ -734,9 +544,9 @@ impl Browser {
     ) {
         let valid = expected.as_ref().is_none_or(|device| {
             device.availability != devices::Availability::Available
-                || device.is_current(&self.storage.read(cx).snapshot)
+                || device.is_current(&self.devices.service.read(cx).snapshot)
         });
-        let Some(slot) = self.tabs.iter_mut().find(|slot| slot.id == id) else {
+        let Some(slot) = self.tabs.items.iter_mut().find(|slot| slot.id == id) else {
             return;
         };
         if !valid {
@@ -757,20 +567,20 @@ impl Browser {
                 slot.device = expected;
                 slot.filter = slot.navigation.view().filter.clone();
                 slot.anchor = None;
-                slot.sort = columns::sort_for(&slot.location(), &self.places);
+                slot.sort = columns::sort_for(&slot.location(), &self.locations.places);
                 slot.refresh_visible();
                 slot.restore_scroll();
                 let location = slot
                     .path()
                     .map(Location::from)
                     .unwrap_or_else(|| slot.location());
-                self.places.record(location);
+                self.locations.places.record(location);
                 self.save_places(cx);
             }
             Err(error) => report_load_failure(error.to_string(), cx),
         }
-        if id == self.active_id {
-            self.filter_sync_pending = true;
+        if id == self.tabs.active_id {
+            self.toolbar.filter.sync_pending = true;
             self.enter_location(cx);
         }
         self.finish_pending_refresh(id, cx);
@@ -778,7 +588,7 @@ impl Browser {
     }
 
     fn navigate(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        self.navigate_tab(self.active_id, path, cx);
+        self.navigate_tab(self.tabs.active_id, path, cx);
     }
     fn navigate_tab(&mut self, id: u64, path: PathBuf, cx: &mut Context<Self>) {
         self.navigate_tab_inner(id, path, false, cx);
@@ -816,8 +626,8 @@ impl Browser {
         let request = slot
             .navigation
             .prepare_open(resolved.location, resolved.path, options);
-        if id == self.active_id {
-            self.path_editing = false;
+        if id == self.tabs.active_id {
+            self.toolbar.path.editing = false;
         }
         self.start_request(id, request, cx);
         file_clipboard::refresh(cx);
@@ -825,99 +635,8 @@ impl Browser {
 
     fn read_options(&self, id: u64) -> ReadOptions {
         ReadOptions {
-            show_hidden: self.preferences.files.show_hidden
+            show_hidden: self.settings.preferences.files.show_hidden
                 || self.tab_slot(id).is_some_and(|slot| slot.reveal_hidden),
-        }
-    }
-
-    fn on_path_input(
-        &mut self,
-        input: &Entity<InputState>,
-        event: &InputEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if matches!(event, InputEvent::Blur) {
-            if self.path_editing && !notifications::is_focused(window, cx) {
-                self.path_editing = false;
-                file_clipboard::refresh(cx);
-                cx.notify();
-            }
-            return;
-        }
-        if !matches!(event, InputEvent::PressEnter { .. }) {
-            return;
-        }
-        let value = input.read(cx).value();
-        if ["location:", "file:", "sftp:", "smb:"]
-            .iter()
-            .any(|scheme| value.starts_with(scheme))
-        {
-            match Location::from_uri(&value) {
-                Ok(Location::Directory(path)) => {
-                    self.navigate(PathBuf::from(path), cx);
-                    Self::restore_file_focus(cx.entity().downgrade(), self.active_id, window);
-                }
-                Ok(location) => self.show_location(location, window, cx),
-                Err(error) => notifications::error(error.to_string(), cx),
-            }
-            return;
-        }
-        let current = self.current_path().unwrap_or_else(|| self.home.clone());
-        let target = if value.as_ref() == current.to_string_lossy() {
-            Ok(current.clone())
-        } else {
-            navigation::resolve_input(value.as_ref(), &current, Some(&self.home))
-        };
-        match target {
-            Ok(path) => {
-                self.navigate(path, cx);
-                Self::restore_file_focus(cx.entity().downgrade(), self.active_id, window);
-                file_clipboard::refresh(cx);
-            }
-            Err(error) => {
-                notifications::Report::new(
-                    notifications::Level::Error,
-                    i18n::text("load-failed", cx),
-                )
-                .detail(error.to_string())
-                .replacing::<LoadNotice>()
-                .show(cx);
-                cx.notify();
-            }
-        }
-    }
-
-    fn on_filter_input(
-        &mut self,
-        input: &Entity<InputState>,
-        event: &InputEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if matches!(event, InputEvent::Blur) {
-            file_clipboard::refresh(cx);
-            return;
-        }
-        if !matches!(event, InputEvent::Change) {
-            return;
-        }
-        let value = input.read(cx).value().to_string();
-        if let Some(slot) = self.active_mut() {
-            slot.filter = value;
-            slot.refresh_visible();
-        }
-        cx.notify();
-    }
-
-    fn sync_filter_input(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let filter = self
-            .active()
-            .map(|tab| tab.filter.clone())
-            .unwrap_or_default();
-        if self.filter_input.read(cx).value().as_ref() != filter {
-            self.filter_input
-                .update(cx, |input, cx| input.set_value(filter, window, cx));
         }
     }
 
@@ -935,13 +654,13 @@ impl Browser {
     /// connect. A row advertises exactly this target, so a hint never names a
     /// tab the press would not really switch to.
     fn tab_cycle_targets(&self) -> (Option<u64>, Option<u64>) {
-        if self.settings_open {
+        if self.settings.open {
             return (None, None);
         }
-        let ids: Vec<u64> = self.tabs.iter().map(|tab| tab.id).collect();
+        let ids: Vec<u64> = self.tabs.items.iter().map(|tab| tab.id).collect();
         (
-            cycle_neighbour(&ids, self.active_id, true),
-            cycle_neighbour(&ids, self.active_id, false),
+            cycle_neighbour(&ids, self.tabs.active_id, true),
+            cycle_neighbour(&ids, self.tabs.active_id, false),
         )
     }
 
@@ -950,7 +669,7 @@ impl Browser {
     /// Only the Ctrl group counts: Alt alone, and the Ctrl+Alt mix that AltGr
     /// reports, keep the close controls hidden just as they keep Ctrl hints off.
     fn revealing_tab_close(&self) -> bool {
-        self.held_modifier == Some(ui::HeldModifier::Ctrl)
+        self.window.held_modifier == Some(ui::HeldModifier::Ctrl)
     }
 
     /// The modifier group the window holds right now, or none while it is out of
@@ -966,19 +685,19 @@ impl Browser {
         if self.tab_slot(id).is_none() {
             return;
         }
-        self.save_tab_view(self.active_id, cx);
-        self.active_id = id;
-        self.settings_open = false;
-        self.path_editing = false;
-        if let Some(index) = self.tabs.iter().position(|slot| slot.id == id) {
-            self.regions.tabs_scroll.scroll_to_item(index);
+        self.save_tab_view(self.tabs.active_id, cx);
+        self.tabs.active_id = id;
+        self.settings.open = false;
+        self.toolbar.path.editing = false;
+        if let Some(index) = self.tabs.items.iter().position(|slot| slot.id == id) {
+            self.sidebar.regions.tabs_scroll.scroll_to_item(index);
         }
         self.sync_filter_input(window, cx);
         self.refresh_if_hidden_changed(cx);
         self.enter_location(cx);
         file_clipboard::refresh(cx);
         self.dismiss_tab_prefix();
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -991,7 +710,7 @@ impl Browser {
             .is_some_and(|tab| {
                 tab.directory()
                     .is_some_and(|directory| directory.options.show_hidden)
-                    != (self.preferences.files.show_hidden
+                    != (self.settings.preferences.files.show_hidden
                         || self.active().is_some_and(|slot| slot.reveal_hidden))
             });
         if refresh_hidden {
@@ -1000,104 +719,46 @@ impl Browser {
     }
 
     fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.tabs.iter().any(|tab| tab.id == id) {
+        if !self.tabs.items.iter().any(|tab| tab.id == id) {
             return;
         }
         self.close_tab_approved(id, window, cx);
     }
 
     fn close_tab_approved(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
+        let Some(index) = self.tabs.items.iter().position(|tab| tab.id == id) else {
             return;
         };
-        let was_active = self.active_id == id;
-        self.tabs.remove(index);
-        if self.tabs.is_empty() {
-            self.open_tab(self.home.clone(), false, window, cx);
+        let was_active = self.tabs.active_id == id;
+        self.tabs.items.remove(index);
+        if self.tabs.items.is_empty() {
+            self.open_tab(self.locations.home.clone(), false, window, cx);
         } else if was_active {
-            self.active_id = self.tabs[index.min(self.tabs.len() - 1)].id;
+            self.tabs.active_id = self.tabs.items[index.min(self.tabs.items.len() - 1)].id;
         }
-        self.path_editing = false;
+        self.toolbar.path.editing = false;
         self.sync_filter_input(window, cx);
-        self.focus.focus(window, cx);
+        self.window.focus.focus(window, cx);
         self.sync_pinned();
         self.save_places(cx);
         cx.notify();
     }
 
     fn toggle_pin(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(slot) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+        let Some(slot) = self.tabs.items.iter_mut().find(|tab| tab.id == id) else {
             return;
         };
         slot.pinned = !slot.pinned;
-        self.tabs.sort_by_key(|slot| !slot.pinned);
+        self.tabs.items.sort_by_key(|slot| !slot.pinned);
         self.sync_pinned();
         self.save_places(cx);
         cx.notify();
     }
 
-    fn sync_pinned(&mut self) {
-        let current: Vec<_> = self
-            .tabs
-            .iter()
-            .filter(|tab| tab.pinned)
-            .filter_map(|tab| tab.path().map(Path::to_path_buf))
-            .collect();
-        // Compare this window's tabs rather than the latest database snapshot,
-        // which can contain pins added by another window.
-        for path in &self.pinned_paths {
-            if !current.contains(path) {
-                self.places.set_pinned(path, false);
-            }
-        }
-        for path in &current {
-            if !self.pinned_paths.contains(path) {
-                self.places.set_pinned(path, true);
-            }
-        }
-        self.pinned_paths = current;
-    }
-
-    fn save_places(&mut self, cx: &mut Context<Self>) {
-        if self.places_load_error.is_some() || self.places_saving {
-            return;
-        }
-        let Some(save) = self.places.take_save() else {
-            return;
-        };
-        self.places_saving = true;
-        let work = self.runtime.spawn(async move { save.run().await });
-        cx.spawn(async move |this, cx| {
-            let result = work
-                .await
-                .map_err(crate::entities::location::places::Error::from)
-                .and_then(std::convert::identity);
-            let _ = this.update(cx, |browser, cx| {
-                browser.places_saving = false;
-                match result {
-                    Ok(snapshot) => {
-                        let views_changed = browser.places.views != snapshot.views
-                            || browser.places.defaults != snapshot.defaults;
-                        browser.places.accept(snapshot);
-                        if views_changed {
-                            browser.reproject_columns(cx);
-                        }
-                        browser.save_places(cx);
-                    }
-                    Err(error) => {
-                        notifications::Report::new(notifications::Level::Error, error.to_string())
-                            .replacing::<PlacesNotice>()
-                            .show(cx);
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
-        self.places.toggle_favorite(self.current_place_location());
+        self.locations
+            .places
+            .toggle_favorite(self.current_place_location());
         self.save_places(cx);
         cx.notify();
     }
@@ -1107,32 +768,13 @@ impl Browser {
     /// `Ctrl+D` works in both directions: it adds the location when it is not
     /// bookmarked and removes it when it is, exactly like the star button.
     fn favorite_current_location(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open
+        if self.settings.open
             || self.current_tab().is_none_or(|slot| slot.is_loading())
             || self.editing_input_focused(window, cx)
         {
             return;
         }
         self.toggle_favorite(cx);
-    }
-
-    /// A path or filter edit owns its keys; workspace shortcuts stay out of it.
-    fn editing_input_focused(&self, window: &Window, cx: &App) -> bool {
-        self.editing_path(window, cx)
-            || self
-                .filter_input
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window)
-    }
-
-    /// Whether the path editor is open or holds focus.
-    ///
-    /// Its text lives only in the widget and losing focus discards the
-    /// uncommitted path, so commands that would move focus stay out of it. The
-    /// filter box commits on every change and keeps its word instead.
-    fn editing_path(&self, window: &Window, cx: &App) -> bool {
-        self.path_editing || self.path_input.read(cx).focus_handle(cx).is_focused(window)
     }
 
     fn activate_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -1154,10 +796,10 @@ impl Browser {
             File(desktop::OpenOutcome),
         }
 
-        let target_tab = self.active_id;
+        let target_tab = self.tabs.active_id;
         let worker_path = path.clone();
-        let desktop = self.desktop.clone();
-        let work = AbortOnDropHandle::new(self.runtime.spawn(async move {
+        let desktop = self.window.desktop.clone();
+        let work = AbortOnDropHandle::new(self.window.runtime.spawn(async move {
             let metadata =
                 tokio::fs::metadata(&worker_path)
                     .await
@@ -1182,7 +824,7 @@ impl Browser {
                 match result {
                     Ok(Activation::Directory) => this.navigate_tab(target_tab, path, cx),
                     Ok(Activation::File(desktop::OpenOutcome::Opened)) => {
-                        this.places.record(&path);
+                        this.locations.places.record(&path);
                         this.save_places(cx);
                     }
                     Ok(Activation::File(desktop::OpenOutcome::Cancelled)) => {}
@@ -1204,7 +846,7 @@ impl Browser {
         if !self.device_path_available(&path, cx) {
             return;
         }
-        let desktop = self.desktop.clone();
+        let desktop = self.window.desktop.clone();
         let work = cx
             .background_executor()
             .spawn(async move { desktop.open_terminal(&path) });
@@ -1225,67 +867,11 @@ impl Browser {
         .detach();
     }
 
-    fn on_settings_event(
-        &mut self,
-        _: &Entity<settings::View>,
-        event: &settings::Event,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let settings::Event::Apply(preferences) = event;
-        self.apply_preferences(preferences.clone(), window, cx);
-    }
-
-    fn apply_preferences(
-        &mut self,
-        preferences: configuration::Preferences,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if preferences == self.preferences {
-            return;
-        }
-        let language_changed = preferences.language != self.preferences.language;
-        let appearance_changed = preferences.appearance != self.preferences.appearance;
-        let result = preferences.apply_shared(&self.preferences, cx);
-        if let Err(error) = result {
-            let previous = self.preferences.clone();
-            self.settings_view
-                .update(cx, |view, cx| view.set_preferences(previous, window, cx));
-            report_settings_failure("settings-apply-failed", &error, cx);
-            cx.notify();
-            return;
-        }
-        let hidden_changed = preferences.files.show_hidden != self.preferences.files.show_hidden;
-        self.preferences = preferences.clone();
-        self.apply_terminal_preferences(cx);
-        if appearance_changed {
-            self.theme_reload.update(cx, |reload, cx| {
-                reload.set_appearance(preferences.appearance.clone(), window, cx);
-            });
-        }
-        if language_changed {
-            // The shared language install succeeded; cached placeholder text and
-            // the native window title are not read during render, so push them.
-            self.sync_localized_fields(window, cx);
-        }
-        let save_error = configuration::save(&preferences).err();
-        self.settings_view
-            .update(cx, |view, cx| view.set_preferences(preferences, window, cx));
-        if let Some(error) = save_error {
-            report_settings_failure("settings-save-failed", &error, cx);
-        }
-        if hidden_changed {
-            self.refresh_current(cx);
-        }
-        cx.notify();
-    }
-
     fn refresh_current(&mut self, cx: &mut Context<Self>) {
         if self.collection().is_some() {
             return;
         }
-        self.refresh_tab(self.active_id, cx);
+        self.refresh_tab(self.tabs.active_id, cx);
     }
 
     fn refresh_tab(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -1312,12 +898,13 @@ impl Browser {
     }
 
     fn refresh_after_file_operation(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
-        self.storage
+        self.devices
+            .service
             .update(cx, |service, cx| service.refresh_capacity(cx));
         let parents: std::collections::HashSet<_> =
             paths.iter().filter_map(|path| path.parent()).collect();
         let mut ready = Vec::new();
-        for slot in &mut self.tabs {
+        for slot in &mut self.tabs.items {
             let affected = slot.path().is_some_and(|current| {
                 parents.contains(current) || paths.iter().any(|path| current.starts_with(path))
             });
@@ -1354,11 +941,11 @@ impl Browser {
         }
         // A dialog owns focus; its own Enter/Esc handling and buttons remain
         // active, but workspace shortcuts must not run behind it.
-        if self.rename.read(cx).is_open() || window.has_active_dialog(cx) {
+        if self.operations.rename.read(cx).is_open() || window.has_active_dialog(cx) {
             return;
         }
         if command == Command::Cancel
-            && let Some(cancel) = &self.remote_paste_cancel
+            && let Some(cancel) = &self.operations.remote_paste_cancel
         {
             cancel.cancel();
             return;
@@ -1384,25 +971,25 @@ impl Browser {
         }
         // Window actions can win their bindings before popup key listeners.
         // Close the controlled menu before handling its chosen command.
-        if self.menu_open && command != Command::Menu {
-            self.menu_open = false;
+        if self.menus.application_open && command != Command::Menu {
+            self.menus.application_open = false;
             if command == Command::Cancel {
-                self.focus.focus(window, cx);
+                self.window.focus.focus(window, cx);
                 cx.notify();
                 return;
             }
         }
-        if self.keyboard_menu.is_some() && command != Command::ContextMenu {
-            self.keyboard_menu = None;
-            self.focus.focus(window, cx);
+        if self.menus.context.is_some() && command != Command::ContextMenu {
+            self.menus.context = None;
+            self.window.focus.focus(window, cx);
             if command == Command::Cancel {
                 cx.notify();
                 return;
             }
         }
-        if self.sort_menu.is_some() && command != Command::Sort {
-            self.sort_menu = None;
-            self.focus.focus(window, cx);
+        if self.menus.sort.is_some() && command != Command::Sort {
+            self.menus.sort = None;
+            self.window.focus.focus(window, cx);
             if command == Command::Cancel {
                 cx.notify();
                 return;
@@ -1432,7 +1019,7 @@ impl Browser {
                 return;
             }
         }
-        if !self.settings_open
+        if !self.settings.open
             && !self.editing_input_focused(window, cx)
             && !window.has_active_dialog(cx)
         {
@@ -1456,40 +1043,45 @@ impl Browser {
                 // Settings keeps its own way back, and the path editor's text
                 // lives only in its widget: opening the menu there would discard
                 // it. Every location page keeps the menu.
-                if self.settings_open || self.editing_path(window, cx) {
+                if self.settings.open || self.editing_path(window, cx) {
                     return;
                 }
-                if self.menu_open {
+                if self.menus.application_open {
                     // The menu is about to be unmounted; take focus back before
                     // its own handle disappears.
-                    self.menu_open = false;
-                    self.focus.focus(window, cx);
+                    self.menus.application_open = false;
+                    self.window.focus.focus(window, cx);
                 } else {
-                    self.menu_open = true;
+                    self.menus.application_open = true;
                 }
             }
             Command::Settings => {
                 // Leaving the file workspace unmounts the menu, so take focus
                 // back from it before its handle disappears.
-                if self.menu_open {
-                    self.menu_open = false;
-                    self.focus.focus(window, cx);
+                if self.menus.application_open {
+                    self.menus.application_open = false;
+                    self.window.focus.focus(window, cx);
                 }
                 self.reset_tab_prefix();
                 // The content region is about to unmount. Keep window actions
                 // reachable until a settings control takes focus.
-                self.root_focus.focus(window, cx);
-                self.settings_open = true;
-                self.path_editing = false;
-                self.settings_view.update(cx, |view, cx| {
-                    view.set_preferences(self.preferences.clone(), window, cx)
+                self.window.root_focus.focus(window, cx);
+                self.settings.open = true;
+                self.toolbar.path.editing = false;
+                self.settings.view.update(cx, |view, cx| {
+                    view.set_preferences(self.settings.preferences.clone(), window, cx)
                 });
             }
-            Command::NewTab => self.open_tab(self.home.clone(), false, window, cx),
+            Command::NewTab => self.open_tab(self.locations.home.clone(), false, window, cx),
             Command::CloseTab => {
                 // Only an ordinary visible tab can claim Ctrl+W.
-                if self.tabs.iter().any(|tab| tab.id == self.active_id) {
-                    self.close_tab(self.active_id, window, cx);
+                if self
+                    .tabs
+                    .items
+                    .iter()
+                    .any(|tab| tab.id == self.tabs.active_id)
+                {
+                    self.close_tab(self.tabs.active_id, window, cx);
                 }
             }
             // Ctrl+Tab arms the file tab prefix while browsing; Settings keeps
@@ -1497,27 +1089,29 @@ impl Browser {
             // workspace context.
             Command::NextTab | Command::PreviousTab => {
                 let backwards = matches!(command, Command::PreviousTab);
-                if self.settings_open {
-                    self.settings_view
+                if self.settings.open {
+                    self.settings
+                        .view
                         .update(cx, |view, cx| view.cycle_page(backwards, window, cx));
                 } else {
                     self.arm_tab_prefix(backwards, window, cx);
                 }
             }
             Command::Sidebar => {
-                self.sidebar_collapsed = !self.sidebar_collapsed;
+                self.sidebar.collapsed = !self.sidebar.collapsed;
                 let width = self.width();
-                self.settings_view
+                self.settings
+                    .view
                     .update(cx, |view, cx| view.set_sidebar_width(width, cx));
             }
             Command::Terminal => self.toggle_terminal(window, cx),
             Command::EditLocation => {
-                self.path_editing = true;
+                self.toolbar.path.editing = true;
                 let path = self
                     .current_path()
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_else(|| self.current_location().display_address());
-                self.path_input.update(cx, |input, cx| {
+                self.toolbar.path.input.update(cx, |input, cx| {
                     input.set_value(path, window, cx);
                     input.focus(window, cx);
                     input.select_all(window, cx);
@@ -1527,7 +1121,9 @@ impl Browser {
                 self.navigate_history(command, cx)
             }
             Command::Refresh => {
-                self.storage.update(cx, |service, cx| service.refresh(cx));
+                self.devices
+                    .service
+                    .update(cx, |service, cx| service.refresh(cx));
                 if self.collection() == Some(Collection::Trash) {
                     self.refresh_trash(cx);
                 } else if self.collection() == Some(Collection::Network) {
@@ -1539,8 +1135,8 @@ impl Browser {
                 }
             }
             Command::Filter => {
-                if !self.settings_open && self.collection().is_none() {
-                    self.filter_input.update(cx, |input, cx| {
+                if !self.settings.open && self.collection().is_none() {
+                    self.toolbar.filter.input.update(cx, |input, cx| {
                         input.focus(window, cx);
                         input.select_all(window, cx);
                     });
@@ -1613,15 +1209,19 @@ impl Browser {
                 }
             }
             Command::Details => {
-                if !self.settings_open
+                if !self.settings.open
                     && self.collection().is_none()
                     && !window.has_active_dialog(cx)
                 {
                     let visible = !self.details_visible();
-                    self.places.set_details(self.current_location(), visible);
+                    self.locations
+                        .places
+                        .set_details(self.current_location(), visible);
                     self.save_places(cx);
                     if !visible {
-                        self.preview.update(cx, |preview, cx| preview.clear(cx));
+                        self.files
+                            .preview
+                            .update(cx, |preview, cx| preview.clear(cx));
                     }
                 }
             }
@@ -1633,7 +1233,7 @@ impl Browser {
                 };
                 self.set_view_mode(mode, window, cx);
             }
-            Command::Sort => self.set_sort_menu_open(self.sort_menu.is_none(), window, cx),
+            Command::Sort => self.set_sort_menu_open(self.menus.sort.is_none(), window, cx),
             Command::Columns => {
                 if !self.editing_input_focused(window, cx)
                     && self.collection().is_none()
@@ -1698,12 +1298,12 @@ impl Browser {
                 self.run_volume_command(command, window, cx);
             }
             Command::Hidden => {
-                let mut preferences = self.preferences.clone();
+                let mut preferences = self.settings.preferences.clone();
                 preferences.files.show_hidden = !preferences.files.show_hidden;
                 self.apply_preferences(preferences, window, cx);
             }
             Command::Open => {
-                if self.regions.sidebar_focused(window, cx) {
+                if self.sidebar.regions.sidebar_focused(window, cx) {
                     self.activate_region(window, cx);
                 } else if self.collection() == Some(Collection::Volumes) {
                     if self.list_keys_available(window, cx)
@@ -1733,8 +1333,9 @@ impl Browser {
                 }
             }
             Command::Cancel => {
-                if self.connector.read(cx).connecting {
-                    self.connector
+                if self.remote.connector.read(cx).connecting {
+                    self.remote
+                        .connector
                         .update(cx, |connector, cx| connector.cancel(cx));
                     return;
                 }
@@ -1745,42 +1346,44 @@ impl Browser {
                 // selection stays intact.
                 drag_drop::cancel_tab_hover(cx);
                 if !cx.stop_active_drag(window) {
-                    if self.regions.sidebar_focused(window, cx) {
-                        if !self.settings_open {
+                    if self.sidebar.regions.sidebar_focused(window, cx) {
+                        if !self.settings.open {
                             self.cancel_clipboard_cut(cx);
                         }
-                        self.focus.focus(window, cx);
+                        self.window.focus.focus(window, cx);
                         cx.notify();
                         return;
                     }
                     if self.cancel_marquee(cx) {
-                        self.focus.focus(window, cx);
+                        self.window.focus.focus(window, cx);
                         return;
                     }
                     // Esc leaves a location page where it is: only the
                     // transient modes (settings, path editing) are cancelled.
                     // A picker leaves the window only once those are closed,
                     // so the first Esc still closes its own local modes.
-                    let local_mode = self.settings_open
-                        || self.path_editing
-                        || self.tab_prefix.is_some()
+                    let local_mode = self.settings.open
+                        || self.toolbar.path.editing
+                        || self.tabs.prefix.is_some()
                         || notifications::is_focused(window, cx)
                         || self
-                            .filter_input
+                            .toolbar
+                            .filter
+                            .input
                             .read(cx)
                             .focus_handle(cx)
                             .is_focused(window);
                     if !local_mode && self.cancel_clipboard_cut(cx) {
-                        self.focus.focus(window, cx);
+                        self.window.focus.focus(window, cx);
                         cx.notify();
                         return;
                     }
                     self.reset_tab_prefix();
-                    self.path_editing = false;
-                    self.settings_open = false;
+                    self.toolbar.path.editing = false;
+                    self.settings.open = false;
                     // Copy contents remain available after Escape.
                     file_clipboard::refresh(cx);
-                    self.focus.focus(window, cx);
+                    self.window.focus.focus(window, cx);
                     if self.picker.is_some() && !local_mode {
                         self.cancel_picker(cx);
                     }

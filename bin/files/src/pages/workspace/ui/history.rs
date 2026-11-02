@@ -71,7 +71,7 @@ impl Browser {
                                             .get(index)
                                             .is_some_and(|visit| visit.location == location)
                                 });
-                                this.focus.focus(window, cx);
+                                this.window.focus.focus(window, cx);
                                 if valid {
                                     this.navigate_history_entry(tab, index, cx);
                                 }
@@ -116,9 +116,9 @@ impl Browser {
             })
             .collect();
         self.discard_marquee();
-        self.menu_open = false;
-        self.keyboard_menu = None;
-        self.sort_menu = None;
+        self.menus.application_open = false;
+        self.menus.context = None;
+        self.menus.sort = None;
         cx.notify();
         entries
     }

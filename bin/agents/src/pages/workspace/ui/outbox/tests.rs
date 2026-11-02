@@ -151,3 +151,16 @@ fn cancelled_edits_and_failed_sends_keep_the_original_draft() {
     assert_eq!(outbox.len(), 2);
     assert!(outbox.advance(&idle(0), true).is_none());
 }
+
+impl SessionOutbox {
+    pub fn turn(&self) -> Option<TurnId> {
+        match &self.dispatch {
+            Dispatch::Submitting { turn, .. } => Some(*turn),
+            _ => None,
+        }
+    }
+
+    pub fn begin_edit(&mut self, composition: Draft) -> Option<Draft> {
+        self.begin_edit_at(0, composition)
+    }
+}

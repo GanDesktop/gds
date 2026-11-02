@@ -286,10 +286,10 @@ impl Browser {
         self.picker
             .as_ref()
             .is_some_and(|picker| !picker.completing && !picker.filter_menu_open)
-            && !self.settings_open
-            && !self.menu_open
-            && !self.path_editing
-            && !self.rename.read(cx).is_open()
+            && !self.settings.open
+            && !self.menus.application_open
+            && !self.toolbar.path.editing
+            && !self.operations.rename.read(cx).is_open()
             && !window.has_active_dialog(cx)
     }
 
@@ -421,7 +421,7 @@ impl Browser {
     /// Apply one projection to every file slot, dropping a selection the new
     /// group no longer shows.
     fn reproject_picker(&mut self, projection: &Projection) {
-        for slot in &mut self.tabs {
+        for slot in &mut self.tabs.items {
             slot.picker = Some(projection.clone());
             // A selection pending from a rename or a new folder is applied by
             // the refresh that follows it; consuming it now would drop it
