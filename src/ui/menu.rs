@@ -56,9 +56,7 @@ fn row_with_state(
             .and_then(|shortcut| shortcut.binding(window))
             .map(|binding| {
                 el! {
-                    .div { # "shortcut"; test_support; flex_shrink_0;
-                        opacity: $(if enabled { 1.0 } else { DISABLED_OPACITY });
-                    } [
+                    .div { # "shortcut"; test_support; flex_shrink_0; } [
                         $(ShortcutBadge::binding(binding)),
                     ]
                 }
@@ -75,6 +73,7 @@ fn row_with_state(
                 min_w: ROW_MIN_WIDTH.px;
                 gap: SHORTCUT_GAP.px;
                 text_size: SMALL;
+                opacity: $(if enabled { 1.0 } else { DISABLED_OPACITY });
             } [
                 .div { # "label"; test_support; flex_1; min_w_0; truncate } [$(label.clone())],
                 ..badge,
