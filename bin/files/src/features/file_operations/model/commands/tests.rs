@@ -9,34 +9,45 @@ fn keystroke(source: &'static str) -> Keystroke {
     Keystroke::parse(source).expect("bundled keystrokes are valid")
 }
 
-/// The refresh keycap follows the primary stroke while the compatibility one
-/// keeps working, and neither leaks into the settings workspace.
+/// Compatibility keys share their primary actions and workspace scope without
+/// replacing the Ctrl shortcuts shown by keycaps and tooltips.
 #[gpui_kit::test]
-fn refresh_displays_ctrl_r_and_keeps_f5(cx: &mut TestAppContext) {
+fn compatibility_keys_preserve_primary_shortcuts_and_workspace_scope(cx: &mut TestAppContext) {
     let keymap = Keymap::new(cx.update(|cx| bindings(cx)));
-    let action = Command::Refresh.action();
+    for (command, alias, primary_key, works_in_settings) in [
+        (Command::Filter, "f3", "f", false),
+        (Command::Terminal, "f4", "`", true),
+        (Command::Refresh, "f5", "r", false),
+        (Command::Sidebar, "f9", "b", true),
+    ] {
+        let action = command.action();
 
-    let displayed = keymap
-        .bindings_for_action(action.as_ref())
-        .last()
-        .expect("refresh is bound");
-    let displayed = displayed.keystrokes()[0].as_keystroke();
-    assert!(displayed.modifiers.control);
-    assert_eq!(displayed.key, "r");
+        let displayed = keymap
+            .bindings_for_action(action.as_ref())
+            .last()
+            .expect("command is bound");
+        let displayed = displayed.keystrokes()[0].as_keystroke();
+        assert!(displayed.modifiers.control);
+        assert_eq!(displayed.key, primary_key);
 
-    for source in [Command::Refresh.default_stroke(), "f5"] {
-        let (resolved, pending) =
-            keymap.bindings_for_input(&[keystroke(source)], &context(WORKSPACE_CONTEXT));
-        assert!(!pending, "{source} is not a prefix of a longer binding");
-        assert_eq!(resolved.len(), 1, "{source} resolves one binding");
-        assert!(
-            resolved[0].action().partial_eq(action.as_ref()),
-            "{source} runs refresh"
-        );
+        for source in [command.default_stroke(), alias] {
+            let (resolved, pending) =
+                keymap.bindings_for_input(&[keystroke(source)], &context(WORKSPACE_CONTEXT));
+            assert!(!pending, "{source} is not a prefix of a longer binding");
+            assert_eq!(resolved.len(), 1, "{source} resolves one binding");
+            assert!(
+                resolved[0].action().partial_eq(action.as_ref()),
+                "{source} runs {command:?}"
+            );
 
-        let (resolved, _) =
-            keymap.bindings_for_input(&[keystroke(source)], &context(SETTINGS_CONTEXT));
-        assert!(resolved.is_empty(), "{source} stays out of settings");
+            let (resolved, _) =
+                keymap.bindings_for_input(&[keystroke(source)], &context(SETTINGS_CONTEXT));
+            assert_eq!(
+                !resolved.is_empty(),
+                works_in_settings,
+                "{source} preserves {command:?}'s settings scope"
+            );
+        }
     }
 }
 
@@ -216,6 +227,9 @@ fn file_bindings_do_not_capture_terminal_input_or_terminal_tabs(cx: &mut TestApp
         ];
         for stroke in [
             "f2",
+            "f3",
+            "f4",
+            "f9",
             "ctrl-c",
             "ctrl-d",
             "ctrl-n",

@@ -396,15 +396,18 @@ impl Command {
         }
     }
 
-    /// Extra strokes that run the same action in the same key context.
+    /// Extra strokes that run the same action.
     ///
     /// [`register`] adds them before [`Self::default_stroke`], so the primary
     /// stroke stays the highest-precedence binding that keycaps, tooltips,
     /// Alt hints and the settings page display.
     pub fn compatibility_strokes(self) -> &'static [&'static str] {
         match self {
+            Self::Filter => &["f3"],
+            Self::Terminal => &["f4"],
             // F5 is the historical refresh key; Ctrl+R is the primary one.
             Self::Refresh => &["f5"],
+            Self::Sidebar => &["f9"],
             // F10 is the conventional menu key; Alt+M is the primary one.
             Self::Menu => &["f10"],
             _ => &[],
@@ -557,7 +560,8 @@ fn action_binding(
     // file-tab operations, and PTY input must keep its control characters.
     let scoped = if action.partial_eq(&gds::ui::help::OpenHelp)
         || action.partial_eq(&OpenSettings)
-        || action.partial_eq(&ToggleTerminal)
+        // Only the primary terminal toggle is window-wide; PTY input keeps F4.
+        || (action.partial_eq(&ToggleTerminal) && stroke == Command::Terminal.default_stroke())
         || action.partial_eq(&FocusNotifications)
         || action.partial_eq(&CloseNotification)
         || action.partial_eq(&CloseAllNotifications)

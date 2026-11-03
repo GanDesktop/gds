@@ -68,7 +68,9 @@ Alt 作为套件统一的界面访问修饰键：同名区域在不同应用中�
 | 选中目录在新文件页签打开 | <kbd>Ctrl</kbd> <kbd>Enter</kbd> |
 | 下一个 / 上一个同组页签 | <kbd>Ctrl</kbd> <kbd>Tab</kbd> / <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>Tab</kbd> |
 | 后退 / 前进 / 上级 | <kbd>Alt</kbd> <kbd>←</kbd> / <kbd>Alt</kbd> <kbd>→</kbd> / <kbd>Alt</kbd> <kbd>↑</kbd> |
-| 聚焦常驻筛选 / 显示隐藏文件 | <kbd>Ctrl</kbd> <kbd>F</kbd> / <kbd>Ctrl</kbd> <kbd>H</kbd> |
+| 聚焦常驻筛选 / 显示隐藏文件 | <kbd>Ctrl</kbd> <kbd>F</kbd>（兼容 <kbd>F3</kbd>） / <kbd>Ctrl</kbd> <kbd>H</kbd> |
+| 显示 / 收起终端 | <kbd>Ctrl</kbd> <kbd>`</kbd>，兼容 <kbd>F4</kbd>；终端半区聚焦时 <kbd>F4</kbd> 留给前台程序，仍用主键切换面板 |
+| 展开 / 折叠侧栏 | <kbd>Ctrl</kbd> <kbd>B</kbd>，兼容 <kbd>F9</kbd>；不覆盖终端半区的按键 |
 | 文件焦点前后 / 首末项 | <kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Home</kbd> / <kbd>End</kbd>，配合 <kbd>Shift</kbd> 扩选 |
 | 全选可见文件 | <kbd>Ctrl</kbd> <kbd>A</kbd>；文本输入框保持文本全选 |
 | 取消当前列表选择 | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>A</kbd>；文件、卷、回收站、最近和收藏共用空白点击的清空逻辑，同时清除光标与范围起点；输入框保留自身编辑行为 |
