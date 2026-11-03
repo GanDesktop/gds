@@ -1,9 +1,6 @@
 use super::{DialogCommand, anchor::DispatchAnchor};
 use crate::ui::button::Button;
-use crate::{
-    appearance::tokens::TOOLTIP_DELAY,
-    ui::{ShortcutHint as Hint, keytips},
-};
+use crate::{appearance::tokens::TOOLTIP_DELAY, ui::ShortcutHint as Hint};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     Icon,
@@ -52,23 +49,12 @@ impl RenderOnce for DialogDecision {
             } else {
                 IconName::X
             });
-        // Only the open dialog's own decisions carry a binding, so the label
-        // layer shows Alt+A / Alt+C here and no workspace key behind the modal.
-        // The slot sits after the label inside the button, so a hint never
-        // covers the button's text or the count in a destructive confirmation,
-        // and its stable width keeps the footer from reflowing.
-        let hint = keytips::suffix_anchor(
-            window,
-            cx,
-            self.command.button_id().into(),
-            self.command.shortcut(),
-        );
         let button = Button::new(self.command.button_id())
             .with_variant(self.variant)
             .icon(Icon::new(icon))
             .label(label.clone())
             .child(anchor.element())
-            .child(hint)
+            .shortcut(self.command.shortcut())
             .on_click(move |_, window, cx| anchor.dispatch(action.as_ref(), window, cx));
         let tooltip = Hint::shortcut(label, self.command.shortcut()).builder();
         div()

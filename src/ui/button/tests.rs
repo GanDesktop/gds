@@ -212,3 +212,101 @@ fn thin_control_focus_preserves_geometry_contrast_and_activation(cx: &mut TestAp
     })
     .expect("pointer and keyboard interaction survive decorations");
 }
+
+struct ShortcutButton {
+    focus: gpui_kit::FocusHandle,
+}
+
+impl Render for ShortcutButton {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .track_focus(&self.focus)
+            .on_action(|_: &crate::ui::actions::FocusNotifications, _, _| {})
+            .flex()
+            .child(
+                Button::new("shortcut-button")
+                    .label("Notify")
+                    .shortcut(crate::ui::actions::Command::FocusNotifications),
+            )
+    }
+}
+
+#[gpui_kit::test]
+fn shortcut_button_grows_reverses_and_releases_its_hint_space(cx: &mut TestAppContext) {
+    use gpui_kit::{InputEvent, KeyBinding, Modifiers, ModifiersChangedEvent};
+    use std::time::Duration;
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::ui::keytips::install(cx);
+        cx.bind_keys([KeyBinding::new(
+            "alt-n",
+            crate::ui::actions::FocusNotifications,
+            None,
+        )]);
+    });
+    let window = cx.open_window(size(px(400.), px(100.)), |window, cx| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            focus.focus(window, cx);
+            ShortcutButton { focus }
+        });
+        Root::new(view, window, cx)
+    });
+    cx.run_until_parked();
+    let width = |window: &mut Window, cx: &mut gpui_kit::App| {
+        window.render_frame(cx);
+        window.find("shortcut-button").bounds().size.width
+    };
+    let modifiers = |alt, window: &mut Window, cx: &mut gpui_kit::App| {
+        window.dispatch_event(
+            ModifiersChangedEvent {
+                modifiers: Modifiers {
+                    alt,
+                    ..Default::default()
+                },
+                capslock: window.capslock(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    };
+    let initial = cx
+        .update_window(window.into(), |_, window, cx| width(window, cx))
+        .unwrap();
+    cx.update_window(window.into(), |_, window, cx| {
+        modifiers(true, window, cx);
+        assert_eq!(width(window, cx), initial);
+    })
+    .unwrap();
+    cx.executor().advance_clock(Duration::from_millis(50));
+    let middle = cx
+        .update_window(window.into(), |_, window, cx| {
+            window.simulate_next_frame(cx);
+            let middle = width(window, cx);
+            assert!(middle > initial);
+            modifiers(false, window, cx);
+            assert_eq!(
+                width(window, cx),
+                middle,
+                "release reverses from the visible width"
+            );
+            middle
+        })
+        .unwrap();
+    cx.executor().advance_clock(Duration::from_millis(180));
+    cx.update_window(window.into(), |_, window, cx| {
+        window.simulate_next_frame(cx);
+        assert_eq!(width(window, cx), initial, "no hint space remains");
+        cx.set_reduce_motion(true);
+        modifiers(true, window, cx);
+        assert!(width(window, cx) > middle);
+        modifiers(false, window, cx);
+        assert_eq!(
+            width(window, cx),
+            initial,
+            "reduced motion settles immediately"
+        );
+    })
+    .unwrap();
+}

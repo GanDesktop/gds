@@ -32,6 +32,8 @@ pub struct Button {
     variant: ButtonVariant,
     tooltip: Option<Rc<dyn Fn(&mut Window, &mut App) -> gpui_kit::AnyView>>,
     shortcut: Option<super::Shortcut>,
+    label: Option<SharedString>,
+    explicit_name: bool,
 }
 
 impl Button {
@@ -49,6 +51,8 @@ impl Button {
             tooltip: None,
             id,
             shortcut: None,
+            label: None,
+            explicit_name: false,
         }
     }
 
@@ -70,7 +74,7 @@ impl Button {
     }
 
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
-        self.inner = self.inner.label(label);
+        self.label = Some(label.into());
         self
     }
 
@@ -80,6 +84,7 @@ impl Button {
     }
 
     pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.explicit_name = true;
         self.inner = self.inner.accessibility_label(label);
         self
     }
@@ -172,10 +177,28 @@ impl Button {
                 .interactivity()
                 .hoverable_tooltip(move |window, cx| tooltip(window, cx));
         }
-        if !self.disabled
-            && !self.loading
-            && let Some(shortcut) = self.shortcut.take()
-        {
+        let shortcut = self
+            .shortcut
+            .take()
+            .filter(|_| !self.disabled && !self.loading);
+        if let Some(label) = self.label.take() {
+            if let Some(shortcut) = shortcut {
+                use gds_uim::el;
+                use gpui_kit::div;
+                if !self.explicit_name {
+                    self.inner = self.inner.accessibility_label(label.clone());
+                }
+                let hint = super::keytips::suffix_anchor(window, cx, self.id, shortcut);
+                self.inner = self.inner.child(el! {
+                    .div { flex; items_center; min_w_0; } [
+                        .div { min_w_0; whitespace_nowrap; text_ellipsis; } [label],
+                        hint,
+                    ]
+                });
+            } else {
+                self.inner = self.inner.label(label);
+            }
+        } else if let Some(shortcut) = shortcut {
             self.inner = self
                 .inner
                 .relative()

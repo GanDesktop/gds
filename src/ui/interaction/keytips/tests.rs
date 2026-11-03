@@ -259,28 +259,6 @@ fn an_icon_control_keeps_its_label_in_its_top_trailing_corner() {
     assert!(rect.intersects(&button));
 }
 
-/// A text button puts its label in the tail it reserves after its text, so the
-/// label never covers the button's own wording.
-#[test]
-fn a_text_button_keeps_its_label_in_its_reserved_tail() {
-    let content = window_content();
-    let button = Bounds::new(point(px(900.), px(700.)), size(px(88.), px(32.)));
-    let tail = Bounds::new(point(px(970.), px(700.)), size(px(16.), px(32.)));
-    let slots = vec![slot(tail, 15., 16., HintPlacement::Suffix)];
-
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
-    let rect = rects[0];
-    assert!(
-        (rect.center().y - button.center().y).abs() <= px(1.),
-        "the label is not centred on its button: {rect:?}"
-    );
-    assert!(
-        rect.left() >= tail.left() && rect.right() <= tail.right(),
-        "the label left the reserved tail: {rect:?}"
-    );
-}
-
 /// Five 32px toolbar buttons with corner labels: every label stays on its own
 /// button, none covers another and none drifts away from its control.
 #[test]

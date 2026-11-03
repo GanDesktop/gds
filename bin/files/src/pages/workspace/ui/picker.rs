@@ -695,17 +695,6 @@ impl Browser {
         let view = cx.entity().downgrade();
 
         let next_filter_shortcut = Shortcut::new(Box::new(PickerNextFilter), Some(PICKER_CONTEXT));
-        let filter_hint = if available && picker.filters().len() > 1 {
-            ui::keytips::suffix_anchor(
-                window,
-                cx,
-                "picker-filter-hint".into(),
-                next_filter_shortcut.clone(),
-            )
-        } else {
-            el! { .div { size_0 } }.into_any_element()
-        };
-
         let filter_view = view.clone();
         let filter = Button::new("picker-filter")
             .small()
@@ -720,7 +709,9 @@ impl Browser {
             .when(picker.filters().len() <= 1, |button| {
                 button.tooltip(i18n::text("picker-filter", cx))
             })
-            .child(filter_hint)
+            .when(available && picker.filters().len() > 1, |button| {
+                button.shortcut(next_filter_shortcut)
+            })
             .dropdown_caret(true)
             .dropdown_menu(move |menu, _, _| {
                 filter_menu(menu, labels.clone(), active_filter, filter_view.clone())
@@ -773,22 +764,12 @@ impl Browser {
         let on_cancel = cx.listener(Self::on_picker_cancel_click);
         let cancel_shortcut = cancel_shortcut();
         let cancel_label = i18n::text("picker-cancel", cx);
-        let cancel_hint = if available {
-            ui::keytips::suffix_anchor(
-                window,
-                cx,
-                "picker-cancel-hint".into(),
-                cancel_shortcut.clone(),
-            )
-        } else {
-            el! { .div { size_0 } }.into_any_element()
-        };
         let cancel = Button::new("picker-cancel")
             .small()
             .icon(Icon::new(IconName::X))
             .label(cancel_label.clone())
             .disabled(!available)
-            .child(cancel_hint)
+            .shortcut(cancel_shortcut.clone())
             .on_click(on_cancel);
         let cancel = el! {
             .div {
@@ -798,8 +779,7 @@ impl Browser {
             } [cancel]
         };
 
-        // A disabled decision has no key that could run it, so it stages no
-        // hint; the reserved tail keeps the button from reflowing in between.
+        // Disabled decisions do not advertise a shortcut.
         let enabled = available && !completion_blocked && self.picker_candidates(cx).is_some();
         let saving = picker.options.is_save();
         let custom_label = picker
@@ -824,16 +804,6 @@ impl Browser {
                 )
             });
         let confirm_shortcut = confirm_shortcut();
-        let hint = if enabled {
-            ui::keytips::suffix_anchor(
-                window,
-                cx,
-                "picker-confirm-hint".into(),
-                confirm_shortcut.clone(),
-            )
-        } else {
-            el! { .div { size_0 } }.into_any_element()
-        };
         let on_confirm = cx.listener(Self::on_picker_confirm_click);
         let control_hint = if enabled {
             ui::keytips::anchor(
@@ -851,7 +821,7 @@ impl Browser {
             .icon(Icon::new(IconName::Check))
             .label(confirm_label.clone())
             .disabled(!enabled)
-            .child(hint)
+            .shortcut(confirm_shortcut.clone())
             .on_click(on_confirm);
         let confirm = el! {
             .div {

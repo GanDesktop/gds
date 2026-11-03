@@ -10,6 +10,7 @@ The shared appearance layer owns the effective reduced-motion value: `!animation
 
 ## Added, retained and deliberately unchanged
 
+- **Button shortcut hints:** text buttons reveal their inline hint and spacing over **140 ms, ease-out cubic** while the matching modifier is held. The button grows with the measured hint width and shrinks on release, reserving no space at rest. Reversals continue from the current width; reduced motion settles immediately. Icon-button badges retain their overlay placement.
 - **Added:** shared `DisclosureIcon` artwork for Files' volumes/locations headings and Agents' workspace groups. A right-facing chevron rotates a quarter-turn toward expanded state over **140 ms, ease-out cubic**, using Kit's target transition. The host retains the accessible name, expanded semantics, tooltip and existing click target. The icon and label slots do not change size or alignment.
 - **Retained:** the existing **160 ms, ease-out cubic** sidebar width transition, sampled once by the host and shared across the whole column. See [sidebar presentation](sidebar.md#continuous-presentation).
 - **Reused without another wrapper:** Kit dialogs, notifications, dropdowns, loading spinners and their reduced-motion behavior. Notification lifetime remains independent of decorative animation.

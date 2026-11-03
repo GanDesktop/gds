@@ -11,6 +11,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     rc::{Rc, Weak},
+    time::Duration,
 };
 
 use gpui_kit::base::{Root, RootPlugin};
@@ -34,10 +35,8 @@ const LABEL_TEXT_SIZE: f32 = 10.0;
 const LABEL_LINE_HEIGHT: f32 = 1.2;
 /// Distance from a control's inside edges to its corner label.
 const EDGE_INSET: Pixels = px(1.);
-/// Width a text button reserves after its label for the hint, before the text
-/// scale is applied. The space is reserved whether or not hints are armed, so
-/// pressing Ctrl or Alt never reflows the button row.
-const SUFFIX_SLOT: f32 = 16.0;
+const SUFFIX_DURATION: Duration = Duration::from_millis(140);
+const SUFFIX_GAP: f32 = 6.;
 /// Free space kept between a label and the edge it is attached to.
 const LABEL_GAP: Pixels = px(2.);
 /// Distance kept between a label and the window edge when it has to move.
@@ -103,9 +102,6 @@ enum HintPlacement {
     /// close control, so this is the free corner that keeps a short label on the
     /// row instead of dropping it when that control shows.
     BottomLeadingCorner,
-    /// In the tail a text button reserves after its label, so a hint never
-    /// covers the button's text or the count in a destructive confirmation.
-    Suffix,
 }
 
 /// One measured label waiting for a position.
@@ -130,6 +126,7 @@ impl Keytips {
                 let changed = this.staged.borrow_mut().release();
                 if changed {
                     cx.notify();
+                    window.refresh();
                 }
             }
         });
@@ -145,7 +142,7 @@ impl Keytips {
 ///
 /// The plugin also clears on window deactivation, which may lose the matching
 /// modifier release. Callers can explicitly clear during other focus transitions.
-pub fn release(window: &Window, cx: &mut App) {
+pub fn release(window: &mut Window, cx: &mut App) {
     let Some(layer) = layer(window, cx) else {
         return;
     };
@@ -156,6 +153,7 @@ pub fn release(window: &Window, cx: &mut App) {
     drop(staged);
     if changed {
         cx.notify(id);
+        window.refresh();
     }
 }
 
@@ -181,7 +179,7 @@ impl RootPlugin for Keytips {
         let staged = self.staged.clone();
         div()
             .size_full()
-            .on_modifiers_changed(move |event, _window, cx| {
+            .on_modifiers_changed(move |event, window, cx| {
                 // Only one group is ever armed. Shift does not change it; a
                 // Ctrl+Alt mix (AltGr, for one) arms neither, so neither
                 // group's labels can light up for the other's press.
@@ -190,6 +188,7 @@ impl RootPlugin for Keytips {
                     && let Some(layer) = this.upgrade()
                 {
                     cx.notify(layer.entity_id());
+                    window.refresh();
                 }
             })
             .child(surface)
@@ -462,25 +461,64 @@ pub fn bottom_corner_anchor(
     )
 }
 
-/// Stage a binding in the tail slot a text button reserves after its label.
-///
-/// The returned element is that slot: an in-flow, click-through spacer of a
-/// stable width, so the button's text never moves when hints are armed. It
-/// belongs inside the button, next to its label.
+/// An in-flow hint that grows from zero width while its modifier is held.
+/// Place it beside the label in a gapless row; it animates its own spacing.
 pub fn suffix_anchor(
     window: &mut Window,
     cx: &mut App,
     key: ElementId,
     shortcut: Shortcut,
 ) -> AnyElement {
-    let hint = staged_anchor(window, cx, key, shortcut, HintPlacement::Suffix);
-    div()
-        .relative()
-        .flex_shrink_0()
-        .h_full()
-        .w(typography::scaled(SUFFIX_SLOT, cx))
-        .child(hint)
-        .into_any_element()
+    use gds_uim::el;
+    use gpui_kit::base::motion::{self, Transition};
+
+    let held = layer(window, cx).and_then(|layer| layer.read(cx).staged.borrow().held);
+    let binding = held.and_then(|held| {
+        let focus = window.focused(cx)?;
+        let handled = window.is_action_available(shortcut.action(), cx);
+        visible_binding(
+            handled,
+            window.highest_precedence_binding_for_action_in(shortcut.action(), &focus),
+            held,
+        )
+        .map(|binding| (binding, held))
+    });
+    // Keep the last label while its space closes, including on a quick reversal.
+    let state = window.use_keyed_state((key.clone(), "suffix-label"), cx, |_, _| {
+        None::<(KeyBinding, HeldModifier)>
+    });
+    if let Some(binding) = binding.as_ref() {
+        state.update(cx, |value, _| *value = Some(binding.clone()));
+    }
+    let progress = motion::transition(
+        (key.clone(), "suffix-reveal"),
+        if binding.is_some() { 1.0_f32 } else { 0.0 },
+        Transition::new(SUFFIX_DURATION),
+        window,
+        cx,
+    );
+    let Some((binding, held)) = state.read(cx).clone() else {
+        return div().size_0().into_any_element();
+    };
+    let label = ShortcutBadge::path_label(&[binding.clone()], held).unwrap_or_default();
+    let text_size = typography::scaled(LABEL_TEXT_SIZE, cx);
+    let run = window.text_style().to_run(label.len());
+    let width = window
+        .text_system()
+        .shape_line(label, text_size, &[run], None)
+        .width
+        + px(LABEL_PADDING_X * 2. + 2.);
+    let gap = typography::scaled(SUFFIX_GAP, cx);
+    let height = text_size * LABEL_LINE_HEIGHT + px(LABEL_PADDING_Y * 2. + 2.);
+    let label = compact_label(key, &[binding], held, cx);
+    el! {
+        .div { flex; items_center; flex_shrink_0; overflow_hidden;
+            w: $((width + gap) * progress); h: height;
+        } [
+            .div { flex; flex_shrink_0; ml: gap; w: width; opacity: progress; } [label],
+        ]
+    }
+    .into_any_element()
 }
 
 fn staged_anchor(
@@ -668,7 +706,6 @@ fn candidates(slot: LabelSlot, content: Bounds<Pixels>) -> Vec<Point<Pixels>> {
         HintPlacement::Trailing => trailing_origin(slot, content).into_iter().collect(),
         HintPlacement::TrailingBefore(reserved) => trailing_before_origins(slot, content, reserved),
         HintPlacement::BottomLeadingCorner => bottom_leading_origins(slot, content),
-        HintPlacement::Suffix => suffix_origin(slot, content).into_iter().collect(),
     };
     for side in [Side::Below, Side::Above] {
         for row in 0..MAX_ROWS {
@@ -839,32 +876,6 @@ fn bottom_leading_origins(slot: LabelSlot, content: Bounds<Pixels>) -> Vec<Point
     columns.into_iter().map(|left| point(left, top)).collect()
 }
 
-/// A text button's reserved tail, right-aligned inside it and vertically
-/// centred so the label follows the button's own text.
-///
-/// A label wider than the reserved tail starts at the tail's leading edge, so
-/// it grows towards the button's outer edge instead of back over the text.
-fn suffix_origin(slot: LabelSlot, content: Bounds<Pixels>) -> Option<Point<Pixels>> {
-    if slot.anchor.size.height < slot.size.height {
-        return None;
-    }
-    let left = (slot.anchor.right() - slot.size.width).max(slot.anchor.left());
-    Some(point(
-        clamp_axis(left, slot.size.width, content.left(), content.right()),
-        clamp_axis(
-            slot.anchor.center().y - slot.size.height.half(),
-            slot.size.height,
-            content.top(),
-            content.bottom(),
-        ),
-    ))
-}
-
-/// Any free place in the window, for a label whose control has no room left on
-/// either of its rows.
-///
-/// This keeps a key visible in a window that is too crowded to hold its label
-/// beside its control; every normal case is resolved by [`candidates`].
 fn overflow_origin(
     slot: LabelSlot,
     content: Bounds<Pixels>,
