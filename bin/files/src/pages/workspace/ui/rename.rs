@@ -16,9 +16,8 @@ use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use super::name_form;
 use super::{Browser, RenameNotice};
-
-const DIALOG_GAP: f32 = 8.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(super) enum NameError {
@@ -223,10 +222,7 @@ impl State {
     }
 
     pub(super) fn focus_input(&self, window: &mut Window, cx: &mut App) {
-        self.input.update(cx, |input, cx| {
-            input.focus(window, cx);
-            input.select_all(window, cx);
-        });
+        name_form::focus(&self.input, window, cx);
     }
 
     pub(super) fn cancel(&mut self, cx: &mut Context<Self>) {
@@ -276,16 +272,7 @@ impl State {
 
 impl Render for State {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let input = self.input.clone();
-        let error = self.error.clone();
-        el! {
-            .div { flex; flex_col; w_full; min_w_0; gap: DIALOG_GAP.px } [
-                .div { w_full; min_w_0 } [($&input, cx).gds::ui::field::input { w_full }],
-                @if (let Some(error) = error)
-                    .div { text_xs; text_color: $cx.theme().danger } [error],
-                @end,
-            ]
-        }
+        name_form::field(&self.input, self.error.as_ref(), cx)
     }
 }
 

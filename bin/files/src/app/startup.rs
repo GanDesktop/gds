@@ -13,7 +13,6 @@ use std::process::ExitCode;
 
 use anyhow::Context as _;
 use directories::BaseDirs;
-use fluent_bundle::FluentArgs;
 use gds::{
     appearance::{theme, typography},
     ui::time,
@@ -149,11 +148,10 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
     } else {
         None
     };
-    let (preferences, migration_error, mut startup_error) = match configuration::load_startup() {
-        Ok(loaded) => (loaded.preferences, loaded.migration, None),
+    let (preferences, mut startup_error) = match configuration::load() {
+        Ok(preferences) => (preferences, None),
         Err(error) => (
             configuration::Preferences::default(),
-            None,
             Some(error.to_string()),
         ),
     };
@@ -242,15 +240,6 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
             gds::ui::terminal::init(cx);
             cx.on_app_quit(|_| async { gds::service::terminal::shutdown_all().await })
                 .detach();
-            if let Some(error) = migration_error {
-                let mut arguments = FluentArgs::new();
-                arguments.set("error", error.to_string());
-                let message = i18n::format("settings-migrate-failed", Some(&arguments), cx);
-                startup_error = Some(match startup_error.take() {
-                    Some(previous) => format!("{previous}\n{message}"),
-                    None => message.to_string(),
-                });
-            }
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();

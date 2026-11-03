@@ -1,5 +1,6 @@
 //! Tool output previews derived from the data supplied by the agent.
 
+use super::markdown::code_block;
 use crate::shared::i18n::tr;
 use bas::acp;
 
@@ -31,16 +32,4 @@ pub(super) fn legacy_diff(diff: &acp::Diff) -> String {
             code_block("text", &diff.new_text)
         ),
     }
-}
-
-fn code_block(language: &str, text: &str) -> String {
-    let fence = "~".repeat(
-        text.split(|ch| ch != '~')
-            .map(str::len)
-            .max()
-            .unwrap_or(0)
-            .max(2)
-            + 1,
-    );
-    format!("{fence}{language}\n{text}\n{fence}")
 }

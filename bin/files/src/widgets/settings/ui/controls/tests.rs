@@ -3,7 +3,7 @@ use crate::entities::preferences::{FilesPreferences, Preferences};
 use gds::ui::settings::{FONT_SIZE_RANGE, form::Model};
 use gds::{
     appearance::{
-        theme::{Appearance, ModePreference, Source},
+        theme::{Appearance, BuiltinTheme, ModePreference, Source},
         typography,
     },
     i18n::Language,
@@ -11,16 +11,16 @@ use gds::{
 };
 
 fn modified_preferences() -> Preferences {
-    Preferences {
+    let mut preferences = Preferences {
         appearance: Appearance {
             source: Source::System,
-            builtin: Default::default(),
+            builtin: BuiltinTheme::Neon,
             mode: ModePreference::Light,
             content_opacity: 0.7,
             sidebar_opacity: 0.8,
         },
         animations_enabled: Some(false),
-        terminal_enabled: None,
+        terminal_enabled: Some(false),
         language: Some(Language::English),
         time_format: Format::Absolute,
         font: typography::Preferences {
@@ -38,166 +38,139 @@ fn modified_preferences() -> Preferences {
             volume_mount_points: Default::default(),
             show_hidden: true,
         },
+    };
+    preferences.files.sidebar.show_volumes = true;
+    preferences
+}
+
+/// Every generated field resets to its own default without rewriting its siblings.
+fn assert_generated_reset_is_isolated<T: Model>(before: &T) {
+    for field in T::fields() {
+        let mut after = before.clone();
+        (field.set)(&mut after, (field.get)(&T::default())).expect("default field value");
+        for probe in T::fields() {
+            if probe.id == field.id {
+                continue;
+            }
+            assert_eq!(
+                (probe.get)(&after),
+                (probe.get)(before),
+                "resetting {} changed {}",
+                field.id,
+                probe.id
+            );
+        }
     }
 }
 
-fn reset_generated<T: Model>(model: &mut T, id: &str) {
-    let field = T::fields()
-        .into_iter()
-        .find(|field| field.id == id)
-        .expect("generated field");
-    (field.set)(model, (field.get)(&T::default())).expect("default field value");
+#[test]
+fn generated_field_reset_only_changes_its_own_value() {
+    let before = modified_preferences();
+    assert_ne!(before, Preferences::default());
+    for field in Preferences::fields() {
+        let mut after = before.clone();
+        (field.set)(&mut after, (field.get)(&Preferences::default())).expect("default field value");
+        assert_eq!(
+            (field.get)(&after),
+            (field.get)(&Preferences::default()),
+            "resetting {} must use its default",
+            field.id
+        );
+        assert_eq!(
+            after.appearance, before.appearance,
+            "resetting {} changed appearance",
+            field.id
+        );
+        assert_eq!(
+            after.files, before.files,
+            "resetting {} changed files",
+            field.id
+        );
+        assert_eq!(
+            after.font, before.font,
+            "resetting {} changed font",
+            field.id
+        );
+        assert_eq!(
+            after.terminal, before.terminal,
+            "resetting {} changed terminal",
+            field.id
+        );
+        assert_eq!(
+            after.animations_enabled, before.animations_enabled,
+            "resetting {} changed animations",
+            field.id
+        );
+        assert_eq!(
+            after.terminal_enabled, before.terminal_enabled,
+            "resetting {} changed terminal enabled",
+            field.id
+        );
+    }
+    assert_generated_reset_is_isolated(&before.font);
+    assert_generated_reset_is_isolated(&before.terminal);
+}
+
+fn control_value(field: Field, preferences: &Preferences) -> serde_json::Value {
+    let value = match field {
+        Field::Source => serde_json::to_value(preferences.appearance.source),
+        Field::Builtin => serde_json::to_value(preferences.appearance.builtin),
+        Field::Mode => serde_json::to_value(preferences.appearance.mode),
+        Field::ContentOpacity => serde_json::to_value(preferences.appearance.content_opacity),
+        Field::SidebarOpacity => serde_json::to_value(preferences.appearance.sidebar_opacity),
+        Field::ShowHidden => serde_json::to_value(preferences.files.show_hidden),
+        Field::SidebarVolumes => serde_json::to_value(preferences.files.sidebar.show_volumes),
+        Field::Animations => serde_json::to_value(preferences.animations_enabled),
+    };
+    value.expect("preferences value")
 }
 
 #[test]
-fn animation_reset_preserves_all_other_preferences() {
+fn control_reset_only_clears_its_own_field() {
+    const FIELDS: &[Field] = &[
+        Field::Source,
+        Field::Builtin,
+        Field::Mode,
+        Field::ContentOpacity,
+        Field::SidebarOpacity,
+        Field::ShowHidden,
+        Field::SidebarVolumes,
+        Field::Animations,
+    ];
     let before = modified_preferences();
-    let mut reset = before.clone();
-    assert!(Field::Animations.reset(&mut reset));
-    assert!(reset.animations_enabled.unwrap_or(true));
-    assert!(!Field::Animations.reset(&mut reset));
-    reset.animations_enabled = before.animations_enabled;
-    assert_eq!(reset, before);
-}
-
-#[test]
-fn resetting_a_theme_choice_does_not_reset_the_other_theme_fields() {
-    let before = modified_preferences();
-    let mut source = before.clone();
-    assert!(Field::Source.reset(&mut source));
-    assert_eq!(
-        source.appearance.source,
-        Preferences::default().appearance.source
-    );
-    assert_eq!(source.appearance.mode, before.appearance.mode);
-    assert_eq!(
-        source.appearance.content_opacity,
-        before.appearance.content_opacity
-    );
-    assert_eq!(
-        source.appearance.sidebar_opacity,
-        before.appearance.sidebar_opacity
-    );
-    assert_eq!(source.language, before.language);
-    assert_eq!(source.files, before.files);
-
-    let mut mode = before.clone();
-    assert!(Field::Mode.reset(&mut mode));
-    assert_eq!(mode.appearance.mode, Preferences::default().appearance.mode);
-    assert_eq!(mode.appearance.source, before.appearance.source);
-    assert_eq!(
-        mode.appearance.content_opacity,
-        before.appearance.content_opacity
-    );
-    assert_eq!(
-        mode.appearance.sidebar_opacity,
-        before.appearance.sidebar_opacity
-    );
-}
-
-#[test]
-fn resetting_one_opacity_keeps_the_other_material_unchanged() {
-    let before = modified_preferences();
-    let mut content = before.clone();
-    assert!(Field::ContentOpacity.reset(&mut content));
-    assert_eq!(
-        content.appearance.content_opacity,
-        Preferences::default().appearance.content_opacity
-    );
-    assert_eq!(content.appearance.sidebar_opacity, 0.8);
-    assert_eq!(content.appearance.source, Source::System);
-    assert_eq!(content.appearance.mode, ModePreference::Light);
-    assert_eq!(content.language, before.language);
-    assert_eq!(content.files, before.files);
-
-    let mut sidebar = before;
-    assert!(Field::SidebarOpacity.reset(&mut sidebar));
-    assert_eq!(
-        sidebar.appearance.sidebar_opacity,
-        Preferences::default().appearance.sidebar_opacity
-    );
-    assert_eq!(sidebar.appearance.content_opacity, 0.7);
-    assert_eq!(sidebar.appearance.source, Source::System);
-    assert_eq!(sidebar.appearance.mode, ModePreference::Light);
-}
-
-#[test]
-fn language_and_file_preference_reset_are_independent() {
-    let before = modified_preferences();
-    let mut language = before.clone();
-    reset_generated(&mut language, "language");
-    assert_eq!(language.language, Preferences::default().language);
-    assert_eq!(language.appearance, before.appearance);
-    assert_eq!(language.files, before.files);
-
-    let mut files = before.clone();
-    assert!(Field::ShowHidden.reset(&mut files));
-    assert!(!files.files.show_hidden);
-    assert_eq!(files.language, before.language);
-    assert_eq!(files.appearance, before.appearance);
-}
-
-#[test]
-fn font_family_and_size_reset_independently_of_every_other_preference() {
-    let before = modified_preferences();
-
-    let mut family = before.clone();
-    reset_generated(&mut family.font, "family");
-    assert_eq!(family.font.family, Preferences::default().font.family);
-    assert_eq!(family.font.size, before.font.size);
-    assert_eq!(family.appearance, before.appearance);
-    assert_eq!(family.language, before.language);
-    assert_eq!(family.time_format, before.time_format);
-    assert_eq!(family.files, before.files);
-
-    let mut size = before.clone();
-    reset_generated(&mut size.font, "size");
-    assert_eq!(size.font.size, Preferences::default().font.size);
-    assert_eq!(size.font.family, before.font.family);
-    assert_eq!(size.files, before.files);
-}
-
-#[test]
-fn terminal_edits_and_general_resets_preserve_other_preferences() {
-    let before = modified_preferences();
-    let mut changed = before.clone();
-    reset_generated(&mut changed.terminal, "font_size");
-    assert_eq!(
-        changed.terminal.font_size,
-        gds::ui::terminal::Preferences::default().font_size
-    );
-    assert_eq!(changed.terminal.shell_args, before.terminal.shell_args);
-    assert_eq!(changed.font, before.font);
-    assert_eq!(changed.files, before.files);
-
-    let mut general = before.clone();
-    reset_generated(&mut general, "language");
-    assert_eq!(general.terminal, before.terminal);
-    assert_eq!(
-        general.files.terminal_content_height,
-        before.files.terminal_content_height
-    );
-}
-
-#[test]
-fn time_format_reset_is_independent_of_files_language_and_columns() {
-    let before = modified_preferences();
-    assert_ne!(before.time_format, Preferences::default().time_format);
-
-    let mut time = before.clone();
-    reset_generated(&mut time, "time_format");
-    assert_eq!(time.time_format, Preferences::default().time_format);
-    assert_eq!(time.files, before.files);
-    assert_eq!(time.language, before.language);
-    assert_eq!(time.appearance, before.appearance);
-
-    let mut files = before.clone();
-    assert!(Field::ShowHidden.reset(&mut files));
-    assert_eq!(files.time_format, before.time_format);
-
-    let mut language = before.clone();
-    reset_generated(&mut language, "language");
-    assert_eq!(language.time_format, before.time_format);
+    let values: Vec<_> = FIELDS
+        .iter()
+        .map(|field| control_value(*field, &before))
+        .collect();
+    let defaults: Vec<_> = FIELDS
+        .iter()
+        .map(|field| control_value(*field, &Preferences::default()))
+        .collect();
+    for (index, field) in FIELDS.iter().enumerate() {
+        assert!(
+            field.is_modified(&before),
+            "{field:?} must be modified by the fixture"
+        );
+        let mut after = before.clone();
+        assert!(
+            field.reset(&mut after),
+            "{field:?} reset must report its modification"
+        );
+        for (other_index, other) in FIELDS.iter().enumerate() {
+            let value = control_value(*other, &after);
+            if other_index == index {
+                assert_eq!(
+                    value, defaults[index],
+                    "{field:?} must reset to its default value"
+                );
+            } else {
+                assert_eq!(
+                    value, values[other_index],
+                    "{field:?} reset changed {other:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

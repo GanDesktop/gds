@@ -45,7 +45,7 @@ In-memory diagnostic logs and the log viewer require `--enable-logs`; Ctrl+Shift
 
 ## Implementation boundaries
 
-Application code is in [`bin/agents/src`](../../../bin/agents/src), organized as `app → pages → widgets → features → entities → shared`. Session and backend entities own protocol state and history; widgets own settings and history views; features own navigation, authentication and session deletion. Frontend configuration lives in `shared/config`.
+Application code is in [`bin/agents/src`](../../../bin/agents/src), organized as `app → pages → widgets → features → entities → shared`. Session and backend entities own protocol state and history; widgets own settings, history and help views; features own navigation, authentication and session deletion. Frontend configuration lives in `shared/config`.
 
 The root manifest pins `bas-client` to a Git revision. The frontend does not embed the Bas daemon or CLI. Agent protocol, authentication, installation and session models remain application code. Shared appearance, typography, Frame, navigation, notifications, shortcuts, clipboard access, timestamps and terminal rendering come from `gds`.
 

@@ -323,17 +323,6 @@ impl Command {
         window.highest_precedence_binding_for_action_in_context(action.as_ref(), context)
     }
 
-    pub fn matches_single_stroke(self, stroke: &Keystroke, window: &Window) -> bool {
-        let Some(binding) = self.binding(window) else {
-            return false;
-        };
-        if binding.keystrokes().len() != 1 {
-            return false;
-        }
-        let expected = binding.keystrokes()[0].as_keystroke();
-        expected.key == stroke.key && expected.modifiers == stroke.modifiers
-    }
-
     /// The default keystroke for this command, as registered by [`register`].
     pub fn default_stroke(self) -> &'static str {
         match self {

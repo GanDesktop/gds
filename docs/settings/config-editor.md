@@ -28,7 +28,7 @@ impl Preferences {
 
 宏为结构体实现 `form::Model`，并在相同模块生成 `PreferencesEditor` 类型别名。在 GPUI 上下文中使用 `cx.new(|cx| PreferencesEditor::new(value, window, cx))` 创建实体，直接将实体放入页面。
 
-订阅 `form::Changed<Preferences>`，由应用接收完整的类型化新值 `event.value` 及字段标识 `event.field`，执行原有的应用、保存与错误反馈流程。应用接受或回退后，调用 `editor.set_value(value, window, cx)` 同步控件；程序同步不发出修改事件。`set_enabled(false, cx)` 禁用编辑。生成的控件不自行访问配置文件。
+订阅 `form::Changed<Preferences>`，由应用接收完整的类型化新值 `event.value` 及字段标识 `event.field`，执行原有的应用、保存与错误反馈流程。应用接受或回退后，调用 `editor.set_value(value, window, cx)` 同步控件；程序同步不发出修改事件。生成的控件不自行访问配置文件。
 
 ## 字段类型与标注
 
@@ -39,6 +39,7 @@ impl Preferences {
 | `f32`、`f64`、8–64 位整数、`isize`、`usize` | 带读数、键盘步进的滑块 |
 | `gds::i18n::Language` | 当前支持语言的可搜索下拉框 |
 | `String` 加 `kind = "font"` | 系统字体目录的可搜索下拉框 |
+| `Vec<String>` 加 `kind = "string_list"` | 每行一项的多行文本；空行忽略 |
 | 实现 `form::Choices` 的枚举 | 可搜索下拉框 |
 
 这些类型可包裹在 `Option<T>` 中。可选的下拉字段增加“跟随系统”项，对应 `None`；可选文本的空值对应 `None`。可选数值/布尔字段的 `default` 只决定 `None` 时显示的继承值，交互后写入 `Some`；恢复默认始终读取结构体的 `Default`，可恢复为 `None`。
@@ -51,7 +52,7 @@ impl Preferences {
 - `min`、`max`、`step`：数值范围和步长，可引用常量，默认 `0`、`100`、`1`。
 - `scale`、`unit`：显示比例与后缀；例如配置 `0.85` 显示为 `85%`，写回仍为 `0.85`。
 - `default`：可选字段的继承显示值。
-- `kind`：特殊处理 `font`、`language` 或 `text`；常规类型自动推断。
+- `kind`：特殊处理 `font`、`language`、`string_list` 或 `text`；常规类型自动推断。
 - `skip`：显式跳过字段或枚举项。
 
 每行使用公共 `SettingRow`、输入框、下拉框、滑块和恢复默认按钮。字体下拉保留未安装的已配置字体并标记“未安装”；语言变化更新标签与目录。恢复默认只修改当前字段，未标注的数据保留原值。

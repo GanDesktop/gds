@@ -157,7 +157,7 @@ impl TileContent {
             cx.theme().muted_foreground
         })
         .interpolate(&cx.theme().accent_foreground, self.selection);
-        let media = match crate::features::file_preview::source(entry) {
+        let media = match crate::entities::file::directory::thumbnail_source(entry) {
             Some(source) => Thumbnail::new(self.thumbnails.clone(), source)
                 .fallback(icon.render(px(geometry.icon_size), icon_color))
                 .into_any_element(),
@@ -311,7 +311,7 @@ impl Browser {
             selection,
             appearance: EntryAppearance::of(entry, cx),
         };
-        let source = crate::features::file_preview::source(entry);
+        let source = crate::entities::file::directory::thumbnail_source(entry);
         let is_video = source
             .as_ref()
             .is_some_and(|source| source.kind == ui::thumbnail::Kind::Video);

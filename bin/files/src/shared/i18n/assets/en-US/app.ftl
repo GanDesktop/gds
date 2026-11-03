@@ -44,7 +44,6 @@ settings-auto-apply = Changes apply and save automatically
 settings-apply-failed = Changes were not applied: { $error }
 settings-save-failed = Changes are active but could not be saved: { $error }
 settings-read-only = Configuration is not writable; changes apply only to this session.
-settings-migrate-failed = Previous settings could not be copied to this application's configuration file: { $error }. This run keeps the settings that were read; the old file is unchanged.
 settings-terminal-note = The embedded terminal is not connected yet. Open an external terminal in the current folder instead.
 settings-shell-note = Uses the system default terminal or the program specified by GDS_TERMINAL.
 settings-shortcuts-note = Equivalent actions share their shortcuts. Keycaps and hints use the active bindings. Hold Ctrl to reveal only Ctrl combinations and Alt to reveal only Alt ones; each hint drops the modifier you are holding, so press the remaining keys. F5 also works for refresh, and F10 also opens the menu.

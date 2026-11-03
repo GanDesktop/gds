@@ -338,37 +338,6 @@ fn regrouping_before_reader_preserves_pixels_and_expansion(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
-#[ignore = "manual timing with a private BAS_HISTORY_BENCH_FILE HistoryWindow JSON"]
-fn history_window_render_benchmark(cx: &mut TestAppContext) {
-    let path = std::env::var_os("BAS_HISTORY_BENCH_FILE").expect("private fixture path");
-    let bytes = std::fs::read(path).expect("read private fixture");
-    let history: HistoryWindow = serde_json::from_slice(&bytes).expect("HistoryWindow JSON");
-    let fixture = fixture(cx);
-    attach(&fixture, history.session.meta.clone(), cx);
-    cx.update_window(fixture.window.into(), |_, window, cx| {
-        let events = history.events.len();
-        let context = history.context.len();
-        let started = std::time::Instant::now();
-        fixture.view.update(cx, |view, cx| show_page(view, history, window, cx));
-        let applied = started.elapsed();
-        let render_started = std::time::Instant::now();
-        window.render_frame(cx);
-        let first_frame = render_started.elapsed();
-        let render_started = std::time::Instant::now();
-        window.render_frame(cx);
-        let second_frame = render_started.elapsed();
-        let rows = fixture.view.read(cx).selected.timeline.list.item_count();
-        eprintln!(
-            "history benchmark: bytes={} events={events} context={context} rows={rows} apply_ms={:.3} first_frame_ms={:.3} second_frame_ms={:.3}",
-            bytes.len(),
-            applied.as_secs_f64() * 1000.,
-            first_frame.as_secs_f64() * 1000.,
-            second_frame.as_secs_f64() * 1000.,
-        );
-    }).expect("benchmark history render");
-}
-
-#[gpui_kit::test]
 fn disk_cached_window_accepts_the_next_live_event(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
     let meta = session();

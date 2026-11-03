@@ -1,8 +1,14 @@
 //! Project directory entries onto the shared image/video thumbnail service.
-use crate::entities::file::directory::{ContentCategory, Entry, EntryKind};
+
 use gds::service::thumbnail::{Kind, Source};
 
-pub(crate) fn source(entry: &Entry) -> Option<Source> {
+use super::{ContentCategory, Entry, EntryKind};
+
+/// The thumbnail source for an entry that the shared service can preview.
+///
+/// Directories, links and non-media files have no source, so callers keep the
+/// entry's icon instead of asking the cache for a thumbnail.
+pub fn thumbnail_source(entry: &Entry) -> Option<Source> {
     if entry.kind != EntryKind::File {
         return None;
     }

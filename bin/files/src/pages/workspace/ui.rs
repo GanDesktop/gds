@@ -21,6 +21,7 @@ mod locations;
 mod marquee;
 mod menu;
 mod motion;
+mod name_form;
 mod new_folder;
 mod pages;
 mod picker;

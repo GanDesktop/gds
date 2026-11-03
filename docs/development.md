@@ -155,16 +155,16 @@ app → pages → widgets → features → entities → shared
 | --- | --- | --- | --- |
 | `app` | 命令行入口、初始化、路由安装和退出 | [app.rs](../bin/files/src/app.rs)、`app/startup.rs`、`app/cli.rs` | [app.rs](../bin/agents/src/app.rs)、`app/startup.rs`、`app/cli.rs` |
 | `pages` | 完整窗口及其页面组合 | `workspace`：浏览、选择模式、设置视图的组合 | `workspace`：会话工作区、后台切换和管理视图的窗口宿主 |
-| `widgets` | 可独立使用、也可嵌入页面的界面块 | `settings` | `settings`（含 Agent 管理与安装内容）、`history` |
-| `features` | 可由不同界面触发的用户操作与工作流 | `file_operations`、`pick_files` | `navigation`（切换后台、打开管理视图）、`agent_auth`、`delete_session` |
+| `widgets` | 可独立使用、也可嵌入页面的界面块 | `settings`、`remote_browser`、`help` | `settings`（含 Agent 管理与安装内容）、`history`、`help` |
+| `features` | 可由不同界面触发的用户操作与工作流 | `file_operations`、`pick_files`、`connect_server` | `navigation`（切换后台、打开管理视图）、`agent_auth`、`delete_session` |
 | `entities` | 领域数据、状态、相关 API 与呈现 | `file`、`location`、`preferences` | `agent`、`backend`、`session` |
-| `shared` | 不承载业务决策的应用内基础能力 | `i18n`、`lib/clipboard` | `i18n`、`config`、`api`、`lib`、`ui`、`routes` |
+| `shared` | 不承载业务决策的应用内基础能力 | `i18n`、`lib`（剪贴板）、`ui` | `i18n`、`config`、`api`、`lib`、`ui`、`routes` |
 
 每层使用 `<layer>.rs` 配合 `<layer>/`；每个切片使用 `<slice>.rs` 作为公开入口，内部按实际职责组织 `ui`、`model`、`api` 等分段。外部调用只通过切片入口公开的类型、函数或命名空间访问，内部实现分段保持私有。测试与资源留在所属模块附近。
 
 `app/cli` 将启动输入转换为运行参数。翻译目录、翻译接口和语言状态在 `shared/i18n`，由启动代码安装，供各切片直接使用。配置持久化保持既有语义：Files 的用户偏好属于 `entities/preferences`，文件列布局属于 `entities/file`；Agents 的前端配置与存储适配在 `shared/config`。
 
-Files 的位置记录和偏好引用文件列布局，通过 `entities/file/x/{location,preferences}` 明确公开这两个实体关系。这是 FSD `@x` 跨实体入口在 Rust 模块语法中的写法；其他层的同层切片不建立横向依赖。
+Files 的位置记录引用文件列布局，通过 `entities/file/x/location` 明确公开该实体关系。这是 FSD `@x` 跨实体入口在 Rust 模块语法中的写法；其他层的同层切片不建立横向依赖。
 
 Agents 的设置和历史浏览器既可嵌入工作区，也可独立打开，因此归入 widgets。`features/navigation` 声明路由回调与请求；`pages/workspace` 实现原生宿主，`app` 在启动时安装。这样 widgets 可以请求跳转，同时保持对页面和应用层的依赖方向。App 的跨层集成测试放在 `app/tests/`；模块测试通过各自公开接口和测试夹具验证行为。
 
@@ -262,7 +262,7 @@ gds-agents --enable-logs --compact
 
 公共 `Frame`、导航条目、键帽与设置控件都在公共库中；Files 专属渲染与具名事件处理器留在二进制模块。明显归属对象的构造、状态同步和呈现方法放在对应 `impl` 中。一次性原生显示检查脚本和数据放在临时目录，不保留到项目；常驻测试只覆盖关键工作流与非显然行为。
 
-Files 的 `pages/workspace/ui::Browser` 按功能组合窗口状态。`window` 管理窗口资源、焦点和订阅；`locations`、`tabs`、`sidebar`、`toolbar` 分别管理位置持久化、标签集合、侧栏区域和输入；`content`、`place_pages`、`devices`、`remote` 保存对应内容的呈现与加载状态；设置、菜单、文件操作、终端及选择器各归所属模块。组内继续按功能收拢，例如 `toolbar.path` / `toolbar.filter`、`collections.favorites` / `collections.network`。各组的构造与同步代码留在同名 UI 子模块，`Browser::new` 负责组装和启动；这些状态仍属于工作区页面，沿用 `<module>.rs` 配合 `<module>/`，不扩大切片公开接口。单个标签的导航、选择和滚动仍由 `OpenTab` 持有，终端会话保持窗口级生命周期。
+Files 的 `pages/workspace/ui::Browser` 按功能组合窗口状态。`window` 管理窗口资源、焦点和订阅；`locations`、`tabs`、`sidebar`、`toolbar` 分别管理位置持久化、标签集合、侧栏区域和输入；`content`、`place_pages`、`devices`、`remote` 保存对应内容的呈现与加载状态；设置、菜单、文件操作、终端及选择器各归所属模块。组内继续按功能收拢，例如 `toolbar` 的地址与名称筛选输入、`place_pages/network` 的网络位置视图、`devices` 的卷呈现。各组的构造与同步代码留在同名 UI 子模块，`Browser::new` 负责组装和启动；这些状态仍属于工作区页面，沿用 `<module>.rs` 配合 `<module>/`，不扩大切片公开接口。单个标签的导航、选择和滚动仍由 `OpenTab` 持有，终端会话保持窗口级生命周期。
 
 ### UIM 写法
 
@@ -341,7 +341,6 @@ gds::ui::notifications::error("操作失败的原因", cx);
 ## 设置与状态
 
 - 应用配置（Files）：`$XDG_CONFIG_HOME/gds/files/settings.toml`，默认 `~/.config/gds/files/settings.toml`，与 `state/files` 同层。设置真实变化时立即请求应用并自动保存；重复选择同值不写入，程序回写不再发起应用请求。应用失败恢复上一次有效偏好并报错；持久化失败保留已生效的运行态，明确提示“已生效但未保存”。声明式符号链接或只读目标允许读取，但不被替换。应用与保存失败通过共享右上角通知气泡反馈，不插入设置页内容，也不另设全宽保存底栏。
-- 旧套件配置 `$XDG_CONFIG_HOME/gds/settings.toml` 只作为一次性导入源：仅当应用配置不存在时读取，并在新路径原子创建副本；新配置存在时完全以新文件为准。旧文件绝不覆盖或删除；旧配置损坏时报错而不写默认值；复制失败时保留已读取的旧偏好用于本次运行并给出启动提示，下次启动重试；并发创建的新配置不会被导入覆盖。应用设置不跨应用同步。
 - Files 状态：`$XDG_STATE_HOME/gds/files/state.sqlite`，默认 `~/.local/state/gds/files/state.sqlite`。`locations` 保存收藏、最近访问和固定位置，远程 URI 使用独立记录；`view_settings` 保存应用默认值与各位置的列布局、列宽、排序、详情栏开关和列表／网格模式。列编辑器默认只作用于当前位置；“本应用默认”在同一 Toasty 事务中更新数据库默认列并清除当前位置的列覆盖，其它视图字段保留。`settings.toml` 保存主题、字体、语言、隐藏文件、侧栏等应用偏好，列与视图状态统一由 SQLite 管理。
 - Agents 的连接历史缓存继续位于 `$XDG_CACHE_HOME/gds/agents/history-v1/history.sqlite`（默认 `~/.cache/gds/agents/history-v1/history.sqlite`）。数据库执行接入公共 `service::storage`，窗口边界、连接命名空间和 512 MiB 淘汰策略仍由 Agents 管理；缓存可删除重建，不与 Files 的持久状态共库。
 - Qt 来源沿实际 qtct 配置中的 `color_scheme_path` 读取，不硬编码某个桌面生成文件。DMS 来源读取已经生成的 `DankMaterialShell/dms-colors.json`。缺失 / 不支持 / 格式错误会报错，不把内置主题伪装成成功跟随。

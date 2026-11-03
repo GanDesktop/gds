@@ -565,7 +565,14 @@ fn process_state(pid: i32) -> Option<char> {
                 .next()
                 .expect("process state"),
         ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        // A job that exits between the /proc entry lookup and the read reports
+        // ESRCH; it is gone, which callers already accept as an outcome.
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                || error.raw_os_error() == Some(nix::libc::ESRCH) =>
+        {
+            None
+        }
         Err(error) => panic!("cannot inspect test process: {error}"),
     }
 }

@@ -44,7 +44,6 @@ settings-auto-apply = 更改立即生效并自动保存
 settings-apply-failed = 未应用更改：{ $error }
 settings-save-failed = 更改已生效，但未能保存：{ $error }
 settings-read-only = 配置不可写；当前更改只在本次运行中生效。
-settings-migrate-failed = 未能把旧配置复制到当前应用的配置文件：{ $error }。本次运行仍使用已读取的旧设置，旧文件未被改动。
 settings-terminal-note = 内嵌终端尚未接入。可以在当前文件夹打开外部终端。
 settings-shell-note = 外部终端使用系统默认终端或 GDS_TERMINAL 指定的程序。
 settings-shortcuts-note = 相同动作使用相同快捷键。键帽与提示读取实际绑定。按住 Ctrl 只显示 Ctrl 组合的提示，按住 Alt 只显示 Alt 组合的提示；提示省略你正按住的修饰键，按下其余键即可执行。刷新另兼容 F5，菜单另兼容 F10。

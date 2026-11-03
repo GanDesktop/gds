@@ -1,6 +1,6 @@
 //! Files owns its application messages; GDS supplies Fluent and base messages.
 
-pub use gds::i18n::{Error, Language, format, text};
+pub use gds::i18n::{Error, Language, text};
 use gpui_kit::App;
 
 pub fn install(language: Language, cx: &mut App) -> Result<(), Error> {

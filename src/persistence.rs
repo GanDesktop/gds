@@ -4,6 +4,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +32,47 @@ fn io_error(path: &Path, source: io::Error) -> Error {
     }
 }
 
+/// How long a writer waits for a transient lock holder before reporting `Busy`.
+///
+/// A process that forks while another thread holds the lock shares the `flock`
+/// with its pre-exec child (the descriptor only closes on exec), and a genuine
+/// concurrent writer can be mid-save. A bounded wait absorbs those transient
+/// holders while a writer that never releases still surfaces as [`Error::Busy`].
+const LOCK_RETRY_BUDGET: Duration = Duration::from_millis(250);
+const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(1);
+
+fn acquire_lock(lock: &fs::File) -> Result<(), fs::TryLockError> {
+    let deadline = Instant::now() + LOCK_RETRY_BUDGET;
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(LOCK_RETRY_INTERVAL);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Open the writer lock without leaking its descriptor into exec'd children.
+///
+/// `flock` is tied to the open file description, so an inherited descriptor
+/// keeps the lock held after the parent closes its copy; `O_CLOEXEC` closes
+/// the descriptor on exec, which is what makes concurrent writers reliable
+/// even when tests or applications spawn helper processes.
+fn open_lock(path: &Path) -> io::Result<fs::File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC);
+    }
+    options.open(path)
+}
+
 #[derive(Clone)]
 pub struct File {
     path: PathBuf,
@@ -56,6 +98,9 @@ impl File {
 
     /// Replace an unchanged document, or create one that is still absent.
     ///
+    /// Transient lock holders are waited out for a short bounded period; a
+    /// writer that never releases the lock is reported as [`Error::Busy`].
+    ///
     /// # Errors
     /// Rejects managed paths, read-only files, concurrent writers and external edits.
     pub fn write(&self, expected: Option<&[u8]>, bytes: &[u8]) -> Result<(), Error> {
@@ -69,17 +114,8 @@ impl File {
         let mut lock_path = self.path.as_os_str().to_owned();
         lock_path.push(".lock");
         let lock_path = PathBuf::from(lock_path);
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
-        }
-        let lock = options
-            .open(&lock_path)
-            .map_err(|error| io_error(&lock_path, error))?;
-        lock.try_lock().map_err(|error| match error {
+        let lock = open_lock(&lock_path).map_err(|error| io_error(&lock_path, error))?;
+        acquire_lock(&lock).map_err(|error| match error {
             fs::TryLockError::WouldBlock => Error::Busy(self.path.clone()),
             fs::TryLockError::Error(error) => io_error(&lock_path, error),
         })?;

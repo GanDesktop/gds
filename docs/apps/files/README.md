@@ -46,9 +46,7 @@ Archive files use external applications through the usual open/open-with flow. B
 
 ## Settings and diagnostics
 
-Open settings from the application menu or Ctrl+,. Changes apply immediately and save automatically; each field has its own default. Preferences apply only to Files. Settings are stored in `$XDG_CONFIG_HOME/gds/files/settings.toml`; location and view state are in `$XDG_STATE_HOME/gds/files/state.sqlite`.
-
-When the application settings file is absent, Files can import `$XDG_CONFIG_HOME/gds/settings.toml` without modifying the source. An existing application file takes priority. Managed symlinks and read-only settings are protected from replacement; save failures are reported separately from changes already applied in memory.
+Open settings from the application menu or Ctrl+,. Changes apply immediately and save automatically; each field has its own default. Preferences apply only to Files. Settings are stored in `$XDG_CONFIG_HOME/gds/files/settings.toml`; location and view state are in `$XDG_STATE_HOME/gds/files/state.sqlite`. Managed symlinks and read-only settings are protected from replacement; save failures are reported separately from changes already applied in memory.
 
 Pass `--enable-logs` to enable the in-memory log viewer, available from the menu or Ctrl+Shift+L. Logs stay within the process and are not written to disk. Ordinary error notifications remain available without this flag.
 

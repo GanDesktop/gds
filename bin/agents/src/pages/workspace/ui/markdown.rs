@@ -9,6 +9,20 @@ mod actions;
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
 
+/// Render text as a Markdown code block, fencing it with a longer run of
+/// tildes than any run inside the text so the block cannot close early.
+pub(super) fn code_block(language: &str, text: &str) -> String {
+    let fence = "~".repeat(
+        text.split(|ch| ch != '~')
+            .map(str::len)
+            .max()
+            .unwrap_or(0)
+            .max(2)
+            + 1,
+    );
+    format!("{fence}{language}\n{text}\n{fence}")
+}
+
 pub(super) struct Document {
     pub state: Entity<TextViewState>,
     source: String,

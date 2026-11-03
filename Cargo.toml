@@ -49,6 +49,9 @@ path = "bin/portal/src/main.rs"
 required-features = ["portal"]
 
 [features]
+# Capability features. Dependencies are declared once in the group of the
+# capability that owns them; every feature enables the packages its own code
+# uses directly.
 default = []
 desktop-protocol = ["dep:serde"]
 persistence = ["dep:thiserror", "dep:tempfile", "dep:nix"]
@@ -99,7 +102,7 @@ agents = [
     "dep:similar", "dep:markdown", "dep:html5ever",
     "dep:markup5ever_rcdom", "dep:rodio", "dep:futures",
     "dep:tokio-stream", "dep:tonic",
-    "dep:uuid", "dep:regex", "dep:sha2", "dep:rustls",
+    "dep:uuid", "dep:sha2", "dep:rustls",
     "gpui-kit/tree-sitter-markdown", "gpui-kit/tree-sitter-rust",
     "gpui-kit/tree-sitter-bash", "gpui-kit/tree-sitter-python",
     "gpui-kit/tree-sitter-typescript", "gpui-kit/tree-sitter-diff",
@@ -114,31 +117,7 @@ portal = [
 gui-tests = ["files", "agents", "gpui-kit/test-support", "zbus?/p2p"]
 
 [dependencies]
-gds-settings-derive = { path = "macros/gds-settings-derive", optional = true }
-dirs = { version = "6", optional = true }
-which = { version = "8", optional = true }
-toasty = { version = "=0.11.0", features = ["sqlite", "migration", "serde"], optional = true }
-toasty-driver-sqlite = { version = "=0.11.0", optional = true }
-toasty-core = { version = "=0.11.0", optional = true }
-strum = { version = "0.28", features = ["derive"], optional = true }
-time = { version = "0.3", features = ["parsing", "macros"], optional = true }
-agent-client-protocol = { version = "=3.3.0", features = ["process", "schemars", "unstable", "unstable_protocol_v2"], optional = true }
-bas = { package = "bas-client", git = "https://github.com/4t145/bas", rev = "9ccfcdb960213ba4f506e93241d9bcd78de3a0b4", optional = true }
-base64 = { version = "0.22", optional = true }
-clap = { version = "4", features = ["derive", "env"], optional = true }
-futures = { version = "0.3", optional = true }
-regex = { version = "1", optional = true }
-rodio = { version = "=0.21.1", optional = true, default-features = false, features = ["playback", "flac", "mp3", "mp4", "vorbis", "wav", "tracing"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
-sha2 = { version = "0.10", optional = true }
-jiff = { version = "0.2", optional = true }
-markdown = { version = "=1.0.0", optional = true }
-html5ever = { version = "=0.27.0", optional = true }
-markup5ever_rcdom = { version = "=0.3.0", optional = true }
-vt100 = { version = "0.16", optional = true }
-unicode-segmentation = { version = "1", optional = true }
-unicode-width = { version = "0.2", optional = true }
-similar = { version = "2", optional = true }
+# Async runtime, errors and serialization shared by several capabilities.
 tokio = { version = "1", optional = true, features = [
     "fs",
     "io-util",
@@ -152,34 +131,53 @@ tokio = { version = "1", optional = true, features = [
 ] }
 tokio-stream = { version = "0.1", features = ["net", "sync"], optional = true }
 tokio-util = { version = "0.7", features = ["rt"], optional = true }
-tonic = { version = "0.14", features = ["tls-ring", "gzip"], optional = true }
+futures = { version = "0.3", optional = true }
+futures-lite = { version = "2", optional = true }
+anyhow = { version = "1", optional = true }
+thiserror = { version = "2", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
-uuid = { version = "1", features = ["serde", "v4", "v7"], optional = true }
-anyhow = { version = "1", optional = true }
-futures-lite = { version = "2", optional = true }
-russh = { version = "=0.65.0", default-features = false, features = ["ring", "rsa"], optional = true }
-russh-sftp = { version = "=3.0.1", optional = true }
-# Later SMB releases pin RustCrypto prereleases incompatible with current russh.
-smb = { version = "=0.10.2", default-features = false, features = ["async", "sign", "encrypt", "std-fs-impls"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+toml = { version = "0.9", optional = true }
+url = { version = "2", features = ["serde"], optional = true }
+percent-encoding = { version = "2", optional = true }
+directories = { version = "6", optional = true }
+tempfile = { version = "3", optional = true }
+
+# Data, text and time formats used by the service and UI code.
+base64 = { version = "0.22", optional = true }
+sha2 = { version = "0.10", optional = true }
+uuid = { version = "1", features = ["serde", "v4"], optional = true }
+strum = { version = "0.28", features = ["derive"], optional = true }
+similar = { version = "2", optional = true }
+time = { version = "0.3", features = ["parsing"], optional = true }
+chrono = { version = "0.4", optional = true }
+jiff = { version = "0.2", optional = true }
+markdown = { version = "=1.0.0", optional = true }
+html5ever = { version = "=0.27.0", optional = true }
+markup5ever_rcdom = { version = "=0.3.0", optional = true }
+
+# Desktop integration and filesystem watching.
+notify = { version = "8", optional = true }
+open = { version = "5", optional = true }
+infer = { version = "0.19", default-features = false, optional = true }
+
+# Persistence and SQLite storage.
+toasty = { version = "=0.11.0", features = ["sqlite", "migration", "serde"], optional = true }
+toasty-driver-sqlite = { version = "=0.11.0", optional = true }
+toasty-core = { version = "=0.11.0", optional = true }
+
+# Terminal backend.
 # Published MIT PTY transport and Apache-2.0 terminal emulator; no GPUI forks.
 portable-pty = { version = "=0.9.0", optional = true }
 alacritty_terminal = { version = "=0.26.0", optional = true }
-# Same MIT/Apache font discovery library as GPUI; resolve system UI and monospace aliases.
-font-kit = { package = "zed-font-kit", version = "=0.14.1-zed", optional = true }
-chrono = { version = "0.4", optional = true }
-directories = { version = "6", optional = true }
-fluent-bundle = { version = "0.16", optional = true }
-gds-uim = { git = "https://github.com/GanDesktop/gds-uim", rev = "90f5424edf6ba9c5ffaacc2b11cb5ffe24960519", optional = true }
-# The picker matches raw (possibly non-UTF-8) basenames, so globbing is done on
-# `Path` values instead of hand-rolled `String` matching.
-globset = { version = "0.4", optional = true }
-gpui-kit = { version = "=0.9.0", optional = true, features = ["gpui-fast"] }
-# Kit's RustEmbed sources must stay self-contained in installed dev builds too.
-rust-embed = { version = "8", optional = true, features = ["debug-embed"] }
-gpui = { package = "gpui-fast", version = "=0.1.13", optional = true }
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.11", optional = true }
 
+# Thumbnail rendering.
+# Thumbnail filenames and PNG metadata use already locked libraries.
+md-5 = { version = "=0.10.6", optional = true }
+png = { version = "=0.18.1", optional = true }
+resvg = { version = "=0.46.0", optional = true }
 # Header-only dimension/colour probing needs these decoders; every feature here
 # is already enabled by GPUI, so the resolved dependency set does not change.
 image = { version = "0.25.10", optional = true, default-features = false, features = [
@@ -191,25 +189,51 @@ image = { version = "0.25.10", optional = true, default-features = false, featur
     "tiff",
     "webp",
 ] }
-infer = { version = "0.19", default-features = false, optional = true }
+
+# Remote filesystems.
+russh = { version = "=0.65.0", default-features = false, features = ["ring", "rsa"], optional = true }
+russh-sftp = { version = "=3.0.1", optional = true }
+# Later SMB releases pin RustCrypto prereleases incompatible with current russh.
+smb = { version = "=0.10.2", default-features = false, features = ["async", "sign", "encrypt", "std-fs-impls"], optional = true }
+
+# Appearance and i18n.
+# Same MIT/Apache font discovery library as GPUI; resolve system UI and monospace aliases.
+font-kit = { package = "zed-font-kit", version = "=0.14.1-zed", optional = true }
+gpui-kit = { version = "=0.9.0", optional = true, features = ["gpui-fast"] }
+rust-ini = { version = "0.21", features = ["brackets-in-section-names"], optional = true }
+fluent-bundle = { version = "0.16", optional = true }
+unic-langid = { version = "0.9", optional = true }
+
+# Shared UI.
+gpui = { package = "gpui-fast", version = "=0.1.13", optional = true }
+gds-uim = { git = "https://github.com/GanDesktop/gds-uim", rev = "90f5424edf6ba9c5ffaacc2b11cb5ffe24960519", optional = true }
+gds-settings-derive = { path = "macros/gds-settings-derive", optional = true }
+# Kit's RustEmbed sources must stay self-contained in installed dev builds too.
+rust-embed = { version = "8", optional = true, features = ["debug-embed"] }
+unicode-segmentation = { version = "1", optional = true }
+unicode-width = { version = "0.2", optional = true }
+
+# Files application.
+# The picker matches raw (possibly non-UTF-8) basenames, so globbing is done on
+# `Path` values instead of hand-rolled `String` matching.
+globset = { version = "0.4", optional = true }
 mime_guess = { version = "2", optional = true }
 xdg-mime = { version = "0.4", optional = true }
-# Standard desktop thumbnail filenames and PNG metadata; use already locked libraries.
-md-5 = { version = "=0.10.6", optional = true }
-png = { version = "=0.18.1", optional = true }
-resvg = { version = "=0.46.0", optional = true }
-notify = { version = "8", optional = true }
-open = { version = "5", optional = true }
-rust-ini = { version = "0.21", features = ["brackets-in-section-names"], optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
-thiserror = { version = "2", optional = true }
-toml = { version = "0.9", optional = true }
 trash = { version = "5.2.9", optional = true }
-unic-langid = { version = "0.9", optional = true }
-tempfile = { version = "3", optional = true }
-url = { version = "2", features = ["serde"], optional = true }
-percent-encoding = { version = "2", optional = true }
+
+# Agents application.
+agent-client-protocol = { version = "=3.3.0", features = ["unstable", "unstable_protocol_v2"], optional = true }
+bas = { package = "bas-client", git = "https://github.com/4t145/bas", rev = "9ccfcdb960213ba4f506e93241d9bcd78de3a0b4", optional = true }
+dirs = { version = "6", optional = true }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.11", optional = true }
+rodio = { version = "=0.21.1", optional = true, default-features = false, features = ["playback", "flac", "mp3", "mp4", "vorbis", "wav", "tracing"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+tonic = { version = "0.14", features = ["tls-ring"], optional = true }
+vt100 = { version = "0.16", optional = true }
+which = { version = "8", optional = true }
+
+# Command-line entry points (Files, Agents and Portal).
+clap = { version = "4", features = ["derive", "env"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "open_uri"], optional = true }
@@ -220,7 +244,31 @@ wl-clipboard-rs = { version = "0.9.4", optional = true }
 [target.'cfg(unix)'.dependencies]
 # Owner/group names come from the system NSS interfaces (`getpwuid_r` /
 # `getgrgid_r`); we do not parse passwd files ourselves.
-nix = { version = "0.31", features = ["user", "fs", "poll", "process", "signal", "term"], optional = true }
+nix = { version = "0.31", features = ["user", "fs", "process", "signal"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+arboard = { version = "=3.6.1", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+process-wrap = { version = "=10.0.1", default-features = false, features = ["tokio1", "job-object", "kill-on-drop"], optional = true }
+
+[build-dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = { version = "0.9" }
+
+[dev-dependencies]
+futures-lite = "2"
+regex = "1"
+tempfile = "3"
+bas = { package = "bas-client", git = "https://github.com/4t145/bas", rev = "9ccfcdb960213ba4f506e93241d9bcd78de3a0b4", features = ["test-support"] }
+# Runtime-generated TLS fixtures for the imported connection tests.
+rcgen = "=0.13.2"
+tonic-prost = "0.14"
+
+[target.'cfg(unix)'.dev-dependencies]
+# Test-only PTY helpers (`nix::pty`, `nix::unistd::tcsetpgrp`) in the Agents
+# terminal tests; production code does not need nix's term feature.
+nix = { version = "0.31", features = ["process", "term"] }
 
 [profile.dev]
 debug = 1
@@ -233,24 +281,6 @@ codegen-units = 1
 debug = 0
 strip = "symbols"
 incremental = false
-
-[target.'cfg(target_os = "macos")'.dependencies]
-arboard = { version = "=3.6.1", optional = true }
-
-[target.'cfg(windows)'.dependencies]
-process-wrap = { version = "=10.0.1", default-features = false, features = ["tokio1", "job-object", "kill-on-drop"], optional = true }
-
-[dev-dependencies]
-futures-lite = "2"
-tempfile = "3"
-bas = { package = "bas-client", git = "https://github.com/4t145/bas", rev = "9ccfcdb960213ba4f506e93241d9bcd78de3a0b4", features = ["test-support"] }
-# Runtime-generated TLS fixtures for the imported connection tests.
-rcgen = "=0.13.2"
-tonic-prost = "0.14"
-
-[build-dependencies]
-serde = { version = "1", features = ["derive"], optional = true }
-toml = { version = "0.9", optional = true }
 
 [patch.crates-io]
 trash = { git = "https://github.com/GanDesktop/trash-rs", branch = "fix/freedesktop-trashinfo-reviewed" }

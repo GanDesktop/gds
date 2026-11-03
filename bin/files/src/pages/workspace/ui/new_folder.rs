@@ -13,19 +13,15 @@ use fluent_bundle::FluentArgs;
 use gds::{i18n, ui::DialogActions, ui::notifications};
 use gds_uim::el;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{
-    ActiveTheme, Icon, WindowExt,
-    dialog::AlertDialog,
-    input::{InputEvent, InputState},
-};
+use gpui_kit::component::{ActiveTheme, Icon, WindowExt, dialog::AlertDialog};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::Browser;
+use super::name_form::NameForm;
 use crate::features::file_operations::names;
 
 const DIALOG_WIDTH: f32 = 480.;
-const DIALOG_GAP: f32 = 8.;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -71,104 +67,11 @@ impl Request {
     }
 }
 
-struct Form {
-    input: Entity<InputState>,
-    suggestion: OsString,
-    display: String,
-    error: Option<SharedString>,
-    _subscription: Subscription,
-}
-
-impl Form {
-    fn new(suggestion: OsString, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let display = suggestion.to_string_lossy().into_owned();
-        let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(i18n::text("new-folder-placeholder", cx))
-        });
-        let subscription = cx.subscribe_in(&input, window, Self::on_input);
-        let mut form = Self {
-            input,
-            suggestion,
-            display,
-            error: None,
-            _subscription: subscription,
-        };
-        let value = form.display.clone();
-        form.input.update(cx, |input, cx| {
-            input.set_value(value, window, cx);
-            input.select_all(window, cx);
-        });
-        form.refresh_error(cx);
-        form
-    }
-
-    /// The typed text, unless the user left the checked suggestion untouched.
-    fn chosen_name(&self, cx: &App) -> OsString {
-        let value = self.input.read(cx).value().to_string();
-        if value == self.display {
-            self.suggestion.clone()
-        } else {
-            OsString::from(value)
-        }
-    }
-
-    fn focus_input(&self, window: &mut Window, cx: &mut App) {
-        self.input.update(cx, |input, cx| {
-            input.focus(window, cx);
-            input.select_all(window, cx);
-        });
-    }
-
-    /// Check the typed leaf itself; the destination is only probed in the
-    /// background after the user confirms.
-    fn refresh_error(&mut self, cx: &App) -> bool {
-        match names::validate(&self.chosen_name(cx)) {
-            Ok(()) => {
-                self.error = None;
-                true
-            }
-            Err(error) => {
-                self.error = Some(i18n::text(error.label_id(), cx));
-                false
-            }
-        }
-    }
-
-    fn on_input(
-        &mut self,
-        _: &Entity<InputState>,
-        event: &InputEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !matches!(event, InputEvent::Change) {
-            return;
-        }
-        self.refresh_error(cx);
-        cx.notify();
-    }
-}
-
-impl Render for Form {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let input = self.input.clone();
-        let error = self.error.clone();
-        el! {
-            .div { flex; flex_col; w_full; min_w_0; gap: DIALOG_GAP.px } [
-                .div { w_full; min_w_0 } [($&input, cx).gds::ui::field::input { w_full }],
-                @if (let Some(error) = error)
-                    .div { text_xs; text_color: $cx.theme().danger } [error],
-                @end,
-            ]
-        }
-    }
-}
-
 struct NewFolderDialog {
     browser: WeakEntity<Browser>,
     origin_tab: u64,
     destination: PathBuf,
-    form: Entity<Form>,
+    form: Entity<NameForm>,
     started: Cell<bool>,
 }
 
@@ -181,7 +84,14 @@ impl NewFolderDialog {
         window: &mut Window,
         cx: &mut Context<Browser>,
     ) -> Rc<Self> {
-        let form = cx.new(|cx| Form::new(suggestion, window, cx));
+        let form = cx.new(|cx| {
+            NameForm::new(
+                suggestion,
+                i18n::text("new-folder-placeholder", cx),
+                window,
+                cx,
+            )
+        });
         Rc::new(Self {
             browser,
             origin_tab,

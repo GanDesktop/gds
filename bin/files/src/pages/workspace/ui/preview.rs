@@ -207,7 +207,7 @@ impl View {
         let Target::Item(item) = &self.target else {
             return None;
         };
-        let source = crate::features::file_preview::source(&item.entry)?;
+        let source = crate::entities::file::directory::thumbnail_source(&item.entry)?;
         let media = Thumbnail::new(self.thumbnails.clone(), source).show_status(true);
         Some(
             el! {

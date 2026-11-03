@@ -13,21 +13,13 @@ fn application_path(root: &tempfile::TempDir) -> PathBuf {
     root.path().join("gds/files/settings.toml")
 }
 
-fn legacy_path(root: &tempfile::TempDir) -> PathBuf {
-    root.path().join("gds/settings.toml")
-}
-
 #[test]
 fn missing_configurations_use_defaults_without_creating_any_file() {
     let root = fixture();
     let application = application_path(&root);
-    let legacy = legacy_path(&root);
-    let loaded =
-        load_startup_from(&application, &legacy).expect("load missing application preferences");
-    assert_eq!(loaded.preferences, Preferences::default());
-    assert!(loaded.migration.is_none());
+    let loaded = load_from(&application).expect("load missing application preferences");
+    assert_eq!(loaded, Preferences::default());
     assert!(!application.exists());
-    assert!(!legacy.exists());
 }
 
 #[test]
@@ -134,183 +126,6 @@ fn partial_terminal_preferences_keep_shared_defaults_and_literal_arguments() {
     assert_eq!(
         load_from(&path).expect("reload terminal configuration"),
         preferences
-    );
-}
-
-#[test]
-fn legacy_preferences_are_imported_once_without_touching_the_old_file() {
-    let root = fixture();
-    let application = application_path(&root);
-    let legacy = legacy_path(&root);
-    let legacy_contents = "[files]\nshow_hidden = true\n";
-    fs::create_dir_all(legacy.parent().expect("legacy directory"))
-        .expect("create legacy directory");
-    fs::write(&legacy, legacy_contents).expect("write legacy preferences");
-
-    let imported = load_startup_from(&application, &legacy).expect("import legacy preferences");
-    assert!(imported.migration.is_none());
-    assert!(imported.preferences.files.show_hidden);
-    assert_eq!(
-        load_from(&application).expect("read imported preferences"),
-        imported.preferences
-    );
-    assert_eq!(
-        fs::read_to_string(&legacy).expect("read unchanged legacy file"),
-        legacy_contents
-    );
-
-    // The application configuration now wins over any legacy change.
-    let mut application_preferences = imported.preferences.clone();
-    application_preferences.files.show_hidden = false;
-    save_to(&application, &application_preferences).expect("save application preferences");
-    fs::write(&legacy, "[files]\nshow_hidden = true\n").expect("update legacy preferences");
-    let startup = load_startup_from(&application, &legacy).expect("load application preferences");
-    assert!(!startup.preferences.files.show_hidden);
-    assert!(startup.migration.is_none());
-    assert_eq!(
-        fs::read_to_string(&legacy).expect("read untouched legacy file"),
-        "[files]\nshow_hidden = true\n"
-    );
-}
-
-#[test]
-fn malformed_legacy_preferences_are_reported_without_writing_application_defaults() {
-    let root = fixture();
-    let application = application_path(&root);
-    let legacy = legacy_path(&root);
-    let invalid = "[files\nshow_hidden = ?";
-    fs::create_dir_all(legacy.parent().expect("legacy directory"))
-        .expect("create legacy directory");
-    fs::write(&legacy, invalid).expect("write malformed legacy preferences");
-
-    assert!(matches!(
-        load_startup_from(&application, &legacy),
-        Err(Error::Parse { .. })
-    ));
-    assert!(!application.exists());
-    assert_eq!(
-        fs::read_to_string(&legacy).expect("read unchanged legacy file"),
-        invalid
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn a_declarative_legacy_link_is_read_and_the_managed_source_is_untouched() {
-    use std::os::unix::fs::symlink;
-
-    let root = fixture();
-    let application = application_path(&root);
-    let legacy = legacy_path(&root);
-    let target = root.path().join("managed-legacy.toml");
-    let contents = "[files]\nshow_hidden = true\n";
-    fs::write(&target, contents).expect("write managed legacy preferences");
-    fs::create_dir_all(legacy.parent().expect("legacy directory"))
-        .expect("create legacy directory");
-    symlink(&target, &legacy).expect("link declarative legacy preferences");
-
-    let imported = load_startup_from(&application, &legacy).expect("import linked preferences");
-    assert!(imported.preferences.files.show_hidden);
-    assert!(imported.migration.is_none());
-    assert_eq!(fs::read_link(&legacy).expect("retain legacy link"), target);
-    assert_eq!(
-        fs::read_to_string(&target).expect("read unchanged managed source"),
-        contents
-    );
-    assert!(
-        load_from(&application)
-            .expect("read imported preferences")
-            .files
-            .show_hidden
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn a_failed_import_keeps_the_legacy_preferences_for_this_run() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let root = fixture();
-    let application = application_path(&root);
-    let legacy = legacy_path(&root);
-    fs::create_dir_all(legacy.parent().expect("legacy directory"))
-        .expect("create legacy directory");
-    fs::write(&legacy, "[files]\nshow_hidden = true\n").expect("write legacy preferences");
-    let directory = application.parent().expect("application directory");
-    fs::create_dir_all(directory).expect("create application directory");
-    fs::set_permissions(directory, fs::Permissions::from_mode(0o555))
-        .expect("make application directory read-only");
-
-    let loaded = load_startup_from(&application, &legacy).expect("load legacy preferences");
-    assert!(loaded.preferences.files.show_hidden);
-    assert!(matches!(
-        loaded.migration,
-        Some(Error::Persistence(gds::persistence::Error::ReadOnly(_)))
-    ));
-    assert!(!application.exists());
-    assert_eq!(
-        fs::read_to_string(&legacy).expect("read unchanged legacy file"),
-        "[files]\nshow_hidden = true\n"
-    );
-
-    fs::set_permissions(directory, fs::Permissions::from_mode(0o755))
-        .expect("restore application directory permissions");
-}
-
-#[test]
-fn an_import_never_overwrites_a_configuration_created_concurrently() {
-    let root = fixture();
-    let application = application_path(&root);
-    fs::create_dir_all(application.parent().expect("application directory"))
-        .expect("create application directory");
-    fs::write(&application, "[files]\nshow_hidden = false\n")
-        .expect("write concurrent preferences");
-
-    assert!(matches!(
-        write_atomic(&application, &Preferences::default(), false),
-        Err(Error::Persistence(gds::persistence::Error::Conflict(_)))
-    ));
-    assert_eq!(
-        fs::read_to_string(&application).expect("read concurrent preferences"),
-        "[files]\nshow_hidden = false\n"
-    );
-}
-
-#[test]
-fn an_import_that_lost_to_a_concurrent_configuration_uses_that_configuration() {
-    let root = fixture();
-    let application = application_path(&root);
-    let legacy = legacy_path(&root);
-    fs::create_dir_all(application.parent().expect("application directory"))
-        .expect("create application directory");
-    let concurrent_contents = "[files]\nshow_hidden = false\n";
-    fs::write(&application, concurrent_contents).expect("write concurrent preferences");
-    let legacy_contents = "[files]\nshow_hidden = true\n";
-    fs::create_dir_all(legacy.parent().expect("legacy directory"))
-        .expect("create legacy directory");
-    fs::write(&legacy, legacy_contents).expect("write legacy preferences");
-    let legacy_preferences = read(&legacy).expect("read legacy preferences");
-
-    // A concurrent configuration wins the no-clobber copy, so the import must
-    // resolve to the file on disk rather than the values it tried to write.
-    let lost = write_atomic(&application, &legacy_preferences, false)
-        .expect_err("refuse to replace the concurrent configuration");
-    assert!(matches!(
-        &lost,
-        Error::Persistence(gds::persistence::Error::Conflict(_))
-    ));
-    let loaded =
-        import_outcome(&application, legacy_preferences, lost).expect("use concurrent preferences");
-
-    assert!(!loaded.preferences.files.show_hidden);
-    assert!(loaded.migration.is_none());
-    assert_eq!(
-        fs::read_to_string(&application).expect("read concurrent preferences"),
-        concurrent_contents
-    );
-    assert_eq!(
-        fs::read_to_string(&legacy).expect("read unchanged legacy file"),
-        legacy_contents
     );
 }
 

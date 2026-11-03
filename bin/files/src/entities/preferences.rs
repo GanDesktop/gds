@@ -1,7 +1,7 @@
 //! Persisted application preferences and their editor model.
 mod api;
 mod model;
-pub(crate) use api::{load_startup, save};
+pub(crate) use api::{load, save};
 #[cfg(test)]
 pub(crate) use model::FilesPreferences;
 pub(crate) use model::{Preferences, PreferencesEditor};

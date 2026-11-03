@@ -108,8 +108,11 @@ fn reading_updates_access_order_without_changing_freshness() {
 fn concurrent_handles_only_observe_complete_replacements() {
     // Busy is an intentional best-effort result; this test waits for successful
     // operations to verify replacement atomicity, not lock scheduling fairness.
+    // The budget is generous because the full parallel suite can deschedule a
+    // lock holder for seconds while PTY/build-heavy tests run; a genuinely
+    // stuck cache would still fail instead of hanging.
     fn retry_busy<T>(mut operation: impl FnMut() -> Result<T, Error>) -> T {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             match operation() {
                 Ok(value) => return value,
@@ -118,7 +121,7 @@ fn concurrent_handles_only_observe_complete_replacements() {
                 {
                     std::thread::sleep(LOCK_RETRY);
                 }
-                Err(error) => panic!("cache operation failed: {error}"),
+                Err(error) => panic!("cache operation failed: {error:?}"),
             }
         }
     }

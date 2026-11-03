@@ -258,12 +258,6 @@ impl Report {
         self.show_to(target, cx);
     }
 
-    /// Deliver a background result to its originating window. A closed origin
-    /// discards the toast without moving it to another window.
-    pub fn show_in(self, window: AnyWindowHandle, cx: &mut App) {
-        self.show_to(Some(window), cx);
-    }
-
     fn show_to(self, target: Option<AnyWindowHandle>, cx: &mut App) {
         match self.level {
             Level::Error => {

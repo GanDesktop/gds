@@ -106,6 +106,53 @@ async fn failed_migration_rolls_back_rows_schema_and_tracking() {
     );
 }
 
+/// A worker that has finished opening the database can start writing while
+/// another worker is still applying migrations inside `Options::open`. SQLite
+/// answers that lock conflict with an immediate `SQLITE_BUSY` instead of
+/// invoking the busy handler (waiting could deadlock against the migrating
+/// connection), so `PRAGMA busy_timeout` cannot cover it. Retry the whole
+/// transaction for a bounded period, as an application client has to; the
+/// final row count still proves that no update was lost.
+const BUSY_RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const BUSY_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+fn is_database_locked(error: &toasty::Error) -> bool {
+    let message = error.to_string();
+    message.contains("database is locked") || message.contains("database table is locked")
+}
+
+async fn write_record(db: &mut Database, id: i64, value: String) {
+    let deadline = std::time::Instant::now() + BUSY_RETRY_TIMEOUT;
+    loop {
+        let attempt = async {
+            let mut tx = db
+                .transaction_builder()
+                .mode(TransactionMode::Immediate)
+                .begin()
+                .await?;
+            if let Err(error) = create!(Record {
+                id,
+                value: value.clone()
+            })
+            .exec(&mut tx)
+            .await
+            {
+                tx.rollback().await?;
+                return Err(error);
+            }
+            tx.commit().await
+        }
+        .await;
+        match attempt {
+            Ok(()) => return,
+            Err(error) if is_database_locked(&error) && std::time::Instant::now() < deadline => {
+                tokio::time::sleep(BUSY_RETRY_INTERVAL).await;
+            }
+            Err(error) => panic!("writer: {error}"),
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_first_open_and_writers_serialize_without_lost_updates() {
     let root = tempfile::tempdir().expect("fixture");
@@ -119,20 +166,7 @@ async fn concurrent_first_open_and_writers_serialize_without_lost_updates() {
             barrier.wait().await;
             let mut db = options(INITIAL).open(path).await.expect("concurrent open");
             for value in 0..10 {
-                let mut tx = db
-                    .transaction_builder()
-                    .mode(TransactionMode::Immediate)
-                    .begin()
-                    .await
-                    .expect("writer");
-                create!(Record {
-                    id: id * 10_i64 + value,
-                    value: value.to_string()
-                })
-                .exec(&mut tx)
-                .await
-                .expect("insert");
-                tx.commit().await.expect("commit");
+                write_record(&mut db, id * 10_i64 + value, value.to_string()).await;
             }
         });
     }

@@ -4,6 +4,7 @@ use bas::model::{ContentBlock, Role, ToolCall, ToolCallStatus};
 use gds_uim::el;
 use gds_uim::m;
 
+use super::super::markdown::code_block;
 use super::super::*;
 use gpui_kit::component::message::{Message as MessageView, MessageContent};
 
@@ -664,18 +665,6 @@ fn json_block(value: &serde_json::Value) -> String {
         "json",
         &serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
     )
-}
-
-fn code_block(language: &str, text: &str) -> String {
-    let fence = "~".repeat(
-        text.split(|ch| ch != '~')
-            .map(str::len)
-            .max()
-            .unwrap_or(0)
-            .max(2)
-            + 1,
-    );
-    format!("{fence}{language}\n{text}\n{fence}")
 }
 
 pub(in crate::pages::workspace) fn block_source(block: &ContentBlock) -> Option<String> {

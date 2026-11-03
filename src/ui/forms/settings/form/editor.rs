@@ -2,7 +2,7 @@ use crate::appearance::tokens;
 use gds_uim::el;
 use gpui_kit::{
     component::{
-        ActiveTheme, Disableable, IndexPath, Sizable,
+        ActiveTheme, IndexPath, Sizable,
         input::{InputEvent, InputState, Textarea, TextareaState},
         select::{SearchableVec, SelectEvent, SelectState},
         slider::{SliderEvent, SliderValue},
@@ -42,7 +42,6 @@ pub struct Editor<T: Model> {
     fields: Vec<Field<T>>,
     controls: Vec<Control>,
     errors: Vec<Option<String>>,
-    enabled: bool,
     language: i18n::Language,
     _subscriptions: Vec<Subscription>,
 }
@@ -170,7 +169,6 @@ impl<T: Model> Editor<T> {
             value,
             fields,
             controls,
-            enabled: true,
             language: i18n::language(cx),
             _subscriptions: subscriptions,
         }
@@ -188,11 +186,6 @@ impl<T: Model> Editor<T> {
         self.value = value;
         self.errors.fill(None);
         self.sync(window, cx);
-        cx.notify();
-    }
-
-    pub fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.enabled = enabled;
         cx.notify();
     }
 
@@ -243,9 +236,6 @@ impl<T: Model> Editor<T> {
     }
 
     fn change(&mut self, index: usize, value: Value, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.enabled {
-            return;
-        }
         let field = &self.fields[index];
         let mut next = self.value.clone();
         let result = (field.set)(&mut next, value).and_then(|_| next.validate());
@@ -308,7 +298,6 @@ impl<T: Model> Editor<T> {
         match &self.controls[index] {
             Control::Toggle => Switch::new(id)
                 .checked(field.effective(&self.value).as_bool().unwrap_or_default())
-                .disabled(!self.enabled)
                 .small()
                 .accessibility_label(label)
                 .on_change(cx.listener(move |this, checked: &bool, window, cx| {
@@ -320,7 +309,6 @@ impl<T: Model> Editor<T> {
                     $(Textarea::new(state)
                         .accessibility_id(id)
                         .small()
-                        .disabled(!self.enabled)
                         .w_full()
                         .aria_label(label)
                         .bg(crate::appearance::theme::Colors::current(cx).content)),
@@ -330,14 +318,12 @@ impl<T: Model> Editor<T> {
             Control::Text(state) => ui::field::input(state, cx)
                 .id(id)
                 .small()
-                .disabled(!self.enabled)
                 .w_full()
                 .aria_label(label)
                 .into_any_element(),
             Control::Choice { state, .. } => ui::field::select(state, cx)
                 .id(id)
                 .small()
-                .disabled(!self.enabled)
                 .w_full()
                 .accessibility_label(label)
                 .search_placeholder(i18n::text("form-search", cx))
@@ -349,12 +335,7 @@ impl<T: Model> Editor<T> {
                 let display =
                     field.effective(&self.value).as_f64().unwrap_or(number.min) * number.scale;
                 control
-                    .element(
-                        id.into(),
-                        label,
-                        number.label(display as f32).into(),
-                        !self.enabled,
-                    )
+                    .element(id.into(), label, number.label(display as f32).into(), false)
                     .into_any_element()
             }
         }
@@ -394,7 +375,7 @@ impl<T: Model> Render for Editor<T> {
                 });
             }
             let modified = field.is_modified(&self.value, &defaults);
-            let reset = (self.enabled && modified).then(|| {
+            let reset = modified.then(|| {
                 ui::button::Button::icon_button(SharedString::from(format!(
                     "config-reset-{}",
                     field.id

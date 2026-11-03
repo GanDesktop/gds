@@ -142,6 +142,6 @@ mode = "system"
 
 ## 6. 持久化与托管配置
 
-Files 保存到 `$XDG_CONFIG_HOME/gds/files/settings.toml`，Agents 保存到自己的前端配置；不存在套件全局外观同步。Files 仅在应用配置缺失时只读导入旧的 `gds/settings.toml`，不修改导入源。应用真实变化后自动保存，失败通过共享通知报告。
+Files 保存到 `$XDG_CONFIG_HOME/gds/files/settings.toml`，Agents 保存到自己的前端配置；不存在套件全局外观同步。应用真实变化后自动保存，失败通过共享通知报告。
 
 声明式符号链接与只读文件允许读取，但不会被替换或覆盖。运行态修改已成功、写入失败时明确报告“已生效但未保存”。外部主题文件始终只读；GDS 不替用户安装 DMS、Qt 插件或修改会话环境。

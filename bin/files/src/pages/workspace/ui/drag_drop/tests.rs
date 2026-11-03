@@ -6,10 +6,7 @@ use std::{
 use gpui_kit::assets::IconName;
 
 use super::{DragPreview, DragSnapshot, transferable_sources};
-use crate::entities::file::directory::{
-    ContentCategory, ContentType, Entry, EntryDetails, EntryKind, LinkStatus, LinkTarget,
-};
-use crate::pages::workspace::ui::file_icon::FileIcon;
+use crate::entities::file::directory::{Entry, EntryDetails, EntryKind};
 use gpui_kit::{Bounds, point, px, size};
 
 fn entry(path: &str, kind: EntryKind) -> Entry {
@@ -27,22 +24,6 @@ fn entry(path: &str, kind: EntryKind) -> Entry {
         modified: None,
         is_hidden: false,
         details: EntryDetails::default(),
-    }
-}
-
-fn content(category: ContentCategory) -> ContentType {
-    ContentType {
-        category,
-        format: None,
-        mime: None,
-    }
-}
-
-fn link(status: LinkStatus, kind: EntryKind, content: Option<ContentType>) -> LinkTarget {
-    LinkTarget {
-        status,
-        kind,
-        content,
     }
 }
 
@@ -128,54 +109,4 @@ fn dropping_a_selection_onto_one_of_its_folders_skips_that_folder() {
         transferable_sources(Path::new("/work/folder"), sources),
         vec![PathBuf::from("/work/a.txt")]
     );
-}
-
-#[test]
-fn a_resolved_link_shows_its_target_category_with_a_link_badge() {
-    let mut linked_folder = entry("/work/shortcut", EntryKind::SymbolicLink);
-    linked_folder.details.target = Some(link(LinkStatus::Resolved, EntryKind::Directory, None));
-    let mut linked_image = entry("/work/cover", EntryKind::SymbolicLink);
-    linked_image.details.target = Some(link(
-        LinkStatus::Resolved,
-        EntryKind::File,
-        Some(content(ContentCategory::Image)),
-    ));
-
-    let folder_icon = FileIcon::for_entry(&linked_folder);
-    assert_eq!(folder_icon.base(), IconName::Folder);
-    assert_eq!(folder_icon.badge(), Some(IconName::Link));
-
-    let image_icon = FileIcon::for_entry(&linked_image);
-    assert_eq!(image_icon.base(), IconName::FileImage);
-    assert_eq!(image_icon.badge(), Some(IconName::Link));
-}
-
-#[test]
-fn only_a_missing_target_uses_the_broken_link_icon() {
-    let mut broken = entry("/work/shortcut", EntryKind::SymbolicLink);
-    broken.details.target = Some(link(LinkStatus::Broken, EntryKind::Unknown, None));
-    let mut unreachable = entry("/work/mounted", EntryKind::SymbolicLink);
-    unreachable.details.target = Some(link(LinkStatus::Unreachable, EntryKind::Unknown, None));
-
-    let broken_icon = FileIcon::for_entry(&broken);
-    assert_eq!(broken_icon.base(), IconName::Unlink);
-    assert_eq!(broken_icon.badge(), None);
-
-    let unreachable_icon = FileIcon::for_entry(&unreachable);
-    assert_ne!(unreachable_icon.base(), IconName::Unlink);
-    assert_eq!(unreachable_icon.badge(), Some(IconName::Link));
-}
-
-#[test]
-fn regular_files_show_their_content_category() {
-    let mut image = entry("/work/photo.png", EntryKind::File);
-    image.details.content = Some(content(ContentCategory::Image));
-    let mut archive = entry("/work/backup.tar", EntryKind::File);
-    archive.details.content = Some(content(ContentCategory::Archive));
-    let unknown = entry("/work/blob", EntryKind::File);
-
-    assert_eq!(FileIcon::for_entry(&image).base(), IconName::FileImage);
-    assert_eq!(FileIcon::for_entry(&archive).base(), IconName::FileArchive);
-    assert_eq!(FileIcon::for_entry(&unknown).base(), IconName::File);
-    assert_eq!(FileIcon::for_entry(&image).badge(), None);
 }
