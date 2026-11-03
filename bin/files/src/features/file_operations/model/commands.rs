@@ -34,6 +34,8 @@ gpui_kit::actions!(
         CopyFiles,
         CutFiles,
         PasteFiles,
+        UndoFileOperation,
+        RedoFileOperation,
         CopyFilePaths,
         SelectAllFiles,
         DeselectAll,
@@ -105,6 +107,8 @@ pub enum Command {
     Copy,
     Cut,
     Paste,
+    Undo,
+    Redo,
     CopyPaths,
     SelectAll,
     DeselectAll,
@@ -133,7 +137,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 49] = [
         Self::Menu,
         Self::Settings,
         Self::Help,
@@ -157,6 +161,8 @@ impl Command {
         Self::Copy,
         Self::Cut,
         Self::Paste,
+        Self::Undo,
+        Self::Redo,
         Self::CopyPaths,
         Self::SelectAll,
         Self::DeselectAll,
@@ -208,6 +214,8 @@ impl Command {
             Self::Copy => "copy-files",
             Self::Cut => "cut-files",
             Self::Paste => "paste-files",
+            Self::Undo => "undo",
+            Self::Redo => "redo",
             Self::CopyPaths => "copy-path",
             Self::SelectAll => "select-all",
             Self::DeselectAll => "deselect-all",
@@ -261,6 +269,8 @@ impl Command {
             Self::Copy => Box::new(CopyFiles),
             Self::Cut => Box::new(CutFiles),
             Self::Paste => Box::new(PasteFiles),
+            Self::Undo => Box::new(UndoFileOperation),
+            Self::Redo => Box::new(RedoFileOperation),
             Self::CopyPaths => Box::new(CopyFilePaths),
             Self::SelectAll => Box::new(SelectAllFiles),
             Self::DeselectAll => Box::new(DeselectAll),
@@ -350,6 +360,8 @@ impl Command {
             Self::Copy => "ctrl-c",
             Self::Cut => "ctrl-x",
             Self::Paste => "ctrl-v",
+            Self::Undo => "ctrl-z",
+            Self::Redo => "ctrl-shift-z",
             Self::CopyPaths => "ctrl-shift-c",
             Self::SelectAll => "ctrl-a",
             Self::DeselectAll => "ctrl-shift-a",
@@ -559,6 +571,11 @@ fn action_binding(
             }
             None => "!GdsTerminal && !FilesTerminalTabs && !FilesTerminal".to_owned(),
         })
+    };
+    let scoped = if action.partial_eq(&UndoFileOperation) || action.partial_eq(&RedoFileOperation) {
+        scoped.map(|context| format!("({context}) && !Input"))
+    } else {
+        scoped
     };
     let predicate = scoped.as_deref().map(|value| {
         KeyBindingContextPredicate::parse(value)

@@ -1,0 +1,31 @@
+Source: gds
+Section: utils
+Priority: optional
+Maintainer: 4t145 <u4t145@163.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc, clang, lld, cmake, pkg-config,
+ python3, libssl-dev, libwayland-dev, libxkbcommon-dev, libxkbcommon-x11-dev,
+ libfontconfig1-dev, libfreetype-dev, libx11-dev, libxcb1-dev, libasound2-dev,
+ libdbus-1-dev, libzstd-dev, zlib1g-dev, libgl-dev, libvulkan-dev, desktop-file-utils
+Standards-Version: 4.7.0
+Homepage: https://github.com/GanDesktop/gds
+Rules-Requires-Root: no
+
+Package: gds-files
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libwayland-client0, libxkbcommon0,
+ libfontconfig1, libxkbcommon-x11-0, libegl1, libvulkan1, xdg-utils, xdg-terminal-exec,
+ xdg-desktop-portal, udisks2
+Recommends: ffmpeg, mesa-vulkan-drivers
+Suggests: xdg-desktop-portal-gds
+Description: native GPUI file manager for Linux desktops
+ Browse local folders, mounted volumes and SFTP/SMB locations,
+ with file operations, previews and embedded terminals.
+
+Package: xdg-desktop-portal-gds
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, xdg-desktop-portal
+Suggests: gds-files
+Description: GDS desktop portal backend
+ Provides the desktop FileChooser interface using GDS Files.
+ Install GDS Files separately for the native picker. Installing this
+ package does not change desktop portal routing or default applications.

@@ -1,0 +1,20 @@
+ARG BASE_IMAGE=debian:trixie
+FROM ${BASE_IMAGE}
+ARG RUST_TOOLCHAIN=stable
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl build-essential clang lld cmake pkg-config git python3 \
+        libssl-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+        libfontconfig1-dev libfreetype-dev libx11-dev libxcb1-dev libasound2-dev \
+        libdbus-1-dev libzstd-dev zlib1g-dev libgl-dev libvulkan-dev \
+        debhelper dpkg-dev fakeroot desktop-file-utils \
+    && rm -rf /var/lib/apt/lists/*
+# Keep the toolchain in the image; Cargo downloads and build outputs use /cache.
+ENV RUSTUP_HOME=/opt/rustup
+ENV CARGO_HOME=/opt/cargo
+ENV PATH=/opt/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain ${RUST_TOOLCHAIN} --no-modify-path \
+    && chmod -R a+rX /opt/rustup /opt/cargo && rm /tmp/rustup-init.sh
+ARG BUILD_UID=1000
+RUN getent passwd ${BUILD_UID} || useradd -M -u ${BUILD_UID} -g 0 builder
+WORKDIR /cache/package

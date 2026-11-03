@@ -19,7 +19,7 @@ P1 表示已有功能的正确性问题；P2 表示互操作能力与覆盖范�
 
 验收：使用隔离 XDG 目录中的实际 `info/*.trashinfo` 与 `files/*`，从生产枚举入口读取，再确认或执行还原。覆盖重复键、相对路径、注释、非 UTF-8 名称、同名冲突与混合有效／无效记录。手工构造 `TrashItem` 的单元测试作为补充。
 
-入口：[回收站后端](../../../bin/files/src/pages/workspace/ui/recycle/backend.rs)、[现有测试](../../../bin/files/src/pages/workspace/ui/recycle/backend/tests.rs)。规范：[Trash §6](https://specifications.freedesktop.org/trash/1.0/)。
+入口：[回收站后端](../../../bin/files/src/features/file_operations/recycle.rs)、[现有测试](../../../bin/files/src/features/file_operations/recycle/tests.rs)。规范：[Trash §6](https://specifications.freedesktop.org/trash/1.0/)。
 
 ## FM-02 原生 FileChooser 与窗口语义（P1 / P2）
 

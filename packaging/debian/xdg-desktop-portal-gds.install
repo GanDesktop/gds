@@ -1,0 +1,4 @@
+usr/libexec/xdg-desktop-portal-gds
+usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.gds.service
+usr/share/xdg-desktop-portal/portals/gds.portal
+usr/lib/systemd/user/xdg-desktop-portal-gds.service

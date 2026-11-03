@@ -232,6 +232,26 @@ fn popup(
 /// Application pages and the about entry.
 fn rows(mut menu: PopupMenu, view: WeakEntity<Browser>, cx: &App) -> PopupMenu {
     menu = ui::menu::popup(menu);
+    for command in [Command::Undo, Command::Redo] {
+        let browser = view.upgrade();
+        let enabled = browser
+            .as_ref()
+            .is_some_and(|view| view.read(cx).history_available(command, cx));
+        let label = browser
+            .as_ref()
+            .map(|view| view.read(cx).history_label(command, cx))
+            .unwrap_or_else(|| i18n::text(command.label_id(), cx));
+        menu = menu.item(
+            ui::menu::item(label, Some(command.into()), enabled)
+                .icon(if command == Command::Undo {
+                    IconName::Undo2
+                } else {
+                    IconName::Redo2
+                })
+                .on_click(Browser::menu_command(view.clone(), command)),
+        );
+    }
+    menu = menu.separator();
     for entry in MenuEntry::ROWS
         .into_iter()
         .filter(|entry| *entry != MenuEntry::Logs || gds::ui::logs::is_enabled(cx))

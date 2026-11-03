@@ -1,7 +1,11 @@
 //! Shared menu surfaces, command rows and in-window context menu placement.
 
 use gds_uim::el;
-use gpui_kit::{component::menu::PopupMenu, prelude::*, *};
+use gpui_kit::{
+    component::menu::{PopupMenu, PopupMenuItem},
+    prelude::*,
+    *,
+};
 
 use super::{Shortcut, ShortcutBadge};
 use crate::appearance::tokens::SMALL;
@@ -13,6 +17,7 @@ const MIN_WIDTH: f32 = 220.;
 const ROW_MIN_WIDTH: f32 = 260.;
 const SHORTCUT_GAP: f32 = 24.;
 const EDGE_MARGIN: f32 = 8.;
+const DISABLED_OPACITY: f32 = 0.5;
 
 /// Keep Kit's menu colors, icons, borders and item states across applications.
 pub fn popup(menu: PopupMenu) -> PopupMenu {
@@ -27,6 +32,23 @@ pub fn row(
     label: impl Into<SharedString>,
     shortcut: Option<Shortcut>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement {
+    row_with_state(label, shortcut, true)
+}
+
+/// Keep custom shortcut badges and the menu item's interaction state in sync.
+pub fn item(
+    label: impl Into<SharedString>,
+    shortcut: Option<Shortcut>,
+    enabled: bool,
+) -> PopupMenuItem {
+    PopupMenuItem::element(row_with_state(label.into(), shortcut, enabled)).disabled(!enabled)
+}
+
+fn row_with_state(
+    label: impl Into<SharedString>,
+    shortcut: Option<Shortcut>,
+    enabled: bool,
+) -> impl Fn(&mut Window, &mut App) -> AnyElement {
     let label = label.into();
     move |window, _| {
         let badge = shortcut
@@ -34,7 +56,9 @@ pub fn row(
             .and_then(|shortcut| shortcut.binding(window))
             .map(|binding| {
                 el! {
-                    .div { # "shortcut"; test_support; flex_shrink_0 } [
+                    .div { # "shortcut"; test_support; flex_shrink_0;
+                        opacity: $(if enabled { 1.0 } else { DISABLED_OPACITY });
+                    } [
                         $(ShortcutBadge::binding(binding)),
                     ]
                 }

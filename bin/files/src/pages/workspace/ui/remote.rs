@@ -1,5 +1,6 @@
 //! Adapts remote widgets to workspace navigation; owns no protocol implementation.
 use super::*;
+use crate::features::file_operations::history as operation_history;
 use crate::{features::connect_server, widgets::remote_browser};
 use crate::{features::file_operations::remote as operations, shared::lib::clipboard};
 use gds::service::remote::{Address, Listing, Session};
@@ -88,6 +89,19 @@ impl Browser {
                 this.operations.paths.clear();
                 let (level, message) = match report {
                     Ok(report) => {
+                        this.operations
+                            .history
+                            .record(operation_history::Entry::new(
+                                operation_history::Kind::Copy,
+                                report
+                                    .completed
+                                    .iter()
+                                    .filter_map(|source| source.name().ok())
+                                    .map(|name| {
+                                        operation_history::Step::trash(destination.join(name))
+                                    })
+                                    .collect(),
+                            ));
                         if !report.completed.is_empty() {
                             this.refresh_after_file_operation(&[destination], cx);
                         }

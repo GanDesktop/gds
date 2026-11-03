@@ -1,5 +1,6 @@
 //! Creating one folder inside a captured destination directory.
 
+use crate::features::file_operations::history as operation_history;
 use std::{
     cell::Cell,
     ffi::{OsStr, OsString},
@@ -377,6 +378,12 @@ impl Browser {
         self.operations.in_progress = false;
         let report = match result {
             Ok(destination) => {
+                self.operations
+                    .history
+                    .record(operation_history::Entry::new(
+                        operation_history::Kind::NewFolder,
+                        vec![operation_history::Step::trash(destination.clone())],
+                    ));
                 if let Some(slot) = self.tab_slot_mut(origin_tab)
                     && destination.parent() == slot.path()
                 {

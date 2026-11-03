@@ -22,6 +22,7 @@ const CONFIRMATION_GAP: f32 = 8.;
 pub(super) struct State {
     pub rename: Entity<super::rename::State>,
     pub in_progress: bool,
+    pub history: operations::history::History,
     pub paths: Vec<PathBuf>,
     pub remote_paste_cancel: Option<tokio_util::sync::CancellationToken>,
 }
@@ -31,6 +32,7 @@ impl State {
         Self {
             rename: cx.new(|cx| super::rename::State::new(window, cx)),
             in_progress: false,
+            history: Default::default(),
             paths: Vec::new(),
             remote_paste_cancel: None,
         }
@@ -427,11 +429,29 @@ impl Browser {
         cx.notify();
     }
 
-    fn finish_file_operation(&mut self, report: operations::Report, cx: &mut Context<Self>) {
+    fn finish_file_operation(&mut self, mut report: operations::Report, cx: &mut Context<Self>) {
         self.operations.in_progress = false;
         let succeeded = report.succeeded_paths();
+        if !report.history_errors.is_empty() {
+            self.operations.history.clear();
+        }
+        if report.kind == operations::Kind::PermanentDelete && !succeeded.is_empty() {
+            self.operations.history.clear();
+        } else {
+            self.operations
+                .history
+                .record(operations::history::Entry::new(
+                    operations::history::Kind::Trash,
+                    std::mem::take(&mut report.receipts)
+                        .into_iter()
+                        .map(operations::history::Step::Restore)
+                        .collect(),
+                ));
+        }
         let failed = report.items.len() - succeeded.len();
-        let level = if failed == 0 {
+        let level = if failed == 0 && !report.history_errors.is_empty() {
+            notifications::Level::Warning
+        } else if failed == 0 {
             notifications::Level::Success
         } else {
             notifications::Level::Error
@@ -455,6 +475,9 @@ impl Browser {
                     .to_string();
                 notice = notice.detail(format!("{path}: {error}"));
             }
+        }
+        for error in report.history_errors {
+            notice = notice.detail(error);
         }
         self.clear_completed_selection(&succeeded);
         self.refresh_after_file_operation(&succeeded, cx);

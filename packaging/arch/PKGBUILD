@@ -1,0 +1,73 @@
+# Maintainer: GDS contributors <https://github.com/GanDesktop/gds>
+pkgbase=gds-files-git
+pkgname=(gds-files-git xdg-desktop-portal-gds-git)
+pkgver=0.0.1.r132.gb59c372
+pkgrel=1
+pkgdesc='Native file manager and optional FileChooser portal for Linux desktops'
+arch=(x86_64)
+url='https://github.com/GanDesktop/gds'
+license=(Apache-2.0)
+# Cargo controls Rust LTO. GCC LTO objects from bundled C dependencies cannot
+# be consumed by Rust's lld linker (notably SQLite).
+options=(!debug !lto)
+makedepends=(rust clang lld cmake git python pkgconf openssl wayland libxkbcommon
+             libxkbcommon-x11 fontconfig freetype2 libx11 libxcb alsa-lib dbus
+             zstd zlib libglvnd vulkan-icd-loader desktop-file-utils)
+source=('gds::git+https://github.com/GanDesktop/gds.git#branch=main')
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$srcdir/gds"
+    local version
+    version=$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+    printf '%s.r%s.g%s' "$version" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd "$srcdir/gds"
+    cargo fetch --locked
+}
+
+build() {
+    cd "$srcdir/gds"
+    export GDS_BUILD_TAG=$(git rev-parse HEAD)
+    export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$srcdir/target}"
+    cargo build --locked --profile "${GDS_PROFILE:-release}" --bin gds-files --features files
+    cargo build --locked --profile "${GDS_PROFILE:-release}" --bin xdg-desktop-portal-gds --features portal
+}
+
+check() {
+    local profile=${GDS_PROFILE:-release}
+    [[ $profile == dev ]] && profile=debug
+    "${CARGO_TARGET_DIR:-$srcdir/target}/$profile/gds-files" --help
+    "${CARGO_TARGET_DIR:-$srcdir/target}/$profile/xdg-desktop-portal-gds" --help
+}
+
+package_gds-files-git() {
+    pkgdesc='Native GPUI file manager with embedded terminals'
+    depends=(gcc-libs glibc openssl wayland libxkbcommon libxkbcommon-x11 fontconfig
+             freetype2 libx11 libxcb alsa-lib dbus zstd zlib libglvnd vulkan-icd-loader
+             xdg-utils xdg-terminal-exec xdg-desktop-portal udisks2)
+    optdepends=('ffmpeg: video thumbnails'
+                'vulkan-driver: GPU rendering'
+                'xdg-desktop-portal-gds: use Files as the system file picker')
+    provides=("gds-files=${pkgver}")
+    conflicts=(gds-files)
+    local profile=${GDS_PROFILE:-release}
+    [[ $profile == dev ]] && profile=debug
+    python "$srcdir/gds/packaging/linux/install.py" "$pkgdir" \
+        "${CARGO_TARGET_DIR:-$srcdir/target}/$profile" --component files
+    desktop-file-validate "$pkgdir/usr/share/applications/io.github.GanDesktop.GdsFiles.desktop"
+}
+
+package_xdg-desktop-portal-gds-git() {
+    pkgdesc='GDS FileChooser desktop portal backend'
+    depends=(gcc-libs glibc xdg-desktop-portal)
+    optdepends=('gds-files: native file picker interface')
+    provides=("xdg-desktop-portal-gds=${pkgver}")
+    conflicts=(xdg-desktop-portal-gds)
+    local profile=${GDS_PROFILE:-release}
+    [[ $profile == dev ]] && profile=debug
+    python "$srcdir/gds/packaging/linux/install.py" "$pkgdir" \
+        "${CARGO_TARGET_DIR:-$srcdir/target}/$profile" --component portal --libexec-dir usr/lib
+}

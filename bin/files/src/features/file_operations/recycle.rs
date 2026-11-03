@@ -65,12 +65,17 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct Outcome {
+    pub entry: Entry,
     pub original_path: PathBuf,
     pub result: Result<(), Error>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(
+        "the file was moved to trash, but its unique recovery record could not be identified: {path}"
+    )]
+    MissingReceipt { path: PathBuf },
     #[error("the recycle bin is only supported on Linux")]
     #[cfg(not(target_os = "linux"))]
     Unsupported,
@@ -106,6 +111,55 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+}
+
+/// A deletion can succeed even if reading its recovery record subsequently fails.
+pub struct Receipt {
+    pub entry: Result<Entry, Error>,
+}
+
+/// Move one file to trash and capture its exact new record, not an older
+/// deletion with the same original path.
+///
+/// # Errors
+/// Reports listing, path resolution or deletion failure before a receipt exists.
+#[cfg(target_os = "linux")]
+pub fn trash(path: &std::path::Path) -> Result<Receipt, Error> {
+    let before: std::collections::HashSet<_> = trash::os_limited::list()?
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect();
+    let original = path
+        .parent()
+        .ok_or_else(|| Error::InvalidRecord {
+            path: path.to_owned(),
+        })?
+        .canonicalize()
+        .map_err(|source| Error::Io {
+            path: path.to_owned(),
+            source,
+        })?
+        .join(path.file_name().ok_or_else(|| Error::InvalidRecord {
+            path: path.to_owned(),
+        })?);
+    trash::delete(path)?;
+    let entry = trash::os_limited::list()
+        .map_err(Error::from)
+        .and_then(|entries| {
+            let mut matches = entries
+                .into_iter()
+                .filter(|entry| entry.original_path() == original && !before.contains(&entry.id));
+            match (matches.next(), matches.next()) {
+                (Some(entry), None) => Entry::from_item(entry),
+                _ => Err(Error::MissingReceipt { path: original }),
+            }
+        });
+    Ok(Receipt { entry })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn trash(_: &std::path::Path) -> Result<Receipt, Error> {
+    Err(Error::Unsupported)
 }
 
 /// List every trash record that can still be acted on.
@@ -168,6 +222,7 @@ pub fn perform(action: Action, entries: Vec<Entry>) -> Vec<Outcome> {
             Outcome {
                 original_path,
                 result: entry.apply(action),
+                entry,
             }
         })
         .collect()

@@ -63,6 +63,8 @@ impl Kind {
 pub enum Error {
     #[error("no files are selected")]
     EmptySelection,
+    #[error(transparent)]
+    Recycle(#[from] super::recycle::Error),
     #[error("refusing to operate on a path without an absolute, named entry: {path}")]
     InvalidTarget { path: PathBuf },
     #[error("path cannot be copied as lossless UTF-8 text: {path}")]
@@ -129,7 +131,23 @@ impl Batch {
     /// Execute the chosen operation on a background executor, retaining every outcome.
     /// A failed operation never falls back to another kind of deletion.
     pub fn execute(self, kind: Kind) -> Report {
-        self.execute_with(kind, |path| kind.execute(path))
+        let mut receipts = Vec::new();
+        let mut history_errors = Vec::new();
+        let mut report = self.execute_with(kind, |path| {
+            if kind == Kind::Trash && super::recycle::supported() {
+                let receipt = super::recycle::trash(path).map_err(Error::Recycle)?;
+                match receipt.entry {
+                    Ok(entry) => receipts.push(entry),
+                    Err(error) => history_errors.push(error.to_string()),
+                }
+                Ok(())
+            } else {
+                kind.execute(path)
+            }
+        });
+        report.receipts = receipts;
+        report.history_errors = history_errors;
+        report
     }
 
     fn execute_with(
@@ -145,7 +163,12 @@ impl Batch {
                 ItemResult { path, result }
             })
             .collect();
-        Report { kind, items }
+        Report {
+            kind,
+            items,
+            receipts: Vec::new(),
+            history_errors: Vec::new(),
+        }
     }
 }
 
@@ -159,6 +182,8 @@ pub struct ItemResult {
 pub struct Report {
     pub kind: Kind,
     pub items: Vec<ItemResult>,
+    pub receipts: Vec<super::recycle::Entry>,
+    pub history_errors: Vec<String>,
 }
 
 impl Report {

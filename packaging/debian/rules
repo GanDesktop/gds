@@ -1,0 +1,33 @@
+#!/usr/bin/make -f
+export DH_VERBOSE = 1
+export GDS_PROFILE ?= release
+export GDS_SOURCE ?= $(CURDIR)
+export CARGO_TARGET_DIR ?= $(CURDIR)/target
+binary_profile = $(if $(filter dev,$(GDS_PROFILE)),debug,$(GDS_PROFILE))
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	cd $(GDS_SOURCE) && cargo build --locked --profile $(GDS_PROFILE) --bin gds-files --features files
+	cd $(GDS_SOURCE) && cargo build --locked --profile $(GDS_PROFILE) --bin xdg-desktop-portal-gds --features portal
+
+override_dh_auto_test:
+	$(CARGO_TARGET_DIR)/$(binary_profile)/gds-files --help
+	$(CARGO_TARGET_DIR)/$(binary_profile)/xdg-desktop-portal-gds --help
+
+override_dh_auto_install:
+	python3 $(GDS_SOURCE)/packaging/linux/install.py debian/tmp $(CARGO_TARGET_DIR)/$(binary_profile)
+	desktop-file-validate debian/tmp/usr/share/applications/io.github.GanDesktop.GdsFiles.desktop
+	rm -r debian/tmp/usr/share/licenses
+
+override_dh_auto_clean:
+	# Keep the external Cargo cache for incremental local package builds.
+
+override_dh_installsystemduser:
+	dh_installsystemduser --no-enable
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym

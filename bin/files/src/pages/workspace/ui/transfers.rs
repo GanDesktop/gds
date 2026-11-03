@@ -15,7 +15,7 @@ use fluent_bundle::FluentArgs;
 use gds::{i18n, ui::notifications};
 
 use super::*;
-use crate::features::file_operations::{names, transfer};
+use crate::features::file_operations::{history, names, transfer};
 use crate::shared::lib::clipboard::{self as file_clipboard, Bridge, Mode, Snapshot};
 use conflict::ConflictDialog;
 
@@ -30,6 +30,7 @@ struct Paste {
     pending: Vec<PathBuf>,
     chosen: Vec<names::NamedTarget>,
     succeeded: Vec<PathBuf>,
+    undo: Vec<history::Step>,
     committed: Vec<PathBuf>,
     failures: Vec<(PathBuf, String)>,
 }
@@ -109,6 +110,7 @@ impl Paste {
 struct Summary {
     mode: transfer::Mode,
     succeeded: Vec<PathBuf>,
+    undo: Vec<history::Step>,
     committed: Vec<PathBuf>,
     failures: Vec<String>,
     clipboard_error: Option<String>,
@@ -116,6 +118,7 @@ struct Summary {
 
 impl Summary {
     fn from_report(report: transfer::Report, clipboard_error: Option<String>) -> Self {
+        let undo = history::transfer_steps(&report);
         let mode = report.mode;
         let succeeded = report.succeeded_sources();
         let committed = report.committed_destinations();
@@ -142,6 +145,7 @@ impl Summary {
         Self {
             mode,
             succeeded,
+            undo,
             committed,
             failures,
             clipboard_error,
@@ -154,6 +158,7 @@ impl Paste {
         Summary {
             mode: self.mode,
             succeeded: self.succeeded,
+            undo: self.undo,
             committed: self.committed,
             failures: self
                 .failures
@@ -314,6 +319,7 @@ impl Browser {
                 destination,
                 chosen: Vec::new(),
                 succeeded: Vec::new(),
+                undo: Vec::new(),
                 committed: Vec::new(),
                 failures: Vec::new(),
             };
@@ -442,6 +448,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         let mut retry: Vec<PathBuf> = Vec::new();
+        paste.undo.extend(history::transfer_steps(&report));
         for item in report.items {
             let source = item.source.clone();
             paste.pending.retain(|pending| pending != &source);
@@ -582,6 +589,19 @@ impl Browser {
     }
 
     fn finish_summary(&mut self, summary: Summary, ending: Ending, cx: &mut Context<Self>) {
+        if summary.committed.len() > summary.undo.len() {
+            // A move may commit its destination before source removal fails.
+            // That incomplete effect cannot be represented by an inverse move.
+            self.operations.history.clear();
+        }
+        self.operations.history.record(history::Entry::new(
+            if summary.mode == transfer::Mode::Move {
+                history::Kind::Move
+            } else {
+                history::Kind::Copy
+            },
+            summary.undo,
+        ));
         let changed: Vec<PathBuf> = if summary.mode == transfer::Mode::Move {
             self.clear_completed_selection(&summary.succeeded);
             summary

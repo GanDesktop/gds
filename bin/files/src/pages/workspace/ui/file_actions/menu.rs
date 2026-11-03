@@ -26,6 +26,43 @@ enum MenuAction {
 }
 
 impl MenuAction {
+    fn enabled(self, browser: &Browser, selection: &Selection, cx: &App) -> bool {
+        if selection.paths.is_empty() || !selection.still_selected(browser) {
+            return false;
+        }
+        let available = selection
+            .paths
+            .iter()
+            .all(|path| browser.device_path_accepts_task(path, cx));
+        let idle = !browser.operations.in_progress
+            && !browser.collections.trash.is_busy()
+            && browser.active().is_some_and(|slot| !slot.is_loading());
+        match self {
+            Self::CopyPaths => selection.paths.iter().all(|path| path.to_str().is_some()),
+            Self::Copy | Self::Cut | Self::Trash | Self::DeletePermanent => available && idle,
+            Self::Paste => {
+                idle && browser.device_path_accepts_task(&selection.directory, cx)
+                    && crate::shared::lib::clipboard::can_paste(cx)
+            }
+            Self::Rename => {
+                available
+                    && idle
+                    && cfg!(target_os = "linux")
+                    && selection.paths.len() == 1
+                    && selection.paths[0]
+                        .file_name()
+                        .is_some_and(|name| name.to_str().is_some())
+            }
+            Self::InternalTerminal => {
+                available
+                    && browser.picker.is_none()
+                    && browser.settings.preferences.terminal_enabled()
+            }
+            Self::Terminal => available && browser.settings.preferences.terminal_enabled(),
+            Self::Open | Self::OpenWith | Self::OpenDirectories => available,
+        }
+    }
+
     fn command(self) -> Option<Command> {
         match self {
             Self::Open => Some(Command::Open),
@@ -57,22 +94,28 @@ impl MenuAction {
     }
 }
 
-struct MenuItems {
+struct MenuItems<'a> {
+    state: &'a Browser,
     browser: WeakEntity<Browser>,
     selection: Arc<Selection>,
 }
 
-impl MenuItems {
-    fn new(browser: WeakEntity<Browser>, selection: Arc<Selection>) -> Self {
-        Self { browser, selection }
+impl<'a> MenuItems<'a> {
+    fn new(state: &'a Browser, browser: WeakEntity<Browser>, selection: Arc<Selection>) -> Self {
+        Self {
+            state,
+            browser,
+            selection,
+        }
     }
 
-    fn item(&self, action: MenuAction, label: SharedString) -> PopupMenuItem {
-        let render = menu::row(label, action.command().map(Into::into));
+    fn item(&self, action: MenuAction, label: SharedString, cx: &App) -> PopupMenuItem {
+        let enabled = action.enabled(self.state, &self.selection, cx);
+        let item = menu::item(label, action.command().map(Into::into), enabled);
         let on_click = Browser::entry_action(self.browser.clone(), self.selection.clone(), action);
         let icon = action.icon();
         el! {
-            render.PopupMenuItem::element {
+            item {
                 on_click: on_click;
                 @if (let Some(icon) = icon) icon: icon; @end;
             }
@@ -90,6 +133,27 @@ enum DirectoryAction {
 }
 
 impl DirectoryAction {
+    fn enabled(self, browser: &Browser, target: &DirectoryTarget, cx: &App) -> bool {
+        if !target.still_current(browser) {
+            return false;
+        }
+        let available = browser.device_path_accepts_task(&target.path, cx);
+        let idle = !browser.operations.in_progress
+            && !browser.collections.trash.is_busy()
+            && browser.active().is_some_and(|slot| !slot.is_loading());
+        match self {
+            Self::NewFolder => available && idle,
+            Self::Paste => available && idle && crate::shared::lib::clipboard::can_paste(cx),
+            Self::InternalTerminal => {
+                available
+                    && browser.picker.is_none()
+                    && browser.settings.preferences.terminal_enabled()
+            }
+            Self::Terminal => available && browser.settings.preferences.terminal_enabled(),
+            Self::Refresh => true,
+        }
+    }
+
     fn command(self) -> Option<Command> {
         match self {
             Self::NewFolder => Some(Command::NewFolder),
@@ -120,18 +184,21 @@ impl DirectoryAction {
 
     fn item(
         self,
+        browser: &Browser,
         view: WeakEntity<Browser>,
         target: Arc<DirectoryTarget>,
         cx: &App,
     ) -> PopupMenuItem {
-        let render = menu::row(
+        let enabled = self.enabled(browser, &target, cx);
+        let item = menu::item(
             i18n::text(self.label_id(), cx),
             self.command().map(Into::into),
+            enabled,
         );
         let on_click = Browser::directory_action(view, target, self);
         let icon = self.icon();
         el! {
-            render.PopupMenuItem::element {
+            item {
                 on_click: on_click;
                 @if (let Some(icon) = icon)
                     icon: icon;
@@ -149,44 +216,40 @@ impl Browser {
         cx: &Context<Self>,
     ) -> PopupMenu {
         let directory = selection.directories_only;
-        let items = MenuItems::new(cx.entity().downgrade(), selection);
-        let open = items.item(MenuAction::Open, i18n::text("open", cx));
+        let items = MenuItems::new(self, cx.entity().downgrade(), selection);
+        let open = items.item(MenuAction::Open, i18n::text("open", cx), cx);
         let open_with = (!directory && self.picker.is_none() && cfg!(target_os = "linux"))
-            .then(|| items.item(MenuAction::OpenWith, i18n::text("open-with", cx)));
+            .then(|| items.item(MenuAction::OpenWith, i18n::text("open-with", cx), cx));
         let open_in_tab = directory.then(|| {
             items.item(
                 MenuAction::OpenDirectories,
                 i18n::text("open-in-new-tab", cx),
+                cx,
             )
         });
-        let copy = items.item(MenuAction::Copy, i18n::text("copy-files", cx));
-        let cut = items.item(MenuAction::Cut, i18n::text("cut-files", cx));
-        let paste = items
-            .item(MenuAction::Paste, i18n::text("paste-files", cx))
-            .disabled(self.operations.in_progress || !crate::shared::lib::clipboard::can_paste(cx));
-        let copy_path = items.item(MenuAction::CopyPaths, i18n::text("copy-path", cx));
-        let rename = items
-            .item(MenuAction::Rename, i18n::text("rename", cx))
-            .disabled(self.operations.in_progress);
-        let trash = items
-            .item(MenuAction::Trash, i18n::text("move-to-trash", cx))
-            .disabled(self.operations.in_progress);
-        let delete = items
-            .item(
-                MenuAction::DeletePermanent,
-                i18n::text("delete-permanently", cx),
-            )
-            .disabled(self.operations.in_progress);
+        let copy = items.item(MenuAction::Copy, i18n::text("copy-files", cx), cx);
+        let cut = items.item(MenuAction::Cut, i18n::text("cut-files", cx), cx);
+        let paste = items.item(MenuAction::Paste, i18n::text("paste-files", cx), cx);
+        let copy_path = items.item(MenuAction::CopyPaths, i18n::text("copy-path", cx), cx);
+        let rename = items.item(MenuAction::Rename, i18n::text("rename", cx), cx);
+        let trash = items.item(MenuAction::Trash, i18n::text("move-to-trash", cx), cx);
+        let delete = items.item(
+            MenuAction::DeletePermanent,
+            i18n::text("delete-permanently", cx),
+            cx,
+        );
         let internal_terminal =
             (self.picker.is_none() && self.settings.preferences.terminal_enabled()).then(|| {
                 items.item(
                     MenuAction::InternalTerminal,
                     i18n::text("files-terminal-open-here", cx),
+                    cx,
                 )
             });
         let terminal = items.item(
             MenuAction::Terminal,
             i18n::text("terminal-open-external", cx),
+            cx,
         );
         el! {
             menu {
@@ -217,34 +280,39 @@ impl Browser {
     ) -> PopupMenu {
         let count = selection.paths.len();
         let directories = selection.directories_only;
-        let items = MenuItems::new(cx.entity().downgrade(), selection);
+        let items = MenuItems::new(self, cx.entity().downgrade(), selection);
         let open_directories = directories.then(|| {
             items.item(
                 MenuAction::OpenDirectories,
                 i18n::count("open-directories-new-tabs", count, cx),
+                cx,
             )
         });
         let copy = items.item(
             MenuAction::Copy,
             i18n::count("copy-selected-files", count, cx),
+            cx,
         );
         let cut = items.item(
             MenuAction::Cut,
             i18n::count("cut-selected-files", count, cx),
+            cx,
         );
         let copy_paths = items.item(
             MenuAction::CopyPaths,
             i18n::count("copy-selected-paths", count, cx),
+            cx,
         );
-        let trash = items
-            .item(MenuAction::Trash, i18n::count("trash-selected", count, cx))
-            .disabled(self.operations.in_progress);
-        let delete = items
-            .item(
-                MenuAction::DeletePermanent,
-                i18n::count("delete-selected", count, cx),
-            )
-            .disabled(self.operations.in_progress);
+        let trash = items.item(
+            MenuAction::Trash,
+            i18n::count("trash-selected", count, cx),
+            cx,
+        );
+        let delete = items.item(
+            MenuAction::DeletePermanent,
+            i18n::count("delete-selected", count, cx),
+            cx,
+        );
         el! {
             menu {
                 @if (let Some(item) = open_directories) item: item; separator; @end;
@@ -264,20 +332,18 @@ impl Browser {
         cx: &Context<Self>,
     ) -> PopupMenu {
         let view = cx.entity().downgrade();
-        let new_folder = DirectoryAction::NewFolder
-            .item(view.clone(), target.clone(), cx)
-            .disabled(self.operations.in_progress);
-        let paste = DirectoryAction::Paste
-            .item(view.clone(), target.clone(), cx)
-            .disabled(self.operations.in_progress || !crate::shared::lib::clipboard::can_paste(cx));
+        let new_folder = DirectoryAction::NewFolder.item(self, view.clone(), target.clone(), cx);
+        let paste = DirectoryAction::Paste.item(self, view.clone(), target.clone(), cx);
         let internal_terminal = self
             .picker
             .is_none()
             .then_some(())
             .filter(|_| self.settings.preferences.terminal_enabled())
-            .map(|_| DirectoryAction::InternalTerminal.item(view.clone(), target.clone(), cx));
-        let terminal = DirectoryAction::Terminal.item(view.clone(), target.clone(), cx);
-        let refresh = DirectoryAction::Refresh.item(view, target, cx);
+            .map(|_| {
+                DirectoryAction::InternalTerminal.item(self, view.clone(), target.clone(), cx)
+            });
+        let terminal = DirectoryAction::Terminal.item(self, view.clone(), target.clone(), cx);
+        let refresh = DirectoryAction::Refresh.item(self, view, target, cx);
         el! { menu { item: new_folder; separator; item: paste; separator;
             @if (let Some(item) = internal_terminal) item: item; @end;
             @if (self.settings.preferences.terminal_enabled()) item: terminal; @end; item: refresh;
@@ -297,6 +363,9 @@ impl Browser {
                 if !target.still_current(this) {
                     notifications::info(i18n::text("location-changed", cx), cx);
                     cx.notify();
+                    return;
+                }
+                if !action.enabled(this, &target, cx) {
                     return;
                 }
                 match action {
@@ -329,6 +398,9 @@ impl Browser {
                 if !selection.still_selected(this) {
                     notifications::info(i18n::text("selection-changed", cx), cx);
                     cx.notify();
+                    return;
+                }
+                if !action.enabled(this, &selection, cx) {
                     return;
                 }
                 match action {

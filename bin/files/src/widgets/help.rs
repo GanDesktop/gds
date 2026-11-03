@@ -68,6 +68,7 @@ const SECTIONS: &[(&str, &[Command])] = &[
             Command::DeletePermanent,
         ],
     ),
+    ("help-history", &[Command::Undo, Command::Redo]),
     (
         "help-selection",
         &[

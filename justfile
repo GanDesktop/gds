@@ -27,6 +27,14 @@ release app="all":
 rpm fedora="43" profile="dev":
     @python3 scripts/build-rpm.py --fedora "$1" --profile "$2"
 
+# 在 Arch 容器中构建 Files 和独立 Portal 的 pacman 包。
+arch profile="dev":
+    @python3 scripts/build-linux-package.py arch --profile "$1"
+
+# 在 Debian/Ubuntu 容器中构建可通过 APT 安装的原生 DEB。
+deb distro="debian" release="" profile="dev":
+    @python3 scripts/build-linux-package.py "$1" --release "$2" --profile "$3"
+
 # 安装整个套件，或指定 files / agents 到当前用户的 Nix profile。
 install app="all":
     nix profile install {{ if app == "all" { ".#gds" } else if app == "files" { ".#gds-files" } else if app == "agents" { ".#gds-agents" } else { error("未知应用：" + app + "；可选 all、files、agents") } }}

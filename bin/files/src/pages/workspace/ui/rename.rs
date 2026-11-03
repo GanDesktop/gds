@@ -1,5 +1,6 @@
 //! Safe single-item renaming and its dialog input state.
 
+use crate::features::file_operations::history as operation_history;
 use std::{
     ffi::{OsStr, OsString},
     fs, io,
@@ -454,6 +455,15 @@ impl Browser {
         self.operations.in_progress = false;
         let report = match result {
             Ok(destination) => {
+                self.operations
+                    .history
+                    .record(operation_history::Entry::new(
+                        operation_history::Kind::Rename,
+                        vec![operation_history::Step::Move {
+                            source: destination.clone(),
+                            destination: source.clone(),
+                        }],
+                    ));
                 let name = destination
                     .file_name()
                     .map_or_else(String::new, |name| name.to_string_lossy().into_owned());

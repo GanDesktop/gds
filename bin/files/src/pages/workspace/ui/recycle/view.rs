@@ -58,7 +58,7 @@ pub(super) fn render_trash(
 }
 
 fn header_actions(browser: &Browser, cx: &mut Context<Browser>) -> Vec<AnyElement> {
-    let busy = browser.collections.trash.is_busy();
+    let busy = browser.collections.trash.is_busy() || browser.operations.in_progress;
     let has_selection = browser.collections.trash.selected_count() > 0;
     let empty = browser.collections.trash.rows().is_empty();
     let on_restore = cx.listener(Browser::on_trash_restore);
@@ -196,7 +196,9 @@ fn render_table(browser: &Browser, window: &mut Window, cx: &mut Context<Browser
     };
     let menu = area_menu(
         cx.entity().downgrade(),
-        !browser.collections.trash.is_busy() && !browser.collections.trash.rows().is_empty(),
+        !browser.collections.trash.is_busy()
+            && !browser.operations.in_progress
+            && !browser.collections.trash.rows().is_empty(),
     );
     let area = PageTableArea::default()
         .id("trash-table-area")
@@ -314,7 +316,7 @@ pub(super) fn entry_menu(browser: &Browser, menu: PopupMenu, cx: &Context<Browse
     let view = cx.entity().downgrade();
     let entries = browser.collections.trash.selected_entries();
     let count = entries.len();
-    let busy = browser.collections.trash.is_busy();
+    let busy = browser.collections.trash.is_busy() || browser.operations.in_progress;
     let restore_label = if count == 1 {
         i18n::text("recycle-restore", cx)
     } else {

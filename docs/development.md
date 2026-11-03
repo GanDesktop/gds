@@ -13,7 +13,10 @@ flake.nix / flake.lock      # Nix flake 入口与依赖锁
 shell.nix                  # 本地 Nix 开发环境入口
 packaging/
 ├── nix/                   # Nix 包、NixOS 模块与开发环境定义
-└── fedora/                # Fedora RPM、构建容器与安装资源
+├── fedora/                # Fedora RPM 与构建容器
+├── arch/                  # Arch/AUR 配方与构建容器
+├── debian/                # Debian/Ubuntu DEB 与构建容器
+└── linux/                 # 原生 Linux 包共用的桌面集成资源安装逻辑
 bin/
 ├── files/
 │   ├── README.md
@@ -28,7 +31,7 @@ bin/
 
 各应用目录的 README 提供职责、入口与运行命令；完整设计与开发文档留在 `docs/`。应用共用根 manifest 和许可证，不单独建立 Cargo package，也不重复放置 LICENSE。
 
-各安装方式的构建、打包与系统集成统一放在 `packaging/`。Nix 的根目录入口委托给 `packaging/nix/` 中的定义；生成的二进制、RPM 和构建缓存保留在 `target/`，不放进打包定义目录。
+各安装方式的构建、打包与系统集成统一放在 `packaging/`。Nix 的根目录入口委托给 `packaging/nix/` 中的定义；生成的二进制、安装包和构建缓存保留在 `target/`，不放进打包定义目录。
 
 ## 运行
 
@@ -129,6 +132,8 @@ Fast 补丁从原 `gpui-pre` / `gpui-pre-linux` 的 `gds-0.3.11` 分支迁移。
 ## Release 构建
 
 Fedora 原生 RPM 的构建与安装见 [Fedora 打包流程](apps/files/fedora.md)。`just rpm` 在宿主机的 Fedora 容器中增量构建 Files 与独立的 GDS Portal 包；Fedora 测试机只安装 RPM，无需编译或安装 Nix。
+
+Arch/AUR 使用 `just arch`，见 [Arch 打包流程](apps/files/arch.md)；Debian 使用 `just deb`，Ubuntu 使用 `just deb ubuntu noble`，见 [DEB 打包流程](apps/files/debian.md)。这两种流程同样分别打包 Files 和 Portal，使用目标发行版的容器构建。AUR 上架与远程 APT 仓库发布不包含在本地构建命令中。
 
 执行 `just release` 构建整个套件，或用 `just release files` / `just release agents` / `just release portal` 单独构建。等价的套件命令是 `cargo build --release --locked --bins --features files,agents,portal`，产物位于 `target/release/`，包含 `gds-files`、`gds-agents` 和 `xdg-desktop-portal-gds`。Nix 打包默认使用同一份 release 配置；安装命令见 [NixOS 安装](nixos.md)。
 

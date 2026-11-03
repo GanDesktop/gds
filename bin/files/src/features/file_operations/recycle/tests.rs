@@ -299,7 +299,7 @@ fn reads_real_trashinfo_and_restores_without_overwriting() {
     if std::env::var_os(FIXTURE).is_none() {
         let root = tempfile::tempdir().expect("isolated XDG data");
         let result = std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args(["--exact", "pages::workspace::ui::recycle::backend::tests::reads_real_trashinfo_and_restores_without_overwriting", "--nocapture"])
+            .args(["--exact", "features::file_operations::recycle::tests::reads_real_trashinfo_and_restores_without_overwriting", "--nocapture"])
             .env(FIXTURE, root.path())
             .env("XDG_DATA_HOME", root.path())
             .output().expect("run isolated trash workflow");

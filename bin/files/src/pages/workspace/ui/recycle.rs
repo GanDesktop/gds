@@ -6,7 +6,8 @@
 //! never by its original path: several records may share one original path, and
 //! an original path is display data rather than a current, deletable file.
 
-mod backend;
+use crate::features::file_operations::history as operation_history;
+use crate::features::file_operations::recycle as backend;
 mod table;
 mod view;
 
@@ -399,7 +400,7 @@ impl Browser {
         entries: Vec<Entry>,
         cx: &mut Context<Self>,
     ) {
-        if entries.is_empty() || self.collections.trash.is_busy() {
+        if entries.is_empty() || self.collections.trash.is_busy() || self.operations.in_progress {
             return;
         }
         if matches!(action, Action::Restore)
@@ -448,9 +449,22 @@ impl Browser {
                 .filter(|outcome| Effect::of(outcome).moved())
                 .map(|outcome| outcome.original_path.clone())
                 .collect();
+            self.operations
+                .history
+                .record(operation_history::Entry::new(
+                    operation_history::Kind::Restore,
+                    outcomes
+                        .iter()
+                        .filter(|outcome| Effect::of(outcome).moved())
+                        .map(|outcome| operation_history::Step::undo_restore(&outcome.entry))
+                        .collect(),
+                ));
             if !restored.is_empty() {
                 self.refresh_after_file_operation(&restored, cx);
             }
+        }
+        if action == Action::Purge && outcomes.iter().any(|outcome| outcome.result.is_ok()) {
+            self.operations.history.clear();
         }
         let report = outcome_report(action, &outcomes, cx);
         // Re-read the store instead of patching the list optimistically: both

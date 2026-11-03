@@ -40,6 +40,7 @@ mod tabs;
 mod terminal;
 mod toolbar;
 mod transfers;
+mod undo;
 mod view;
 mod window;
 
@@ -1168,6 +1169,11 @@ impl Browser {
                         input.focus(window, cx);
                         input.select_all(window, cx);
                     });
+                }
+            }
+            Command::Undo | Command::Redo => {
+                if !self.editing_input_focused(window, cx) {
+                    self.replay_file_operation(command, window, cx);
                 }
             }
             Command::Copy | Command::Cut => {

@@ -380,6 +380,24 @@ impl Browser {
         self.dispatch(Command::Cut, window, cx);
     }
 
+    pub(super) fn on_undo_files(
+        &mut self,
+        _: &UndoFileOperation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch(Command::Undo, window, cx);
+    }
+
+    pub(super) fn on_redo_files(
+        &mut self,
+        _: &RedoFileOperation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch(Command::Redo, window, cx);
+    }
+
     pub(super) fn on_paste_files(
         &mut self,
         _: &PasteFiles,

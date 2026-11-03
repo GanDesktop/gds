@@ -228,6 +228,8 @@ fn file_bindings_do_not_capture_terminal_input_or_terminal_tabs(cx: &mut TestApp
             "alt-shift-s",
             "ctrl-shift-c",
             "ctrl-v",
+            "ctrl-z",
+            "ctrl-shift-z",
             "ctrl-tab",
             "escape",
             "delete",

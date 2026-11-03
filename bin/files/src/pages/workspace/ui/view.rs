@@ -196,6 +196,8 @@ impl Render for Browser {
                 on_action: (cx, Self::on_copy_files).Context::listener;
                 on_action: (cx, Self::on_cut_files).Context::listener;
                 on_action: (cx, Self::on_paste_files).Context::listener;
+                on_action: (cx, Self::on_undo_files).Context::listener;
+                on_action: (cx, Self::on_redo_files).Context::listener;
                 on_action: (cx, Self::on_copy_paths).Context::listener;
                 on_action: (cx, Self::on_select_all).Context::listener;
                 on_action: (cx, Self::on_deselect_all).Context::listener;
