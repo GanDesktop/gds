@@ -19,6 +19,8 @@ enum MenuAction {
     Paste,
     CopyPaths,
     Rename,
+    #[cfg(unix)]
+    Permissions,
     Trash,
     DeletePermanent,
     Terminal,
@@ -44,6 +46,8 @@ impl MenuAction {
                 idle && browser.device_path_accepts_task(&selection.directory, cx)
                     && crate::shared::lib::clipboard::can_paste(cx)
             }
+            #[cfg(unix)]
+            Self::Permissions => available && idle && selection.paths.len() == 1,
             Self::Rename => {
                 available
                     && idle
@@ -67,6 +71,8 @@ impl MenuAction {
         match self {
             Self::Open => Some(Command::Open),
             Self::OpenWith => None,
+            #[cfg(unix)]
+            Self::Permissions => None,
             Self::OpenDirectories => Some(Command::OpenInNewTab),
             Self::Copy => Some(Command::Copy),
             Self::Cut => Some(Command::Cut),
@@ -88,6 +94,8 @@ impl MenuAction {
             Self::Paste => Some(IconName::ClipboardPaste),
             Self::CopyPaths => Some(IconName::ClipboardCopy),
             Self::Rename => Some(IconName::TextCursor),
+            #[cfg(unix)]
+            Self::Permissions => Some(IconName::Lock),
             Self::Trash | Self::DeletePermanent => Some(IconName::Trash),
             Self::Terminal | Self::InternalTerminal => Some(IconName::Terminal),
         }
@@ -232,6 +240,14 @@ impl Browser {
         let paste = items.item(MenuAction::Paste, i18n::text("paste-files", cx), cx);
         let copy_path = items.item(MenuAction::CopyPaths, i18n::text("copy-path", cx), cx);
         let rename = items.item(MenuAction::Rename, i18n::text("rename", cx), cx);
+        #[cfg(unix)]
+        let permissions = Some(items.item(
+            MenuAction::Permissions,
+            i18n::text("permissions-title", cx),
+            cx,
+        ));
+        #[cfg(not(unix))]
+        let permissions: Option<PopupMenuItem> = None;
         let trash = items.item(MenuAction::Trash, i18n::text("move-to-trash", cx), cx);
         let delete = items.item(
             MenuAction::DeletePermanent,
@@ -263,6 +279,7 @@ impl Browser {
                 item: copy_path;
                 separator;
                 item: rename;
+                @if (let Some(item) = permissions) item: item; @end;
                 separator;
                 item: trash; item: delete;
                 separator;
@@ -417,6 +434,10 @@ impl Browser {
                     MenuAction::Paste => this.paste_files(selection.directory.clone(), window, cx),
                     MenuAction::CopyPaths => this.copy_selected_paths(&selection.paths, cx),
                     MenuAction::Rename => this.begin_rename(selection.paths[0].clone(), window, cx),
+                    #[cfg(unix)]
+                    MenuAction::Permissions => {
+                        this.edit_permissions(selection.paths[0].clone(), window, cx)
+                    }
                     MenuAction::Trash => this.request_trash_selection(window, cx),
                     MenuAction::DeletePermanent => this.request_delete_selection(window, cx),
                     MenuAction::Terminal | MenuAction::InternalTerminal => {

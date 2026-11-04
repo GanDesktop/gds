@@ -3362,6 +3362,7 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "walkdir",
  "which",
  "xdg-mime",
  "zbus",

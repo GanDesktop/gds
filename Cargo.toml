@@ -93,7 +93,7 @@ ui = [
 ]
 files = [
     "ui", "desktop", "storage", "remote", "dep:clap", "dep:globset",
-    "dep:mime_guess", "dep:xdg-mime", "dep:trash", "dep:tokio-util",
+    "dep:mime_guess", "dep:xdg-mime", "dep:trash", "dep:tokio-util", "dep:walkdir",
 ]
 agents = [
     "ui", "desktop", "storage", "dep:clap", "dep:tokio-util", "dep:mime_guess",
@@ -144,6 +144,7 @@ url = { version = "2", features = ["serde"], optional = true }
 percent-encoding = { version = "2", optional = true }
 directories = { version = "6", optional = true }
 tempfile = { version = "3", optional = true }
+walkdir = { version = "2.5", optional = true }
 
 # Data, text and time formats used by the service and UI code.
 base64 = { version = "0.22", optional = true }

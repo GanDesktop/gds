@@ -520,7 +520,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> PopupMenu {
-        let menu = gds::ui::menu::popup(menu);
+        let menu = gds::ui::menu::popup_in(menu, window);
         let Some(target) = DirectoryTarget::capture(self, path) else {
             return menu;
         };
@@ -535,7 +535,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> PopupMenu {
-        let menu = gds::ui::menu::popup(menu);
+        let menu = gds::ui::menu::popup_in(menu, window);
         if !self.pages.is_empty() || self.collection().is_some() {
             return menu;
         }

@@ -7,3 +7,6 @@ pub(crate) mod remote;
 
 pub(crate) mod history;
 pub(crate) mod recycle;
+
+#[cfg(unix)]
+pub(crate) mod permissions;

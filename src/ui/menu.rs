@@ -17,6 +17,7 @@ const MIN_WIDTH: f32 = 220.;
 const ROW_MIN_WIDTH: f32 = 260.;
 const SHORTCUT_GAP: f32 = 24.;
 const EDGE_MARGIN: f32 = 8.;
+const SURFACE_BORDER: f32 = 1.;
 const DISABLED_OPACITY: f32 = 0.5;
 
 /// Keep Kit's menu colors, icons, borders and item states across applications.
@@ -25,6 +26,13 @@ pub fn popup(menu: PopupMenu) -> PopupMenu {
         .max_w(px(MAX_WIDTH))
         .max_h(px(MAX_HEIGHT))
         .scrollable(true)
+}
+
+/// Let context menus use the window's height before scrolling. Kit applies the
+/// height limit to the items container, inside the popover's border.
+pub fn popup_in(menu: PopupMenu, window: &Window) -> PopupMenu {
+    let available = window.bounds().size.height - px(2. * (EDGE_MARGIN + SURFACE_BORDER));
+    popup(menu).max_h(available.max(px(0.)))
 }
 
 /// A command label and its effective shortcut, with one shared spacing rule.

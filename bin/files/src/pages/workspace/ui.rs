@@ -26,6 +26,8 @@ mod motion;
 mod name_form;
 mod new_folder;
 mod pages;
+#[cfg(unix)]
+mod permissions;
 mod picker;
 mod place_pages;
 mod preview;
