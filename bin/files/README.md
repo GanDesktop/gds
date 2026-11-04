@@ -21,7 +21,7 @@ A full file browser with a familiar Windows File Explorer feel. You don't need t
 
 On Linux, the terminal might be even more essential than the file manager. So we've included a simple one to make life easier for power users.
 
-![Terminal demo](docs/assets/terminal.png)
+![Fastfetch running in the built-in terminal](docs/assets/terminal.png)
 
 ### Translucent windows that follow my system theme.
 
@@ -33,11 +33,15 @@ Now you can finally see your anime girl wallpaper. I know how important that is.
 
 Maybe you really don't have a mouse. We understand your predicament!
 
+![Open tabs, select files, and preview images using the keyboard](docs/assets/keyboard-navigation.gif)
+
 ### And the absolute killer feature: **COPY PATH!!!**
 
 Seriously, why do so many file managers still not support copying file paths? How is this even a thing?
 
-![Copy a file path](docs/assets/copy-path.png)
+![Copy path in the context menu](docs/assets/copy-path.png)
+
+[Watch a file path being copied and pasted into the address bar](docs/assets/copy-path.gif).
 
 ## Install and launch
 
@@ -47,54 +51,7 @@ Seriously, why do so many file managers still not support copying file paths? Ho
 Install this file manager for me: https://github.com/GanDesktop/gds/blob/main/bin/files/README.md
 ```
 
-### One-command installation
-
-Run in a terminal with `curl` and Bash installed:
-
-```sh
-curl -fsSL https://gds.gandesktop.dev/install.sh | bash
-```
-
-The installer detects your system, downloads Files from the latest stable release, verifies its SHA-256, and installs it through your package manager. It requests your administrator password through `sudo` when needed. Native packages support x86_64 Arch Linux, Debian 13, and Fedora 43. On NixOS it uses the existing Nix installation, following the flake's main branch by default. Pass `--nix` to use an existing Nix installation on another Linux distribution.
-
-To include the optional file chooser portal backend:
-
-```sh
-curl -fsSL https://gds.gandesktop.dev/install.sh | bash -s -- --with-portal
-```
-
-Add `--version v0.0.1` to select a specific release (replace the tag with the desired version; prereleases are also supported). Portal still needs desktop configuration, as described below. Run the installer again to upgrade native packages; use `nix profile upgrade` for Nix installations.
-
-### With a package manager
-
-Download the `gds-files` package for your system from [GitHub Releases](https://github.com/GanDesktop/gds/releases). Release builds target **x86_64 Arch Linux, Debian 13 (trixie), and Fedora 43**. Assets appear once the release build finishes.
-
-Run the matching command in your download directory. Keep only the version you intend to install so the wildcard does not match older packages.
-
-| System | Install command |
-| --- | --- |
-| Arch Linux | `sudo pacman -U ./gds-files-git-*-x86_64.pkg.tar.zst` |
-| Debian 13 | `sudo apt install ./gds-files_*_amd64.deb` |
-| Fedora 43 | `sudo dnf install ./gds-files-*.fc43.x86_64.rpm` |
-
-The package manager installs dependencies from your configured repositories. Open **GDS Files** from the application menu or run `gds-files`. These are native binary packages; no local compilation is needed. Other distributions or versions are not guaranteed to work.
-
-To use Files for system file dialogs, also download and install the `xdg-desktop-portal-gds` package from the same release:
-
-```sh
-# Arch Linux
-sudo pacman -U ./xdg-desktop-portal-gds-git-*-x86_64.pkg.tar.zst
-# Debian 13
-sudo apt install ./xdg-desktop-portal-gds_*_amd64.deb
-# Fedora 43
-sudo dnf install ./xdg-desktop-portal-gds-*.fc43.x86_64.rpm
-```
-
-Portal is optional. Installing it does not switch your system's file picker automatically; see [Portal configuration](../../docs/apps/files/fedora.md#optional-gds-portal).
-
-To upgrade, download the new package and run the install command again. Release downloads do not add a software repository, so system updates will not upgrade GDS automatically. Each release also includes `SHA256SUMS` for checking download hashes.
-
-### With Nix
+### Nix installation (recommended)
 
 **Install into your profile:**
 
@@ -128,6 +85,58 @@ Rebuild from your system configuration directory:
 sudo nixos-rebuild switch --flake .
 ```
 
+### Native packages
+
+Packages are available for x86_64 Arch Linux, Debian 13, and Fedora 43. Run:
+
+```sh
+curl -fsSL https://gds.gandesktop.dev/install.sh | bash
+```
+
+You can also download a package from [GitHub Releases](https://github.com/GanDesktop/gds/releases) and install it with your system's package manager. Install a newer package to upgrade. For system file dialogs, pass `--with-portal` to the script (`bash -s -- --with-portal`) and follow the [Portal configuration guide](../../docs/apps/files/fedora.md#optional-gds-portal).
+
+After installation, open **GDS Files** from the application menu or run `gds-files`.
+
+## Customize the appearance
+
+### Themes
+
+Follow your system theme, choose a built-in theme, or use a custom theme.
+
+| Desktop environment | System appearance followed |
+| --- | --- |
+| DankMaterialShell | System colors and light/dark mode, including colors generated from the wallpaper |
+| KDE Plasma | System color scheme |
+| GNOME | System light/dark preference and GTK appearance |
+
+![Appearance settings: theme, corners, animations, opacity, and fonts](docs/assets/appearance-settings.png)
+
+### Transparency
+
+Adjust the main area and sidebar opacity separately. Here is the same window against the same wallpaper:
+
+| Opaque | Translucent |
+| --- | --- |
+| ![Main area and sidebar at 100% opacity](docs/assets/opacity-opaque.png) | ![Main area at 65% and sidebar at 35% opacity](docs/assets/opacity-translucent.png) |
+
+### Rounded corners
+
+| Rounded corners off | Rounded corners on |
+| --- | --- |
+| ![Square window corner](docs/assets/corners-square.png) | ![Rounded window corner](docs/assets/corners-rounded.png) |
+
+### Font and text size
+
+Choose your preferred font and text size. This comparison uses the host's font at 14 px and 20 px.
+
+![The same interface at two text sizes](docs/assets/font-size.gif)
+
+### Animations
+
+The sidebar and details panel animate as they expand and collapse. You can turn animations off in the appearance settings.
+
+![Expanding and collapsing the sidebar and details panel](docs/assets/interface-animations.gif)
+
 ## Settings and data
 
 Open **Settings** from the main menu. Changes take effect immediately and are saved automatically.
@@ -143,6 +152,8 @@ On Linux, data lives in the following locations. If you set XDG environment vari
 ## File picker
 
 GDS Portal is GDS's desktop Portal backend. It currently provides the file chooser interface. Once GDS Portal is enabled, apps that use this interface can open Files' native picker, specifying open or save mode, file types, an initial location, and other options.
+
+![The native image picker with multiple files selected](docs/assets/file-picker.png)
 
 ## Debug
 
@@ -175,3 +186,5 @@ gds-files --pick-directory "$HOME/Documents"
 ```
 
 On confirmation, the command-line picker writes JSON to standard output and exits. Canceling returns no selected files. See the [file picker documentation](../../docs/apps/files/picker.md) for arguments and the output format.
+
+See the [capture guide](docs/assets/capture.md) to record the screenshots and GIFs again.
