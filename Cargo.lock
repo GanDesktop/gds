@@ -880,7 +880,7 @@ dependencies = [
 [[package]]
 name = "bas-client"
 version = "0.1.0"
-source = "git+https://github.com/4t145/bas?rev=9ccfcdb960213ba4f506e93241d9bcd78de3a0b4#9ccfcdb960213ba4f506e93241d9bcd78de3a0b4"
+source = "git+https://github.com/GanDesktop/bas?rev=9ccfcdb960213ba4f506e93241d9bcd78de3a0b4#9ccfcdb960213ba4f506e93241d9bcd78de3a0b4"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
