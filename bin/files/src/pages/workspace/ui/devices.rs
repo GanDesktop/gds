@@ -284,7 +284,7 @@ impl Browser {
                 .files
                 .volume_mount_points
                 .insert(identity.clone(), root);
-            if let Err(error) = configuration::save(&self.settings.preferences) {
+            if let Err(error) = configuration::save(&self.settings.preferences, cx) {
                 report_settings_failure("settings-save-failed", error, cx);
             }
         } else {

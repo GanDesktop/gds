@@ -133,6 +133,16 @@ impl State {
         self.error.as_deref()
     }
 
+    pub(super) fn deselect(&mut self, id: &OsString) {
+        self.selected.remove(id);
+        if self.cursor.as_ref() == Some(id) {
+            self.cursor = None;
+        }
+        if self.anchor.as_ref() == Some(id) {
+            self.anchor = None;
+        }
+    }
+
     pub(super) fn selected_count(&self) -> usize {
         self.selected.len()
     }
@@ -417,10 +427,15 @@ impl Browser {
             .map(|entry| entry.original_path.clone())
             .collect();
         let count = entries.len();
-        notifications::Operation::start(i18n::count(action_labels(action).working, count, cx), cx);
+        self.start_background_kind(
+            "trash",
+            i18n::count(action_labels(action).working, count, cx),
+            cx,
+        );
+        let cancel = self.background_tasks.read(cx).token("trash");
         let work = cx
             .background_executor()
-            .spawn(async move { backend::perform(action, entries) });
+            .spawn(async move { backend::perform_cancellable(action, entries, &cancel) });
         cx.spawn(async move |this, cx| {
             let outcomes = work.await;
             if let Err(error) = this.update(cx, |this, cx| {
@@ -471,7 +486,7 @@ impl Browser {
         // an untouched record and one whose cleanup failed must show up as the
         // store really reports it.
         self.load_trash(cx);
-        notifications::Operation::finish(report, cx);
+        self.finish_background_kind("trash", report, cx);
         cx.notify();
     }
 

@@ -24,6 +24,7 @@ const TAB_HEIGHT: f32 = 44.;
 const ITEM_RADIUS: f32 = 6.;
 const CAPTION_PADDING: f32 = 6.;
 const FILTER_WIDTH: f32 = 200.;
+const ADDRESS_HEIGHT: f32 = tokens::ICON_BUTTON_SIZE + 2.;
 /// A collapsed tab row puts its close control in its own corner: a small X
 /// must not widen the icon-only row.
 const TAB_CORNER_CLOSE_SIZE: f32 = 16.;
@@ -52,7 +53,7 @@ impl Render for Browser {
         self.sync_terminal_cwd(window, cx);
         if !self.pages.is_empty()
             || self.collection().is_some()
-            || self.menus.application_open
+            || self.menus.open.is_some()
             || self.menus.context.is_some()
             || self.menus.sort.is_some()
             || self.picker.is_some()
@@ -63,12 +64,12 @@ impl Render for Browser {
         // Settings replaces the toolbar; every location page keeps the menu, so
         // only entering Settings drops a menu that was open over the workspace.
         if !self.pages.is_empty() {
-            self.menus.application_open = false;
+            self.menus.open = None;
         }
         if !self.pages.is_empty() || self.collection().is_some() {
             self.menus.sort = None;
         }
-        let state = if self.sidebar.collapsed {
+        let state = if self.sidebar_collapsed() {
             ui::sidebar::SidebarState::Collapsed
         } else {
             ui::sidebar::SidebarState::Expanded
@@ -95,6 +96,11 @@ impl Render for Browser {
         } else {
             let opacity = motion::tab_content(self.tabs.active_id, window, cx);
             let content = self.render_content(window, cx);
+            let header = self
+                .window
+                .layout
+                .compact
+                .then(|| self.compact_page_header(window, cx));
             let content = ui::region::surface(
                 "content-region",
                 &self.window.focus,
@@ -108,6 +114,7 @@ impl Render for Browser {
             .flex_col()
             .flex_1()
             .h_full()
+            .children(header)
             .child(content)
             .into_any_element();
             let workspace = frame
@@ -178,6 +185,7 @@ impl Render for Browser {
                 on_action: (cx, Self::on_help).Context::listener;
                 on_action: (cx, Self::on_new_folder).Context::listener;
                 on_action: (cx, Self::on_new_tab).Context::listener;
+                on_action: (cx, Self::on_new_window).Context::listener;
                 on_action: (cx, Self::on_close_tab).Context::listener;
                 on_action: (cx, Self::on_next_tab).Context::listener;
                 on_action: (cx, Self::on_previous_tab).Context::listener;
@@ -286,7 +294,7 @@ impl Browser {
             }
             .into_any_element()
         } else {
-            menu::application_menu(self.menus.application_open, cx.entity().downgrade(), cx)
+            menu::control(menu::Kind::Application, self.menus.open, cx.entity().downgrade(), cx)
         };
         let sidebar = self.command_button("sidebar", IconName::PanelLeft, Command::Sidebar, cx);
         let content = if !self.pages.is_empty() {
@@ -296,7 +304,7 @@ impl Browser {
             self.render_navigation(window, cx)
         };
         let controls = el! {
-            .div { flex; items_center; gap: SMALL_GAP.px; w_full; min_w_0 } [@if (self.pages.current() != Some(&pages::Page::Help)) sidebar, @end, content]
+            .div { flex; items_center; gap: SMALL_GAP.px; w_full; min_w_0 } [@if (self.pages.current() != Some(&pages::Page::Help) && !self.window.layout.compact) sidebar, @end, content]
         };
         let window_controls = ui::window::WindowControls::default()
             .on_close_window(cx.listener(Self::on_close_window));
@@ -317,17 +325,31 @@ impl Browser {
             .disabled(!has_parent);
         let path = self.render_path(window, cx);
         el! {
-            .div { flex; flex_1; min_w_0; items_center; gap: SMALL_GAP.px } [back, forward, parent, path]
+            .div { flex; flex_1; min_w_0; items_center; gap: SMALL_GAP.px } [@if (!self.window.layout.compact) back, forward, parent, @end, path]
         }.into_any_element()
     }
 
     fn render_path(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        if self.toolbar.path.editing {
-            return div()
-                .flex_1()
-                .min_w_0()
-                .block_mouse_except_scroll()
-                .child(ui::field::input(&self.toolbar.path.input, cx))
+        let editing = self.toolbar.path.editing;
+        let on_click = cx.listener(Self::click_command(Command::EditLocation));
+        let shell = el! {
+            .div {
+                # "location-display";
+                flex_1; min_w_0; flex; items_center; mx: CAPTION_PADDING.px;
+                h: ADDRESS_HEIGHT.px;
+                rounded: ITEM_RADIUS.px; border_1;
+                border_color: $(if editing { cx.theme().ring } else { cx.theme().border });
+            }
+        }
+        .test_support()
+        .block_mouse_except_scroll();
+        if editing {
+            return shell
+                .child(
+                    ui::field::input(&self.toolbar.path.input, cx)
+                        .appearance(false)
+                        .h_full(),
+                )
                 .into_any_element();
         }
         if let Some(location) = self
@@ -339,11 +361,9 @@ impl Browser {
                 Location::Directory(p) => Path::new(p).display().to_string(),
                 _ => location.label(cx).to_string(),
             };
-            return div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .child(destination)
+            return shell
+                .on_click(on_click)
+                .child(el! { .div { flex_1; min_w_0; px: CAPTION_PADDING.px; truncate } [destination] })
                 .into_any_element();
         }
         let content = if let Location::Remote(address) = self.current_location() {
@@ -383,17 +403,11 @@ impl Browser {
             }.into_any_element()
         };
         let edit = self.command_button("edit-path", IconName::Pencil, Command::EditLocation, cx);
-        el! {
-            .div {
-                # "location-display";
-                flex_1; min_w_0; flex; items_center; mx: CAPTION_PADDING.px;
-                rounded: ITEM_RADIUS.px; border_1; border_color: $cx.theme().border;
-            } [
-                content,
-                edit,
-            ]
-        }
-        .into_any_element()
+        shell
+            .on_click(on_click)
+            .child(content)
+            .child(edit)
+            .into_any_element()
     }
 
     pub(super) fn render_tab(
@@ -687,12 +701,44 @@ impl Browser {
             .div {
                 # "location-scope"; size_full; flex; items_center;
                 text_xs; text_color: $cx.theme().muted_foreground;
-                @if (self.sidebar.collapsed) justify_center; @else px: CONTENT_PADDING.px; @end;
+                @if (self.sidebar_collapsed()) justify_center; @else px: CONTENT_PADDING.px; @end;
             } [
                 @if (self.pages.is_empty()) $i18n::text("local", cx), @end,
             ]
         }
         .into_any_element()
+    }
+
+    pub(super) fn page_title(&self, cx: &App) -> SharedString {
+        if self.current_location() == Location::from(&self.locations.home) {
+            // Use the localized name for the home directory.
+            i18n::text("home", cx)
+        } else {
+            self.current_tab()
+                .map(|slot| self.tab_title(slot, cx))
+                .unwrap_or_default()
+                .into()
+        }
+    }
+
+    pub(super) fn directory_filter(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // The filter box itself is the real target of its binding.
+        let filter_hint = ui::keytips::row_anchor(
+            window,
+            cx,
+            "filter-hint".into(),
+            ui::Shortcut::from(Command::Filter),
+        );
+        el! {
+            .div { # "directory-filter"; test_support; relative; w: FILTER_WIDTH.px; min_w: 96.0.px; flex_shrink_1 } [
+                ($&self.toolbar.filter.input, cx).ui::field::input { small; cleanable: true; prefix: IconName::Search.Icon::new },
+                filter_hint,
+            ]
+        }.into_any_element()
     }
 
     fn directory_page(
@@ -701,16 +747,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> ContentPage {
-        let title: SharedString = if self.current_location() == Location::from(&self.locations.home)
-        {
-            // Use the localized name for the home directory.
-            i18n::text("home", cx)
-        } else {
-            self.current_tab()
-                .map(|slot| self.tab_title(slot, cx))
-                .unwrap_or_default()
-                .into()
-        };
+        let title = self.page_title(cx);
         let favorite = self
             .locations
             .places
@@ -724,19 +761,7 @@ impl Browser {
             .command_button("details", IconName::Info, Command::Details, cx)
             .active(self.details_visible());
         let on_columns = cx.listener(Self::on_columns);
-        // The filter box itself is the real target of its binding.
-        let filter_hint = ui::keytips::row_anchor(
-            window,
-            cx,
-            "filter-hint".into(),
-            ui::Shortcut::from(Command::Filter),
-        );
-        let filter = el! {
-            .div { relative; w: FILTER_WIDTH.px; min_w: 96.0.px; flex_shrink_1 } [
-                ($&self.toolbar.filter.input, cx).ui::field::input { small; cleanable: true; prefix: IconName::Search.Icon::new },
-                filter_hint,
-            ]
-        };
+        let filter = self.directory_filter(window, cx);
         let favorite = el! {
             "favorite".IconButton::new {
                 icon: IconName::Star;
@@ -776,10 +801,14 @@ impl Browser {
             ));
         el! {
             .ContentPage::default { # "directory-page" } [
+                @if (!self.window.layout.compact)
                 .PageHeader::default [
-                    .PageTitle::default [title],
+                     .div { # "page-title"; test_support; aria_label: $(title.clone()); flex_1; min_w_0; overflow_hidden } [
+                        .PageTitle::default [title],
+                    ],
                     .PageActions::default { min_w_0; flex_shrink_1; } [filter, view_mode, favorite, sort, columns, hidden, details, refresh],
                 ],
+                @end,
                 .PageContent::default [body],
             ]
         }
@@ -813,8 +842,12 @@ impl Browser {
             slot.refresh_visible();
         }
         self.sync_preview(cx);
-        let details_progress =
-            motion::state_progress("files-details", self.details_visible(), window, cx);
+        let progress = motion::state_progress("files-details", self.details_visible(), window, cx);
+        let details_progress = if self.window.layout.compact {
+            0.
+        } else {
+            progress
+        };
         let width = f32::from(window.bounds().size.width)
             - self.width()
             - TABLE_INSET * 2.
@@ -1037,7 +1070,7 @@ impl Browser {
         el! { .div { flex; items_center; flex_shrink_0; gap_2; } [terminal] }.into_any_element()
     }
 
-    fn render_status(&self, cx: &App) -> AnyElement {
+    fn render_status(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut labels = Vec::new();
         if self.pages.current() == Some(&pages::Page::Help) {
             return el! { .div }.into_any_element();
@@ -1050,11 +1083,8 @@ impl Browser {
         {
             labels.push(i18n::text("loading", cx));
         } else if let Some(view) = self.remote_view() {
-            let (visible, selected) = view.read(cx).counts();
+            let (visible, _) = view.read(cx).counts();
             labels.push(i18n::count("item-count", visible, cx));
-            if selected > 0 {
-                labels.push(i18n::count("selection-count", selected, cx));
-            }
         } else if self.collection() == Some(Collection::Volumes) {
             let count = self
                 .devices
@@ -1075,10 +1105,6 @@ impl Browser {
                 self.collections.trash.rows().len(),
                 cx,
             ));
-            let selected = self.collections.trash.selected_count();
-            if selected > 0 {
-                labels.push(i18n::count("selection-count", selected, cx));
-            }
         } else if let Some(slot) = self.active().filter(|slot| slot.files_available())
             && let Some(directory) = slot.navigation.directory()
         {
@@ -1104,10 +1130,6 @@ impl Browser {
                 args.set("total", directory.entries.len() as i64);
                 labels.push(i18n::format("filter-count", Some(&args), cx));
             }
-            let selected = slot.navigation.view().selected.len();
-            if selected > 0 {
-                labels.push(i18n::count("selection-count", selected, cx));
-            }
         }
         let labels = labels
             .into_iter()
@@ -1115,9 +1137,14 @@ impl Browser {
         el! {
             .div { w_full; flex; items_center; gap: TABLE_INSET.px; min_w_0; text_xs; text_color: $cx.theme().muted_foreground } [
                 ..labels,
-                @if (let Some(clipboard) = clipboard_status::render(cx))
-                    clipboard,
-                @end,
+                .div { h: 12.0.px; border_l_1; border_color: $(cx.theme().border); },
+                .div { # "footer-status-controls"; test_support; flex; items_center; flex_shrink_0;
+                    gap: $(px(if self.window.layout.compact { 0. } else { ITEM_GAP }));
+                } [
+                    $(self.render_background_tasks(cx)),
+                    $(self.render_selection_status(cx)),
+                    $(clipboard_status::render(self.clipboard_details.clone(), self.window.layout.compact, cx)),
+                ],
             ]
         }.into_any_element()
     }

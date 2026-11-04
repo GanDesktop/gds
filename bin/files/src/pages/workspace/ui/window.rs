@@ -11,6 +11,7 @@ pub(super) struct State {
     pub focus: FocusHandle,
     /// Held window-wide so tab close controls need no per-control timer.
     pub held_modifier: Option<ui::HeldModifier>,
+    pub layout: responsive::Layout,
     pub subscriptions: Vec<Subscription>,
 }
 
@@ -25,6 +26,7 @@ impl State {
             root_focus: cx.focus_handle(),
             focus,
             held_modifier: None,
+            layout: responsive::Layout::for_width(window.bounds().size.width),
             subscriptions: Vec::new(),
         }
     }
@@ -33,6 +35,9 @@ impl State {
 impl Browser {
     pub(super) fn subscribe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.window.subscriptions = vec![
+            cx.observe_global_in::<configuration::Current>(window, Self::sync_preferences),
+            cx.observe(&self.background_tasks, |_, _, cx| cx.notify()),
+            cx.observe_window_bounds(window, Self::on_window_resize),
             cx.observe(&self.terminal.split, |_, _, cx| cx.notify()),
             cx.subscribe(&self.terminal.split, Self::on_terminal_split),
             cx.subscribe_in(&self.toolbar.path.input, window, Self::on_path_input),

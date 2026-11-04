@@ -4,7 +4,7 @@ use super::*;
 use gds_uim::el;
 
 impl Browser {
-    pub(super) fn volume_can_rename(&self, id: &VolumeId, cx: &App) -> bool {
+    pub(in super::super) fn volume_can_rename(&self, id: &VolumeId, cx: &App) -> bool {
         self.devices
             .service
             .read(cx)

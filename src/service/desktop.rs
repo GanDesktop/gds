@@ -14,8 +14,6 @@ pub use client::{Desktop, OpenMode, OpenOutcome};
 #[cfg(feature = "desktop")]
 pub use error::Error;
 #[cfg(all(feature = "desktop", target_os = "linux"))]
-pub mod clipboard;
-#[cfg(all(feature = "desktop", target_os = "linux"))]
 pub mod file_manager;
 #[cfg(all(feature = "desktop", target_os = "linux"))]
 mod portal;

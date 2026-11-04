@@ -1,0 +1,85 @@
+name: Release Linux packages
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }} (x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [arch, debian-13, fedora-43]
+    env:
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build native packages from the release tag
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          case "$TARGET" in
+            arch)
+              python3 scripts/build-linux-package.py arch --engine docker --profile release --package-release 1
+              ;;
+            debian-13)
+              python3 scripts/build-linux-package.py debian --release trixie --engine docker --profile release --package-release 1
+              ;;
+            fedora-43)
+              python3 scripts/build-rpm.py --fedora 43 --engine docker --profile release --package-release 1
+              ;;
+          esac
+      - name: Collect Files and Portal packages
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p dist
+          case "$TARGET" in
+            arch) cp target/arch/arch-latest/*.pkg.tar.zst dist/ ;;
+            debian-13) cp target/deb/debian-trixie/*.deb dist/ ;;
+            fedora-43) cp target/rpm/fedora-43/*/*.rpm dist/ ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Upload release assets
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums and upload all packages
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          sha256sum -- *.pkg.tar.zst *.deb *.rpm > SHA256SUMS
+          gh release upload "$RELEASE_TAG" --clobber -- ./*.pkg.tar.zst ./*.deb ./*.rpm
+          # Publish the manifest after all packages are available to the installer.
+          gh release upload "$RELEASE_TAG" --clobber -- ./SHA256SUMS

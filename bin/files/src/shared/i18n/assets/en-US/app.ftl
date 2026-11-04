@@ -8,6 +8,7 @@ settings-region-note = Use Alt to focus a region, arrows to move, Enter to open,
 settings-notification-actions = Notifications
 settings-notification-note = Use arrows to move between notifications and Esc to return. Outside notifications, close targets the newest one. Closing a notification does not cancel its task.
 app-menu = Menu
+page-tools = Page actions
 settings = Settings
 settings-general = General
 settings-appearance = Appearance
@@ -284,3 +285,9 @@ help-select-tab = Select file tab 1–9
 unpin-close-title = Unpin and close tab?
 unpin-close-message = “{ $name }” is pinned.
 unpin-close-confirm = Unpin and close
+
+appearance-rounded-corners = Rounded window corners
+
+loading-volume = Volume { $name }
+
+new-window = New window

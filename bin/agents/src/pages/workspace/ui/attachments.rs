@@ -418,9 +418,15 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
+        #[cfg(target_os = "linux")]
+        if cx.supports_clipboard_mime() {
+            self.paste_native(None, window, cx);
+            cx.stop_propagation();
+            return;
+        }
         let clipboard = cx.read_from_clipboard();
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        if cfg!(all(target_os = "macos", not(test))) || cx.compositor_name() == "Wayland" {
+        if cfg!(all(target_os = "macos", not(test))) {
             self.paste_native(clipboard, window, cx);
             cx.stop_propagation();
             return;
@@ -443,16 +449,13 @@ impl Workspace {
     ) {
         use futures::future::{Either, select};
         let target = self.begin_paste(cx);
+        let read = crate::shared::lib::clipboard::Contents::read(cx);
         cx.spawn_in(window, async move |view, cx| {
-            let read = cx.background_executor().spawn(async {
-                crate::shared::lib::clipboard::Contents::read_native()
-                    .map_err(|error| error.to_string())
-            });
             let timeout = cx
                 .background_executor()
                 .timer(std::time::Duration::from_secs(3));
             let result = match select(Box::pin(read), Box::pin(timeout)).await {
-                Either::Left((result, _)) => result,
+                Either::Left((result, _)) => result.map_err(|error| error.to_string()),
                 Either::Right(_) => Err(tr!("clipboard-timeout").into()),
             };
             let _ = view.update_in(cx, |this, window, cx| {

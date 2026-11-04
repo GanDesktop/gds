@@ -56,7 +56,7 @@ fn rename_undo_redo_use_shortcuts_and_menu_without_intercepting_text(cx: &mut Te
         for label in ["Undo", "Redo"] {
             window.within("popup-menu").click(label, cx);
             assert!(
-                browser.read(cx).menus.application_open,
+                browser.read(cx).menus.open.is_some(),
                 "disabled history keeps the menu open"
             );
             assert!(!browser.read(cx).operations.in_progress);
@@ -67,7 +67,7 @@ fn rename_undo_redo_use_shortcuts_and_menu_without_intercepting_text(cx: &mut Te
     cx.run_until_parked();
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
-        assert!(!browser.read(cx).menus.application_open);
+        assert!(browser.read(cx).menus.open.is_none());
         crate::shared::lib::clipboard::clear(cx);
         window.render_frame(cx);
         window.right_click(("file-name", 0usize), cx);

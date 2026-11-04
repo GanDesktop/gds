@@ -14,9 +14,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fedora", type=int, default=43)
     parser.add_argument("--profile", choices=["dev", "release"], default="dev")
+    parser.add_argument("--package-release", type=int, help="Package revision for releases (default: timestamp)")
     parser.add_argument("--engine", choices=["docker", "podman"],
                         default="docker" if shutil.which("docker") else "podman")
     args = parser.parse_args()
+    if args.package_release is not None and args.package_release < 1:
+        parser.error("--package-release must be positive")
     if not shutil.which(args.engine):
         parser.error(f"{args.engine} is required; start its container service before building")
 
@@ -26,7 +29,7 @@ def main():
     revision = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=project, text=True,
     ).strip()
-    release = "0." + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    release = str(args.package_release) if args.package_release else "0." + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     cache = project / "target" / f"fedora-{args.fedora}"
     output = project / "target/rpm" / f"fedora-{args.fedora}"
     cache.mkdir(parents=True, exist_ok=True)

@@ -892,3 +892,6 @@ appearance-builtin-theme-help = Six palettes, each with light and dark variants.
 
 app-help = Help
 shortcuts-application = Application
+
+appearance-rounded-corners = Rounded window corners
+appearance-rounded-corners-help = Round floating window corners. Disabled by default.

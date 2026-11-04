@@ -46,6 +46,20 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.update_preferences(preferences, true, window, cx);
+    }
+
+    pub(super) fn sync_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.update_preferences(configuration::current(cx), false, window, cx);
+    }
+
+    fn update_preferences(
+        &mut self,
+        preferences: configuration::Preferences,
+        persist: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if preferences == self.settings.preferences {
             return;
         }
@@ -79,7 +93,9 @@ impl Browser {
             // the native window title are not read during render, so push them.
             self.sync_localized_fields(window, cx);
         }
-        let save_error = configuration::save(&preferences).err();
+        let save_error = persist
+            .then(|| configuration::save(&preferences, cx))
+            .and_then(Result::err);
         self.settings
             .view
             .update(cx, |view, cx| view.set_preferences(preferences, window, cx));

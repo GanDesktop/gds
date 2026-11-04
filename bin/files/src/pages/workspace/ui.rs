@@ -1,5 +1,6 @@
 use crate::entities::location::{Location, VolumeIdentity};
 use gds::appearance::tokens;
+mod background_tasks;
 mod breadcrumb;
 mod clipboard_status;
 mod columns;
@@ -12,6 +13,7 @@ mod drag_drop;
 mod entry_appearance;
 mod file_actions;
 mod file_icon;
+mod file_label;
 mod grid;
 mod handlers;
 mod history;
@@ -31,11 +33,14 @@ mod recycle;
 mod regions;
 mod remote;
 mod rename;
+mod responsive;
 mod routing;
 mod selection;
+mod selection_status;
 mod settings;
 mod sidebar;
 mod sort;
+mod status;
 mod table;
 mod tabs;
 mod terminal;
@@ -43,6 +48,7 @@ mod toolbar;
 mod transfers;
 mod undo;
 mod view;
+mod watching;
 mod window;
 
 use std::{
@@ -84,6 +90,9 @@ enum LocationTarget {
     Network,
     Trash,
 }
+
+pub struct NewWindowRequested(pub PathBuf);
+impl EventEmitter<NewWindowRequested> for Browser {}
 
 pub struct LaunchOptions {
     pub runtime: Handle,
@@ -132,6 +141,7 @@ struct ViewState {
 }
 
 struct OpenTab {
+    watch: Option<watching::Watch>,
     remote: Option<remote::Directory>,
     remote_load: Option<Task<()>>,
     id: u64,
@@ -160,6 +170,7 @@ struct OpenTab {
 impl OpenTab {
     fn new(id: u64, location: Location, path: Option<PathBuf>, pinned: bool) -> Self {
         Self {
+            watch: None,
             remote: None,
             remote_load: None,
             id,
@@ -327,6 +338,9 @@ pub struct Browser {
 
     menus: menu::State,
     operations: file_actions::State,
+    background_tasks: Entity<background_tasks::State>,
+    clipboard_details: Entity<clipboard_status::Details>,
+    selection_details: Entity<selection_status::Details>,
     terminal: terminal::State,
     /// The picker session, when this window is a file picker.
     picker: Option<picker::State>,
@@ -365,6 +379,12 @@ impl Browser {
             remote: remote::State::new(host.runtime.clone(), cx),
             menus: menu::State::default(),
             operations: file_actions::State::new(window, cx),
+            background_tasks: cx.new(|_| background_tasks::State::default()),
+            clipboard_details: cx.new(|_| clipboard_status::Details::new(host.runtime.clone())),
+            selection_details: {
+                let browser = cx.entity();
+                cx.new(|cx| selection_status::Details::new(browser, cx))
+            },
             terminal: terminal::State::new(&settings.preferences, cx),
             picker: picker.map(|options| picker::State::new(options, window, cx)),
             window: host,
@@ -446,9 +466,11 @@ impl Browser {
     }
 
     fn details_visible(&self) -> bool {
-        self.locations
-            .places
-            .details_visible(self.current_location())
+        !self.window.layout.compact
+            && self
+                .locations
+                .places
+                .details_visible(self.current_location())
     }
 
     fn current_path(&self) -> Option<PathBuf> {
@@ -509,6 +531,7 @@ impl Browser {
     }
 
     fn start_request(&mut self, id: u64, request: LoadRequest, cx: &mut Context<Self>) {
+        self.watch_directory(id, request.path(), cx);
         if let Some(slot) = self.tab_slot_mut(id) {
             slot.remote_load = None;
         }
@@ -581,6 +604,11 @@ impl Browser {
             }
             Err(error) => report_load_failure(error.to_string(), cx),
         }
+        let watched_path = self
+            .tab_slot(id)
+            .and_then(OpenTab::path)
+            .map(Path::to_path_buf);
+        self.watch_directory(id, watched_path.as_deref(), cx);
         if id == self.tabs.active_id {
             self.toolbar.filter.sync_pending = true;
             self.enter_location(cx);
@@ -999,11 +1027,9 @@ impl Browser {
         }
         // Window actions can win their bindings before popup key listeners.
         // Close the controlled menu before handling its chosen command.
-        if self.menus.application_open && command != Command::Menu {
-            self.menus.application_open = false;
-            if matches!(command, Command::Settings | Command::Help) {
-                self.window.focus.focus(window, cx);
-            }
+        if self.menus.open.is_some() && command != Command::Menu {
+            self.menus.open = None;
+            self.window.focus.focus(window, cx);
             if command == Command::Cancel {
                 self.window.focus.focus(window, cx);
                 cx.notify();
@@ -1078,21 +1104,21 @@ impl Browser {
                 if !self.pages.is_empty() || self.editing_path(window, cx) {
                     return;
                 }
-                if self.menus.application_open {
+                if self.menus.open == Some(menu::Kind::Application) {
                     // The menu is about to be unmounted; take focus back before
                     // its own handle disappears.
-                    self.menus.application_open = false;
+                    self.menus.open = None;
                     self.window.focus.focus(window, cx);
                 } else {
-                    self.menus.application_open = true;
+                    self.menus.open = Some(menu::Kind::Application);
                 }
             }
             Command::Help => self.show_page(pages::Page::Help, window, cx),
             Command::Settings => {
                 // Leaving the file workspace unmounts the menu, so take focus
                 // back from it before its handle disappears.
-                if self.menus.application_open {
-                    self.menus.application_open = false;
+                if self.menus.open.is_some() {
+                    self.menus.open = None;
                     self.window.focus.focus(window, cx);
                 }
 
@@ -1107,6 +1133,11 @@ impl Browser {
             Command::NewFolder => {
                 if let Some(path) = self.current_path() {
                     self.request_new_folder(path, window, cx);
+                }
+            }
+            Command::NewWindow => {
+                if self.picker.is_none() {
+                    cx.emit(NewWindowRequested(self.current_path().unwrap_or_else(|| self.locations.home.clone())));
                 }
             }
             Command::NewTab => self.open_tab(self.locations.home.clone(), false, window, cx),
@@ -1132,7 +1163,9 @@ impl Browser {
                 }
             }
             Command::Sidebar => {
-                self.sidebar.collapsed = !self.sidebar.collapsed;
+                if !self.window.layout.compact {
+                    self.sidebar.collapsed = !self.sidebar.collapsed;
+                }
             }
             Command::Terminal => self.toggle_terminal(window, cx),
             Command::EditLocation => {
@@ -1244,7 +1277,8 @@ impl Browser {
                 }
             }
             Command::Details => {
-                if self.pages.is_empty()
+                if !self.window.layout.compact
+                    && self.pages.is_empty()
                     && self.collection().is_none()
                     && !window.has_active_dialog(cx)
                 {

@@ -116,7 +116,7 @@ impl Browser {
             })
             .collect();
         self.discard_marquee();
-        self.menus.application_open = false;
+        self.menus.open = None;
         self.menus.context = None;
         self.menus.sort = None;
         cx.notify();

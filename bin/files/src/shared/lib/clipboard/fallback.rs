@@ -71,19 +71,33 @@ impl Clipboard {
         succeeded: Vec<PathBuf>,
         cx: &mut App,
     ) -> Task<Result<(), Error>> {
+        Self::remove_paths(expected, succeeded, false, cx)
+    }
+
+    pub fn remove_paths(
+        expected: Snapshot,
+        succeeded: Vec<PathBuf>,
+        explicit: bool,
+        cx: &mut App,
+    ) -> Task<Result<(), Error>> {
         let read = cx.read_from_clipboard_async();
         cx.spawn(async move |cx| {
             let item = read.await?;
             let Some(current) = Self::decode(item.as_ref())? else {
                 return Ok(());
             };
-            let Some(remaining) = expected.remaining_after(&current, &succeeded) else {
+            let remaining = if explicit {
+                expected.excluding(&current, &succeeded)
+            } else {
+                expected.remaining_after(&current, &succeeded)
+            };
+            let Some(remaining) = remaining else {
                 return Ok(());
             };
             let item = if remaining.is_empty() {
                 ClipboardItem::new_string(String::new())
             } else {
-                Self::encode(&Snapshot::new(Mode::Cut, remaining)?)?
+                Self::encode(&Snapshot::new(expected.mode, remaining)?)?
             };
             cx.update(|cx| cx.write_to_clipboard(item));
             Ok(())

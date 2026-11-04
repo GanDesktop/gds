@@ -20,15 +20,21 @@ DMS 导出 / KDE 当前配色 / Qt 配置色板 / 内置 TOML
 
 ## 2. 来源与明暗
 
-主题下拉提供“系统主题”和“内置”。系统来源在 KDE Plasma 会话中读取当前 KDE 配色，其它会话沿用 DankMaterialShell 的导出；Qt5ct / Qt6ct 保留代码与配置兼容，但不出现在主题下拉中。
+主题下拉提供“系统主题”和“内置”。系统来源在 KDE Plasma 会话中读取当前 KDE 配色，GNOME 会话读取当前 GTK 3 主题，其它会话沿用 DankMaterialShell 的导出；Qt5ct / Qt6ct 保留代码与配置兼容，但不出现在主题下拉中。
 
-Files 新配置默认使用内置配色，明暗跟随桌面系统；明暗还可单独选择浅色或深色。系统主题按当前会话选择来源，已有 `dms` 配置兼容读取为 `system`。`ModePreference` 表示系统 / 浅 / 深，实际 `Mode` 只有浅 / 深。切换来源不重置明暗、字体、内置配色或表面不透明度。
+Files defaults to the system palette and follows the desktop light/dark preference. 明暗还可单独选择浅色或深色。系统主题按当前会话选择来源，已有 `dms` 配置兼容读取为 `system`。`ModePreference` 表示系统 / 浅 / 深，实际 `Mode` 只有浅 / 深。切换来源不重置明暗、字体、内置配色或表面不透明度。
 
 ### DMS
 
 读取 `$XDG_CACHE_HOME/DankMaterialShell/dms-colors.json`，默认 `~/.cache/DankMaterialShell/dms-colors.json`。解析器读取 `colors.light` / `colors.dark` 的颜色角色；跟随系统时要求 `mode` 为 `light` 或 `dark`，显式明暗只读取对应组。
 
 请求的组缺失、必需角色缺失、颜色非法或文件不可读均返回错误。可选表面角色从同一来源中补齐；未提供的业务状态色使用公共默认值。文件存在只说明导出可读取，不证明桌面正在使用该配色。实现见 [DMS provider](../../src/appearance/theme/provider/system/dms.rs)。
+
+### GNOME
+
+通过独立 Python/PyGObject 进程调用 GTK 3 的 `Gtk.StyleContext.lookup_color`，读取当前 GTK 主题及用户 `gtk-3.0/gtk.css` 解析后的颜色。必需的窗口、内容、文字和选中颜色成对导入；缺失必需角色时报错，缺失辅助角色从同一主题推导。没有自带 Adwaita 色表。运行时需要 Python 3、PyGObject 和 GTK 3 introspection 数据，原生包与 Nix 环境声明这些依赖。
+
+明暗偏好仅设置读取进程的 `gtk-application-prefer-dark-theme`，不改系统配置；系统模式结合 GNOME 的 `color-scheme` 选择变体，再从实际窗口底色确定模式。监听 dconf 用户库及 GTK 3 的 `gtk.css`、`settings.ini`，设置变化后重新读取。只提供一套颜色的第三方主题不会被自动生成另一套配色。这里读取的是 GTK 3 主题，不承诺与使用独立样式的 libadwaita 应用或 GNOME Shell 扩展一致。
 
 ### KDE Plasma
 
@@ -145,3 +151,29 @@ mode = "system"
 Files 保存到 `$XDG_CONFIG_HOME/gds/files/settings.toml`，Agents 保存到自己的前端配置；不存在套件全局外观同步。应用真实变化后自动保存，失败通过共享通知报告。
 
 声明式符号链接与只读文件允许读取，但不会被替换或覆盖。运行态修改已成功、写入失败时明确报告“已生效但未保存”。外部主题文件始终只读；GDS 不替用户安装 DMS、Qt 插件或修改会话环境。
+
+## Window frames and initial size
+
+Files and Agents start with a 960 × 640 logical-pixel workspace, capped at 85%
+of the display work area on smaller screens. The compositor can override this
+allocation when tiling. Files keeps a 520 × 360 minimum so its compact layout
+remains usable.
+
+Files has two responsive layouts, both retaining the page title. The expanded
+layout shows the directory search field and all page actions. Below approximately
+1080 px, the compact layout collapses the sidebar and hides back/forward/parent
+controls. The title and search stay in the page header; the remaining actions
+collapse into an ellipsis button at the right end of that same header. Sorting
+and the application menu are available as submenus. The main menu button stays
+in the top-left corner in both layouts, with the same contents and Alt+M / F10
+bindings; it is independent of the page-actions ellipsis. Details are disabled in the
+compact layout, including their shortcut. Expanding restores the saved sidebar
+and details preferences. The breakpoint budgets for the expanded details panel,
+even when it is currently closed. Long titles truncate within their available
+space instead of disappearing at an independent breakpoint.
+
+Both appearance pages offer **Rounded window corners**, disabled by default.
+`appearance.rounded_corners` is saved independently by each application and applies
+immediately. Linux client-side frames use the shared 10 px radius, including their
+content clip and input region. Maximized/fullscreen windows and corners touching a
+tiled edge stay square; server-side decorations remain desktop-owned.

@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf};
 use bas::service::tls::ConnectionOptions as Target;
 use gpui_kit::{
     App, AppContext, Bounds, Global, WindowBounds, WindowHandle, WindowKind, WindowOptions,
-    component::Root, prelude::*, px, size, transparent_black,
+    component::Root, prelude::*, transparent_black,
 };
 use tokio::runtime::Handle;
 
@@ -96,18 +96,13 @@ pub(crate) fn window_options(compact: bool, cx: &App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
-            crate::pages::workspace::initial_size(compact),
+            gds::ui::window::fit_size(crate::pages::workspace::initial_size(compact), cx),
             cx,
         ))),
         kind: WindowKind::Normal,
         window_background: cx
             .global::<crate::shared::lib::appearance::Appearance>()
             .background,
-        window_min_size: Some(if compact {
-            size(px(420.), px(80.))
-        } else {
-            size(px(1000.), px(640.))
-        }),
         app_id: Some("io.github.GanDesktop.GdsAgents".into()),
         ..gds::ui::window::window_options()
     }

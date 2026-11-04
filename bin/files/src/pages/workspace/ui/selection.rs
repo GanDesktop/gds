@@ -78,7 +78,7 @@ impl Browser {
             && self.window.focus.contains_focused(window, cx)
             && !self.sidebar.regions.sidebar_focused(window, cx)
             && !notifications::is_focused(window, cx)
-            && !self.menus.application_open
+            && self.menus.open.is_none()
             && self.menus.context.is_none()
             && self.menus.sort.is_none()
             && !self.operations.rename.read(cx).is_open()

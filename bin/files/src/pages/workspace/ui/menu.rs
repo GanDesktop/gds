@@ -1,8 +1,10 @@
 //! The application menu: the toolbar control and the popup it opens.
 //!
-//! The button and the keyboard shortcut drive one open flag on the workspace,
+//! The button and the keyboard shortcut drive the same menu on the workspace,
 //! so `Alt+M` (with `F10` as its compatibility stroke) opens exactly the menu
 //! the pointer opens, and can never leave a second one behind.
+
+mod overflow;
 
 use super::*;
 use gds::ui::{self, Shortcut, button::Button};
@@ -18,11 +20,17 @@ use gpui_kit::prelude::*;
 
 #[derive(Default)]
 pub(super) struct State {
-    /// The toolbar button and Alt+M / F10 drive the same application menu.
-    pub application_open: bool,
+    /// Only one of the application menu and page tools can be open.
+    pub open: Option<Kind>,
     pub context: Option<context_menu::OpenMenu>,
     pub sort: Option<sort::OpenMenu>,
     pub volume_focus: Option<FocusHandle>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Kind {
+    Application,
+    PageTools,
 }
 
 /// One row of the application menu.
@@ -33,6 +41,7 @@ pub(super) struct State {
 /// actions the single owner of that concern.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MenuEntry {
+    NewWindow,
     Settings,
     Help,
     Logs,
@@ -41,10 +50,17 @@ enum MenuEntry {
 
 impl MenuEntry {
     /// The rows of the application menu, in order.
-    const ROWS: [Self; 4] = [Self::Settings, Self::Help, Self::Logs, Self::About];
+    const ROWS: [Self; 5] = [
+        Self::NewWindow,
+        Self::Settings,
+        Self::Help,
+        Self::Logs,
+        Self::About,
+    ];
 
     fn label_id(self) -> &'static str {
         match self {
+            Self::NewWindow => Command::NewWindow.label_id(),
             Self::Settings => Command::Settings.label_id(),
             Self::Help => Command::Help.label_id(),
             Self::Logs => "logs-title",
@@ -54,6 +70,7 @@ impl MenuEntry {
 
     fn icon(self) -> IconName {
         match self {
+            Self::NewWindow => IconName::Plus,
             Self::Settings => IconName::Settings,
             Self::Help => IconName::BookOpen,
             Self::Logs => IconName::List,
@@ -64,6 +81,7 @@ impl MenuEntry {
     /// The command whose binding the row shows, if the row has one.
     fn command(self) -> Option<Command> {
         match self {
+            Self::NewWindow => Some(Command::NewWindow),
             Self::Settings => Some(Command::Settings),
             Self::Help => Some(Command::Help),
             Self::About | Self::Logs => None,
@@ -85,13 +103,16 @@ impl MenuEntry {
     /// The press that runs the row; the popup closes itself afterwards.
     fn on_click(self, view: WeakEntity<Browser>) -> impl Fn(&ClickEvent, &mut Window, &mut App) {
         move |event, window, cx| match self {
+            Self::NewWindow => {
+                Browser::menu_command(view.clone(), Command::NewWindow)(event, window, cx)
+            }
             Self::Settings => {
                 Browser::menu_command(view.clone(), Command::Settings)(event, window, cx);
             }
             Self::Help => Browser::menu_command(view.clone(), Command::Help)(event, window, cx),
             Self::About => Browser::show_about(view.clone(), window, cx),
             Self::Logs => {
-                let _ = view.update(cx, |browser, cx| browser.set_menu_open(false, cx));
+                let _ = view.update(cx, |browser, cx| browser.set_menu_open(None, cx));
                 window.dispatch_action(Box::new(gds::ui::logs::OpenLogs), cx);
             }
         }
@@ -110,41 +131,60 @@ struct MenuState {
 
 /// The toolbar menu control together with the popup it opens.
 ///
-/// `open` is the workspace's flag, so the pointer and the shortcut go through
+/// `open` identifies the workspace popup, so the pointer and the shortcut go through
 /// the same state: a press can only open this popup, and a press while it is up
 /// closes it instead of stacking another menu.
-pub(super) fn application_menu(
-    open: bool,
+pub(super) fn control(
+    kind: Kind,
+    open: Option<Kind>,
     view: WeakEntity<Browser>,
     cx: &mut Context<Browser>,
 ) -> AnyElement {
     let application = gds::ui::about::Application::cargo(env!("CARGO_BIN_NAME"));
-    let label = i18n::text("app-menu", cx);
-    let trigger = Button::application_menu("application-menu", application.icon)
-        .accessibility_label(label.clone())
-        .tooltip_with_shortcut(label, Shortcut::from(Command::Menu));
+    let open = open == Some(kind);
+    let compact = kind == Kind::PageTools;
+    let label = i18n::text(if compact { "page-tools" } else { "app-menu" }, cx);
+    let trigger = if compact {
+        Button::icon_button("page-tools")
+            .control_icon(IconName::Ellipsis)
+            .tooltip(label.clone())
+    } else {
+        Button::application_menu("application-menu", application.icon)
+            .tooltip_with_shortcut(label.clone(), Shortcut::from(Command::Menu))
+    }
+    .accessibility_label(label);
     let opener = view.clone();
-    Popover::new("application-menu-popover")
-        .appearance(false)
-        .overlay_closable(false)
-        .open(open)
-        .trigger(trigger)
-        .on_open_change(move |open, _, cx| {
-            if let Some(view) = opener.upgrade() {
-                view.update(cx, |browser, cx| browser.set_menu_open(*open, cx));
-            }
-        })
-        .content(move |_, window, cx| popup(view.clone(), window, cx))
-        .into_any_element()
+    Popover::new(if compact {
+        "compact-menu-popover"
+    } else {
+        "application-menu-popover"
+    })
+    .appearance(false)
+    .overlay_closable(false)
+    .open(open)
+    .trigger(trigger)
+    .on_open_change(move |open, _, cx| {
+        if let Some(view) = opener.upgrade() {
+            view.update(cx, |browser, cx| {
+                if *open {
+                    browser.set_menu_open(Some(kind), cx);
+                } else if browser.menus.open == Some(kind) {
+                    browser.set_menu_open(None, cx);
+                }
+            });
+        }
+    })
+    .content(move |_, window, cx| popup(kind, view.clone(), window, cx))
+    .into_any_element()
 }
 
 impl Browser {
-    /// Record whether the application menu is showing.
-    pub(super) fn set_menu_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.menus.application_open == open {
+    /// Select one popup, or close the current popup.
+    pub(super) fn set_menu_open(&mut self, open: Option<Kind>, cx: &mut Context<Self>) {
+        if self.menus.open == open {
             return;
         }
-        self.menus.application_open = open;
+        self.menus.open = open;
         cx.notify();
     }
 
@@ -185,18 +225,29 @@ impl Browser {
 
 /// The open menu, built once per open session.
 fn popup(
+    kind: Kind,
     view: WeakEntity<Browser>,
     window: &mut Window,
     cx: &mut Context<PopoverState>,
 ) -> AnyElement {
-    let state = window.use_keyed_state(SharedString::from("application-menu:menu"), cx, |_, _| {
-        MenuState::default()
-    });
+    let compact = kind == Kind::PageTools;
+    let key = if compact {
+        "compact-menu:menu"
+    } else {
+        "application-menu:menu"
+    };
+    let state = window.use_keyed_state(SharedString::from(key), cx, |_, _| MenuState::default());
     if let Some(menu) = state.read(cx).menu.clone() {
         return menu.into_any_element();
     }
     let build_view = view.clone();
-    let menu = PopupMenu::build(window, cx, move |menu, _, cx| rows(menu, build_view, cx));
+    let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
+        if kind == Kind::PageTools {
+            overflow::rows(menu, build_view, window, cx)
+        } else {
+            rows(menu, build_view, cx)
+        }
+    });
     state.update(cx, |state, _| state.menu = Some(menu.clone()));
     // A controlled popover applies its own focus while mounting. Give the
     // menu focus afterwards so its Escape and arrow handlers own the keys.
@@ -205,7 +256,7 @@ fn popup(
     window.on_next_frame(move |window, cx| {
         if opening_view
             .upgrade()
-            .is_some_and(|view| view.read(cx).menus.application_open)
+            .is_some_and(|view| view.read(cx).menus.open == Some(kind))
             && let Some(menu) = opening_menu.upgrade()
         {
             menu.focus_handle(cx).focus(window, cx);
@@ -221,7 +272,11 @@ fn popup(
                 _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
                 _ = state.update(cx, |state, _| state.menu = None);
                 if let Some(view) = view.upgrade() {
-                    view.update(cx, |browser, cx| browser.set_menu_open(false, cx));
+                    view.update(cx, |browser, cx| {
+                        if browser.menus.open == Some(kind) {
+                            browser.set_menu_open(None, cx);
+                        }
+                    });
                 }
             }
         })

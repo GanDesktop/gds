@@ -313,7 +313,7 @@ impl Browser {
         }
         el! {
             .ContentPage::default { # $(collection.label_id()) } [
-                .PageHeader::default [
+                .PageHeader::default { @if (self.window.layout.compact) hidden; @end } [
                     .PageTitle::default [$i18n::text(collection.label_id(), cx)],
                     @if (!actions.is_empty())
                         .PageActions::default [..actions],

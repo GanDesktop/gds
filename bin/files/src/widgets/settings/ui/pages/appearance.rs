@@ -11,6 +11,14 @@ use gds::ui::settings::SettingRow;
 
 impl View {
     pub(super) fn render_appearance(&mut self, cx: &mut Context<Self>) -> Div {
+        let corners = el! {
+            "settings-rounded-corners".Switch::new {
+                accessibility_label: $(text("appearance-rounded-corners", cx));
+                checked: $(self.preferences.appearance.rounded_corners);
+                on_change: $(cx.listener(Self::on_rounded_corners_changed));
+            }
+        };
+        let corners_row = self.setting_row(Field::RoundedCorners, corners, cx);
         let animations = el! {
             "settings-animations".Switch::new {
                 accessibility_label: $(text("appearance-animations", cx));
@@ -61,6 +69,7 @@ impl View {
                 source_row,
                 ..builtin_row,
                 mode_row,
+                corners_row,
                 animations_row,
                 animations_note,
                 content_opacity,

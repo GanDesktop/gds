@@ -159,3 +159,17 @@ fn copy_create_trash_and_restore_round_trip() {
         outcome.result.unwrap();
     }
 }
+
+#[test]
+fn cancelled_history_retains_steps_for_retry() {
+    let root = tempfile::tempdir().expect("history fixture");
+    let path = root.path().join("keep");
+    fs::write(&path, "keep").unwrap();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+    let report =
+        Entry::new(Kind::Copy, vec![Step::trash(path.clone())]).execute_cancellable(&cancel);
+    assert!(path.exists());
+    assert_eq!(report.remaining.len(), 1);
+    assert!(report.inverse.is_empty());
+}

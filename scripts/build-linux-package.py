@@ -17,9 +17,12 @@ def main():
     parser.add_argument('target', choices=['arch', 'debian', 'ubuntu'])
     parser.add_argument('--release', help='Debian/Ubuntu container release (default: trixie/noble)')
     parser.add_argument('--profile', choices=['dev', 'release'], default='dev')
+    parser.add_argument('--package-release', type=int, help='Package revision for releases (default: timestamp)')
     parser.add_argument('--engine', choices=['docker', 'podman'],
                         default='docker' if shutil.which('docker') else 'podman')
     args = parser.parse_args()
+    if args.package_release is not None and args.package_release < 1:
+        parser.error('--package-release must be positive')
     if not shutil.which(args.engine):
         parser.error(f'{args.engine} is required')
     if args.target == 'arch' and args.release:
@@ -53,7 +56,8 @@ def main():
         short = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=project, text=True).strip()
         recipe = (work / 'PKGBUILD').read_text()
         recipe = re.sub(r'^pkgver=.*$', f'pkgver={version}.r{count}.g{short}', recipe, flags=re.M)
-        recipe = recipe.replace('pkgrel=1\n', f'pkgrel={stamp}\n')
+        recipe = recipe.replace('pkgrel=1\n', f'pkgrel={args.package_release or stamp}\n')
+        recipe = recipe.replace('#branch=main', f'#commit={revision}')
         (work / 'PKGBUILD').write_text(recipe)
         (work / 'src').mkdir(exist_ok=True)
         source = work / 'src/gds'
@@ -63,8 +67,9 @@ def main():
     else:
         shutil.copytree(project / 'packaging/debian', work / 'debian', dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns('Containerfile'))
+        package_release = str(args.package_release) if args.package_release else f'0.{stamp}'
         (work / 'debian/changelog').write_text(
-            f'gds ({version}-0.{stamp}) unstable; urgency=medium\n\n'
+            f'gds ({version}-{package_release}) unstable; urgency=medium\n\n'
             f'  * Local {args.target} {release} build of {revision}.\n\n'
             f' -- 4t145 <u4t145@163.com>  {format_datetime(now)}\n')
         entry = ['bash', '-c', 'dpkg-buildpackage -b -us -uc -d && cp /cache/*.deb /cache/*.buildinfo /cache/*.changes /output/']

@@ -14,6 +14,7 @@ fn palette_reinstallation_preserves_thin_semantic_focus(cx: &mut gpui_kit::TestA
     for builtin in super::BuiltinTheme::ALL {
         for mode in [ModePreference::Light, ModePreference::Dark] {
             let appearance = Appearance {
+                source: Source::Builtin,
                 builtin,
                 mode,
                 ..Appearance::default()
@@ -65,8 +66,9 @@ use super::{Appearance, Error, Mode, ModePreference, Source, validate_opacity};
 fn appearance_defaults_follow_system_without_changing_explicit_legacy_choices() {
     let appearance: Appearance = serde_json::from_str("{}").expect("valid settings JSON");
     assert_eq!(appearance, Appearance::default());
-    assert_eq!(appearance.source, Source::Builtin);
+    assert_eq!(appearance.source, Source::System);
     assert_eq!(appearance.mode, ModePreference::System);
+    assert!(!appearance.rounded_corners);
     let explicit: Appearance = toml::from_str("source = 'dms'").expect("explicit DMS selection");
     assert_eq!(explicit.source, Source::System);
     let encoded = toml::to_string(&explicit).expect("system appearance serialization");
@@ -102,10 +104,12 @@ fn builtin_fallback_keeps_the_mode_intent_and_uses_safe_material_defaults() {
             mode,
             content_opacity: f32::NAN,
             sidebar_opacity: -1.0,
+            rounded_corners: true,
         };
         let fallback = requested.builtin_fallback();
         assert_eq!(fallback.source, Source::Builtin);
         assert_eq!(fallback.mode, mode);
+        assert!(fallback.rounded_corners);
         assert_eq!(
             fallback.content_opacity,
             Appearance::default().content_opacity

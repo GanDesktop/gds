@@ -508,14 +508,17 @@ pub fn suffix_anchor(
         .shape_line(label, text_size, &[run], None)
         .width
         + px(LABEL_PADDING_X * 2. + 2.);
+    // Text layout rounds glyph advances up; the clip must include the entire border.
+    let width = width.ceil();
     let gap = typography::scaled(SUFFIX_GAP, cx);
-    let height = text_size * LABEL_LINE_HEIGHT + px(LABEL_PADDING_Y * 2. + 2.);
-    let label = compact_label(key, &[binding], held, cx);
+    let height = (text_size * LABEL_LINE_HEIGHT + px(LABEL_PADDING_Y * 2. + 2.)).ceil();
+    let label = compact_label(key, &[binding], held, cx).w_full().h_full();
     el! {
-        .div { flex; items_center; flex_shrink_0; overflow_hidden;
+        .div { flex; items_center; flex_shrink_0;
+            when: $(progress < 1.0), { overflow_hidden };
             w: $((width + gap) * progress); h: height;
         } [
-            .div { flex; flex_shrink_0; ml: gap; w: width; opacity: progress; } [label],
+            .div { flex; flex_shrink_0; ml: gap; w: width; h: height; opacity: progress; } [label],
         ]
     }
     .into_any_element()
@@ -937,7 +940,7 @@ fn compact_label(
     bindings: &[KeyBinding],
     held: HeldModifier,
     cx: &App,
-) -> impl IntoElement + use<> {
+) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
     let text_size = typography::scaled(LABEL_TEXT_SIZE, cx);
     let label = ShortcutBadge::path_label(bindings, held).unwrap_or_default();
     div()

@@ -15,6 +15,36 @@ use gpui_kit::{
 
 pub const HEIGHT: f32 = crate::appearance::tokens::TOOLBAR_HEIGHT;
 pub const MACOS_CONTROLS_WIDTH: f32 = 80.;
+const INITIAL_WIDTH: f32 = 960.;
+const INITIAL_HEIGHT: f32 = 640.;
+const DISPLAY_FRACTION: f32 = 0.85;
+const MIN_WIDTH: f32 = 520.;
+const MIN_HEIGHT: f32 = 360.;
+
+pub fn minimum_size() -> gpui_kit::Size<gpui_kit::Pixels> {
+    gpui_kit::size(px(MIN_WIDTH), px(MIN_HEIGHT))
+}
+
+pub fn initial_size() -> gpui_kit::Size<gpui_kit::Pixels> {
+    gpui_kit::size(px(INITIAL_WIDTH), px(INITIAL_HEIGHT))
+}
+
+/// Leave room for desktop panels and decorations on small displays.
+/// Tiling compositors remain free to choose the final window allocation.
+pub fn fit_size(
+    requested: gpui_kit::Size<gpui_kit::Pixels>,
+    cx: &App,
+) -> gpui_kit::Size<gpui_kit::Pixels> {
+    let Some(display) = cx.primary_display() else {
+        return requested;
+    };
+    let available = display.visible_bounds().size;
+    gpui_kit::size(
+        requested.width.min(available.width * DISPLAY_FRACTION),
+        requested.height.min(available.height * DISPLAY_FRACTION),
+    )
+}
+
 type Handler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 /// Defaults for windows that draw the GDS toolbar or titlebar. macOS keeps its

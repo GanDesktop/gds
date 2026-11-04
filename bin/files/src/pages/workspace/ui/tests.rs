@@ -46,13 +46,49 @@ fn tab_reaches_collapsed_locations_and_file_navigation(cx: &mut gpui_kit::TestAp
     cx.update_window(window.into(), |_, window, cx| {
         window.activate_window();
         window.click("back", cx);
+        let stable_ids = [
+            "location-display",
+            "back",
+            "forward",
+            "parent",
+            "sidebar",
+            "content-region",
+        ];
+        let bounds = stable_ids.map(|id| window.find(id).bounds());
+        let address = bounds[0];
+        // Use blank space near the right edge, outside the breadcrumb buttons.
+        window.click_at(
+            "location-display",
+            point(address.size.width - px(48.), address.size.height / 2.),
+            cx,
+        );
+        assert!(browser.read(cx).toolbar.path.editing);
+        assert!(
+            browser
+                .read(cx)
+                .toolbar
+                .path
+                .input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        );
+        assert_eq!(stable_ids.map(|id| window.find(id).bounds()), bounds);
+        window.input("/uncommitted-address", cx);
+        window.press("escape", cx);
+        assert!(!browser.read(cx).toolbar.path.editing);
+        assert_eq!(
+            browser.read(cx).current_path().as_deref(),
+            Some(root.path())
+        );
+        assert_eq!(stable_ids.map(|id| window.find(id).bounds()), bounds);
         window.click("edit-path", cx);
         assert!(browser.read(cx).toolbar.path.editing);
         window.press("escape", cx);
         window.click("application-menu", cx);
-        assert!(browser.read(cx).menus.application_open);
+        assert!(browser.read(cx).menus.open.is_some());
         window.press("escape", cx);
-        assert!(!browser.read(cx).menus.application_open);
+        assert!(browser.read(cx).menus.open.is_none());
         window.press("ctrl-l", cx);
         let mut reached_locations = false;
         let mut reached_files = false;

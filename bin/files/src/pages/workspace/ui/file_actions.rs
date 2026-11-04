@@ -365,7 +365,7 @@ impl Browser {
         let batch = match operations::Batch::new(selection.paths) {
             Ok(batch) => batch,
             Err(error) => {
-                notifications::Operation::finish(
+                self.finish_background(
                     notifications::Report::new(notifications::Level::Error, error.to_string()),
                     cx,
                 );
@@ -408,10 +408,11 @@ impl Browser {
         let origin_tab = request.origin_tab;
         let kind = request.kind;
         let count = request.batch.paths().len();
-        notifications::Operation::start(i18n::count(kind.progress_label(), count, cx), cx);
+        self.start_background(i18n::count(kind.progress_label(), count, cx), cx);
+        let cancel = self.background_tasks.read(cx).token("files");
         let work = cx
             .background_executor()
-            .spawn(async move { request.batch.execute(kind) });
+            .spawn(async move { request.batch.execute_cancellable(kind, &cancel) });
         cx.spawn(async move |this, cx| {
             let report = work.await;
             for item in report.failed_items() {
@@ -481,7 +482,7 @@ impl Browser {
         }
         self.clear_completed_selection(&succeeded);
         self.refresh_after_file_operation(&succeeded, cx);
-        notifications::Operation::finish(notice, cx);
+        self.finish_background(notice, cx);
         cx.notify();
     }
 

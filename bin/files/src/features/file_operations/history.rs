@@ -94,7 +94,7 @@ impl Step {
         }
     }
 
-    fn apply(&self) -> Result<Self, Error> {
+    fn apply(&self, cancel: &tokio_util::sync::CancellationToken) -> Result<Self, Error> {
         match self {
             Self::Move {
                 source,
@@ -115,7 +115,7 @@ impl Step {
                     vec![NamedTarget::new(source.clone(), name.to_owned())],
                 )?;
                 batch
-                    .execute()
+                    .execute_cancellable(cancel.clone())
                     .items
                     .pop()
                     .expect("one move result")
@@ -164,7 +164,12 @@ impl Entry {
 
     /// Run off the UI thread. Failed steps remain retryable; completed steps
     /// alone enter the opposite stack, so a partial batch is never replayed twice.
+    #[cfg(test)]
     pub fn execute(self) -> Report {
+        self.execute_cancellable(&tokio_util::sync::CancellationToken::new())
+    }
+
+    pub fn execute_cancellable(self, cancel: &tokio_util::sync::CancellationToken) -> Report {
         let mut report = Report {
             kind: self.kind,
             changed: self.paths(),
@@ -174,7 +179,14 @@ impl Entry {
             replacements: Vec::new(),
         };
         for step in self.steps.into_iter().rev() {
-            match step.apply() {
+            if cancel.is_cancelled() {
+                if report.remaining.is_empty() {
+                    report.errors.push("operation cancelled".into());
+                }
+                report.remaining.push(step);
+                continue;
+            }
+            match step.apply(cancel) {
                 Ok(inverse) => {
                     if let (
                         Step::Trash {

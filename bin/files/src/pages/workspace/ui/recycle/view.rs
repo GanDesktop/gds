@@ -47,7 +47,7 @@ pub(super) fn render_trash(
     let body = render_body(browser, window, cx);
     el! {
         .ContentPage::default { # "trash-content" } [
-            .PageHeader::default [
+            .PageHeader::default { @if (browser.window.layout.compact) hidden; @end } [
                 .PageTitle::default [$i18n::text("trash", cx)],
                 .PageActions::default [..actions],
             ],

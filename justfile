@@ -7,6 +7,10 @@ develop := "nix develop --impure --expr 'import ./shell.nix'"
 default:
     @just --list
 
+# 打开测试虚拟机桌面，或执行 start / stop / ssh / copy。
+vm machine action="open" *args:
+    @python3 scripts/vm.py "$@"
+
 # 编译并启动指定目标，可继续传应用参数。
 dev app *args:
     @just _cargo run "$@"
@@ -37,7 +41,7 @@ deb distro="debian" release="" profile="dev":
 
 # 安装整个套件，或指定 files / agents 到当前用户的 Nix profile。
 install app="all":
-    nix profile install {{ if app == "all" { ".#gds" } else if app == "files" { ".#gds-files" } else if app == "agents" { ".#gds-agents" } else { error("未知应用：" + app + "；可选 all、files、agents") } }}
+    nix profile add {{ if app == "all" { ".#gds" } else if app == "files" { ".#gds-files" } else if app == "agents" { ".#gds-agents" } else { error("未知应用：" + app + "；可选 all、files、agents") } }}
 
 # 使用 target/debug 缓存构建，并安装本机开发版入口。
 install-dev app="all":

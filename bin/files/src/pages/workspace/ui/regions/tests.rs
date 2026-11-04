@@ -19,7 +19,11 @@ fn content_focus_is_complete_exclusive_and_does_not_move_the_table(
         .expect("unpolled device runtime");
     cx.update(|cx| {
         gpui_kit::init(cx);
-        gds::appearance::theme::apply(&Default::default(), cx).expect("application theme");
+        let appearance = gds::appearance::theme::Appearance {
+            source: gds::appearance::theme::Source::Builtin,
+            ..Default::default()
+        };
+        gds::appearance::theme::apply(&appearance, cx).expect("application theme");
         crate::shared::i18n::install(gds::i18n::Language::English, cx).expect("translations");
         crate::features::file_operations::commands::register(cx);
     });

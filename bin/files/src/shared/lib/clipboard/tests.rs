@@ -297,7 +297,7 @@ fn cut_validation_adopts_republished_paths_and_clears_replaced_content() {
 
     cache.record_write(&cut);
     let generation = cache.begin_refresh().expect("validation read");
-    assert!(!cache.reconcile(generation, Err(Error::Changed), false));
+    assert!(!cache.reconcile(generation, Err(Error::InvalidPayload("unreadable clipboard".into())), false));
     assert!(
         cache.has_cut(),
         "an unreadable clipboard is not evidence of replacement"
@@ -432,4 +432,42 @@ fn remote_uri_offers_preserve_local_cut_intent_and_do_not_promote_ordinary_text(
         super::REMOTE_URI_METADATA.into(),
     );
     assert!(fallback::Clipboard::decode_uris(Some(&secret)).is_err());
+}
+
+#[gpui_kit::test]
+async fn explicit_clipboard_removal_preserves_mode_and_newer_offers(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    for mode in [Mode::Copy, Mode::Cut] {
+        let first = PathBuf::from("/tmp/first");
+        let second = PathBuf::from("/tmp/second");
+        let expected = cx.update(|cx| {
+            fallback::Clipboard::write(mode, vec![first.clone(), second.clone()], cx).unwrap()
+        });
+        cx.update(|cx| {
+            fallback::Clipboard::remove_paths(expected.clone(), vec![first.clone()], true, cx)
+        })
+        .await
+        .unwrap();
+        let current = cx.update(fallback::Clipboard::read).await.unwrap().unwrap();
+        assert_eq!(current.mode, mode);
+        assert_eq!(current.paths, [second.clone()]);
+        // A stale row must not replace the new offer, even when its path matches.
+        cx.update(|cx| fallback::Clipboard::remove_paths(expected, vec![second.clone()], true, cx))
+            .await
+            .unwrap();
+        assert_eq!(
+            cx.update(fallback::Clipboard::read).await.unwrap().unwrap(),
+            current
+        );
+        cx.update(|cx| fallback::Clipboard::remove_paths(current, vec![second], true, cx))
+            .await
+            .unwrap();
+        assert!(
+            cx.update(fallback::Clipboard::read)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
 }

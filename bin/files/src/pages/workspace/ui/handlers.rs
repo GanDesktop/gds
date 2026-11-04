@@ -54,6 +54,10 @@ impl Browser {
     ) {
         self.dispatch(Command::NewFolder, window, cx);
     }
+    pub(super) fn on_new_window(&mut self, _: &NewWindow, window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch(Command::NewWindow, window, cx);
+    }
+
     pub(super) fn on_new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         self.dispatch(Command::NewTab, window, cx);
     }

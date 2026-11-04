@@ -17,20 +17,10 @@ use gds::{
     appearance::{theme, typography},
     ui::time,
 };
-use gpui_kit::*;
 
 const IO_THREADS: usize = 2;
-const APP_ID: &str = "io.github.GanDesktop.GdsFiles";
-const PICKER_APP_ID: &str = "io.github.GanDesktop.GdsFiles.Picker";
-const PICKER_WIDTH: f32 = 1100.;
-const PICKER_HEIGHT: f32 = 740.;
-const INITIAL_WIDTH: f32 = 1280.;
-const INITIAL_HEIGHT: f32 = 820.;
-/// The window has to hold the sidebar column, the file content and the details
-/// panel side by side; below this they would collide in the toolbar and the
-/// content area. The dialog and column layouts do not shrink past these.
-const MIN_WIDTH: f32 = 1000.;
-const MIN_HEIGHT: f32 = 640.;
+pub(super) const APP_ID: &str = "io.github.GanDesktop.GdsFiles";
+pub(super) const PICKER_APP_ID: &str = "io.github.GanDesktop.GdsFiles.Picker";
 
 /// # Errors
 /// Reports invalid arguments or unavailable user/current directories.
@@ -246,83 +236,40 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
                 }
             })
             .detach();
-            let dimensions = if picking {
-                size(px(PICKER_WIDTH), px(PICKER_HEIGHT))
-            } else {
-                size(px(INITIAL_WIDTH), px(INITIAL_HEIGHT))
-            };
-            let bounds = Bounds::centered(None, dimensions, cx);
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
-                app_id: Some(if picking { PICKER_APP_ID } else { APP_ID }.to_owned()),
-                kind: if picking && picker_options.as_ref().and_then(|options| options.portal.as_ref()).is_none_or(|request| request.modal) {
-                    WindowKind::Dialog
-                } else if picking {
-                    WindowKind::Floating
-                } else {
-                    WindowKind::Normal
-                },
-                ..gds::ui::window::window_options()
-            };
+            configuration::publish(preferences.clone(), cx);
+            let manager = super::windows::Windows::install(handle.clone(), home.clone(), cx);
             cx.spawn(async move |cx| {
                 let places = tokio_util::task::AbortOnDropHandle::new(handle.spawn(Places::load()))
-                    .await
-                    .unwrap_or_else(|error| Err(error.into()));
+                    .await.unwrap_or_else(|error| Err(error.into()));
                 cx.update(move |cx| {
-                    let opened = gpui_kit::open_window(options, cx, move |window, cx| {
-                        let request = picker_options.as_ref().and_then(|options| options.portal.as_ref());
-                        let title = request.map(|request| request.title.as_str()).filter(|title| !title.is_empty());
-                        let default_title = i18n::text("app-title", cx);
-                        window.set_window_title(title.unwrap_or(default_title.as_ref()));
-                        if let Some(request) = request.filter(|request| !request.parent_window.is_empty()) {
-                            if let Err(error) = window.set_external_parent(&request.parent_window) {
-                                tracing::warn!(parent = %request.parent_window, %error, "cannot associate chooser with its parent");
-                            }
-                        }
-                        let launch = workspace::LaunchOptions {
-                            runtime: handle,
-                            places,
-                            start,
-                            home,
-                            preferences,
-                            startup_error,
-                            picker: picker_options,
-                        };
-                        let browser = cx.new(|cx| workspace::Browser::new(launch, window, cx));
-                        #[cfg(target_os = "linux")]
-                        if let Some(command) = initial_command {
-                            browser.update(cx, |browser, cx| browser.apply_desktop_command(command, window, cx));
-                        }
-                        browser
-                    });
-                    if let Ok((window, _)) = &opened {
-                        let main_window = window.window_id();
-                        cx.on_window_closed(move |cx, closed| { if closed == main_window { cx.quit(); } }).detach();
-                    }
-                    #[cfg(target_os = "linux")]
-                    if let (Ok((window, browser)), Some(mut receiver)) = (&opened, manager_receiver) {
-                        let window = *window;
-                        let browser = browser.downgrade();
-                        cx.spawn(async move |cx| {
-                            while let Some(command) = receiver.recv().await {
-                                let Some(browser) = browser.upgrade() else { break };
+                    let opened = manager.update(cx, |manager, cx| manager.open(workspace::LaunchOptions {
+                        runtime: handle, places, start, home, preferences, startup_error, picker: picker_options,
+                    }, cx));
+                    match opened {
+                        Ok((window, browser)) => {
+                            #[cfg(target_os = "linux")]
+                            if let Some(command) = initial_command {
                                 if let Err(error) = window.update(cx, |_, window, cx| {
                                     browser.update(cx, |browser, cx| browser.apply_desktop_command(command, window, cx));
-                                }) { tracing::warn!(%error, "Files window closed before desktop request"); break; }
+                                }) { tracing::warn!(%error, "Files window closed before initial request"); }
                             }
-                        }).detach();
-                    }
-                    if let Err(error) = opened {
-                        tracing::error!("Cannot open the Files window: {error}");
-                        if picking {
-                            picker::mark_failed();
+                            #[cfg(target_os = "linux")]
+                            if let Some(mut receiver) = manager_receiver {
+                                cx.spawn(async move |cx| {
+                                    while let Some(command) = receiver.recv().await {
+                                        manager.update(cx, |manager, cx| manager.desktop_command(command, cx));
+                                    }
+                                }).detach();
+                            }
                         }
-                        cx.quit();
+                        Err(error) => {
+                            tracing::error!(%error, "Cannot open the Files window");
+                            if picking { picker::mark_failed(); }
+                            cx.quit();
+                        }
                     }
                 });
-            })
-            .detach();
+            }).detach();
         });
     Ok(())
 }

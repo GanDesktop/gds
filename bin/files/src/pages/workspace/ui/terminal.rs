@@ -429,7 +429,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         self.settings.preferences.files.terminal_content_height = Some(event.0);
-        if let Err(error) = configuration::save(&self.settings.preferences) {
+        if let Err(error) = configuration::save(&self.settings.preferences, cx) {
             report_settings_failure("settings-save-failed", &error, cx);
         }
     }

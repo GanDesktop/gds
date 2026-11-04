@@ -197,3 +197,5 @@ Agents 的搜索、新会话、侧栏、窗口模式、对话滚动、输入区�
 Files 的列表和网格中，PgUp / PgDn 按可见行数翻页，Home / End 到首尾。Ctrl+Shift+N 新建文件夹。Ctrl+N / Ctrl+W 按焦点所在半区新建／关闭文件或终端页签。拖入终端的文件按逐个引用的路径粘贴，不附带回车。
 
 终端默认启用；设置中的终端页排在文件配置之后，可停用终端入口，也可逐行编辑 Shell 参数。停用会隐藏终端面板和入口，保留已有会话；重新启用后可再次展开。
+
+Files opens a new window with **Ctrl+Alt+N** or **New window** in the application menu. **Ctrl+N** continues to create a tab in the focused file or terminal region. Launching Files again opens another window; closing one browser window leaves the others running.

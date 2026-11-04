@@ -1,0 +1,13 @@
+{
+  "name": "gds-installer-host",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare-assets": "node prepare.mjs",
+    "deploy": "npm run prepare-assets && cf deploy"
+  },
+  "devDependencies": {
+    "cf": "1.0.0-beta.27",
+    "wrangler": "4.157.0"
+  }
+}

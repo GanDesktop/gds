@@ -8,7 +8,9 @@ use gpui_kit::{
 
 pub(super) const WIDTH: f32 = 1_000.;
 pub(super) const HEIGHT: f32 = 720.;
+#[cfg(test)]
 pub(super) const MIN_WIDTH: f32 = 780.;
+#[cfg(test)]
 pub(super) const MIN_HEIGHT: f32 = 480.;
 
 actions!(logs, [OpenLogs]);
@@ -147,10 +149,9 @@ pub fn open(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
             kind: WindowKind::Floating,
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
-                size(px(WIDTH), px(HEIGHT)),
+                gds::ui::window::fit_size(size(px(WIDTH), px(HEIGHT)), cx),
                 cx,
             ))),
-            window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
             window_background: (options.background)(cx),
             app_id: options.app_id.as_ref().map(ToString::to_string),
             ..TitleBar::window_options()

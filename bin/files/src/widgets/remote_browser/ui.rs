@@ -54,6 +54,7 @@ pub(crate) struct View {
     anchor: Option<usize>,
     filter: String,
     hidden: bool,
+    compact: bool,
     task: Option<Task<()>>,
     progress_task: Option<Task<()>>,
     cancel: CancellationToken,
@@ -81,6 +82,7 @@ impl View {
             anchor: None,
             filter: String::new(),
             hidden: true,
+            compact: false,
             task: None,
             progress_task: None,
             cancel: CancellationToken::new(),
@@ -92,9 +94,30 @@ impl View {
         view.sync_table(cx);
         view
     }
+    pub(crate) fn background_task(&self) -> Option<(String, CancellationToken)> {
+        (self.busy && self.cancellable).then(|| {
+            (
+                format!(
+                    "{} — {}",
+                    self.options.listing.address, self.progress.current
+                ),
+                self.cancel.clone(),
+            )
+        })
+    }
     pub(crate) fn busy(&self) -> bool {
         self.busy
     }
+    pub(crate) fn selected_addresses(&self) -> Vec<Address> {
+        self.selected.clone()
+    }
+
+    pub(crate) fn deselect_address(&mut self, address: &Address, cx: &mut Context<Self>) {
+        self.selected.retain(|selected| selected != address);
+        self.sync_table(cx);
+        cx.notify();
+    }
+
     pub(crate) fn counts(&self) -> (usize, usize) {
         (self.rows.len(), self.selected.len())
     }
@@ -305,8 +328,73 @@ impl Render for View {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use gds::ui::page::*;
         use gpui_kit::assets::IconName;
+        let actions = self
+            .toolbar_actions()
+            .into_iter()
+            .map(|(id, icon, enabled)| {
+                ui::IconButton::new(id)
+                    .icon(icon)
+                    .label(i18n::text(id, cx))
+                    .disabled(!enabled)
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.toolbar_action(id, window, cx)),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        let notice = self.message.clone();
+        let status = format!(
+            "{} · {} B · {}",
+            self.progress.files, self.progress.bytes, self.progress.current
+        );
+        el! {
+            .ui::ContentPage::default [
+                @if (!self.compact)
+                .PageHeader::default [
+                    .PageTitle::default [$(self.address().name())],
+                    .PageActions::default { min_w_0; flex_shrink_1; } [
+                        .div { w: 180.0.px; min_w_0 } [($&self.options.filter, cx).ui::field::input { small; cleanable: true }],
+                        ..actions,
+                    ],
+                ],
+                @end,
+                @if (self.busy)
+                    .PageNotice::default [
+                        .div { flex; items_center; gap_2; w_full } [
+                            .div { flex_1; min_w_0; truncate } [status],
+                            @if (self.cancellable)
+                            "remote-cancel".ui::IconButton::new { icon: IconName::X; label: $i18n::text("operation-cancel", cx);
+                                on_click: $(cx.listener(|this, _, _, _| this.cancel.cancel()));
+                            },
+                            @end,
+                        ],
+                    ],
+                @end,
+                @if (let Some(message) = notice)
+                    .PageNotice::default [.div { whitespace_normal } [message]],
+                @end,
+                .PageContent::default [
+                    .PageTableArea::default [
+                        ($&self.table).DataTable::new { bordered: false; with_size: $(gpui_kit::component::Size::Size(px(gds::appearance::tokens::DataListStyle::ROW_HEIGHT))); },
+                    ],
+                ],
+            ]
+        }
+    }
+}
+
+impl View {
+    pub(crate) fn set_compact(&mut self, compact: bool, cx: &mut Context<Self>) {
+        if self.compact != compact {
+            self.compact = compact;
+            cx.notify();
+        }
+    }
+
+    fn toolbar_actions(&self) -> [(&'static str, gpui_kit::assets::IconName, bool); 7] {
+        use gpui_kit::assets::IconName;
         let selected = !self.selected.is_empty();
-        let actions = [
+        [
             ("remote-upload", IconName::Upload, !self.busy),
             (
                 "remote-download",
@@ -335,59 +423,42 @@ impl Render for View {
             ),
             ("remote-disconnect", IconName::Unplug, !self.busy),
         ]
-        .into_iter()
-        .map(|(id, icon, enabled)| {
-            ui::IconButton::new(id)
-                .icon(icon)
-                .label(i18n::text(id, cx))
-                .disabled(!enabled)
-                .on_click(cx.listener(move |this, _, window, cx| match id {
-                    "remote-upload" => this.upload(window, cx),
-                    "remote-download" => this.download(this.selected.clone(), false, window, cx),
-                    "new-folder" => this.name_prompt(true, window, cx),
-                    "rename" => this.name_prompt(false, window, cx),
-                    "delete-permanently" => this.confirm_delete(window, cx),
-                    "remote-bookmark" => cx.emit(Event::Favorite(this.address().clone())),
-                    _ => cx.emit(Event::Disconnect(this.address().clone())),
-                }))
-                .into_any_element()
-        })
-        .collect::<Vec<_>>();
-        let notice = self.message.clone();
-        let status = format!(
-            "{} · {} B · {}",
-            self.progress.files, self.progress.bytes, self.progress.current
-        );
-        el! {
-            .ui::ContentPage::default [
-                .PageHeader::default [
-                    .PageTitle::default [$(self.address().name())],
-                    .PageActions::default [
-                        .div { w: 180.0.px; min_w_0 } [($&self.options.filter, cx).ui::field::input { small; cleanable: true }],
-                        ..actions,
-                    ],
-                ],
-                @if (self.busy)
-                    .PageNotice::default [
-                        .div { flex; items_center; gap_2; w_full } [
-                            .div { flex_1; min_w_0; truncate } [status],
-                            @if (self.cancellable)
-                            "remote-cancel".ui::IconButton::new { icon: IconName::X; label: $i18n::text("operation-cancel", cx);
-                                on_click: $(cx.listener(|this, _, _, _| this.cancel.cancel()));
-                            },
-                            @end,
-                        ],
-                    ],
-                @end,
-                @if (let Some(message) = notice)
-                    .PageNotice::default [.div { whitespace_normal } [message]],
-                @end,
-                .PageContent::default [
-                    .PageTableArea::default [
-                        ($&self.table).DataTable::new { bordered: false; with_size: $(gpui_kit::component::Size::Size(px(gds::appearance::tokens::DataListStyle::ROW_HEIGHT))); },
-                    ],
-                ],
-            ]
-        }
+    }
+
+    fn toolbar_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match id {
+            "remote-upload" => self.upload(window, cx),
+            "remote-download" => self.download(self.selected.clone(), false, window, cx),
+            "new-folder" => self.name_prompt(true, window, cx),
+            "rename" => self.name_prompt(false, window, cx),
+            "delete-permanently" => self.confirm_delete(window, cx),
+            "remote-bookmark" => cx.emit(Event::Favorite(self.address().clone())),
+            _ => cx.emit(Event::Disconnect(self.address().clone())),
+        };
+    }
+
+    pub(crate) fn toolbar_menu(
+        &self,
+        view: WeakEntity<Self>,
+        cx: &App,
+    ) -> Vec<gpui_kit::component::menu::PopupMenuItem> {
+        self.toolbar_actions()
+            .into_iter()
+            .map(|(id, icon, enabled)| {
+                let view = view.clone();
+                gpui_kit::component::menu::PopupMenuItem::new(i18n::text(id, cx))
+                    .icon(icon)
+                    .disabled(!enabled)
+                    .on_click(move |_, window, _| {
+                        let view = view.clone();
+                        window.on_next_frame(move |window, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                this.options.focus.focus(window, cx);
+                                this.toolbar_action(id, window, cx);
+                            });
+                        });
+                    })
+            })
+            .collect()
     }
 }

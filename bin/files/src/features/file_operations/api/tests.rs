@@ -150,3 +150,17 @@ fn permanent_delete_removes_entries_without_following_leaf_or_nested_links() {
             .is_symlink()
     );
 }
+
+#[test]
+fn cancelled_deletion_keeps_sources() {
+    let root = tempfile::tempdir().expect("delete fixture");
+    let path = root.path().join("keep");
+    std::fs::write(&path, "keep").unwrap();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+    let report = Batch::new(vec![path.clone()])
+        .unwrap()
+        .execute_cancellable(Kind::PermanentDelete, &cancel);
+    assert!(matches!(report.items[0].result, Err(Error::Cancelled)));
+    assert!(path.exists());
+}

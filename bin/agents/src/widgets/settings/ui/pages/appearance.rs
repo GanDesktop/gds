@@ -66,6 +66,7 @@ impl Group {
 #[derive(Clone, Copy)]
 enum Field {
     Animations,
+    RoundedCorners,
     Language,
     Source,
     Builtin,
@@ -82,9 +83,10 @@ enum Field {
     ComposerEnter,
 }
 impl Field {
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 15] = [
         Self::Language,
         Self::Animations,
+        Self::RoundedCorners,
         Self::Source,
         Self::Builtin,
         Self::Mode,
@@ -100,6 +102,7 @@ impl Field {
     ];
     fn id(self) -> &'static str {
         match self {
+            Self::RoundedCorners => "appearance-rounded-corners",
             Self::Animations => "appearance-animations",
             Self::Language => "appearance-language",
             Self::Source => "appearance-source",
@@ -119,6 +122,7 @@ impl Field {
     }
     fn label(self) -> &'static str {
         match self {
+            Self::RoundedCorners => tr!("appearance-rounded-corners"),
             Self::Animations => tr!("appearance-animations"),
             Self::Language => tr!("appearance-language"),
             Self::Source => tr!("appearance-source"),
@@ -138,6 +142,7 @@ impl Field {
     }
     fn help(self) -> &'static str {
         match self {
+            Self::RoundedCorners => tr!("appearance-rounded-corners-help"),
             Self::Animations => tr!("appearance-animations-help"),
             Self::Language => tr!("appearance-language-help"),
             Self::Source => tr!("appearance-source-help"),
@@ -159,7 +164,7 @@ impl Field {
     }
     fn group(self) -> Group {
         match self {
-            Self::Animations | Self::Language => Group::Theme,
+            Self::Animations | Self::Language | Self::RoundedCorners => Group::Theme,
             Self::Source
             | Self::Builtin
             | Self::Mode
@@ -407,6 +412,15 @@ impl AppearancePage {
 
     fn control(&self, field: Field, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         match field {
+            Field::RoundedCorners => el! {
+                ($(field.id())).crate::shared::ui::checkbox {
+                    accessibility_label: $(field.label());
+                    checked: $(self.form.rounded_corners);
+                    disabled: $(self.document.is_none());
+                    on_click: $(cx.listener(Self::on_rounded_corners_changed));
+                }
+            }
+            .into_any_element(),
             Field::Animations => el! {
                 ($(field.id())).crate::shared::ui::checkbox {
                     accessibility_label: $(field.label());

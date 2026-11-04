@@ -15,13 +15,13 @@ use super::{Error, Mode, ModePreference, palette::Palette};
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     /// An embedded palette; System mode follows the native platform appearance.
-    #[default]
     Builtin,
     /// Palette selected by the user's Qt6ct configuration.
     Qt6ct,
     /// Palette selected by the user's Qt5ct configuration.
     Qt5ct,
-    /// The current desktop's palette: KDE Plasma or DankMaterialShell.
+    /// The current desktop's palette: GNOME, KDE Plasma or DankMaterialShell.
+    #[default]
     #[serde(alias = "dms")]
     System,
 }
@@ -45,7 +45,7 @@ impl Source {
 
     /// Whether System mode is supplied by the native platform rather than the source.
     pub(super) fn uses_platform_mode(self) -> bool {
-        !matches!(self, Self::System)
+        !matches!(self, Self::System) || system::uses_platform_mode()
     }
 
     /// # Errors
@@ -58,7 +58,7 @@ impl Source {
     ) -> Result<Loaded, Error> {
         match self {
             Self::Builtin => Ok(builtin::load(builtin, preference, platform)),
-            Self::System => system::load(preference),
+            Self::System => system::load(preference, platform),
             Self::Qt5ct => config::Qt::V5.load(preference, platform),
             Self::Qt6ct => config::Qt::V6.load(preference, platform),
         }

@@ -8,6 +8,7 @@ settings-region-note = Alt 访问各区域；上下键移动焦点，Enter 打�
 settings-notification-actions = 通知
 settings-notification-note = 上下键切换通知，Esc 返回原位置。未聚焦通知时关闭最新一条；关闭提示不会取消后台任务。
 app-menu = 菜单
+page-tools = 页面操作
 settings = 设置
 settings-general = 常规
 settings-appearance = 外观
@@ -275,3 +276,9 @@ help-select-tab = 选择第 1–9 个文件页签
 unpin-close-title = 取消固定并关闭页签？
 unpin-close-message = “{ $name }”已固定。
 unpin-close-confirm = 取消固定并关闭
+
+appearance-rounded-corners = 窗口圆角
+
+loading-volume = 卷 { $name }
+
+new-window = 新建窗口

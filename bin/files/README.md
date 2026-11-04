@@ -47,16 +47,59 @@ Seriously, why do so many file managers still not support copying file paths? Ho
 Install this file manager for me: https://github.com/GanDesktop/gds/blob/main/bin/files/README.md
 ```
 
+### One-command installation
+
+Run in a terminal with `curl` and Bash installed:
+
+```sh
+curl -fsSL https://gds.gandesktop.dev/install.sh | bash
+```
+
+The installer detects your system, downloads Files from the latest stable release, verifies its SHA-256, and installs it through your package manager. It requests your administrator password through `sudo` when needed. Native packages support x86_64 Arch Linux, Debian 13, and Fedora 43. On NixOS it uses the existing Nix installation, following the flake's main branch by default. Pass `--nix` to use an existing Nix installation on another Linux distribution.
+
+To include the optional file chooser portal backend:
+
+```sh
+curl -fsSL https://gds.gandesktop.dev/install.sh | bash -s -- --with-portal
+```
+
+Add `--version v0.0.1` to select a specific release (replace the tag with the desired version; prereleases are also supported). Portal still needs desktop configuration, as described below. Run the installer again to upgrade native packages; use `nix profile upgrade` for Nix installations.
+
 ### With a package manager
 
-<!-- Package manager installation is not available yet. -->
+Download the `gds-files` package for your system from [GitHub Releases](https://github.com/GanDesktop/gds/releases). Release builds target **x86_64 Arch Linux, Debian 13 (trixie), and Fedora 43**. Assets appear once the release build finishes.
+
+Run the matching command in your download directory. Keep only the version you intend to install so the wildcard does not match older packages.
+
+| System | Install command |
+| --- | --- |
+| Arch Linux | `sudo pacman -U ./gds-files-git-*-x86_64.pkg.tar.zst` |
+| Debian 13 | `sudo apt install ./gds-files_*_amd64.deb` |
+| Fedora 43 | `sudo dnf install ./gds-files-*.fc43.x86_64.rpm` |
+
+The package manager installs dependencies from your configured repositories. Open **GDS Files** from the application menu or run `gds-files`. These are native binary packages; no local compilation is needed. Other distributions or versions are not guaranteed to work.
+
+To use Files for system file dialogs, also download and install the `xdg-desktop-portal-gds` package from the same release:
+
+```sh
+# Arch Linux
+sudo pacman -U ./xdg-desktop-portal-gds-git-*-x86_64.pkg.tar.zst
+# Debian 13
+sudo apt install ./xdg-desktop-portal-gds_*_amd64.deb
+# Fedora 43
+sudo dnf install ./xdg-desktop-portal-gds-*.fc43.x86_64.rpm
+```
+
+Portal is optional. Installing it does not switch your system's file picker automatically; see [Portal configuration](../../docs/apps/files/fedora.md#optional-gds-portal).
+
+To upgrade, download the new package and run the install command again. Release downloads do not add a software repository, so system updates will not upgrade GDS automatically. Each release also includes `SHA256SUMS` for checking download hashes.
 
 ### With Nix
 
 **Install into your profile:**
 
 ```sh
-nix profile install github:GanDesktop/gds#gds-files
+nix profile add github:GanDesktop/gds#gds-files
 ```
 
 **Install on NixOS:** Add this input to `flake.nix` and include `gds` in your `outputs` arguments:

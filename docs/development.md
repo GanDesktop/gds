@@ -56,7 +56,7 @@ just
 
 ### 开发版安装
 
-频繁调整界面时使用 `just install-dev`，也可指定 `just install-dev files` / `just install-dev agents`。它用普通 Cargo dev profile 增量构建，复用当前仓库的 `target/debug` 缓存，再安装用户级命令和标为 `(Dev)` 的桌面入口，不走 Nix 发布包的完整 LTO 和包内测试流程。
+频繁调整界面时使用 `just install-dev`，也可指定 `just install-dev files` / `just install-dev agents`。它用普通 Cargo dev profile 增量构建，复用当前仓库的 `target/debug` 缓存，再安装用户级命令和标为 `(Dev)` 的桌面入口，不走 Nix 发布包的优化构建和包内测试流程。
 
 入口通过轻量运行包装直接执行工作区中的 debug 二进制，不复制大型产物，也不在每次启动时进入 `nix develop`。包装仅补充运行库、终端启动器、缩略图工具和 terminfo，保留桌面会话的 `SHELL`、提示符与其它环境；安装时记录在用户 state 目录中的 Nix profile 保持这些依赖可达。后续 `just build` 或 `just install-dev` 更新相同二进制，重开窗口即可使用新版本。工作区与 `target/debug` 需要保留，尚未运行的测试仍可通过 `just test` 或 GUI 测试命令单独执行。
 
@@ -92,7 +92,7 @@ cargo build --bins --features files,agents,portal
 | `desktop-protocol` | `service::desktop::protocol` 中的进程通信类型，只依赖 Serde |
 | `persistence` | 原子文件存储与路径管理 |
 | `watch` | 文件变化通知，独立于 GUI |
-| `desktop` | 桌面打开方式、剪贴板、FileManager1 与 Portal 客户端 |
+| `desktop` | 桌面打开方式、FileManager1 与 Portal 客户端 |
 | `storage` | Toasty / SQLite 存储 |
 | `logs` | 本进程日志服务 |
 | `terminal` | PTY 与终端模型 |
@@ -121,6 +121,7 @@ cargo tree --no-default-features --features portal --edges normal,build
 
 第三方源码在 GanDesktop 的独立仓库维护，通过 Git 分支引用，由 `Cargo.lock` 固定提交；不将源码复制进本项目。当前使用 GPUI Kit `0.9.0` 的 `gpui-fast` feature，补丁基于发布的 GPUI Fast `0.1.13` 包快照，保留包名和版本：
 
+- [gpui-kit / gds-0.9.0](https://github.com/GanDesktop/gpui-kit/tree/gds-0.9.0)：仅替换 `gpui-component`，基于 0.9.0 发布提交，增加可配置 Linux 窗口圆角并同步内容裁切与平台命中区域；默认直角，其余 Kit crate 保持发布版本。
 - [gpui-fast / gds-0.1.13](https://github.com/GanDesktop/gpui-fast/tree/gds-0.1.13)：外部父窗口与调用方激活 token 的公共接口；外部文件拖入恢复鼠标输入模式，修复键盘操作后放下事件无法命中目标的问题。
 - [gpui-fast-linux / gds-0.1.13](https://github.com/GanDesktop/gpui-fast-linux/tree/gds-0.1.13)：对应 Wayland / X11 实现。
 - [trash-rs / fix/freedesktop-trashinfo-reviewed](https://github.com/GanDesktop/trash-rs/tree/fix/freedesktop-trashinfo-reviewed)：回收站记录解析与路径解析修复，保留 `trash` 包名及 `5.2.9` 版本。
@@ -135,9 +136,28 @@ Fedora 原生 RPM 的构建与安装见 [Fedora 打包流程](apps/files/fedora.
 
 Arch/AUR 使用 `just arch`，见 [Arch 打包流程](apps/files/arch.md)；Debian 使用 `just deb`，Ubuntu 使用 `just deb ubuntu noble`，见 [DEB 打包流程](apps/files/debian.md)。这两种流程同样分别打包 Files 和 Portal，使用目标发行版的容器构建。AUR 上架与远程 APT 仓库发布不包含在本地构建命令中。
 
+GitHub Release 发布由 [release.yml](../.github/workflows/release.yml) 自动打包：先将代码和工作流提交、推送到 GitHub，更新 `Cargo.toml` 与 `Cargo.lock` 中的项目版本，再为该提交创建对应的版本 tag（例如 `v0.0.1`），在 Releases 页面点击 **Publish release**。草稿和普通 push 不触发打包，正式版和预发布都会触发。tag 指向的提交必须包含工作流及打包脚本。
+
+CI 检出该 tag，分别在 Arch、Debian 13（trixie）和 Fedora 43 容器中构建 x86_64 的 Files 与独立 Portal，使用 release profile 和固定包修订号 `1`。三项全部成功后，统一上传六个安装包及 `SHA256SUMS`；构建期间 Release 页面可能尚无附件。失败可在 Actions 中修复后重试；同一 tag 的重新运行覆盖同名附件。新版本应更新项目版本并使用新 tag，避免不同源码使用同一个 DEB/RPM 版本。发布 job 使用 GitHub 自带的 `GITHUB_TOKEN` 和 `contents: write` 权限，不需要另外配置发布 token，也不需要发行版账号。
+
+该流程在已发布的 Release 上补充附件，因此仓库应允许修改 Release 附件；如果启用了不可变 Release，应改用先构建草稿附件、最后发布的流程。安装方法见 [Files README](../bin/files/README.md#with-a-package-manager)。Nix 继续通过现有 flake 安装；若要固定到某次发布，可用 `nix profile add github:GanDesktop/gds/v0.0.1#gds-files`（将 tag 换成实际版本）。此工作流不发布 Nix 二进制缓存、AUR 配方或 APT/RPM 软件源。
+
+一键安装入口为 [scripts/install.sh](../scripts/install.sh)，通过 Cloudflare Workers 静态资源托管在 `https://gds.gandesktop.dev/install.sh`。部署配置位于 [packaging/cloudflare](../packaging/cloudflare/)，使用新版 `cf` CLI；只发布安装脚本及响应头配置，不运行自定义 Worker 代码。Cloudflare 提供脚本，安装包与校验文件仍从 GitHub Releases 下载。
+
+修改脚本后，从仓库根目录重新部署：
+
+```sh
+npm ci --prefix packaging/cloudflare
+npm run deploy --prefix packaging/cloudflare
+```
+
+需要事先通过 `cf auth login` 登录有权管理该域名的 Cloudflare 账号。部署命令会从 `scripts/install.sh` 复制最新脚本、构建静态资源并更新 `gds-installer`。`cloudflare.config.ts` 绑定 `gds.gandesktop.dev`；`_headers` 指定纯文本响应和 5 分钟缓存。用户运行 `curl -fsSL https://gds.gandesktop.dev/install.sh | bash`，可用 `bash -s -- --with-portal` 同时安装 Portal，或用 `bash -s -- --version v0.0.1` 选择版本。
+
+安装脚本测试：`python3 -m unittest discover -s scripts/tests -v`。测试使用本地 Release 文件和模拟的系统命令，不会安装软件或请求管理员权限。
+
 执行 `just release` 构建整个套件，或用 `just release files` / `just release agents` / `just release portal` 单独构建。等价的套件命令是 `cargo build --release --locked --bins --features files,agents,portal`，产物位于 `target/release/`，包含 `gds-files`、`gds-agents` 和 `xdg-desktop-portal-gds`。Nix 打包默认使用同一份 release 配置；安装命令见 [NixOS 安装](nixos.md)。
 
-[Cargo.toml](../Cargo.toml) 的 `[profile.release]` 以运行性能为先：`opt-level = 3`、完整 LTO（`lto = "fat"`）和 `codegen-units = 1` 提供跨 crate 优化机会，代价是更长的编译／链接时间和更高的构建内存需求。`debug = 0`、`strip = "symbols"` 去掉调试信息和符号，缩小交付体积，但也会减少崩溃回溯信息；关闭增量编译（`incremental = false`）。参数说明见 [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html)。实际性能收益需要用具体工作负载衡量。
+[Cargo.toml](../Cargo.toml) uses Cargo’s standard release optimization settings: `opt-level = 3`, `lto = false`, and `codegen-units = 16`. This avoids whole-program fat LTO and allows code generation within a crate to run in parallel. Cargo may still perform local Thin LTO between that crate’s codegen units. `debug = 0` and `strip = "symbols"` keep debug information and symbols out of shipped binaries; `incremental = false` retains Cargo’s release default. Nix and native Linux packages use this same profile. See [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html).
 
 保留默认的 panic unwind 策略，以兼容 GPUI 依赖中的展开处理。发布配置使用通用目标 CPU；仅供本机使用的构建可自行加 `RUSTFLAGS="-C target-cpu=native"`，此时产物可能无法在较旧的 CPU 上运行。
 
@@ -182,7 +202,7 @@ src/
 │   ├── typography.rs             # 字体与字号规则
 │   └── tokens.rs                 # 共享视觉默认值
 ├── service.rs + service/
-│   ├── desktop.rs + desktop/       # 桌面打开、portal、剪贴板与监听
+│   ├── desktop.rs + desktop/       # 桌面打开、portal 与监听
 │   ├── remote.rs + remote/       # SFTP / SMB 地址、会话与文件传输接口
 │   ├── logs.rs + logs/             # 本进程日志、tracing 采集与保留队列
 │   ├── storage.rs + storage/       # Toasty SQLite 初始化与原生迁移接入
@@ -214,9 +234,9 @@ GPUI 与 Tokio 的执行器独立。Files 和 Agents 的启动层直接创建并
 
 `service::desktop::Desktop` 提供文件打开和外部终端操作；Linux Portal 连接按需建立，由克隆的 `Desktop` 共享。桌面操作返回 `desktop::Error`，Portal 失败保留为 `PortalError` 及其底层错误；默认应用和选择器均失败时保留两次错误，用户取消是正常结果。
 
-`service::desktop::clipboard::Clipboard` 创建通用 `Reader`：`mime_types()` 列出可用格式，`read(mime)` 按需返回 `Option<Vec<u8>>` 原始字节。它不解码文本、文件或图片，也不限制 MIME 类别；多个格式读取共用截止时间，每份载荷受大小限制。Agents 负责文本兼容、换行处理、本地文件 URI、图片格式选择及附件优先级；Files 负责复制／剪切协议。底层库每次读取重新连接，读取器不代表剪贴板内容的原子快照；Files 组合 KDE 标记与 URI 列表时仍会重读 URI，核对内容是否变化。
+剪贴板随窗口平台连接管理。Wayland 通过 GPUI 的 `read_clipboard_mime` / `write_clipboard_mime` 使用核心 `wl_data_device` 协议，复用窗口的 seat、焦点和输入 serial，不依赖 `ext-data-control` / `wlr-data-control`。没有键盘焦点时返回 `NotFocused`；其他窗口平台继续使用 GPUI 的 `ClipboardItem` 接口。协议参见 [Wayland 数据设备](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_data_device)。
 
-剪贴板先提供可用的 MIME 表示，再由消费者选择并请求数据，见 [Wayland 数据提供协议](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_data_offer)。例如同一份内容可以提供 `text/plain` 与 `text/html`，或文件 URI 与复制／剪切标记。当前锁定的 GPUI Wayland 后端从外部剪贴板读取时优先文本、其次图片，不能同时取回两者，也不解析文件 URI；公共服务补充格式级读取能力，其余 GPUI 剪贴板功能继续直接复用。
+格式读取在界面线程向同一个 `wl_data_offer` 请求所需 MIME，后台读取管道，共用超时与总字节限制。返回的 offer revision 可用于条件写入，剪切完成后若用户已经复制了新内容，清理不覆盖新选择。GPUI 只传输 MIME 字节；Agents 负责文本、文件 URI、图片格式选择及附件优先级，Files 负责 GNOME/KDE 复制／剪切格式与来源标记。普通文本剪贴板和拖放仍使用原有 GPUI 接口。
 
 Files 的 UDisks2 连接、设备操作、重连计时器以及 OpenURI 请求在这个 Tokio runtime 中运行。zbus 5.19 同时编译两种后端时，会根据连接创建时的 Tokio 环境选择后端。GPUI 自身依赖 ashpd 的 `async-io` feature，且 ashpd 不允许同时开启 `tokio` feature；应用通过 ashpd 官方 `OpenFileRequest::connection` 接口注入在 Tokio 中创建的 zbus 连接，避免复用框架可能已在其它执行器初始化的全局 Portal 连接。框架内部仍保留其原有依赖配置。相关机制见 [zbus 运行时文档](https://docs.rs/zbus/5.19.0/zbus/#special-tokio-support) 和 [GPUI 前台／后台执行器说明](https://zed.dev/blog/zed-decoded-async-rust)。
 
@@ -343,6 +363,7 @@ gds::ui::notifications::error("操作失败的原因", cx);
 - 应用配置（Files）：`$XDG_CONFIG_HOME/gds/files/settings.toml`，默认 `~/.config/gds/files/settings.toml`，与 `state/files` 同层。设置真实变化时立即请求应用并自动保存；重复选择同值不写入，程序回写不再发起应用请求。应用失败恢复上一次有效偏好并报错；持久化失败保留已生效的运行态，明确提示“已生效但未保存”。声明式符号链接或只读目标允许读取，但不被替换。应用与保存失败通过共享右上角通知气泡反馈，不插入设置页内容，也不另设全宽保存底栏。
 - Files 状态：`$XDG_STATE_HOME/gds/files/state.sqlite`，默认 `~/.local/state/gds/files/state.sqlite`。`locations` 保存收藏、最近访问和固定位置，远程 URI 使用独立记录；`view_settings` 保存应用默认值与各位置的列布局、列宽、排序、详情栏开关和列表／网格模式。列编辑器默认只作用于当前位置；“本应用默认”在同一 Toasty 事务中更新数据库默认列并清除当前位置的列覆盖，其它视图字段保留。`settings.toml` 保存主题、字体、语言、隐藏文件、侧栏等应用偏好，列与视图状态统一由 SQLite 管理。
 - Agents 的连接历史缓存继续位于 `$XDG_CACHE_HOME/gds/agents/history-v1/history.sqlite`（默认 `~/.cache/gds/agents/history-v1/history.sqlite`）。数据库执行接入公共 `service::storage`，窗口边界、连接命名空间和 512 MiB 淘汰策略仍由 Agents 管理；缓存可删除重建，不与 Files 的持久状态共库。
+- GNOME 系统来源通过隔离的 Python/PyGObject 进程读取 GTK 3 实际解析出的主题角色，监听 dconf 与用户 GTK 配置；不维护硬编码 Adwaita 色板。详见 [主题来源](vistual-language/theme.md#gnome)。
 - Qt 来源沿实际 qtct 配置中的 `color_scheme_path` 读取，不硬编码某个桌面生成文件。DMS 来源读取已经生成的 `DankMaterialShell/dms-colors.json`。缺失 / 不支持 / 格式错误会报错，不把内置主题伪装成成功跟随。
 - 外部主题在启动或主题 / 明暗选择变化时读取。DMS 的跟随系统模式读取导出的活动模式；内置 / Qt 读取平台明暗偏好。`theme::Observer` 统一监听 DMS、Qt 配置及解析后的色板路径，跟随原子替换与托管符号链接；后台读取成功后才安装，失败保留最后有效主题，旧来源结果不覆盖新选择。透明度变化只更新材质，不重读色板。
 - 透明度仅影响表面；窗口允许 alpha，Root 清除不透明垫底。整条左列（顶栏左区、文件或设置侧栏、终端左区、底部留白）各区域仅绘制一次相同侧栏背景，不叠加内容底色；右侧区域独立绘制内容背景。底部左区没有分割顶线。没有启用或宣称支持 Niri 的桌面背板模糊。

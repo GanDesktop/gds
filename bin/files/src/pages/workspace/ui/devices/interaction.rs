@@ -59,7 +59,7 @@ impl Browser {
             .map(|volume| volume.id.clone())
     }
 
-    pub(super) fn volume_command_enabled(&self, id: &VolumeId, command: Command, cx: &App) -> bool {
+    pub(in super::super) fn volume_command_enabled(&self, id: &VolumeId, command: Command, cx: &App) -> bool {
         let Some(volume) = self.devices.service.read(cx).snapshot.volume(id) else {
             return false;
         };

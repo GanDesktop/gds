@@ -1,4 +1,4 @@
-//! File clipboard interchange; Wayland uses real file MIME offers.
+//! File clipboard interchange through the application window's native selection.
 //! Other platforms retain a clearly limited GPUI same-process fallback.
 
 mod fallback;
@@ -100,6 +100,19 @@ impl Snapshot {
         Ok(unique)
     }
 
+    fn excluding(&self, current: &Self, removed: &[PathBuf]) -> Option<Vec<PathBuf>> {
+        if self != current {
+            return None;
+        }
+        let remaining: Vec<_> = self
+            .paths
+            .iter()
+            .filter(|path| !removed.contains(path))
+            .cloned()
+            .collect();
+        (remaining.len() != self.paths.len()).then_some(remaining)
+    }
+
     fn remaining_after(&self, current: &Self, succeeded: &[PathBuf]) -> Option<Vec<PathBuf>> {
         // Foreign offers have no per-copy identity. Do not overwrite their owner,
         // even if another copy happens to contain exactly the same path list.
@@ -127,8 +140,6 @@ pub enum Error {
     InvalidUri(String),
     #[error("invalid file clipboard data: {0}")]
     InvalidPayload(String),
-    #[error("file clipboard changed while its formats were being read")]
-    Changed,
     #[error("file clipboard payload exceeds the supported size")]
     TooLarge,
     #[error("file clipboard I/O failed: {0}")]
@@ -139,10 +150,7 @@ pub enum Error {
     PlatformRead(#[from] gpui_kit::ClipboardReadError),
     #[cfg(target_os = "linux")]
     #[error(transparent)]
-    NativeRead(#[from] gds::service::desktop::clipboard::Error),
-    #[cfg(target_os = "linux")]
-    #[error("Wayland clipboard write failed: {0}")]
-    WaylandWrite(#[from] wl_clipboard_rs::copy::Error),
+    Native(#[from] gpui_kit::ClipboardAccessError),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -167,9 +175,9 @@ impl Bridge {
         let copyable = checked.as_ref().is_ok_and(|uris| copyable_uris(uris));
         let write = match self.backend {
             #[cfg(target_os = "linux")]
-            Backend::Wayland => cx
-                .background_executor()
-                .spawn(async move { wayland::Clipboard::write_uris(checked?) }),
+            Backend::Wayland => {
+                Task::ready(checked.and_then(|uris| wayland::Clipboard::write_uris(uris, cx)))
+            }
             Backend::Gpui => {
                 if let Ok(uris) = &checked {
                     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string_with_metadata(
@@ -194,19 +202,15 @@ impl Bridge {
     pub fn read_uris(&self, cx: &mut App) -> Task<Result<Option<(Mode, Vec<String>)>, Error>> {
         match self.backend {
             #[cfg(target_os = "linux")]
-            Backend::Wayland => cx
-                .background_executor()
-                .spawn(async { wayland::Clipboard::read_uris() }),
+            Backend::Wayland => wayland::Clipboard::read_uris(cx),
             Backend::Gpui => Task::ready(fallback::Clipboard::decode_uris(
                 cx.read_from_clipboard().as_ref(),
             )),
         }
     }
-    pub fn new(_: &App) -> Self {
+    pub fn new(cx: &App) -> Self {
         #[cfg(target_os = "linux")]
-        if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty())
-            || std::env::var_os("WAYLAND_SOCKET").is_some_and(|value| !value.is_empty())
-        {
+        if cx.supports_clipboard_mime() {
             return Self {
                 backend: Backend::Wayland,
             };
@@ -216,7 +220,7 @@ impl Bridge {
         }
     }
 
-    /// Start on the GPUI thread. Wayland connection and payload work run in the background.
+    /// Publish from the GPUI thread using the focused window's selection serial.
     ///
     /// # Errors
     /// The task reports invalid paths, encoding or unavailable clipboard protocols.
@@ -228,10 +232,10 @@ impl Bridge {
     ) -> Task<Result<Snapshot, Error>> {
         match self.backend {
             #[cfg(target_os = "linux")]
-            Backend::Wayland => cx.background_executor().spawn(async move {
-                let snapshot = Snapshot::new(mode, paths)?;
-                wayland::Clipboard::write(&snapshot)
-            }),
+            Backend::Wayland => Task::ready(
+                Snapshot::new(mode, paths)
+                    .and_then(|snapshot| wayland::Clipboard::write(&snapshot, cx)),
+            ),
             Backend::Gpui => Task::ready(fallback::Clipboard::write(mode, paths, cx)),
         }
     }
@@ -243,17 +247,14 @@ impl Bridge {
     pub fn read(&self, cx: &mut App) -> Task<Result<Option<Snapshot>, Error>> {
         match self.backend {
             #[cfg(target_os = "linux")]
-            Backend::Wayland => cx
-                .background_executor()
-                .spawn(async { wayland::Clipboard::read() }),
+            Backend::Wayland => wayland::Clipboard::read(cx),
             Backend::Gpui => fallback::Clipboard::read(cx),
         }
     }
 
     /// Remove completed cut entries only from an unchanged GDS-owned snapshot.
-    /// Foreign owners and newly copied contents are left untouched. The Wayland
-    /// protocol exposes no atomic compare-and-set; ownership is reread immediately
-    /// before publishing a replacement, rather than assuming the old offer persists.
+    /// Foreign owners and newly copied contents are left untouched. Wayland cleanup
+    /// compares the captured offer revision immediately before publication.
     ///
     /// # Errors
     /// The task reports clipboard access or update failures; filesystem results are unaffected.
@@ -264,6 +265,23 @@ impl Bridge {
         cx: &mut App,
     ) -> Task<Result<(), Error>> {
         self.remove_cut_paths(snapshot, succeeded, cx)
+    }
+
+    /// Remove an explicitly chosen entry, only while the platform offer matches the displayed snapshot.
+    ///
+    /// # Errors
+    /// Reports clipboard read or publication failures.
+    pub fn remove_path(
+        &self,
+        snapshot: Snapshot,
+        path: PathBuf,
+        cx: &mut App,
+    ) -> Task<Result<(), Error>> {
+        match self.backend {
+            #[cfg(target_os = "linux")]
+            Backend::Wayland => wayland::Clipboard::remove_paths(snapshot, vec![path], true, cx),
+            Backend::Gpui => fallback::Clipboard::remove_paths(snapshot, vec![path], true, cx),
+        }
     }
 
     fn remove_cut_paths(
@@ -277,9 +295,7 @@ impl Bridge {
         }
         match self.backend {
             #[cfg(target_os = "linux")]
-            Backend::Wayland => cx
-                .background_executor()
-                .spawn(async move { wayland::Clipboard::finish_cut(&snapshot, &paths) }),
+            Backend::Wayland => wayland::Clipboard::remove_paths(snapshot, paths, false, cx),
             Backend::Gpui => fallback::Clipboard::finish_cut(snapshot, paths, cx),
         }
     }

@@ -2,7 +2,7 @@
 
 #[cfg(target_os = "linux")]
 use gpui_kit::ImageFormat;
-use gpui_kit::{ClipboardEntry, ClipboardItem, Image};
+use gpui_kit::{App, ClipboardEntry, ClipboardItem, Image, Task};
 use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
@@ -22,7 +22,10 @@ const TEXT_TYPES: [&str; 4] = [
 pub(crate) enum Error {
     #[cfg(target_os = "linux")]
     #[error(transparent)]
-    Native(#[from] gds::service::desktop::clipboard::Error),
+    Native(#[from] gpui_kit::ClipboardAccessError),
+    #[cfg(target_os = "linux")]
+    #[error(transparent)]
+    Platform(#[from] gpui_kit::ClipboardReadError),
     #[cfg(target_os = "macos")]
     #[error(transparent)]
     Native(#[from] macos::Error),
@@ -40,39 +43,64 @@ pub(crate) struct Contents {
 
 impl Contents {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    /// # Errors
-    /// Reports native clipboard access or invalid text representations.
-    pub(crate) fn read_native() -> Result<Self, Error> {
+    pub(crate) fn read(cx: &mut App) -> Task<Result<Self, Error>> {
         #[cfg(target_os = "linux")]
         {
             use strum::IntoEnumIterator;
-            let clipboard = gds::service::desktop::clipboard::Clipboard::default();
-            let reader = clipboard.reader()?;
-            let mut contents = Self::default();
-            if let Some(data) = reader.read("text/uri-list")? {
-                contents.paths = Self::file_paths(std::str::from_utf8(&data)?);
+            if !cx.supports_clipboard_mime() {
+                let read = cx.read_from_clipboard_async();
+                return cx.spawn(async move |_| Ok(Self::from_item(read.await?)));
             }
-            if let Some(mime) = TEXT_TYPES
+            let types = ["text/uri-list", "x-special/gnome-copied-files"]
                 .into_iter()
-                .find(|mime| reader.mime_types().contains(*mime))
-                && let Some(data) = reader.read(mime)?
-            {
-                contents.text = Some(std::str::from_utf8(&data)?.replace("\r\n", "\n"));
-            }
-            // File attachments take precedence over an alternative image representation.
-            if contents.paths.is_empty()
-                && let Some(format) = ImageFormat::iter()
-                    .find(|format| reader.mime_types().contains(format.mime_type()))
-                && let Some(data) = reader.read(format.mime_type())?
-            {
-                contents.images.push(Image::from_bytes(format, data));
-            }
-            Ok(contents)
+                .chain(TEXT_TYPES)
+                .chain(ImageFormat::iter().map(|format| format.mime_type()))
+                .map(str::to_owned)
+                .collect();
+            let read = cx.read_clipboard_mime(types, 16 * 1024 * 1024);
+            cx.spawn(async move |_| Self::from_mime(read.await?))
         }
         #[cfg(target_os = "macos")]
         {
-            macos::read().map_err(Error::from)
+            cx.background_executor()
+                .spawn(async { macos::read().map_err(Error::from) })
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_mime(offer: Option<gpui_kit::ClipboardMimeOffer>) -> Result<Self, Error> {
+        use strum::IntoEnumIterator;
+        let Some(offer) = offer else {
+            return Ok(Self::default());
+        };
+        let bytes = |mime: &str| {
+            offer
+                .entries
+                .iter()
+                .find(|entry| entry.mime_type == mime)
+                .map(|entry| entry.bytes.as_slice())
+        };
+        let mut contents = Self::default();
+        if let Some(data) = bytes("text/uri-list") {
+            contents.paths = Self::file_paths(std::str::from_utf8(data)?);
+        } else if let Some(data) = bytes("x-special/gnome-copied-files") {
+            if let Some((_, uris)) = std::str::from_utf8(data)?.split_once('\n') {
+                contents.paths = Self::file_paths(uris);
+            }
+        }
+        if let Some(data) = TEXT_TYPES.into_iter().find_map(bytes) {
+            contents.text = Some(std::str::from_utf8(data)?.replace("\r\n", "\n"));
+        }
+        if contents.paths.is_empty() {
+            if let Some((format, data)) = ImageFormat::iter()
+                .find_map(|format| bytes(format.mime_type()).map(|data| (format, data)))
+            {
+                contents
+                    .images
+                    .push(Image::from_bytes(format, data.to_vec()));
+            }
+        }
+        Ok(contents)
     }
 
     pub fn from_item(item: Option<ClipboardItem>) -> Self {

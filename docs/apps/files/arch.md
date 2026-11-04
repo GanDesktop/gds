@@ -7,7 +7,8 @@ The recipe builds two independent native packages:
 
 The recipe is in `packaging/arch/PKGBUILD`. It is a VCS package tracking the
 project's `main` branch and uses `Cargo.lock`. Having a recipe in this repository
-does not mean it has been published to the AUR. Until publication, build locally
+does not mean it has been published to the AUR. Download prebuilt packages from
+[GitHub Releases](https://github.com/GanDesktop/gds/releases), or build locally
 using one of the methods below; no AUR helper or Nix is needed.
 
 ## Build the working tree in a container

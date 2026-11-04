@@ -38,6 +38,8 @@ pub struct Request {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("operation cancelled")]
+    Cancelled,
     #[error("no files were selected for transfer")]
     EmptySelection,
     #[error("an absolute named source entry is required: {path}")]
@@ -107,6 +109,7 @@ pub struct Batch {
     request: Request,
     /// Explicit target leaves; sources absent here keep their original name.
     names: Vec<NamedTarget>,
+    cancel: tokio_util::sync::CancellationToken,
 }
 
 impl Batch {
@@ -133,6 +136,7 @@ impl Batch {
             return Err(Error::EmptySelection);
         }
         Ok(Self {
+            cancel: tokio_util::sync::CancellationToken::new(),
             request,
             names: Vec::new(),
         })
@@ -183,6 +187,11 @@ impl Batch {
     }
 
     /// Run on a background executor. Each item retains its own outcome and original paths.
+    pub fn execute_cancellable(mut self, cancel: tokio_util::sync::CancellationToken) -> Report {
+        self.cancel = cancel;
+        self.execute()
+    }
+
     pub fn execute(self) -> Report {
         #[cfg(target_os = "linux")]
         {
@@ -190,7 +199,11 @@ impl Batch {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let Batch { request, names } = self;
+            let Batch {
+                request,
+                names,
+                cancel,
+            } = self;
             let mode = request.mode;
             let items = request
                 .paths
@@ -216,7 +229,11 @@ impl Batch {
         self,
         mut initial_rename: impl FnMut(&Path, &Path) -> Result<(), Errno>,
     ) -> Report {
-        let Batch { request, names } = self;
+        let Batch {
+            request,
+            names,
+            cancel,
+        } = self;
         let mode = request.mode;
         let items = request
             .paths
@@ -231,7 +248,11 @@ impl Batch {
                     destination_committed: false,
                     result: Ok(()),
                 };
-                item.result = item.transfer(mode, &mut initial_rename);
+                item.result = if cancel.is_cancelled() {
+                    Err(Error::Cancelled)
+                } else {
+                    item.transfer(mode, &mut initial_rename, &cancel)
+                };
                 item
             })
             .collect();
@@ -391,6 +412,7 @@ impl Item {
         &mut self,
         mode: Mode,
         initial_rename: &mut impl FnMut(&Path, &Path) -> Result<(), Errno>,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<(), Error> {
         let prepared = Prepared::new(self)?;
         if mode == Mode::Move {
@@ -408,9 +430,13 @@ impl Item {
         let node = Node {
             source: prepared.source.clone(),
             destination: stage.payload(),
+            cancel: cancel.clone(),
         };
         let mut copied = None;
         let result = node.copy_root().and_then(|manifest| {
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
             if manifest.metadata.st_dev != prepared.metadata.dev()
                 || manifest.metadata.st_ino != prepared.metadata.ino()
             {
@@ -434,6 +460,7 @@ impl Item {
 
 #[cfg(target_os = "linux")]
 struct Node {
+    cancel: tokio_util::sync::CancellationToken,
     source: PathBuf,
     destination: PathBuf,
 }
@@ -454,6 +481,9 @@ impl Node {
     /// # Errors
     /// Refuses special entries and propagates reading, writing and permission errors.
     fn copy_at(&self, parent: &File, name: &OsStr) -> Result<Copied, Error> {
+        if self.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
         let metadata = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)
             .map_err(|error| Error::filesystem("inspect source", &self.source, error))?;
         let children = match FileType::from_raw_mode(metadata.st_mode) {
@@ -509,8 +539,23 @@ impl Node {
             .create_new(true)
             .open(&self.destination)
             .map_err(|error| Error::filesystem("create staged file", &self.destination, error))?;
-        io::copy(&mut source, &mut destination)
-            .map_err(|error| Error::filesystem("copy file", &self.source, error))?;
+        use std::io::{Read, Write};
+        const COPY_BUFFER_SIZE: usize = 64 * 1024;
+        let mut buffer = vec![0; COPY_BUFFER_SIZE];
+        loop {
+            if self.cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let count = source
+                .read(&mut buffer)
+                .map_err(|error| Error::filesystem("read file", &self.source, error))?;
+            if count == 0 {
+                break;
+            }
+            destination
+                .write_all(&buffer[..count])
+                .map_err(|error| Error::filesystem("copy file", &self.destination, error))?;
+        }
         let after = rustix::fs::fstat(&source)
             .map_err(|error| Error::filesystem("recheck open file", &self.source, error))?;
         Copied::check(expected, &after, &self.source)?;
@@ -556,6 +601,7 @@ impl Node {
                 continue;
             }
             let copied = Self {
+                cancel: self.cancel.clone(),
                 source: self.source.join(name),
                 destination: self.destination.join(name),
             }

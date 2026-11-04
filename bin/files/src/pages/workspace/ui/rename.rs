@@ -70,6 +70,8 @@ pub(super) fn validate_name(name: &str, current: &OsStr) -> Result<(), NameError
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Error {
+    #[error("operation cancelled")]
+    Cancelled,
     #[error(transparent)]
     Name(#[from] NameError),
     #[error("cannot rename a path without a parent and file name: {path}")]
@@ -412,12 +414,17 @@ impl Browser {
         }
         self.operations.in_progress = true;
         self.operations.paths = vec![request.source.clone()];
-        notifications::Operation::start(i18n::text("rename-working", cx), cx);
+        self.start_background(i18n::text("rename-working", cx), cx);
         let source = request.source.clone();
         let origin_tab = self.tabs.active_id;
-        let work = cx
-            .background_executor()
-            .spawn(async move { request.execute() });
+        let cancel = self.background_tasks.read(cx).token("files");
+        let work = cx.background_executor().spawn(async move {
+            if cancel.is_cancelled() {
+                Err(Error::Cancelled)
+            } else {
+                request.execute()
+            }
+        });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             if let Err(error) = this.update(cx, |this, cx| {
@@ -485,7 +492,7 @@ impl Browser {
                 )
             }
         };
-        notifications::Operation::finish(report, cx);
+        self.finish_background(report, cx);
     }
 }
 

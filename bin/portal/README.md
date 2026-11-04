@@ -5,7 +5,7 @@ An independent desktop portal backend for GDS. It currently provides the native 
 ## Installation
 
 ```sh
-nix profile install github:GanDesktop/gds#xdg-desktop-portal-gds
+nix profile add github:GanDesktop/gds#xdg-desktop-portal-gds
 ```
 
 On NixOS, import `gds.nixosModules.gds-portal` and enable:

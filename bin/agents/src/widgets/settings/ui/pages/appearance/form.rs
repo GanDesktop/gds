@@ -15,6 +15,7 @@ use gpui_kit::{
 
 pub(super) struct Form {
     pub animations_enabled: Option<bool>,
+    pub rounded_corners: bool,
     pub confirm_delete: Option<bool>,
     pub auto_collapse_activity: Option<bool>,
     pub default_agent: Entity<SelectState<Vec<Choice<Option<String>>>>>,
@@ -210,6 +211,7 @@ impl Form {
         };
         Self {
             animations_enabled: p.animations_enabled,
+            rounded_corners: p.rounded_corners,
             confirm_delete: p.confirm_session_delete,
             auto_collapse_activity: p.auto_collapse_activity,
             default_agent,
@@ -320,6 +322,7 @@ impl Form {
         };
         let p = Preferences {
             animations_enabled: self.animations_enabled,
+            rounded_corners: self.rounded_corners,
             confirm_session_delete: self.confirm_delete,
             auto_collapse_activity: self.auto_collapse_activity,
             default_agent: self

@@ -68,7 +68,7 @@ impl Browser {
     }
 
     fn save_sidebar(&mut self, cx: &mut Context<Self>) {
-        if let Err(error) = configuration::save(&self.settings.preferences) {
+        if let Err(error) = configuration::save(&self.settings.preferences, cx) {
             report_settings_failure("settings-save-failed", &error, cx);
         }
         cx.notify();
@@ -110,7 +110,7 @@ impl Browser {
                 "volumes".Button::new { ghost; small; flex_1; min_w_0; justify_start; pl: $(self.sidebar_heading_inset());
                     accessibility_label: t!(@cx, "volumes"); on_click: on_click;
                     aria_expanded: $(!collapsed);
-                    @if (self.sidebar.collapsed) tooltip: t!(@cx, "volumes"); @end;
+                    @if (self.sidebar_collapsed()) tooltip: t!(@cx, "volumes"); @end;
                 } [heading],
             ]
         }
@@ -191,7 +191,7 @@ impl Browser {
                     "locations-toggle".Button::new { ghost; small; flex_1; min_w_0; justify_start; pl: $(self.sidebar_heading_inset());
                         accessibility_label: t!(@cx, "locations"); aria_expanded: expanded;
                         on_click: on_toggle;
-                        @if (self.sidebar.collapsed) tooltip: t!(@cx, "locations"); @end;
+                        @if (self.sidebar_collapsed()) tooltip: t!(@cx, "locations"); @end;
                     } [label],
                 ]
             }
@@ -324,7 +324,7 @@ impl Browser {
             }
             .into_any_element()
         };
-        let state = if self.sidebar.collapsed {
+        let state = if self.sidebar_collapsed() {
             SidebarState::Collapsed
         } else {
             SidebarState::Expanded

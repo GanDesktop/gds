@@ -287,7 +287,7 @@ impl Browser {
             .as_ref()
             .is_some_and(|picker| !picker.completing && !picker.filter_menu_open)
             && self.pages.is_empty()
-            && !self.menus.application_open
+            && self.menus.open.is_none()
             && !self.toolbar.path.editing
             && !self.operations.rename.read(cx).is_open()
             && !window.has_active_dialog(cx)

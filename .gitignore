@@ -10,3 +10,6 @@
 .DS_Store
 *.swp
 *.swo
+
+# Local Cloudflare account and deployment cache.
+/.cloudflare/

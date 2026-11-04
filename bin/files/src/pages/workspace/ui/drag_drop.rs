@@ -206,8 +206,7 @@ impl DragPreview {
                     bg: $(cx.theme().popover); border_1; border_color: $(cx.theme().border);
                     shadow_sm;
                 } [
-                    $(item.icon.render(px(PREVIEW_ICON_SIZE), color)),
-                    .div { min_w_0; truncate; } [$(item.name.clone())],
+                    .file_label::FileLabel::default { icon: $(item.icon); name: $(item.name.clone()); },
                 ]
             }
         });
@@ -408,7 +407,7 @@ impl Browser {
         let batch = match transfer::Batch::new(request) {
             Ok(batch) => batch,
             Err(error) => {
-                notifications::Operation::finish(
+                self.finish_background(
                     notifications::Report::new(notifications::Level::Error, error.to_string()),
                     cx,
                 );
@@ -423,10 +422,11 @@ impl Browser {
             .cloned()
             .chain(std::iter::once(batch.destination().to_path_buf()))
             .collect();
-        notifications::Operation::start(i18n::count("transfer-working", count, cx), cx);
+        self.start_background(i18n::count("transfer-working", count, cx), cx);
+        let cancel = self.background_tasks.read(cx).token("files");
         let work = cx
             .background_executor()
-            .spawn(async move { batch.execute() });
+            .spawn(async move { batch.execute_cancellable(cancel) });
         cx.spawn(async move |this, cx| {
             let report = work.await;
             if let Err(closed) = this.update(cx, |this, cx| {

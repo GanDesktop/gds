@@ -10,6 +10,7 @@ gpui_kit::actions!(
         OpenSettings,
         NewFolder,
         NewTab,
+        NewWindow,
         CloseTab,
         NextTab,
         PreviousTab,
@@ -89,6 +90,7 @@ pub enum Command {
     Help,
     NewFolder,
     NewTab,
+    NewWindow,
     CloseTab,
     NextTab,
     PreviousTab,
@@ -137,12 +139,13 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 50] = [
         Self::Menu,
         Self::Settings,
         Self::Help,
         Self::NewFolder,
         Self::NewTab,
+        Self::NewWindow,
         Self::CloseTab,
         Self::NextTab,
         Self::PreviousTab,
@@ -196,6 +199,7 @@ impl Command {
             Self::Help => "help",
             Self::NewFolder => "new-folder",
             Self::NewTab => "new-tab",
+            Self::NewWindow => "new-window",
             Self::CloseTab => "close-tab",
             Self::NextTab => "next-tab",
             Self::PreviousTab => "previous-tab",
@@ -251,6 +255,7 @@ impl Command {
             Self::Help => Box::new(gds::ui::help::OpenHelp),
             Self::NewFolder => Box::new(NewFolder),
             Self::NewTab => Box::new(NewTab),
+            Self::NewWindow => Box::new(NewWindow),
             Self::CloseTab => Box::new(CloseTab),
             Self::NextTab => Box::new(NextTab),
             Self::PreviousTab => Box::new(PreviousTab),
@@ -331,6 +336,7 @@ impl Command {
             Self::Help => "f1",
             Self::NewFolder => "ctrl-shift-n",
             Self::NewTab => "ctrl-n",
+            Self::NewWindow => "ctrl-alt-n",
             Self::CloseTab => "ctrl-w",
             Self::NextTab => "ctrl-tab",
             Self::PreviousTab => "ctrl-shift-tab",

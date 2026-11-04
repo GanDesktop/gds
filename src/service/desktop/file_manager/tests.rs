@@ -145,10 +145,11 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
             Server::open_existing(APP_BUS_NAME, std::path::Path::new("/tmp"), "another-token")
                 .await
                 .expect("dispatch to Files identity");
-            assert_eq!(
-                receiver.recv().await.expect("own request").startup_id,
-                "another-token"
-            );
+            let request = receiver.recv().await.expect("own request");
+            assert_eq!(request.startup_id, "another-token");
+            assert_eq!(request.operation, Operation::NewWindow);
+            assert_eq!(request.targets[0].directory, PathBuf::from("/tmp"));
+            assert!(request.targets[0].selection.is_empty());
             other._connection.close().await.expect("close Files");
             client.close().await.expect("close other provider");
         });

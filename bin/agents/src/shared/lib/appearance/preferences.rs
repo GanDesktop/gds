@@ -37,6 +37,7 @@ pub(super) fn appearance(preferences: &Preferences) -> theme::Appearance {
         },
         content_opacity: preferences.content_opacity.unwrap_or(opacity.content),
         sidebar_opacity: preferences.sidebar_opacity.unwrap_or(opacity.sidebar),
+        rounded_corners: preferences.rounded_corners,
     }
 }
 

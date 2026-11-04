@@ -13,11 +13,12 @@ use gds::{
 fn modified_preferences() -> Preferences {
     let mut preferences = Preferences {
         appearance: Appearance {
-            source: Source::System,
+            source: Source::Builtin,
             builtin: BuiltinTheme::Neon,
             mode: ModePreference::Light,
             content_opacity: 0.7,
             sidebar_opacity: 0.8,
+            rounded_corners: true,
         },
         animations_enabled: Some(false),
         terminal_enabled: Some(false),
@@ -121,6 +122,7 @@ fn control_value(field: Field, preferences: &Preferences) -> serde_json::Value {
         Field::ShowHidden => serde_json::to_value(preferences.files.show_hidden),
         Field::SidebarVolumes => serde_json::to_value(preferences.files.sidebar.show_volumes),
         Field::Animations => serde_json::to_value(preferences.animations_enabled),
+        Field::RoundedCorners => serde_json::to_value(preferences.appearance.rounded_corners),
     };
     value.expect("preferences value")
 }
@@ -136,6 +138,7 @@ fn control_reset_only_clears_its_own_field() {
         Field::ShowHidden,
         Field::SidebarVolumes,
         Field::Animations,
+        Field::RoundedCorners,
     ];
     let before = modified_preferences();
     let values: Vec<_> = FIELDS
@@ -250,10 +253,37 @@ fn appearance_navigation_exposes_animation_toggle_and_independent_reset(
     })
     .expect("reset animations");
     cx.update(|cx| assert!(!cx.reduce_motion(), "system preference is restored"));
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("settings-rounded-corners", cx);
+        assert!(view.read(cx).preferences.appearance.rounded_corners);
+    })
+    .expect("toggle window corners");
+    cx.update(|cx| {
+        assert!(
+            cx.global::<gpui_kit::component::WindowBorderStyle>()
+                .corner_radius()
+                > px(0.)
+        )
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click(("settings-reset", Field::RoundedCorners as usize), cx);
+    })
+    .expect("reset window corners");
+    cx.update(|cx| {
+        assert_eq!(
+            cx.global::<gpui_kit::component::WindowBorderStyle>()
+                .corner_radius(),
+            px(0.)
+        )
+    });
     let changes = changes.borrow();
-    assert_eq!(changes.len(), 2);
+    assert_eq!(changes.len(), 4);
     assert_eq!(changes[0].animations_enabled, Some(false));
     assert_eq!(changes[1], Preferences::default());
+    assert!(changes[2].appearance.rounded_corners);
+    assert_eq!(changes[3], Preferences::default());
 }
 
 #[cfg(feature = "gui-tests")]
@@ -266,6 +296,7 @@ fn changing_and_resetting_builtin_palette_applies_without_changing_mode(
         gpui_kit::init(cx);
         let mut previous = modified_preferences();
         previous.appearance.source = Source::Builtin;
+        previous.appearance.builtin = BuiltinTheme::default();
         theme::apply(&previous.appearance, cx).expect("initial embedded palette");
         let original = theme::Colors::current(cx);
         let mut changed = previous.clone();

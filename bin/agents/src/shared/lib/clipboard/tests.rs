@@ -16,3 +16,29 @@ fn uri_lists_accept_only_local_files_and_preserve_unix_names() {
         ]
     );
 }
+
+#[test]
+fn native_file_representations_take_precedence_over_image_alternatives() {
+    use gpui_kit::{ClipboardMime, ClipboardMimeOffer};
+    let contents = Contents::from_mime(Some(ClipboardMimeOffer {
+        id: 1,
+        entries: vec![
+            ClipboardMime {
+                mime_type: "x-special/gnome-copied-files".into(),
+                bytes: b"copy\nfile:///tmp/a%20b.png".to_vec(),
+            },
+            ClipboardMime {
+                mime_type: "image/png".into(),
+                bytes: vec![1, 2, 3],
+            },
+            ClipboardMime {
+                mime_type: "text/plain".into(),
+                bytes: b"a\r\nb".to_vec(),
+            },
+        ],
+    }))
+    .expect("desktop offer");
+    assert_eq!(contents.paths, [PathBuf::from("/tmp/a b.png")]);
+    assert!(contents.images.is_empty());
+    assert_eq!(contents.text.as_deref(), Some("a\nb"));
+}

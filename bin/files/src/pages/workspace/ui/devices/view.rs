@@ -420,7 +420,7 @@ impl Browser {
         };
         el! {
             .ContentPage::default { # "volumes-page" } [
-                .PageHeader::default [
+                .PageHeader::default { @if (self.window.layout.compact) hidden; @end } [
                     .PageTitle::default [$i18n::text("volumes", cx)],
                     .PageActions::default [..actions],
                 ],

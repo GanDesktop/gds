@@ -22,7 +22,7 @@ pub(crate) fn initial_size(compact: bool) -> Size<Pixels> {
     if compact {
         size(px(POPUP_WIDTH), px(INPUT_HEIGHT))
     } else {
-        size(px(1280.), px(820.))
+        gds::ui::window::initial_size()
     }
 }
 

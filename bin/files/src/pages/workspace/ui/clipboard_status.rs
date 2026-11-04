@@ -1,80 +1,132 @@
-//! Persistent file clipboard summary and its full path details.
-
+//! Editable file clipboard summary; removing a row updates the platform offer.
 use super::*;
-use gds::appearance::tokens::TOOLTIP_DELAY;
 use gds_uim::el;
-use gpui_kit::{
-    assets::IconName,
-    component::{ActiveTheme, Icon, tooltip::Tooltip},
-    prelude::*,
-};
+use gpui_kit::{assets::IconName, prelude::*};
 
-const ICON_SIZE: f32 = 12.;
-const LABEL_MAX_WIDTH: f32 = 280.;
-const DETAILS_WIDTH: f32 = 560.;
-const DETAILS_MAX_HEIGHT: f32 = 320.;
-
-pub(super) fn render(cx: &App) -> Option<AnyElement> {
-    let snapshot = file_clipboard::current(cx)?;
-    let (icon, title) = match snapshot.mode {
-        file_clipboard::Mode::Copy => (IconName::Copy, i18n::text("clipboard-copied", cx)),
-        file_clipboard::Mode::Cut => (IconName::Scissors, i18n::text("clipboard-cut", cx)),
-    };
-    let label: SharedString = if let [path] = snapshot.paths.as_slice() {
-        path.file_name()
-            .unwrap_or(path.as_os_str())
-            .to_string_lossy()
-            .into_owned()
-            .into()
-    } else {
-        i18n::count("item-count", snapshot.paths.len(), cx)
-    };
-    let tooltip = |window: &mut Window, cx: &mut App| {
-        Tooltip::element(|_, cx| match file_clipboard::current(cx) {
-            Some(snapshot) => details(&snapshot, cx),
-            None => div().into_any_element(),
-        })
-        .build(window, cx)
-    };
-    Some(
-        el! {
-            .div {
-                # "file-clipboard-status"; role: Role::Status; aria_label: title;
-                flex; items_center; gap_1; min_w_0; max_w: LABEL_MAX_WIDTH.px;
-                tooltip_show_delay: TOOLTIP_DELAY; hoverable_tooltip: tooltip;
-            } [
-                icon.Icon::new { size: ICON_SIZE.px; flex_shrink_0; },
-                .div { min_w_0; truncate; } [label],
-            ]
-        }
-        .into_any_element(),
-    )
+pub(super) struct Details {
+    busy: bool,
+    runtime: tokio::runtime::Handle,
+    paths: Vec<PathBuf>,
+    icons: std::collections::HashMap<PathBuf, file_icon::FileIcon>,
+    loading: Option<Task<()>>,
 }
 
-fn details(snapshot: &file_clipboard::Snapshot, cx: &App) -> AnyElement {
-    let title = i18n::text(
-        match snapshot.mode {
-            file_clipboard::Mode::Copy => "clipboard-copied",
-            file_clipboard::Mode::Cut => "clipboard-cut",
-        },
-        cx,
-    );
-    let paths = snapshot.paths.iter().map(|path| {
-        el! { .div { min_w_0; whitespace_normal; } [$(path.to_string_lossy().into_owned())] }
-    });
-    el! {
-        .div { occlude; w: DETAILS_WIDTH.px; max_w_full; flex; flex_col; gap_2; py_1; } [
-            .div { flex; items_center; gap_2; } [title, $(i18n::count("item-count", snapshot.paths.len(), cx))],
-            .div {
-                # "file-clipboard-paths"; min_w_0; max_h: DETAILS_MAX_HEIGHT.px; overflow_y_scroll;
-                flex; flex_col; gap_1;
-            } [..paths],
-            @if (snapshot.can_cancel())
-                .div { flex; items_center; gap_2; text_color: $(cx.theme().muted_foreground); } [
-                    $(ui::ShortcutBadge::new(Command::Cancel)),
-                    $(i18n::text("clipboard-cancel-cut", cx)),
-                ],
-            @end,
-        ]
-    }.into_any_element()
+impl Details {
+    pub(super) fn new(runtime: tokio::runtime::Handle) -> Self {
+        Self {
+            busy: false,
+            runtime,
+            paths: Vec::new(),
+            icons: Default::default(),
+            loading: None,
+        }
+    }
+
+    fn sync_icons(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if paths == self.paths {
+            return;
+        }
+        self.paths = paths.clone();
+        self.icons.retain(|path, _| paths.contains(path));
+        let work = self.runtime.spawn_blocking(move || {
+            let icons = paths
+                .iter()
+                .map(|path| {
+                    let icon = match directory::Entry::inspect(path) {
+                        Ok(entry) => file_icon::FileIcon::for_entry(&entry),
+                        // Clipboard entries may disappear after a move or external deletion.
+                        Err(_) => file_icon::FileIcon::plain(IconName::FileQuestionMark),
+                    };
+                    (path.clone(), icon)
+                })
+                .collect();
+            (paths, icons)
+        });
+        self.loading = Some(cx.spawn(async move |this, cx| match work.await {
+            Ok((paths, icons)) => {
+                let _ = this.update(cx, |this, cx| {
+                    if this.paths == paths {
+                        this.icons = icons;
+                        cx.notify();
+                    }
+                });
+            }
+            Err(error) => tracing::warn!(%error, "clipboard icon lookup failed"),
+        }));
+    }
+}
+impl Render for Details {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let snapshot = file_clipboard::current(cx);
+        self.sync_icons(
+            snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.paths.clone())
+                .unwrap_or_default(),
+            cx,
+        );
+        let rows = snapshot.map(|snapshot| snapshot.paths.iter().map(|path| {
+            let expected = snapshot.as_ref().clone();
+            let path = path.clone();
+            let label: SharedString = path.to_string_lossy().into_owned().into();
+            let key = label.clone();
+            let name: SharedString = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned().into();
+            let icon = self.icons.get(&path).copied().unwrap_or_else(|| file_icon::FileIcon::plain(IconName::File));
+            let on_click = cx.listener(move |this, _, _, cx| {
+                if this.busy { return; }
+                this.busy = true;
+                let work = file_clipboard::Bridge::new(cx).remove_path(expected.clone(), path.clone(), cx);
+                cx.spawn(async move |this, cx| {
+                    let result = work.await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.busy = false;
+                        if let Err(error) = result { notifications::error(error.to_string(), cx); }
+                        file_clipboard::refresh(cx);
+                        cx.notify();
+                    });
+                }).detach();
+                cx.notify();
+            });
+            let action = el! { "remove-clipboard-entry".ui::IconButton::new { icon: IconName::X; label: $(i18n::text("clipboard-remove-item", cx)); disabled: $(self.busy); on_click: on_click; } }.into_any_element();
+            status::row(key, file_label::FileLabel::default().icon(icon).name(name), label, action)
+        }).collect()).unwrap_or_default();
+        status::list(rows, i18n::text("clipboard-empty", cx))
+    }
+}
+
+pub(super) fn render(
+    details: Entity<Details>,
+    compact: bool,
+    cx: &mut Context<Browser>,
+) -> AnyElement {
+    let snapshot = file_clipboard::current(cx);
+    let count = snapshot.as_ref().map_or(0, |snapshot| snapshot.paths.len());
+    let icon = match snapshot.as_ref().map(|snapshot| snapshot.mode) {
+        Some(file_clipboard::Mode::Cut) => IconName::Scissors,
+        _ => IconName::Copy,
+    };
+    let label = snapshot
+        .as_ref()
+        .map(|snapshot| {
+            if let [path] = snapshot.paths.as_slice() {
+                path.file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy()
+                    .into_owned()
+                    .into()
+            } else {
+                i18n::count("item-count", count, cx)
+            }
+        })
+        .unwrap_or_default();
+    status::control(
+        "file-clipboard-status",
+        i18n::text("clipboard-title", cx),
+        status::Summary::default()
+            .compact(compact)
+            .icon(icon)
+            .label(label)
+            .count(count),
+        details,
+    )
 }

@@ -84,8 +84,13 @@ impl Preferences {
                 && appearance.builtin != old_appearance.builtin)
         {
             theme::apply(appearance, cx)?;
-        } else if appearance != old_appearance {
+        } else if appearance.content_opacity != old_appearance.content_opacity
+            || appearance.sidebar_opacity != old_appearance.sidebar_opacity
+        {
             theme::update_opacity(appearance.content_opacity, appearance.sidebar_opacity, cx)?;
+        }
+        if appearance.rounded_corners != old_appearance.rounded_corners {
+            theme::update_window_corners(appearance.rounded_corners, cx);
         }
         if self.font != previous.font {
             typography::install(&self.font, cx)?;

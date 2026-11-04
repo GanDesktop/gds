@@ -59,7 +59,7 @@ watch = ["dep:notify", "dep:tokio"]
 desktop = [
     "desktop-protocol", "watch", "dep:tokio", "dep:tracing", "dep:infer",
     "dep:open", "dep:thiserror", "dep:url", "dep:ashpd", "dep:zbus",
-    "dep:rustix", "dep:wl-clipboard-rs",
+    "dep:rustix",
 ]
 storage = [
     "dep:toasty", "dep:toasty-driver-sqlite", "dep:toasty-core",
@@ -239,7 +239,6 @@ clap = { version = "4", features = ["derive", "env"], optional = true }
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "open_uri"], optional = true }
 zbus = { version = "5.19", default-features = false, features = ["tokio"], optional = true }
 rustix = { version = "1.1", features = ["fs", "event"], optional = true }
-wl-clipboard-rs = { version = "0.9.4", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # Owner/group names come from the system NSS interfaces (`getpwuid_r` /
@@ -273,16 +272,17 @@ nix = { version = "0.31", features = ["process", "term"] }
 [profile.dev]
 debug = 1
 
-# Prioritize runtime performance, then reduce the shipped binary size.
+# Use standard release optimization while keeping compilation parallel.
 [profile.release]
 opt-level = 3
-lto = "fat"
-codegen-units = 1
+lto = false
+codegen-units = 16
 debug = 0
 strip = "symbols"
 incremental = false
 
 [patch.crates-io]
+gpui-component = { git = "https://github.com/GanDesktop/gpui-kit", branch = "gds-0.9.0" }
 trash = { git = "https://github.com/GanDesktop/trash-rs", branch = "fix/freedesktop-trashinfo-reviewed" }
 gpui-fast = { git = "https://github.com/GanDesktop/gpui-fast", branch = "gds-0.1.13" }
 gpui-fast-linux = { git = "https://github.com/GanDesktop/gpui-fast-linux", branch = "gds-0.1.13" }

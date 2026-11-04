@@ -61,6 +61,8 @@ impl Kind {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("operation cancelled")]
+    Cancelled,
     #[error("no files are selected")]
     EmptySelection,
     #[error(transparent)]
@@ -130,10 +132,22 @@ impl Batch {
 
     /// Execute the chosen operation on a background executor, retaining every outcome.
     /// A failed operation never falls back to another kind of deletion.
+    #[cfg(test)]
     pub fn execute(self, kind: Kind) -> Report {
+        self.execute_cancellable(kind, &tokio_util::sync::CancellationToken::new())
+    }
+
+    pub fn execute_cancellable(
+        self,
+        kind: Kind,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Report {
         let mut receipts = Vec::new();
         let mut history_errors = Vec::new();
         let mut report = self.execute_with(kind, |path| {
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
             if kind == Kind::Trash && super::recycle::supported() {
                 let receipt = super::recycle::trash(path).map_err(Error::Recycle)?;
                 match receipt.entry {

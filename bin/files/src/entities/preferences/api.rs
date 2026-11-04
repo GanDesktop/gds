@@ -11,6 +11,25 @@ use std::{
 use directories::BaseDirs;
 
 use super::model::Preferences;
+use gpui_kit::{App, Global};
+
+pub(crate) struct Current(pub Preferences);
+impl Global for Current {}
+
+pub(crate) fn current(cx: &App) -> Preferences {
+    cx.try_global::<Current>()
+        .map(|current| current.0.clone())
+        .unwrap_or_default()
+}
+
+pub(crate) fn publish(preferences: Preferences, cx: &mut App) {
+    if cx
+        .try_global::<Current>()
+        .is_none_or(|current| current.0 != preferences)
+    {
+        cx.set_global(Current(preferences));
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -65,8 +84,16 @@ pub fn load() -> Result<Preferences, Error> {
 /// # Errors
 /// Returns errors for managed symlink/read-only destinations, serialization,
 /// directory creation, writing or persistence. The old file is not truncated.
-pub fn save(preferences: &Preferences) -> Result<(), Error> {
-    save_to(&path()?, preferences)
+pub fn save(preferences: &Preferences, cx: &mut App) -> Result<(), Error> {
+    // UI tests use in-memory preferences; storage tests call save_to with temporary paths.
+    #[cfg(test)]
+    if cx.is_test() {
+        publish(preferences.clone(), cx);
+        return Ok(());
+    }
+    save_to(&path()?, preferences)?;
+    publish(preferences.clone(), cx);
+    Ok(())
 }
 
 /// # Errors

@@ -72,6 +72,8 @@ pub struct Outcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("operation cancelled")]
+    Cancelled,
     #[error(
         "the file was moved to trash, but its unique recovery record could not be identified: {path}"
     )]
@@ -215,13 +217,25 @@ fn collect_entries(items: impl IntoIterator<Item = trash::TrashItem>) -> Result<
 /// The outcome list preserves the input order, and one record's failure never
 /// stops the remaining records from being attempted.
 pub fn perform(action: Action, entries: Vec<Entry>) -> Vec<Outcome> {
+    perform_cancellable(action, entries, &tokio_util::sync::CancellationToken::new())
+}
+
+pub fn perform_cancellable(
+    action: Action,
+    entries: Vec<Entry>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Vec<Outcome> {
     entries
         .into_iter()
         .map(|entry| {
             let original_path = entry.original_path.clone();
             Outcome {
                 original_path,
-                result: entry.apply(action),
+                result: if cancel.is_cancelled() {
+                    Err(Error::Cancelled)
+                } else {
+                    entry.apply(action)
+                },
                 entry,
             }
         })

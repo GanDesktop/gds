@@ -272,7 +272,7 @@ impl Browser {
         self.operations.in_progress = true;
         // Until the clipboard arrives, the source volumes are unknown.
         self.operations.paths.clear();
-        notifications::Operation::start(i18n::text("paste-working", cx), cx);
+        self.start_background(i18n::text("paste-working", cx), cx);
         cx.spawn_in(window, async move |this, cx| {
             let result = read.await;
             if matches!(
@@ -358,6 +358,15 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.background_tasks.read(cx).token("files").is_cancelled() {
+            let paste = match inspection {
+                Inspection::Ready(paste)
+                | Inspection::Failed { paste, .. }
+                | Inspection::Conflict { paste, .. } => paste,
+            };
+            self.cancel_paste(paste, window, cx);
+            return;
+        }
         match inspection {
             Inspection::Ready(paste) => self.execute_paste(paste, window, cx),
             Inspection::Failed { paste, error } => {
@@ -424,10 +433,11 @@ impl Browser {
                 return;
             }
         };
-        notifications::Operation::start(i18n::count("transfer-working", count, cx), cx);
+        self.start_background(i18n::count("transfer-working", count, cx), cx);
+        let cancel = self.background_tasks.read(cx).token("files");
         let work = cx
             .background_executor()
-            .spawn(async move { batch.execute() });
+            .spawn(async move { batch.execute_cancellable(cancel) });
         cx.spawn_in(window, async move |this, cx| {
             let report = work.await;
             let _ = this.update_in(cx, |browser, window, cx| {
@@ -521,7 +531,7 @@ impl Browser {
     fn cancel_paste(&mut self, paste: Paste, window: &mut Window, cx: &mut Context<Self>) {
         if paste.succeeded.is_empty() && paste.failures.is_empty() {
             self.operations.in_progress = false;
-            notifications::Operation::finish(
+            self.finish_background(
                 notifications::Report::new(
                     notifications::Level::Info,
                     i18n::text("paste-cancelled", cx),
@@ -555,7 +565,7 @@ impl Browser {
 
     fn fail_paste(&mut self, message: String, level: notifications::Level, cx: &mut Context<Self>) {
         self.operations.in_progress = false;
-        notifications::Operation::finish(notifications::Report::new(level, message), cx);
+        self.finish_background(notifications::Report::new(level, message), cx);
         cx.notify();
     }
 
@@ -663,6 +673,6 @@ impl Browser {
                 cx,
             ));
         }
-        notifications::Operation::finish(notice, cx);
+        self.finish_background(notice, cx);
     }
 }

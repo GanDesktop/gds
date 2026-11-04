@@ -18,7 +18,7 @@ nix build .#gds-files
 nix build .#gds-agents
 nix build .#xdg-desktop-portal-gds
 
-nix profile install .#gds
+nix profile add .#gds
 nix run .#gds-files -- "$HOME"
 nix run .#gds-agents -- --compact
 ```

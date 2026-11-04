@@ -163,7 +163,7 @@ impl Browser {
             disabled: $self.collections.network.discovery.loading; on_click: on_refresh;
         } };
         el! { .ContentPage::default { # "network-page" } [
-            .PageHeader::default [
+            .PageHeader::default { @if (self.window.layout.compact) hidden; @end } [
                 .PageTitle::default [$i18n::text("network", cx)],
                 .PageActions::default [@if (self.picker.is_none()) add, @end, refresh],
             ],

@@ -862,3 +862,6 @@ appearance-builtin-theme-help = 六套配色，各有浅色和深色版本。
 
 app-help = 帮助
 shortcuts-application = 应用
+
+appearance-rounded-corners = 窗口圆角
+appearance-rounded-corners-help = 为浮动窗口启用圆角，默认关闭。

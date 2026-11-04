@@ -25,6 +25,8 @@ const DIALOG_WIDTH: f32 = 480.;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
+    #[error("operation cancelled")]
+    Cancelled,
     #[error(transparent)]
     Name(#[from] names::NameError),
     #[error("an item named {name} already exists in {directory}")]
@@ -263,10 +265,15 @@ impl Browser {
             cx.notify();
             return;
         }
-        notifications::Operation::start(i18n::text("new-folder-working", cx), cx);
-        let work = cx
-            .background_executor()
-            .spawn(async move { request.execute() });
+        self.start_background(i18n::text("new-folder-working", cx), cx);
+        let cancel = self.background_tasks.read(cx).token("files");
+        let work = cx.background_executor().spawn(async move {
+            if cancel.is_cancelled() {
+                Err(Error::Cancelled)
+            } else {
+                request.execute()
+            }
+        });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             if let Err(closed) = this.update(cx, |this, cx| {
@@ -337,7 +344,7 @@ impl Browser {
                 )
             }
         };
-        notifications::Operation::finish(report, cx);
+        self.finish_background(report, cx);
         cx.notify();
     }
 }

@@ -138,7 +138,7 @@ impl Browser {
     ) {
         if !self.sidebar.regions.sidebar_focused(window, cx)
             || !self.pages.is_empty()
-            || self.menus.application_open
+            || self.menus.open.is_some()
             || self.menus.context.is_some()
             || self.menus.sort.is_some()
             || window.has_active_dialog(cx)

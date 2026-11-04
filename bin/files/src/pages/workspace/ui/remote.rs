@@ -64,7 +64,7 @@ impl Browser {
             Ok(sources) => sources,
             Err(error) => {
                 self.operations.in_progress = false;
-                notifications::Operation::finish(
+                self.finish_background(
                     notifications::Report::new(notifications::Level::Error, error),
                     cx,
                 );
@@ -73,7 +73,7 @@ impl Browser {
             }
         };
         self.operations.paths = vec![destination.clone()];
-        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancel = self.background_tasks.read(cx).token("files");
         self.operations.remote_paste_cancel = Some(cancel.clone());
         let (updates, _) = tokio::sync::watch::channel(Default::default());
         let target = operations::Resource::Local(destination.clone());
@@ -129,7 +129,7 @@ impl Browser {
                     }
                     Err(error) => (notifications::Level::Error, error.to_string()),
                 };
-                notifications::Operation::finish(notifications::Report::new(level, message), cx);
+                this.finish_background(notifications::Report::new(level, message), cx);
                 cx.notify();
             });
         })
@@ -342,6 +342,16 @@ impl Browser {
             };
             let address = options.listing.address.clone();
             let view = cx.new(|cx| remote_browser::View::new(options, window, cx));
+            let tasks = self.background_tasks.clone();
+            let task_key: SharedString = format!("remote-task-{}", view.entity_id()).into();
+            cx.observe(&view, move |_, view, cx| {
+                let task = view.read(cx).background_task();
+                tasks.update(cx, |tasks, cx| {
+                    tasks.sync_remote(task_key.clone(), task, cx)
+                });
+                cx.notify();
+            })
+            .detach();
             cx.subscribe(&view, move |this, _, event: &remote_browser::Event, cx| {
                 match event {
                     remote_browser::Event::Navigate(target) => this.navigate_location(tab, Location::Remote(target.clone()), cx),
@@ -372,7 +382,10 @@ impl Browser {
             .current_tab()
             .map_or(String::new(), |s| s.filter.clone());
         let hidden = self.settings.preferences.files.show_hidden;
-        view.update(cx, |view, cx| view.set_filter(filter, hidden, cx));
+        view.update(cx, |view, cx| {
+            view.set_filter(filter, hidden, cx);
+            view.set_compact(self.window.layout.compact, cx);
+        });
         el! { .div { flex_1; min_h_0 } [view] }.into_any_element()
     }
 }

@@ -82,6 +82,9 @@ impl Default for SurfaceOpacity {
     }
 }
 
+/// Radius used when the user enables rounded floating windows.
+pub const WINDOW_CORNER_RADIUS: f32 = 10.;
+
 /// An alpha-capable window lets per-surface opacity changes apply immediately.
 pub const WINDOW_BACKGROUND: WindowBackgroundAppearance = WindowBackgroundAppearance::Transparent;
 

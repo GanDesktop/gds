@@ -80,8 +80,12 @@ impl Browser {
         self.operations.in_progress = true;
         self.operations.paths = paths;
         self.window.focus.focus(window, cx);
-        notifications::Operation::start(label, cx);
-        let work = self.window.runtime.spawn_blocking(move || entry.execute());
+        self.start_background(label, cx);
+        let cancel = self.background_tasks.read(cx).token("files");
+        let work = self
+            .window
+            .runtime
+            .spawn_blocking(move || entry.execute_cancellable(&cancel));
         cx.spawn(async move |this, cx| {
             let result = work.await;
             if let Err(error) = this.update(cx, |this, cx| {
@@ -91,7 +95,7 @@ impl Browser {
                     Ok(report) => this.finish_history(direction, report, cx),
                     Err(error) => {
                         this.operations.history.clear();
-                        notifications::Operation::finish(
+                        this.finish_background(
                             notifications::Report::new(
                                 notifications::Level::Error,
                                 error.to_string(),
@@ -134,7 +138,7 @@ impl Browser {
         for error in report.errors {
             notice = notice.detail(error);
         }
-        notifications::Operation::finish(notice, cx);
+        self.finish_background(notice, cx);
     }
 }
 

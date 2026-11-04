@@ -32,11 +32,13 @@ pub(super) enum Field {
     ShowHidden,
     SidebarVolumes,
     Animations,
+    RoundedCorners,
 }
 
 impl Field {
     pub fn label_id(self) -> &'static str {
         match self {
+            Self::RoundedCorners => "appearance-rounded-corners",
             Self::Animations => "appearance-animations",
             Self::Source => "theme-source",
             Self::Builtin => "theme-builtin-selection",
@@ -51,6 +53,7 @@ impl Field {
     pub fn is_modified(self, preferences: &Preferences) -> bool {
         let defaults = Preferences::default();
         match self {
+            Self::RoundedCorners => preferences.appearance.rounded_corners,
             Self::Animations => !preferences.animations_enabled.unwrap_or(true),
             Self::Source => preferences.appearance.source != defaults.appearance.source,
             Self::Builtin => preferences.appearance.builtin != defaults.appearance.builtin,
@@ -76,6 +79,7 @@ impl Field {
         }
         let defaults = Preferences::default();
         match self {
+            Self::RoundedCorners => preferences.appearance.rounded_corners = false,
             Self::Animations => preferences.animations_enabled = defaults.animations_enabled,
             Self::Source => preferences.appearance.source = defaults.appearance.source,
             Self::Builtin => preferences.appearance.builtin = defaults.appearance.builtin,

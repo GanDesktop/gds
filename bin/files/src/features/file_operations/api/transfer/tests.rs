@@ -55,6 +55,7 @@ fn cross_device_cleanup_preserves_concurrent_additions_and_edits() {
         };
         let prepared = Prepared::new(&item).expect("prepare cross-device copy");
         let copied = super::Node {
+            cancel: tokio_util::sync::CancellationToken::new(),
             source: source.clone(),
             destination: destination.clone(),
         }
@@ -513,4 +514,53 @@ fn a_scanned_free_name_completes_the_move_without_replacing_the_original() {
         b"existing"
     );
     assert!(fs::symlink_metadata(&source).is_err());
+}
+
+#[test]
+fn cancellation_retains_completed_moves_and_untouched_sources() {
+    let root = tempfile::tempdir().expect("transfer fixture");
+    let destination = root.path().join("destination");
+    fs::create_dir(&destination).unwrap();
+    let first = root.path().join("first");
+    let second = root.path().join("second");
+    fs::write(&first, "one").unwrap();
+    fs::write(&second, "two").unwrap();
+    let mut work = batch(
+        vec![first.clone(), second.clone()],
+        &destination,
+        Mode::Move,
+    );
+    let cancel = tokio_util::sync::CancellationToken::new();
+    work.cancel = cancel.clone();
+    let report = work.execute_with_rename(|source, target| {
+        Prepared::rename_no_replace(source, target)?;
+        cancel.cancel();
+        Ok(())
+    });
+    assert!(report.items[0].result.is_ok());
+    assert!(matches!(report.items[1].result, Err(Error::Cancelled)));
+    assert!(!first.exists());
+    assert!(second.exists());
+    assert_eq!(report.committed_destinations(), [destination.join("first")]);
+    assert!(!destination.join("second").exists());
+}
+
+#[test]
+fn cancelled_cross_device_move_cleans_staging_without_removing_source() {
+    let root = tempfile::tempdir().expect("transfer fixture");
+    let destination = root.path().join("destination");
+    fs::create_dir(&destination).unwrap();
+    let source = root.path().join("source");
+    fs::write(&source, "keep").unwrap();
+    let mut work = batch(vec![source.clone()], &destination, Mode::Move);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    work.cancel = cancel.clone();
+    let report = work.execute_with_rename(|_, _| {
+        cancel.cancel();
+        Err(Errno::XDEV)
+    });
+    assert!(matches!(report.items[0].result, Err(Error::Cancelled)));
+    assert!(!report.items[0].destination_committed);
+    assert_eq!(fs::read_to_string(&source).unwrap(), "keep");
+    assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
 }

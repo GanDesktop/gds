@@ -39,3 +39,15 @@ undo-done = 已撤销
 redo-done = 已重做
 undo-failed = 部分项目无法撤销
 redo-failed = 部分项目无法重做
+
+tasks-empty = 无进行中的任务
+tasks-count = { $count } 项任务
+tasks-cancelling = 正在终止…
+
+tasks-title = 后台任务
+selection-title = 选中项目
+selection-empty = 无选中项目
+selection-remove-item = 取消选中
+clipboard-title = 剪切板
+clipboard-empty = 剪切板为空
+clipboard-remove-item = 从剪切板移除

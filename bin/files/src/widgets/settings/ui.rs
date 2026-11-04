@@ -338,6 +338,17 @@ impl View {
         }
     }
 
+    fn on_rounded_corners_changed(
+        &mut self,
+        checked: &bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.change(window, cx, |preferences| {
+            Field::replace(&mut preferences.appearance.rounded_corners, *checked)
+        });
+    }
+
     fn on_animations_changed(
         &mut self,
         checked: &bool,

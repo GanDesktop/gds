@@ -152,10 +152,9 @@ fn open_host(mut host: Host, cx: &mut App) -> anyhow::Result<WindowHandle<Root>>
             kind: kind.window_kind(),
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
-                size(px(WIDTH), px(height)),
+                gds::ui::window::fit_size(size(px(WIDTH), px(height)), cx),
                 cx,
             ))),
-            window_min_size: Some(size(px(WIDTH), px(height))),
             window_background: cx.global::<theme::Appearance>().background,
             app_id: Some("io.github.GanDesktop.GdsAgents".into()),
             ..TitleBar::window_options()

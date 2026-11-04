@@ -39,3 +39,15 @@ undo-done = Undo complete
 redo-done = Redo complete
 undo-failed = Could not undo all items
 redo-failed = Could not redo all items
+
+tasks-empty = No running tasks
+tasks-count = { $count } tasks
+tasks-cancelling = Cancelling…
+
+tasks-title = Background tasks
+selection-title = Selection
+selection-empty = No selected items
+selection-remove-item = Deselect
+clipboard-title = Clipboard
+clipboard-empty = Clipboard is empty
+clipboard-remove-item = Remove from clipboard

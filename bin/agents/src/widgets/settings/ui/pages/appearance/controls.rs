@@ -24,6 +24,16 @@ impl Field {
 }
 
 impl AppearancePage {
+    pub(super) fn on_rounded_corners_changed(
+        &mut self,
+        checked: &bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.form.rounded_corners = *checked;
+        self.flush_pending(window, cx);
+    }
+
     pub(super) fn on_animations_changed(
         &mut self,
         checked: &bool,
@@ -133,6 +143,7 @@ impl AppearancePage {
         };
         let defaults = Preferences::default();
         match field {
+            Field::RoundedCorners => self.form.rounded_corners,
             Field::Animations => !self.form.animations_enabled.unwrap_or(true),
             Field::UiFont => named(&self.form.ui_font),
             Field::MonoFont => named(&self.form.mono_font),
@@ -187,6 +198,7 @@ impl AppearancePage {
         }
         let defaults = Preferences::default();
         match field {
+            Field::RoundedCorners => self.form.rounded_corners = defaults.rounded_corners,
             Field::Animations => self.form.animations_enabled = defaults.animations_enabled,
             Field::UiFont => self.form.ui_font.update(cx, |select, cx| {
                 select.set_selected_value(&form::FontChoice::Default, window, cx)

@@ -114,7 +114,7 @@ impl FileIcon {
         }
     }
 
-    fn plain(base: IconName) -> Self {
+    pub(super) fn plain(base: IconName) -> Self {
         Self { base, badge: None }
     }
 

@@ -11,6 +11,7 @@ pub const OBJECT_PATH: &str = "/org/freedesktop/FileManager1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation {
+    NewWindow,
     Folders,
     Items,
     Properties,
@@ -54,12 +55,12 @@ impl Command {
                 .and_then(|uri| uri.to_file_path().ok())
                 .filter(|path| path.is_absolute())
                 .ok_or_else(|| Error::InvalidUri(uri.clone()))?;
-            let directory = if operation == Operation::Folders {
+            let directory = if matches!(operation, Operation::Folders | Operation::NewWindow) {
                 path.clone()
             } else {
                 path.parent().unwrap_or(&path).to_owned()
             };
-            let selected = operation != Operation::Folders;
+            let selected = matches!(operation, Operation::Items | Operation::Properties);
             if let Some(target) = targets
                 .iter_mut()
                 .find(|target| target.directory == directory)
@@ -119,6 +120,22 @@ impl Interface {
     }
 }
 
+struct Launcher {
+    sender: mpsc::Sender<Command>,
+}
+
+#[zbus::interface(name = "io.github.GanDesktop.Files")]
+impl Launcher {
+    async fn open_window(&self, uri: String, startup_id: String) -> zbus::fdo::Result<()> {
+        let command = Command::from_uris(Operation::NewWindow, &[uri], startup_id)
+            .map_err(|error| zbus::fdo::Error::InvalidArgs(error.to_string()))?;
+        self.sender
+            .send(command)
+            .await
+            .map_err(|_| zbus::fdo::Error::Failed("Files is closing".into()))
+    }
+}
+
 pub struct Server {
     _connection: Connection,
     pub provider_conflict: Option<String>,
@@ -129,6 +146,12 @@ impl Server {
     /// Reports another application instance or an unavailable session bus.
     pub async fn connect(app_bus_name: &str, sender: mpsc::Sender<Command>) -> Result<Self, Error> {
         let connection = zbus::connection::Builder::session()?
+            .serve_at(
+                OBJECT_PATH,
+                Launcher {
+                    sender: sender.clone(),
+                },
+            )?
             .serve_at(OBJECT_PATH, Interface { sender })?
             .build()
             .await?;
@@ -178,9 +201,9 @@ impl Server {
             .call_method(
                 Some(app_bus_name),
                 OBJECT_PATH,
-                Some(BUS_NAME),
-                "ShowFolders",
-                &(vec![uri.as_str()], startup_id),
+                Some("io.github.GanDesktop.Files"),
+                "OpenWindow",
+                &(uri.as_str(), startup_id),
             )
             .await?;
         Ok(())

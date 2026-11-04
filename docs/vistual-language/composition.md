@@ -115,3 +115,29 @@ el! {
 ```
 
 这里的条件同时推迟正文构造，避免在收起状态创建 Markdown 和工具结果。Agents 的活动面板只给这个 Kit 组件应用现有边框与留白。压缩错误作为普通子元素保留，正文随展开状态显示。
+
+### File browser status controls
+
+The footer starts with the item count, followed by background tasks, selection,
+and clipboard controls. All three controls open their list only on click, above
+the footer; hovering shows just the control name. In the compact layout, nonempty
+controls show a count badge, including a count of one, without summary text.
+In the expanded layout, they show summary text without a badge. Empty controls
+show only their icon; explanatory empty states stay inside the popup. Switching
+layouts animates text width and opacity and fades the badge over 160 ms, respecting
+reduced motion. Compact controls sit directly beside each other in 32 px square
+targets. Icons stay centered, including when a popover is open; badges overlay
+the corner without participating in layout. Labels retain a full line box so
+descenders are not clipped by the width animation.
+
+Lists reuse Kit `ListItem` with 32 px rows and full-row hover feedback. The
+trailing action appears while its row is hovered, with its space reserved. The
+popup uses the same surface and 4 px outer padding as menus, without an extra
+popover padding layer. File names and category icons share `FileLabel`
+with the drag preview; full paths remain available in tooltips. Text truncates
+on one line instead of expanding row spacing.
+The task action cancels work, the selection action deselects that entry, and the
+clipboard action removes that entry from the platform clipboard while preserving
+the remaining entries and copy/cut mode. Cancellation remains pending until the
+worker finishes cleanup. Completed tasks leave the list and report their outcome
+through notifications.

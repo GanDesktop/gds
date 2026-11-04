@@ -74,6 +74,7 @@ pub struct Appearance {
     pub mode: ModePreference,
     pub content_opacity: f32,
     pub sidebar_opacity: f32,
+    pub rounded_corners: bool,
 }
 
 impl Default for Appearance {
@@ -85,6 +86,7 @@ impl Default for Appearance {
             mode: ModePreference::default(),
             content_opacity: opacity.content,
             sidebar_opacity: opacity.sidebar,
+            rounded_corners: false,
         }
     }
 }
@@ -136,6 +138,20 @@ impl Error {
             detail: detail.into(),
         }
     }
+}
+
+/// Update client-side window corners without reloading the palette.
+pub fn update_window_corners(rounded: bool, cx: &mut App) {
+    cx.set_global(
+        gpui_kit::component::WindowBorderStyle::default().with_corner_radius(gpui_kit::px(
+            if rounded {
+                crate::appearance::tokens::WINDOW_CORNER_RADIUS
+            } else {
+                0.
+            },
+        )),
+    );
+    cx.refresh_windows();
 }
 
 #[derive(Clone, Copy)]
@@ -221,6 +237,7 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
         content_opacity: appearance.content_opacity,
         sidebar_opacity: appearance.sidebar_opacity,
     });
+    update_window_corners(appearance.rounded_corners, cx);
     material::Material::install(cx);
     // Tables inherit their surrounding content material. Keep the background
     // role opaque: native dialogs and other raised surfaces use it directly.
@@ -337,6 +354,7 @@ impl Appearance {
         Self {
             source: Source::Builtin,
             mode: self.mode,
+            rounded_corners: self.rounded_corners,
             ..Self::default()
         }
     }

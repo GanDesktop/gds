@@ -22,6 +22,10 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.window.layout.compact {
+            self.set_menu_open(open.then_some(menu::Kind::PageTools), cx);
+            return;
+        }
         if open == self.menus.sort.is_some() {
             return;
         }
@@ -43,41 +47,10 @@ impl Browser {
         };
         self.discard_marquee();
         self.menus.context = None;
-        self.menus.application_open = false;
+        self.menus.open = None;
         let browser = cx.entity().downgrade();
         let menu = PopupMenu::build(window, cx, move |menu, _, cx| {
-            let mut menu = ui::menu::popup(menu);
-            for (key, label) in [
-                (sorting::Key::Name, "name"),
-                (sorting::Key::Type, "type"),
-                (sorting::Key::Size, "size"),
-                (sorting::Key::Modified, "modified"),
-            ] {
-                let browser = browser.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(i18n::text(label, cx))
-                        .checked(current.key == key)
-                        .on_click(move |_, _, cx| {
-                            let _ = browser.update(cx, |this, cx| {
-                                this.set_sort(
-                                    sorting::Sort {
-                                        key,
-                                        direction: current.direction,
-                                    },
-                                    cx,
-                                );
-                            });
-                        }),
-                );
-            }
-            menu.separator().item(
-                PopupMenuItem::new(i18n::text("sort-descending", cx))
-                    .checked(current.direction == sorting::Direction::Descending)
-                    .on_click(move |_, _, cx| {
-                        let _ = browser
-                            .update(cx, |this, cx| this.set_sort(current.next(current.key), cx));
-                    }),
-            )
+            rows(menu, current, browser, cx)
         });
         let menu_id = menu.entity_id();
         let dismiss = cx.subscribe_in(&menu, window, move |this, _, _: &DismissEvent, _, cx| {
@@ -134,4 +107,44 @@ impl Browser {
                     .unwrap_or_else(|| div().into_any_element())
             })
     }
+}
+
+/// Shared by the full toolbar popup and the compact menu submenu.
+pub(super) fn rows(
+    menu: PopupMenu,
+    current: sorting::Sort,
+    browser: WeakEntity<Browser>,
+    cx: &App,
+) -> PopupMenu {
+    let mut menu = ui::menu::popup(menu);
+    for (key, label) in [
+        (sorting::Key::Name, "name"),
+        (sorting::Key::Type, "type"),
+        (sorting::Key::Size, "size"),
+        (sorting::Key::Modified, "modified"),
+    ] {
+        let browser = browser.clone();
+        menu = menu.item(
+            PopupMenuItem::new(i18n::text(label, cx))
+                .checked(current.key == key)
+                .on_click(move |_, _, cx| {
+                    let _ = browser.update(cx, |this, cx| {
+                        this.set_sort(
+                            sorting::Sort {
+                                key,
+                                direction: current.direction,
+                            },
+                            cx,
+                        );
+                    });
+                }),
+        );
+    }
+    menu.separator().item(
+        PopupMenuItem::new(i18n::text("sort-descending", cx))
+            .checked(current.direction == sorting::Direction::Descending)
+            .on_click(move |_, _, cx| {
+                let _ = browser.update(cx, |this, cx| this.set_sort(current.next(current.key), cx));
+            }),
+    )
 }
