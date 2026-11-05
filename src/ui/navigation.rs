@@ -17,7 +17,7 @@ pub use details::NavItemDetails;
 pub use header::NavItemHeader;
 pub use label::NavItemLabel;
 
-pub use action::hover_action;
+pub use action::{corner_action, corner_button, hover_action};
 pub use icon::{pinned_icon, with_pin};
 
 use super::button::Button;

@@ -25,10 +25,6 @@ const ITEM_RADIUS: f32 = 6.;
 const CAPTION_PADDING: f32 = 6.;
 const FILTER_WIDTH: f32 = 200.;
 const ADDRESS_HEIGHT: f32 = tokens::ICON_BUTTON_SIZE + 2.;
-/// A collapsed tab row puts its close control in its own corner: a small X
-/// must not widen the icon-only row.
-const TAB_CORNER_CLOSE_SIZE: f32 = 16.;
-const TAB_CORNER_CLOSE_ICON: f32 = 11.;
 /// Space a tab row keeps for its close control at its trailing edge: the row's
 /// inner padding, the button and the gap in front of it. A page-cycle hint ends
 /// before that space, so the two keys never cover each other.
@@ -294,7 +290,12 @@ impl Browser {
             }
             .into_any_element()
         } else {
-            menu::control(menu::Kind::Application, self.menus.open, cx.entity().downgrade(), cx)
+            menu::control(
+                menu::Kind::Application,
+                self.menus.open,
+                cx.entity().downgrade(),
+                cx,
+            )
         };
         let sidebar = self.command_button("sidebar", IconName::PanelLeft, Command::Sidebar, cx);
         let content = if !self.pages.is_empty() {
@@ -497,11 +498,7 @@ impl Browser {
                             # $(action_id, id); absolute; top: 1.0.px; right: 1.0.px;
                             on_mouse_down: MouseButton::Left, on_close_down;
                         } [
-                            ($(corner_id, id)).Button::new {
-                                ghost; small; size: TAB_CORNER_CLOSE_SIZE.px;
-                                icon: action_icon.Icon::new { size: TAB_CORNER_CLOSE_ICON.px };
-                                accessibility_label: $action_label.clone();
-                                tooltip: action_label;
+                            ($(corner_id, id), action_icon, action_label).ui::corner_button {
                                 on_click: on_close;
                             },
                         ]

@@ -2,12 +2,12 @@
 # Keep action names consistent. Variables contain user or agent data; preserve them.
 # Use Fluent selectors for plural forms and message references for shared labels.
 
-## Local workspace terminals
-local-terminal-title = Local terminal
-local-terminal-toggle = Toggle local terminal
+## Workspace terminals
+local-terminal-title = Terminal
+local-terminal-toggle = Toggle terminal
 local-terminal-show = Show terminal
 local-terminal-hide = Hide terminal
-local-terminal-no-cwd = Select a local working directory to create a terminal.
+local-terminal-no-cwd = Select a workspace to create a terminal.
 local-terminal-remote = Local terminals require a local IPC connection. TCP and remote paths are not used locally.
 local-terminal-resize = Resize terminal dock
 local-terminal-close-title = Close window and terminals?
@@ -17,7 +17,7 @@ local-terminal-closing = Waiting for local terminals to stop…
 local-terminal-quit-notice = Quitting also terminates local terminals in every window and workspace.
 local-terminal-new = New terminal
 local-terminal-select = Switch terminal
-local-terminal-empty = No local terminals. Use + to start a shell in this working directory.
+local-terminal-empty = No terminals in this workspace. Use + to start a shell in its directory.
 local-terminal-tab-close = Close terminal
 local-terminal-tab-close-title = Terminate this terminal?
 local-terminal-tab-close-message = Its shell and running programs will be stopped. Other terminals are not affected.
@@ -587,7 +587,7 @@ session-directory-add = Attach working folder…
 session-directory-remove = Remove additional folder: { $path }
 session-directories-unavailable = Requires an idle session and an agent supporting additional folders and reloading
 workspace-update-failed = Could not save workspace visibility
-workspace-choose = Switch working folder
+workspace-choose = Switch workspace
 workspace-choose-folder = Choose working folder
 workspace-collapse = Collapse workspace
 workspace-copy-path = Copy folder path
@@ -855,7 +855,7 @@ usage-view = View context usage
 window-compact = Switch to compact mode
 window-expand = Expand window
 
-sidebar-workspaces = Workspaces
+sidebar-workspaces = Sessions
 sidebar-view = Switch view
 sidebar-archived = Archived
 

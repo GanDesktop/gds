@@ -7,11 +7,18 @@ use gpui_kit::{PathPromptOptions, component::menu::PopupMenuItem};
 impl Workspace {
     pub(in crate::pages::workspace) fn workspace_button(
         &self,
+        presentation: Option<gds::ui::sidebar::SidebarPresentation>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let sessions = self.visible_sessions();
-        let groups = self.grouped_threads(&sessions, "");
-        let directories: Vec<_> = groups.into_iter().map(|group| group.directory).collect();
+        let directories: Vec<_> = self
+            .backend
+            .workspaces
+            .iter()
+            .filter(|workspace| {
+                !workspace.archived || self.navigation.view == super::View::Archived
+            })
+            .map(|workspace| (Some(workspace.cwd.clone()), workspace.name.clone()))
+            .collect();
         let selected = self.navigation.selected_directory.clone();
         let name = self
             .workspace_for_directory(&selected)
@@ -28,8 +35,11 @@ impl Workspace {
                     role: gpui_kit::Role::Label;
                     aria_label: $(name.clone());
                     min_w_0;
+                    flex_1;
+                    opacity: $(presentation.map_or(1., |value| value.label_opacity()));
                     whitespace_nowrap;
                     text_ellipsis;
+                    text_left;
                     text_size: crate::shared::ui::SMALL;
                 } [
                     $(name.clone()),
@@ -37,19 +47,26 @@ impl Workspace {
             }
         });
         let button = el! {
-            ("workspace-picker").Button::new {
-                ghost;
-                xsmall;
-                h: layout::ICON_BUTTON_SIZE.px;
-                control_icon: IconName::Folder;
+            ("workspace-picker").Button::icon_button {
                 accessibility_label: $(name.clone());
-                when: $(self.window.compact), {
-                    w: layout::ICON_BUTTON_SIZE.px;
-                    h: layout::ICON_BUTTON_SIZE.px;
-                    p_0;
-                };
+                @if (let Some(presentation) = presentation)
+                    w: $(px(presentation.width() - 2. * gds::appearance::tokens::SIDEBAR_PADDING));
+                @else
+                    @if (!self.window.compact) w_auto; px_2; @end;
+                @end;
             } [
-                ..label,
+                .div { size_full; min_w_0; flex; items_center; overflow_hidden;
+                    pl: $(px(presentation.map_or(0., |value| value.interpolate(8., 10.))));
+                    pr: $(px(presentation.map_or(0., |value| value.interpolate(8., 0.))));
+                    gap: $(px(presentation.map_or(0., |value| value.interpolate(8., 0.))));
+                    when: $(presentation.is_none()), { justify_center; };
+                } [
+                    (IconName::Folder).Icon::new { size: gds::appearance::tokens::SIDEBAR_ICON_SIZE.px; flex_shrink_0; },
+                    ..label,
+                    @if (presentation.is_some_and(|value| value.actions_visible()))
+                        (IconName::ChevronDown).Icon::new { size: crate::shared::ui::SMALL_ICON.px; flex_shrink_0; },
+                    @end,
+                ],
             ]
         };
         let menu = self.menu_button(
@@ -57,16 +74,16 @@ impl Workspace {
             directories.len() + 2,
             false,
             move |mut menu, _, _| {
-                for directory in &directories {
+                for (directory, name) in &directories {
                     let directory = directory.clone();
                     let view = view.clone();
                     menu = menu.item(
-                        PopupMenuItem::new(groups::path_label(directory.as_deref()))
+                        PopupMenuItem::new(name.clone())
                             .checked(directory == selected)
                             .on_click(move |_, window, cx| {
                                 menus::in_parent(parent, window, cx, |window, cx| {
                                     let _ = view.update(cx, |this, cx| {
-                                        this.new_thread(directory.clone(), window, cx)
+                                        this.switch_workspace(directory.clone(), window, cx)
                                     });
                                 });
                             }),
@@ -92,7 +109,69 @@ impl Workspace {
             },
             cx,
         );
-        crate::shared::ui::tooltip::bounded("workspace-picker-hint", menu, hint)
+        let context_menu =
+            self.workspace_menu(self.navigation.selected_directory.clone(), false, cx);
+        div()
+            .id("workspace-selector")
+            .test_support()
+            .on_mouse_down(
+                gpui_kit::MouseButton::Right,
+                cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    this.open_context_menu(event.position, 6, context_menu.clone(), window, cx);
+                }),
+            )
+            .child(crate::shared::ui::tooltip::bounded(
+                "workspace-picker-hint",
+                menu,
+                hint,
+            ))
+    }
+
+    pub(in crate::pages::workspace) fn switch_workspace(
+        &mut self,
+        directory: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.navigation.selected_directory == directory {
+            return;
+        }
+        let Some(workspace) = self.workspace_for_directory(&directory) else {
+            return;
+        };
+        let archived = workspace.archived;
+        let workspace = workspace.id;
+        let remembered = self.navigation.workspace_sessions.get(&directory).copied();
+        let target = self
+            .sessions
+            .entries
+            .iter()
+            .filter(|session| session.workspace == workspace && session.archived == archived)
+            .max_by_key(|session| (Some(session.id) == remembered, session.updated_at))
+            .map(|session| session.id);
+        self.navigation.view = super::View::Workspaces;
+        if let Some(id) = target {
+            self.select(id, window, cx);
+        } else {
+            self.detach_thread(directory.clone(), window, cx);
+            self.navigation.session_requested = false;
+            let draft = self
+                .navigation
+                .drafts
+                .contents
+                .get(&directory)
+                .cloned()
+                .unwrap_or_default();
+            self.composer.switch_target(draft, window, cx);
+            self.focus_input(window, cx);
+        }
+        if archived {
+            self.navigation.view = super::View::Archived;
+        }
+        self.sync_terminal_panel(window, cx);
+        cx.notify();
     }
 
     pub(in crate::pages::workspace) fn open_workspace_add_menu(

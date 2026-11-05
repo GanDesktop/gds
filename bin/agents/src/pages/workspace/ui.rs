@@ -522,6 +522,9 @@ impl Workspace {
                 .collapsed
                 .remove(&self.navigation.selected_directory);
         }
+        self.navigation
+            .workspace_sessions
+            .insert(self.navigation.selected_directory.clone(), id);
         if restore_draft {
             self.composer.expanded = false;
             self.sync_composer_mode(cx);

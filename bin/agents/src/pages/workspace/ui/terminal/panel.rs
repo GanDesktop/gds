@@ -346,33 +346,46 @@ impl Panel {
         let shortcut_target = selected && self.tabs_focus.is_focused(window);
         let group = SharedString::from(format!("agents-terminal-row-{id}"));
         let close_label = tr!("local-terminal-tab-close");
-        let close = Button::icon_button(("agents-terminal-close", id))
-            .control_icon(IconName::X)
-            .accessibility_label(close_label)
-            .selected(selected)
-            .when(shortcut_target, |button| {
-                button.tooltip_with_shortcut(
-                    close_label,
-                    gds::ui::Shortcut::new(Box::new(CloseTerminal), Some(TABS_CONTEXT)),
-                )
-            })
-            .when(!shortcut_target, |button| button.tooltip(close_label))
-            .on_click(cx.listener(move |panel, _, window, cx| {
-                cx.stop_propagation();
-                panel.request_close(id, window, cx);
-            }))
-            .into_any_element();
+        let compact = presentation.progress() == 0.;
+        let close = if compact {
+            gds::ui::corner_button(("agents-terminal-close", id), IconName::X, close_label)
+        } else {
+            Button::icon_button(("agents-terminal-close", id)).control_icon(IconName::X)
+        }
+        .accessibility_label(close_label)
+        .selected(selected)
+        .when(shortcut_target, |button| {
+            button.tooltip_with_shortcut(
+                close_label,
+                gds::ui::Shortcut::new(Box::new(CloseTerminal), Some(TABS_CONTEXT)),
+            )
+        })
+        .when(!shortcut_target, |button| button.tooltip(close_label))
+        .on_click(cx.listener(move |panel, _, window, cx| {
+            cx.stop_propagation();
+            panel.request_close(id, window, cx);
+        }));
         let reveal_close = shortcut_target
             && gds::ui::HeldModifier::from_modifiers(window.modifiers())
                 == Some(gds::ui::HeldModifier::Ctrl);
-        let close = if reveal_close {
-            close
+        let (trailing, corner) = if compact {
+            (
+                Vec::new(),
+                Some(gds::ui::corner_action(group.clone(), close, reveal_close)),
+            )
         } else {
-            gds::ui::hover_action(group.clone(), div().into_any_element(), Some(close))
+            let close = close.into_any_element();
+            let close = if reveal_close {
+                close
+            } else {
+                gds::ui::hover_action(group.clone(), div().into_any_element(), Some(close))
+            };
+            (vec![close], None)
         };
         div()
             .id(("agents-terminal-row", id))
             .test_support()
+            .relative()
             .group(group)
             .w_full()
             .flex_shrink_0()
@@ -383,13 +396,14 @@ impl Panel {
                     .selected(selected)
                     .presentation(presentation)
                     .tooltip_enabled(false)
-                    .trailing(vec![close])
+                    .trailing(trailing)
                     .on_click(cx.listener(move |panel, _, window, cx| {
                         panel.active = Some(id);
                         panel.tabs_focus.focus(window, cx);
                         cx.notify();
                     })),
             )
+            .children(corner)
             .into_any_element()
     }
 
@@ -429,24 +443,6 @@ impl Panel {
                 self.entries
                     .iter()
                     .map(|entry| self.tab(entry, presentation, window, cx)),
-            )
-            .child(
-                gds::ui::NavItem::new(
-                    "agents-terminal-new",
-                    IconName::Plus,
-                    tr!("local-terminal-new"),
-                )
-                .presentation(presentation)
-                .disabled(self.cwd.is_none() || self.closing)
-                .shortcut(gds::ui::Shortcut::new(
-                    Box::new(NewTerminal),
-                    Some(TABS_CONTEXT),
-                ))
-                .on_click(
-                    cx.listener(|panel, _, window, cx| {
-                        panel.new_terminal(&NewTerminal, window, cx)
-                    }),
-                ),
             )
             .into_any_element()
     }

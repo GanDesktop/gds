@@ -2,12 +2,12 @@
 # Keep action names consistent. Variables contain user or agent data; preserve them.
 # Use Fluent selectors for plural forms and message references for shared labels.
 
-## 本地工作区终端
-local-terminal-title = 本地终端
-local-terminal-toggle = 显示／隐藏本地终端
+## 工作区终端
+local-terminal-title = 终端
+local-terminal-toggle = 显示／隐藏终端
 local-terminal-show = 显示终端
 local-terminal-hide = 收起终端
-local-terminal-no-cwd = 请选择本地工作目录，再新建终端。
+local-terminal-no-cwd = 请先选择工作区，再新建终端。
 local-terminal-remote = 仅本地 IPC 连接可启动本地终端，不会将 TCP 或远端目录当作本机目录。
 local-terminal-resize = 调整终端面板高度
 local-terminal-close-title = 关闭窗口及终端？
@@ -17,7 +17,7 @@ local-terminal-closing = 正在等待本地终端退出…
 local-terminal-quit-notice = 退出也会终止所有窗口和工作区中的本地终端。
 local-terminal-new = 新建终端
 local-terminal-select = 切换终端
-local-terminal-empty = 尚无本地终端。点击 + 在此工作目录中启动 Shell。
+local-terminal-empty = 此工作区尚无终端。点击 + 在工作区目录中启动 Shell。
 local-terminal-tab-close = 关闭终端
 local-terminal-tab-close-title = 终止此终端？
 local-terminal-tab-close-message = 将停止此终端的 Shell 和运行中的程序，不影响其他终端。
@@ -586,7 +586,7 @@ session-directory-add = 附加工作文件夹…
 session-directory-remove = 移除副目录：{ $path }
 session-directories-unavailable = 需要空闲会话，且智能体支持附加目录和重新加载
 workspace-update-failed = 无法保存工作区显示状态
-workspace-choose = 切换工作文件夹
+workspace-choose = 切换工作区
 workspace-choose-folder = 选择工作文件夹
 workspace-collapse = 收起工作区
 workspace-copy-path = 复制目录路径
@@ -825,7 +825,7 @@ usage-view = 查看上下文用量
 window-compact = 切换到紧凑模式
 window-expand = 展开窗口
 
-sidebar-workspaces = 工作区
+sidebar-workspaces = 会话
 sidebar-view = 切换视图
 sidebar-archived = 已归档
 

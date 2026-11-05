@@ -110,13 +110,10 @@ impl Terminals {
 
 impl Workspace {
     fn terminal_group(&self) -> Option<Group> {
-        let cwd = if self.selected.id.is_some() {
-            // A session without cwd must not inherit the previously selected directory.
-            self.current().and_then(|session| session.cwd.as_deref())
-        } else {
-            self.navigation.selected_directory.as_deref()
-        };
-        Group::new(&self.backend.server, cwd)
+        Group::new(
+            &self.backend.server,
+            self.navigation.selected_directory.as_deref(),
+        )
     }
 
     pub(super) fn terminal_panel(&self) -> Option<Entity<Panel>> {
@@ -265,47 +262,6 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)))
     }
 
-    /// Only the matching workspace contributes its terminal controls to navigation.
-    pub(super) fn render_workspace_terminals(
-        &self,
-        directory: Option<&Path>,
-        presentation: gds::ui::sidebar::SidebarPresentation,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if !self.terminals.visible {
-            return None;
-        }
-        let group = Group::new(&self.backend.server, directory)?;
-        if self.terminal_group().as_ref() != Some(&group) {
-            return None;
-        }
-        let panel = self.terminals.workspaces.get(&group)?.panel.clone();
-        let tabs = panel.update(cx, |panel, cx| panel.render_tabs(presentation, cx));
-        Some(
-            div()
-                .id("workspace-terminals")
-                .test_support()
-                .flex()
-                .flex_col()
-                .w_full()
-                .min_w_0()
-                .pl(px(presentation.interpolate(8., 0.)))
-                .child(
-                    gds::ui::sidebar::SideBarSectionTitle::new(gds::i18n::t!(
-                        @cx, "local-terminal-title"
-                    ))
-                    .id("agents-terminal-heading")
-                    .px(px(gds::appearance::tokens::SIDEBAR_SECTION_PADDING))
-                    .py_1()
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .opacity(presentation.label_opacity()),
-                )
-                .child(tabs)
-                .into_any_element(),
-        )
-    }
-
     fn terminal_picker(
         &self,
         panel: Option<&Entity<Panel>>,
@@ -361,6 +317,7 @@ impl Workspace {
     pub(super) fn render_terminal_dock(
         &self,
         content: AnyElement,
+        presentation: gds::ui::sidebar::SidebarPresentation,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if !self.terminals.visible {
@@ -395,6 +352,7 @@ impl Workspace {
             .child(
                 div()
                     .id("active-local-terminal-title")
+                    .test_support()
                     .flex_1()
                     .min_w_0()
                     .truncate()
@@ -415,6 +373,32 @@ impl Workspace {
                             panel.update(cx, |panel, cx| panel.request_close(*id, window, cx));
                         }
                     })),
+            );
+        let frame = gds::ui::Frame::default().sidebar_width(presentation.width());
+        let heading = div()
+            .id("agents-terminal-heading")
+            .flex()
+            .items_center()
+            .h_full()
+            .min_w_0()
+            .px(px(presentation.interpolate(
+                gds::appearance::tokens::SIDEBAR_PADDING,
+                (gds::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH
+                    - gds::appearance::tokens::ICON_BUTTON_SIZE)
+                    / 2.,
+            )))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .opacity(presentation.label_opacity())
+                    .child(
+                        gds::ui::sidebar::SideBarSectionTitle::new(gds::i18n::t!(
+                            @cx, "local-terminal-title"
+                        ))
+                        .px(px(gds::appearance::tokens::SIDEBAR_SECTION_PADDING)),
+                    ),
             )
             .child(
                 layout::icon_button("new-local-terminal", IconName::Plus)
@@ -429,9 +413,20 @@ impl Workspace {
                         }
                     })),
             );
-        let header = controls
+        let header = frame
+            .workspace(heading.into_any_element(), controls.into_any_element(), cx)
             .flex_none()
-            .bg(gds::appearance::theme::content_background(cx));
+            .h(px(gds::appearance::tokens::TERMINAL_HEADER_HEIGHT));
+        let tabs =
+            div()
+                .id("local-terminal-navigation")
+                .test_support()
+                .size_full()
+                .overflow_y_scroll()
+                .p(px(gds::appearance::tokens::SIDEBAR_PADDING))
+                .children(panel.as_ref().map(|panel| {
+                    panel.update(cx, |panel, cx| panel.render_tabs(presentation, cx))
+                }));
         let body = workspace
             .map(|workspace| workspace.panel.clone().into_any_element())
             .unwrap_or_else(|| {
@@ -457,23 +452,11 @@ impl Workspace {
             .min_w_0()
             .overflow_hidden()
             .child(header)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(body),
-            );
-        let divider = div()
-            .size_full()
-            .bg(gds::appearance::theme::content_background(cx));
-        let content = div()
-            .size_full()
-            .bg(gds::appearance::theme::content_background(cx))
-            .child(content);
+            .child(frame.workspace_with_content_surface(tabs.into_any_element(), body, cx));
+        let divider = frame
+            .workspace(div().into_any_element(), div().into_any_element(), cx)
+            .flex_none()
+            .size_full();
         gds::ui::split::VerticalSplit::new(split)
             .top(content)
             .bottom(dock)

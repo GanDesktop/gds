@@ -116,9 +116,11 @@ async fn panels_start_on_reveal_and_survive_hiding_and_directory_switches(cx: &m
                 let no_cwd = session();
                 view.selected.id = Some(no_cwd.id);
                 view.sessions.entries.push(no_cwd);
-                assert!(
-                    view.terminal_panel().is_none(),
-                    "session without cwd must not reuse selected directory"
+                assert_eq!(
+                    view.terminal_panel()
+                        .expect("workspace owns terminal even without session cwd")
+                        .entity_id(),
+                    first.entity_id()
                 );
                 view.selected.id = None;
                 view.navigation.selected_directory = None;
@@ -134,9 +136,7 @@ async fn panels_start_on_reveal_and_survive_hiding_and_directory_switches(cx: &m
 
 #[cfg(unix)]
 #[gpui_kit::test]
-async fn terminal_navigation_is_nested_in_its_workspace_and_dock_does_not_split_sidebar(
-    cx: &mut TestAppContext,
-) {
+async fn terminal_navigation_occupies_bottom_dock_and_tracks_workspace(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("workspace terminal directories");
     let first_cwd = directory.path().join("first");
@@ -156,33 +156,45 @@ async fn terminal_navigation_is_nested_in_its_workspace_and_dock_does_not_split_
                 view.terminal_panel()
                     .expect("first workspace provides its panel")
             });
+            // The split measures its available height during the first frame.
             window.render_frame(cx);
-            let group = window.find("workspace-header-0").bounds();
-            let terminals = window.find("workspace-terminals").bounds();
+            window.render_frame(cx);
+            let group = window.find("workspace-selector").bounds();
+            let terminals = window.find("local-terminal-navigation").bounds();
             let dock = window.find("local-terminal-dock").bounds();
             assert!(
                 terminals.origin.y > group.origin.y,
-                "terminal controls belong below workspace heading"
+                "terminal controls belong below workspace navigation"
             );
             assert!(
                 terminals.right() <= px(SIDEBAR_WIDTH),
-                "controls remain inside workspace navigation"
+                "terminal tabs align with the application sidebar"
             );
             assert!(
-                dock.origin.x >= px(SIDEBAR_WIDTH),
-                "terminal content never takes over application sidebar"
+                dock.origin.x < px(SIDEBAR_WIDTH),
+                "terminal dock spans the sidebar and content columns"
+            );
+            assert!(terminals.top() >= dock.top());
+            assert!(terminals.bottom() <= dock.bottom());
+            assert!(window.find("session-list").bounds().bottom() <= dock.top());
+            assert!(
+                window.find("active-local-terminal-title").bounds().left() >= terminals.right()
             );
             first
         })
         .expect("workspace-owned terminal layout");
     cx.update_window(fixture.window.into(), |_, window, cx| {
-        let before = window.find("workspace-terminals").bounds();
+        let before = window.find("local-terminal-navigation").bounds();
         gds::appearance::motion::set_animations_enabled(false, cx);
         fixture
             .view
             .update(cx, |view, cx| view.toggle_sidebar(window, cx));
         window.render_frame(cx);
-        let after = window.find("workspace-terminals").bounds();
+        let after = window.find("local-terminal-navigation").bounds();
+        assert_eq!(
+            window.find("new-local-terminal").bounds().center().x,
+            after.center().x
+        );
         assert_eq!(before.top(), after.top());
         assert_eq!(before.size.height, after.size.height);
         assert!(window.find("agents-terminal-tabs").visible());
@@ -193,33 +205,15 @@ async fn terminal_navigation_is_nested_in_its_workspace_and_dock_does_not_split_
             fixture.view.read(cx).window.sidebar_visible
         );
         fixture.view.update(cx, |view, cx| {
-            let presentation = gds::ui::sidebar::SidebarPresentation::default();
-            view.navigation.selected_directory = Some(second_cwd.clone());
-            view.sync_terminal_panel(window, cx);
+            view.switch_workspace(Some(second_cwd.clone()), window, cx);
             let second = view.terminal_panel().expect("second workspace panel");
             assert_ne!(first.entity_id(), second.entity_id());
-            assert!(
-                view.render_workspace_terminals(Some(&first_cwd), presentation, cx)
-                    .is_none()
-            );
-            assert!(
-                view.render_workspace_terminals(Some(&second_cwd), presentation, cx)
-                    .is_some()
-            );
-            view.navigation.selected_directory = Some(first_cwd.clone());
+            view.switch_workspace(Some(first_cwd.clone()), window, cx);
             assert_eq!(
                 view.terminal_panel()
                     .expect("retained first panel")
                     .entity_id(),
                 first.entity_id()
-            );
-            assert!(
-                view.render_workspace_terminals(Some(&first_cwd), presentation, cx)
-                    .is_some()
-            );
-            assert!(
-                view.render_workspace_terminals(Some(&second_cwd), presentation, cx)
-                    .is_none()
             );
         });
     })
@@ -236,7 +230,7 @@ async fn terminal_navigation_is_nested_in_its_workspace_and_dock_does_not_split_
 
 #[cfg(unix)]
 #[gpui_kit::test]
-async fn dock_switch_and_close_work_without_sidebar_terminal_controls(cx: &mut TestAppContext) {
+async fn dock_tabs_and_controls_remain_available_across_navigation_views(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("workspace terminal control directory");
     let cwd = directory.path().to_path_buf();
@@ -295,10 +289,7 @@ async fn dock_switch_and_close_work_without_sidebar_terminal_controls(cx: &mut T
                 cx.notify();
             });
             window.render_frame(cx);
-            assert_eq!(
-                window.try_find("agents-terminal-tabs").is_some(),
-                view_mode == workspace_navigation::View::Workspaces && !collapsed && !filtered,
-            );
+            assert!(window.find("agents-terminal-tabs").visible());
             assert!(window.try_find("choose-local-terminal").is_none());
             assert!(window.find("close-local-terminal").visible());
             window.click("new-local-terminal", cx);
@@ -473,6 +464,17 @@ async fn close_without_confirmation_reaps_hidden_starting_terminal(cx: &mut Test
 #[cfg(unix)]
 #[gpui_kit::test]
 async fn sidebar_terminal_close_follows_hover_and_keyboard_target(cx: &mut TestAppContext) {
+    terminal_close_controls(cx, false).await;
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn collapsed_terminal_close_follows_hover_and_keyboard_target(cx: &mut TestAppContext) {
+    terminal_close_controls(cx, true).await;
+}
+
+#[cfg(unix)]
+async fn terminal_close_controls(cx: &mut TestAppContext, collapsed: bool) {
     use gpui_kit::{InputEvent as _, Modifiers, ModifiersChangedEvent};
 
     cx.executor().allow_parking();
@@ -481,6 +483,8 @@ async fn sidebar_terminal_close_follows_hover_and_keyboard_target(cx: &mut TestA
     let panel = cx
         .update_window(fixture.window.into(), |_, window, cx| {
             fixture.view.update(cx, |view, cx| {
+                gds::appearance::motion::set_animations_enabled(false, cx);
+                view.window.sidebar_visible = !collapsed;
                 view.backend.server =
                     bas::service::Target::Unix("/tmp/terminal-test.sock".into()).into();
                 view.backend.workspaces = vec![project(Some(directory.path()))];
@@ -514,6 +518,13 @@ async fn sidebar_terminal_close_follows_hover_and_keyboard_target(cx: &mut TestA
         assert!(!window.find(("agents-terminal-close", second)).visible());
         window.hover(("agents-terminal-tab", first), cx);
         assert!(window.find(("agents-terminal-close", first)).visible());
+        if collapsed {
+            let row = window.find(("agents-terminal-row", first)).bounds();
+            let close = window.find(("agents-terminal-close", first)).bounds();
+            assert_eq!(close.size, size(px(16.), px(16.)));
+            assert!(close.left() >= row.left() && close.right() <= row.right());
+            assert!(close.top() >= row.top() && close.bottom() <= row.bottom());
+        }
         window.click(("agents-terminal-close", first), cx);
         assert_eq!(panel.read(cx).choices(cx).len(), 1);
         assert_eq!(

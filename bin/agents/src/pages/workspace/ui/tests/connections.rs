@@ -78,11 +78,19 @@ fn footer_switches_backends_in_place_and_restores_drafts(cx: &mut TestAppContext
         );
         let footer = window.find("server-status");
         assert!(footer.bounds().right() <= px(gds::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH));
-        assert!(
-            footer
-                .bounds()
-                .contains(&window.find("server-status-indicator").bounds().center())
+        let bounds = footer.bounds();
+        let icon = window.find("server-status-icon").bounds();
+        let indicator = window.find("server-status-indicator").bounds();
+        assert_eq!(bounds.size, size(px(32.), px(32.)));
+        assert_eq!(icon.center(), bounds.center());
+        assert_eq!(
+            bounds.center(),
+            window.find("frame-footer-sidebar").bounds().center()
         );
+        assert_eq!(icon, bounds);
+        assert!(bounds.contains(&indicator.origin));
+        assert!(indicator.right() <= bounds.right());
+        assert!(indicator.bottom() <= bounds.bottom());
         assert!(footer.label().unwrap().contains("TCP"));
         window.click("server-status", cx);
         window.render_frame(cx);

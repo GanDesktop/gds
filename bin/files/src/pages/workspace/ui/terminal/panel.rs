@@ -417,33 +417,50 @@ impl Panel {
         let group = SharedString::from(format!("files-terminal-row-{id}"));
         let hint = Self::hint(entry, cx);
         let close_label = i18n::text("files-terminal-end", cx);
-        let close = ui::button::Button::icon_button(("files-terminal-close", id))
-            .control_icon(IconName::X)
-            .accessibility_label(close_label.clone())
-            .selected(selected)
-            .when(shortcut_target, |button| {
-                button.tooltip_with_shortcut(
-                    close_label.clone(),
-                    ui::Shortcut::new(Box::new(CloseTerminal), Some(TERMINAL_TABS_CONTEXT)),
-                )
-            })
-            .when(!shortcut_target, |button| button.tooltip(close_label))
-            .disabled(self.sealed || entry.closing)
-            .on_click(cx.listener(move |panel, _, window, cx| {
-                cx.stop_propagation();
-                panel.request_close(id, window, cx);
-            }))
-            .into_any_element();
+        let compact = self.sidebar.progress() == 0.;
+        let close = if compact {
+            gds::ui::corner_button(
+                ("files-terminal-close", id),
+                IconName::X,
+                close_label.clone(),
+            )
+        } else {
+            ui::button::Button::icon_button(("files-terminal-close", id)).control_icon(IconName::X)
+        }
+        .accessibility_label(close_label.clone())
+        .selected(selected)
+        .when(shortcut_target, |button| {
+            button.tooltip_with_shortcut(
+                close_label.clone(),
+                ui::Shortcut::new(Box::new(CloseTerminal), Some(TERMINAL_TABS_CONTEXT)),
+            )
+        })
+        .when(!shortcut_target, |button| button.tooltip(close_label))
+        .disabled(self.sealed || entry.closing)
+        .on_click(cx.listener(move |panel, _, window, cx| {
+            cx.stop_propagation();
+            panel.request_close(id, window, cx);
+        }));
         let reveal_close = shortcut_target
             && ui::HeldModifier::from_modifiers(window.modifiers()) == Some(ui::HeldModifier::Ctrl);
-        let close = if reveal_close {
-            close
+        let (trailing, corner) = if compact {
+            (
+                Vec::new(),
+                Some(gds::ui::corner_action(group.clone(), close, reveal_close)),
+            )
         } else {
-            ui::hover_action(group.clone(), div().into_any_element(), Some(close))
+            let close = close.into_any_element();
+            let close = if reveal_close {
+                close
+            } else {
+                gds::ui::hover_action(group.clone(), div().into_any_element(), Some(close))
+            };
+            (vec![close], None)
         };
         div()
             .id(("files-terminal-row", id))
             .test_support()
+            .relative()
             .group(group)
             .w_full()
             .flex_shrink_0()
@@ -458,9 +475,10 @@ impl Panel {
                 .presentation(self.sidebar)
                 .selected(selected)
                 .tooltip_enabled(false)
-                .trailing(vec![close])
+                .trailing(trailing)
                 .on_click(cx.listener(move |panel, _, window, cx| panel.select(id, window, cx))),
             )
+            .children(corner)
             .into_any_element()
     }
 

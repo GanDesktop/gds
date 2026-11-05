@@ -446,7 +446,7 @@ impl Workspace {
                 ..restore,
                 ..authentication,
                 $(self.application_button(cx)),
-                $(self.workspace_button(cx)),
+                $(self.workspace_button(None, cx)),
                 $(self.terminal_toggle_button(cx)),
                 ("new-session", IconName::Plus).icon_button {
                     tooltip_with_shortcut: tr!("session-new"), $(shortcuts::shortcut(NewSession));
@@ -478,12 +478,8 @@ impl Workspace {
             .children(self.archive_notice(cx))
             .child(self.render_chat(cx))
             .into_any_element();
-        let content = self.render_terminal_dock(content, cx);
-        let workspace = if self.terminals.visible {
-            frame.workspace_with_content_surface(sidebar, content, cx)
-        } else {
-            frame.workspace(sidebar, content, cx)
-        };
+        let workspace = frame.workspace(sidebar, content, cx).into_any_element();
+        let workspace = self.render_terminal_dock(workspace, presentation, cx);
         let server = self.server_status_footer(presentation, cx);
         let status = div()
             .children(self.activity_label().map(|label| caption(label, cx)))

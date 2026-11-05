@@ -255,48 +255,49 @@ impl Workspace {
                 / 2.,
         );
         let button = el! {
-            ("server-status").Button::new {
-                small;
-                ghost;
-                w: $(px(sidebar.width() - inset - 12.));
+            ("server-status").Button::icon_button {
+                w: $(px(sidebar.width() - inset * 2.));
                 min_w_0;
                 accessibility_label: $(hint.clone());
                 tooltip: hint;
                 overflow_hidden;
-                justify_start;
-                px_0;
             } [
-                .div {
-                    relative;
-                    flex_shrink_0;
-                    flex;
-                    items_center;
-                    justify_center;
-                    size: gds::appearance::tokens::ICON_BUTTON_SIZE.px;
-                } [
-                    icon,
+                .div { size_full; min_w_0; flex; items_center; gap: $(px(sidebar.interpolate(4., 0.))); } [
                     .div {
-                        absolute;
-                        bottom: CONNECTION_BADGE_INSET.px;
-                        right: CONNECTION_BADGE_INSET.px;
-                    } [indicator],
+                        # "server-status-icon";
+                        test_support;
+                        relative;
+                        flex_shrink_0;
+                        flex;
+                        items_center;
+                        justify_center;
+                        size: gds::appearance::tokens::ICON_BUTTON_SIZE.px;
+                    } [
+                        icon,
+                        .div {
+                            absolute;
+                            bottom: CONNECTION_BADGE_INSET.px;
+                            right: CONNECTION_BADGE_INSET.px;
+                        } [indicator],
+                    ],
+                    .div {
+                        # "server-status-name";
+                        test_support;
+                        role: gpui_kit::Role::Label;
+                        aria_label: $(name.clone());
+                        flex_1;
+                        min_w_0;
+                        truncate;
+                        text_left;
+                        opacity: $(sidebar.label_opacity());
+                    } [name],
+                    @if (sidebar.actions_visible())
+                        (IconName::ChevronDown).Icon::new {
+                            size: crate::shared::ui::SMALL_ICON.px;
+                            flex_shrink_0;
+                        },
+                    @end,
                 ],
-                .div {
-                    # "server-status-name";
-                    test_support;
-                    role: gpui_kit::Role::Label;
-                    aria_label: $(name.clone());
-                    flex_1;
-                    min_w_0;
-                    truncate;
-                    text_left;
-                    opacity: $(sidebar.label_opacity());
-                } [name],
-                (IconName::ChevronDown).Icon::new {
-                    size: crate::shared::ui::SMALL_ICON.px;
-                    flex_shrink_0;
-                    when: $(!sidebar.actions_visible()), { invisible; };
-                },
             ]
         };
         let menu = self.menu_button(
@@ -354,8 +355,7 @@ impl Workspace {
                 flex_shrink_0;
                 flex;
                 items_center;
-                pl: inset.px;
-                pr_3;
+                px: inset.px;
                 min_w_0;
                 overflow_hidden;
             } [

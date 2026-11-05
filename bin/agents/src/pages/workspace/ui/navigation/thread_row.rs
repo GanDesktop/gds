@@ -115,6 +115,40 @@ impl Workspace {
         } else {
             div().size(px(layout::ICON_BUTTON_SIZE)).into_any_element()
         };
+        let corner = (!editing && presentation.progress() == 0.).then(|| {
+            let draft = !session.archived && self.sessions.is_draft(id);
+            let archived = session.archived;
+            let label = if pinned {
+                tr!("session-unpin")
+            } else if draft {
+                tr!("draft-discard")
+            } else if archived {
+                tr!("session-restore")
+            } else {
+                tr!("session-archive")
+            };
+            let button = gds::ui::corner_button(
+                SharedString::from(format!("thread-close-corner-{id}")),
+                if pinned { IconName::Pin } else { IconName::X },
+                label,
+            )
+            .disabled(
+                !pinned
+                    && (!self.backend.connected
+                        || self.sessions.pending.archiving.contains(&id)
+                        || self.sessions.pending.deleting.contains(&id)
+                        || self.workspace_blocked(session.workspace)),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                if pinned {
+                    this.toggle_pinned(id, cx);
+                } else {
+                    this.on_thread_row_menu_visibility(id, draft, archived, window, cx);
+                }
+            }));
+            gds::ui::corner_action(group.clone(), button, pinned)
+        });
         let hint = format!(
             "{}\n{} · {} · {}\n{}",
             title(session),
@@ -135,7 +169,7 @@ impl Workspace {
                 } else {
                     cx.theme().sidebar_foreground
                 }),
-            pinned,
+            pinned && presentation.progress() > 0.,
             cx,
         );
         let badge = (!presentation.actions_visible())
@@ -207,6 +241,7 @@ impl Workspace {
                 ],
                 .div { flex_1; min_w_0; overflow_hidden; opacity: $(presentation.label_opacity()); } [title_row],
                 .div { flex_shrink_0; when: $(!presentation.actions_visible()), { invisible; }; } [trailing],
+                ..corner,
             ]
         }.into_any_element()
     }
@@ -236,6 +271,15 @@ impl Workspace {
 
     fn thread_visibility_button(&self, session: &SessionMeta, cx: &mut Context<Self>) -> Button {
         let id = session.id;
+        if self.navigation.pinned.contains(&id) {
+            return layout::icon_button(SharedString::from(format!("unpin-{id}")), IconName::Pin)
+                .accessibility_label(tr!("session-unpin"))
+                .tooltip(tr!("session-unpin"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.toggle_pinned(id, cx);
+                }));
+        }
         if session.archived || !self.sessions.is_draft(id) {
             return self.archive_button(session, "archive", cx);
         }

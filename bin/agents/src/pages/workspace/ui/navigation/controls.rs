@@ -212,19 +212,7 @@ impl Workspace {
         match event {
             InputEvent::PressEnter { .. } => {
                 let query = self.navigation.search.read(cx).value().to_lowercase();
-                let sessions = self.visible_sessions();
-                let first = if self.navigation.view.flat() {
-                    super::history::sorted(&sessions)
-                        .into_iter()
-                        .find(|session| matches_query(session, &query))
-                        .map(|session| session.id)
-                } else {
-                    self.grouped_threads(&sessions, &query)
-                        .into_iter()
-                        .flat_map(|group| group.threads)
-                        .next()
-                        .map(|session| session.id)
-                };
+                let first = self.sidebar_session_ids(&query).first().copied();
                 if let Some(id) = first {
                     self.select(id, window, cx);
                     self.focus_input(window, cx);

@@ -82,8 +82,6 @@ impl Workspace {
                     tooltip_with_shortcut: tr!("sidebar-toggle"), $(shortcuts::shortcut(ToggleSidebar));
                     on_click: $(cx.listener(Self::on_sidebar_toggle));
                 },
-                $(self.workspace_button(cx)),
-                ("/", cx).caption,
                 $(self.title_slot(cx)),
                 $(self.mode_button(cx)),
             ]

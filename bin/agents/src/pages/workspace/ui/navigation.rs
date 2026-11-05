@@ -100,7 +100,7 @@ impl View {
 
     pub(super) fn icon(self) -> IconName {
         match self {
-            Self::Workspaces => IconName::Folder,
+            Self::Workspaces => IconName::MessagesSquare,
             Self::Bookmarks => IconName::Bookmark,
             Self::History => IconName::Clock,
             Self::Archived => IconName::Archive,
@@ -121,6 +121,26 @@ impl View {
 }
 
 impl Workspace {
+    pub(super) fn pinned_sessions(&self) -> Vec<SessionMeta> {
+        self.sessions
+            .entries
+            .iter()
+            .filter(|session| !session.archived && self.navigation.pinned.contains(&session.id))
+            .cloned()
+            .collect()
+    }
+
+    pub(super) fn sidebar_sessions(&self) -> Vec<SessionMeta> {
+        let workspace = self
+            .workspace_for_directory(&self.navigation.selected_directory)
+            .map(|workspace| workspace.id);
+        self.visible_sessions()
+            .into_iter()
+            .filter(|session| Some(session.workspace) == workspace)
+            .filter(|session| session.archived || !self.navigation.pinned.contains(&session.id))
+            .collect()
+    }
+
     pub(super) fn toggle_bookmark(&mut self, session: SessionId, cx: &mut Context<Self>) {
         if self.sessions.pending.deleting.contains(&session)
             || !self.sessions.entries.iter().any(|meta| meta.id == session)
@@ -215,22 +235,19 @@ impl Workspace {
         self.select(target, window, cx);
     }
 
+    pub(super) fn sidebar_session_ids(&self, query: &str) -> Vec<SessionId> {
+        let pinned = self.pinned_sessions();
+        let sessions = self.sidebar_sessions();
+        history::sorted(&pinned)
+            .into_iter()
+            .chain(history::sorted(&sessions))
+            .filter(|session| matches_query(session, query))
+            .map(|session| session.id)
+            .collect()
+    }
+
     pub(super) fn thread_cycle_targets(&self, cx: &App) -> CycleTargets {
-        let sessions = self.visible_sessions();
         let query = self.navigation.search.read(cx).value().to_lowercase();
-        let threads: Vec<_> = if self.navigation.view.flat() {
-            history::sorted(&sessions)
-                .into_iter()
-                .filter(|session| matches_query(session, &query))
-                .map(|session| session.id)
-                .collect()
-        } else {
-            self.grouped_threads(&sessions, &query)
-                .into_iter()
-                .flat_map(|group| group.threads)
-                .map(|session| session.id)
-                .collect()
-        };
-        CycleTargets::new(&threads, self.selected.id)
+        CycleTargets::new(&self.sidebar_session_ids(&query), self.selected.id)
     }
 }

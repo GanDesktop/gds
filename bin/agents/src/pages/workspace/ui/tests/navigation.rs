@@ -619,6 +619,7 @@ fn sidebar_motion_keeps_shared_boundaries_rows_and_scroll(cx: &mut TestAppContex
         session.cwd = Some(PathBuf::from("/tmp"));
         session.workspace = project(session.cwd.as_deref()).id;
     }
+    sessions.sort_by_key(|session| (std::cmp::Reverse(session.updated_at), session.id));
     let target = sessions[8].id;
     let mut hidden = session();
     hidden.cwd = Some(PathBuf::from("/var"));
@@ -764,4 +765,79 @@ fn sidebar_collapsed_menu_keeps_commands_and_focus_available(cx: &mut TestAppCon
         window.press("escape", cx);
     })
     .expect("workspace add menu remains accessible");
+}
+
+#[gpui_kit::test]
+fn workspace_selector_scopes_sessions_and_keeps_pins_above_it(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let first = session();
+    let mut second = session();
+    second.cwd = Some("/tmp/second-workspace".into());
+    second.workspace = project(second.cwd.as_deref()).id;
+    let mut pinned = first.clone();
+    pinned.id = SessionId::new();
+    attach(&fixture, pinned.clone(), cx);
+    attach(&fixture, first.clone(), cx);
+    attach(&fixture, second.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.navigation.pinned.insert(pinned.id);
+            view.composer
+                .input
+                .update(cx, |input, cx| input.set_value("second draft", window, cx));
+            cx.notify();
+        });
+        window.render_frame(cx);
+        let picker = window.find("workspace-selector").bounds();
+        let pins = window.find("pinned-sessions").bounds();
+        assert!(pins.bottom() <= picker.top());
+        assert!(
+            window
+                .find(format!("session-{}", pinned.id))
+                .bounds()
+                .bottom()
+                <= picker.top()
+        );
+        assert!(window.find(format!("session-{}", second.id)).bounds().top() >= picker.bottom());
+        assert!(window.try_find(format!("session-{}", first.id)).is_none());
+        window.click("workspace-picker", cx);
+        window.press("down", cx);
+        window.press("enter", cx);
+    })
+    .expect("select first workspace from the sidebar menu");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(fixture.view.read(cx).selected.id, Some(first.id));
+        assert!(window.find(format!("session-{}", first.id)).visible());
+        assert!(window.try_find(format!("session-{}", second.id)).is_none());
+        fixture.view.update(cx, |view, cx| {
+            view.switch_workspace(second.cwd.clone(), window, cx)
+        });
+        assert_eq!(fixture.view.read(cx).selected.id, Some(second.id));
+        assert_eq!(
+            fixture.view.read(cx).composer.input.read(cx).value(),
+            "second draft"
+        );
+        gds::appearance::motion::set_animations_enabled(false, cx);
+        fixture
+            .view
+            .update(cx, |view, cx| view.toggle_sidebar(window, cx));
+        window.render_frame(cx);
+        let row = window.find(format!("session-{}", pinned.id)).bounds();
+        let close = window
+            .find(format!("thread-close-corner-{}", pinned.id))
+            .bounds();
+        assert_eq!(close.size, size(px(16.), px(16.)));
+        assert!(close.left() >= row.left() && close.right() <= row.right());
+        assert!(close.top() >= row.top() && close.bottom() <= row.bottom());
+        window.click(format!("thread-close-corner-{}", pinned.id), cx);
+        assert!(!fixture.view.read(cx).navigation.pinned.contains(&pinned.id));
+        assert_eq!(
+            fixture.view.read(cx).selected.id,
+            Some(second.id),
+            "unpin never selects the row"
+        );
+    })
+    .expect("restore workspace draft and unpin from collapsed row");
 }

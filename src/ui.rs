@@ -31,7 +31,7 @@ pub use button::IconButton;
 pub use dialog::DialogActions;
 pub use frame::{Frame, WindowDragArea};
 pub use list::ListSurface;
-pub use navigation::{NavItem, hover_action, pinned_icon, with_pin};
+pub use navigation::{NavItem, corner_action, corner_button, hover_action, pinned_icon, with_pin};
 pub use page::ContentPage;
 pub use shortcut::{
     HeldModifier, Shortcut, ShortcutBadge, ShortcutHint, command_tooltip, shortcut_tooltip,

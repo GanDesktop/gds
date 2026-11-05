@@ -6,7 +6,7 @@ use gds_uim::el;
 use gds_uim::m;
 use gpui_kit::component::menu::PopupMenuItem;
 
-const WORKSPACE_MENU_ROWS: usize = 5;
+const WORKSPACE_MENU_ROWS: usize = 6;
 
 impl Workspace {
     pub(in crate::pages::workspace) fn render_sidebar(
@@ -16,14 +16,19 @@ impl Workspace {
     ) -> impl IntoElement {
         let query = self.navigation.search.read(cx).value().to_lowercase();
         let cycle = self.thread_cycle_targets(cx);
-        let sessions = self.visible_sessions();
+        let sessions = self.sidebar_sessions();
         let groups = if self.navigation.view.flat() {
             Vec::new()
         } else {
             self.grouped_threads(&sessions, &query)
+                .into_iter()
+                .filter(|group| group.directory == self.navigation.selected_directory)
+                .collect()
         };
         let header = self.sidebar_controls(presentation, cx);
-        let empty = (if self.navigation.view.flat() {
+        let empty = (if self.navigation.view == View::Workspaces {
+            false
+        } else if self.navigation.view.flat() {
             !sessions
                 .iter()
                 .any(|session| matches_query(session, &query))
@@ -42,7 +47,28 @@ impl Workspace {
                 ]
             }
         });
-        let columns = if self.navigation.view == View::History {
+        let columns = if self.navigation.view == View::Workspaces {
+            let mut rows = Vec::new();
+            if self.selected.id.is_none() && query.is_empty() {
+                rows.push(self.draft_thread_row(0, presentation, cx));
+            }
+            rows.extend(
+                history::sorted(&sessions)
+                    .into_iter()
+                    .filter(|session| matches_query(session, &query))
+                    .map(|session| self.thread_row(session, &cycle, presentation, cx)),
+            );
+            if rows.is_empty() {
+                rows.push(
+                    div()
+                        .p_3()
+                        .opacity(presentation.label_opacity())
+                        .child(caption(tr!("session-no-results"), cx))
+                        .into_any_element(),
+                );
+            }
+            rows
+        } else if self.navigation.view == View::History {
             let now = jiff::Zoned::now();
             history::groups(&sessions, &query, &now)
                 .into_iter()
@@ -88,9 +114,6 @@ impl Workspace {
                     let draft_selected = self.navigation.view == View::Workspaces
                         && self.selected.id.is_none()
                         && self.navigation.selected_directory == directory;
-                    let terminals = (!collapsed)
-                        .then(|| self.render_workspace_terminals(directory.as_deref(), presentation, cx))
-                        .flatten();
                     let header = self.workspace_header(index, directory, collapsed, presentation, cx);
                     let draft =
                         (!collapsed && draft_selected).then(|| self.draft_thread_row(index, presentation, cx));
@@ -120,16 +143,34 @@ impl Workspace {
                                 ..empty,
                                 ..threads,
                             ],
-                            ..terminals,
                         ]
                     }
                     .into_any_element()
                 })
                 .collect::<Vec<_>>()
         };
+        let pinned = self.pinned_sessions();
+        let pinned = history::sorted(&pinned)
+            .into_iter()
+            .filter(|session| matches_query(session, &query))
+            .map(|session| self.thread_row(session, &cycle, presentation, cx))
+            .collect::<Vec<_>>();
+        let picker = self
+            .workspace_button(Some(presentation), cx)
+            .into_any_element();
         el! {
             .SideBar::default { presentation: presentation; } [
-                .SideBarHeader::default [header],
+                .SideBarHeader::default [
+                    @if (!pinned.is_empty())
+                        .div {
+                            # "pinned-sessions"; test_support; flex; flex_col; gap_1;
+                            max_h: 180.0.px; overflow_y_scroll;
+                            px: gds::appearance::tokens::SIDEBAR_PADDING.px;
+                        } [..pinned],
+                    @end,
+                    .div { px: gds::appearance::tokens::SIDEBAR_PADDING.px; py_1; } [picker],
+                    header,
+                ],
                 .SideBarContent::default { # "agents-sidebar-content"; overflow_hidden } [
                     .div {
                         # "session-list";
@@ -327,7 +368,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn workspace_menu(
+    pub(super) fn workspace_menu(
         &self,
         directory: Option<PathBuf>,
         collapsed: bool,
