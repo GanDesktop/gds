@@ -13,7 +13,12 @@ fn session_queries_follow_prompt_runtime_and_removal_state() {
     assert!(!store.is_draft(id));
     assert!(store.is_draft(other));
 
-    let mut snapshot = SessionSnapshot::from(SessionMeta::new(id, "test".into(), Owner::current()));
+    let mut snapshot = SessionSnapshot::from(SessionMeta::new(
+        Default::default(),
+        id,
+        "test".into(),
+        Owner::current(),
+    ));
     snapshot.runtime.failure = Some(RuntimeFailure::Persistence {
         message: "disk full".into(),
     });
@@ -35,8 +40,12 @@ fn removal_and_content_discard_preserve_independent_session_state() {
     let retained = SessionId::new();
     let mut store = SessionStore::default();
     for id in [removed, retained] {
-        let mut snapshot =
-            SessionSnapshot::from(SessionMeta::new(id, "test".into(), Owner::current()));
+        let mut snapshot = SessionSnapshot::from(SessionMeta::new(
+            Default::default(),
+            id,
+            "test".into(),
+            Owner::current(),
+        ));
         snapshot.runtime.failure = Some(RuntimeFailure::Persistence {
             message: "disk full".into(),
         });

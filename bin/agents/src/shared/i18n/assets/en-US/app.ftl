@@ -586,9 +586,6 @@ session-directories-title = Additional session workspaces
 session-directory-add = Attach working folder…
 session-directory-remove = Remove additional folder: { $path }
 session-directories-unavailable = Requires an idle session and an agent supporting additional folders and reloading
-workspace-remove = Remove workspace
-workspace-remove-confirm = Remove “{ $path }” from the sidebar and archive all its conversations. No conversations or folders will be deleted. Conversations can be restored from the archive.
-workspace-remove-incomplete = Some conversations could not be archived, so the workspace remains. Completed archives are available in the archive list. Please retry.
 workspace-update-failed = Could not save workspace visibility
 workspace-choose = Switch working folder
 workspace-choose-folder = Choose working folder
@@ -895,3 +892,10 @@ shortcuts-application = Application
 
 appearance-rounded-corners = Rounded window corners
 appearance-rounded-corners-help = Round floating window corners. Disabled by default.
+
+workspace-archive = Archive workspace
+workspace-restore = Restore workspace
+workspace-delete = Delete workspace
+workspace-archive-confirm = Archive “{ $path }” and all its sessions? Running sessions will stop; history will be retained.
+workspace-delete-confirm = Delete the empty workspace “{ $path }”? Project files will be retained.
+workspace-delete-cascade-confirm = “{ $path }” contains { $count } sessions, including archived sessions. Permanently delete them and their Bas history too? Project files will be retained.

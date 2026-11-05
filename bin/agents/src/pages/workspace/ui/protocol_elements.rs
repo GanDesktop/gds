@@ -502,7 +502,7 @@ impl Workspace {
                                     .iter()
                                     .enumerate()
                                     .map(
-                                        |(block_index, block)| match bas::model::presentation::content_to_v1(
+                                        |(block_index, block)| match crate::entities::session::conversation::content_to_v1(
                                             block,
                                         ) {
                                             Ok(block) => self.render_block(

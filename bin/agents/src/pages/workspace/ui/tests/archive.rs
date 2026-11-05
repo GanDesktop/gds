@@ -32,10 +32,11 @@ fn a_catalog_started_before_creation_does_not_discard_new_drafts_or_queue(cx: &m
                 });
             // This response was snapshotted before Create but delivered after its receipt.
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: view.backend.agents.clone(),
                     sessions: Vec::new(),
-                })),
+                }))),
                 window,
                 cx,
             );
@@ -50,10 +51,11 @@ fn a_catalog_started_before_creation_does_not_discard_new_drafts_or_queue(cx: &m
             // Subsequent serial directory observations can establish a real removal.
             for sessions in [vec![meta.clone()], Vec::new()] {
                 view.update(
-                    Update::Catalog(Ok(connection::Catalog {
+                    Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                        workspaces: Vec::new(),
                         agents: view.backend.agents.clone(),
                         sessions: sessions.into_iter().map(Into::into).collect(),
-                    })),
+                    }))),
                     window,
                     cx,
                 );
@@ -83,10 +85,11 @@ fn delayed_archive_success_after_a_newer_restore_still_pauses_the_queue(cx: &mut
                 });
             view.set_archived(meta.id, true, cx);
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: view.backend.agents.clone(),
                     sessions: vec![archived(meta.clone(), false, 3).into()],
-                })),
+                }))),
                 window,
                 cx,
             );
@@ -181,13 +184,14 @@ fn inactive_catalog_archive_retains_attachments_and_does_not_resume_queue(cx: &m
                 .enqueue(draft);
             for (value, revision) in [(true, 2), (false, 3)] {
                 view.update(
-                    Update::Catalog(Ok(connection::Catalog {
+                    Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                        workspaces: Vec::new(),
                         agents: Vec::new(),
                         sessions: vec![
                             archived(first.clone(), value, revision).into(),
                             second.clone().into(),
                         ],
-                    })),
+                    }))),
                     window,
                     cx,
                 );

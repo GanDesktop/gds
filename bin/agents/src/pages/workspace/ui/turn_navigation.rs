@@ -1,5 +1,6 @@
 //! Complete prompt navigation is a read-only catalog, not the loaded body window.
-use bas::model::{Message, Role};
+use crate::entities::session::conversation::Message;
+use bas::model::Role;
 use gpui_kit::{ListOffset, ScrollDelta, ScrollEvent};
 use std::collections::BTreeMap;
 
@@ -15,8 +16,7 @@ const WHEEL_STEP_PIXELS: f32 = 24.;
 
 pub(super) fn message_cursor(message: &Message) -> Option<u64> {
     // Conversation derives presentation IDs from the first original event cursor.
-    let id = uuid::Uuid::parse_str(&message.id.to_string()).ok()?;
-    u64::try_from(id.as_u128()).ok()
+    u64::try_from(message.id.as_u128()).ok()
 }
 
 impl Workspace {

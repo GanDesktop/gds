@@ -34,10 +34,11 @@ fn tracked_outcome_does_not_skip_metadata_and_waits_for_idle_catalog(cx: &mut Te
             background.status = SessionStatus::Idle;
             background.active_turn = None;
             background.title = Some("intermediate title update".into());
-            view.update(Update::Catalog(Ok(connection::Catalog {
+            view.update(Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                workspaces: Vec::new(),
                 agents: view.backend.agents.clone(),
                 sessions: vec![background.clone().into(), foreground.into()],
-            })), window, cx);
+            }))), window, cx);
             assert_eq!(view.sessions.entries.iter().find(|meta| meta.id == background.id).expect("complete metadata").title, background.title);
         });
         assert!(matches!(fixture.commands.try_recv(), Ok(Command::Prompt { session, submission, .. }) if session == background.id && submission::text(&submission) == "unsent"));

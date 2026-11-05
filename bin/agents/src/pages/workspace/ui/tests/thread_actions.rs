@@ -10,10 +10,11 @@ fn creation_receipt_after_catalog_removal_settles_without_reactivating(cx: &mut 
             assert!(view.selected.creating);
             for sessions in [vec![removed.clone().into()], Vec::new()] {
                 view.update(
-                    Update::Catalog(Ok(connection::Catalog {
+                    Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                        workspaces: Vec::new(),
                         agents: view.backend.agents.clone(),
                         sessions,
-                    })),
+                    }))),
                     window,
                     cx,
                 );
@@ -58,10 +59,11 @@ fn catalog_removal_invalidates_selection_and_late_watch_updates(cx: &mut TestApp
                     vec![removed.clone().into()]
                 };
                 view.update(
-                    Update::Catalog(Ok(connection::Catalog {
+                    Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                        workspaces: Vec::new(),
                         agents: view.backend.agents.clone(),
                         sessions: live,
-                    })),
+                    }))),
                     window,
                     cx,
                 );
@@ -93,10 +95,11 @@ fn catalog_removal_invalidates_selection_and_late_watch_updates(cx: &mut TestApp
                     Vec::new()
                 };
                 view.update(
-                    Update::Catalog(Ok(connection::Catalog {
+                    Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                        workspaces: Vec::new(),
                         agents: view.backend.agents.clone(),
                         sessions: remaining,
-                    })),
+                    }))),
                     window,
                     cx,
                 );
@@ -301,10 +304,11 @@ fn confirmed_deletion_cannot_be_undone_by_old_catalogs_or_receipts(cx: &mut Test
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: view.backend.agents.clone(),
                     sessions: vec![removed.clone().into(), retained.clone().into()],
-                })),
+                }))),
                 window,
                 cx,
             );
@@ -317,10 +321,11 @@ fn confirmed_deletion_cannot_be_undone_by_old_catalogs_or_receipts(cx: &mut Test
                 cx,
             );
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: view.backend.agents.clone(),
                     sessions: vec![removed.clone().into(), retained.clone().into()],
-                })),
+                }))),
                 window,
                 cx,
             );

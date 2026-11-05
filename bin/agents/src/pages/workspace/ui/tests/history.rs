@@ -115,9 +115,7 @@ fn reopening_restarted_current_session_reattaches_without_clearing_the_draft(
         assert_eq!(view.selected.stream, StreamState::Loading);
         assert_eq!(view.composer.input.read(cx).value(), "keep unsent text");
     });
-    while let Ok(command) = fixture.commands.try_recv() {
-        assert!(matches!(command, Command::Foreground(Some(id)) if id == meta.id));
-    }
+    assert!(fixture.commands.try_recv().is_err());
 }
 
 #[gpui_kit::test]

@@ -17,9 +17,10 @@ fn persistence_retry_waits_for_catalog_and_never_resubmits(cx: &mut TestAppConte
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
             let snapshot = failed(SessionSnapshot::from(meta.clone()));
-            view.update(Update::Catalog(Ok(connection::Catalog {
+            view.update(Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                workspaces: Vec::new(),
                 agents: view.backend.agents.clone(), sessions: vec![snapshot],
-            })), window, cx);
+            }))), window, cx);
             view.retry_history(cx);
             assert!(matches!(fixture.commands.try_recv(), Ok(Command::RestartSession(id)) if id == meta.id));
             assert!(view.history_retry_disabled());
@@ -42,9 +43,10 @@ fn persistence_retry_waits_for_catalog_and_never_resubmits(cx: &mut TestAppConte
             }, window, cx);
             assert!(matches!(fixture.commands.try_recv(), Ok(Command::Refresh)));
             assert!(!view.sessions.healthy(meta.id), "RPC receipt cannot supersede newer catalog state");
-            view.update(Update::Catalog(Ok(connection::Catalog {
+            view.update(Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                workspaces: Vec::new(),
                 agents: view.backend.agents.clone(), sessions: vec![recovered],
-            })), window, cx);
+            }))), window, cx);
             assert!(view.sessions.healthy(meta.id));
             assert!(matches!(fixture.commands.try_recv(), Ok(Command::Watch { session, .. }) if session == meta.id));
             assert!(fixture.commands.try_recv().is_err(), "recovery never sends a prompt");
@@ -68,10 +70,11 @@ fn runtime_failure_gates_current_and_background_without_rewriting_committed_stat
             let healthy = SessionSnapshot::from(current.clone());
             let background = SessionSnapshot::from(background.clone());
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: view.backend.agents.clone(),
                     sessions: vec![healthy.clone(), background.clone()],
-                })),
+                }))),
                 window,
                 cx,
             );
@@ -105,10 +108,11 @@ fn runtime_failure_gates_current_and_background_without_rewriting_committed_stat
             }
             let failed_current = failed(healthy.clone());
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: view.backend.agents.clone(),
                     sessions: vec![failed_current.clone(), failed(background.clone())],
-                })),
+                }))),
                 window,
                 cx,
             );
@@ -199,10 +203,11 @@ fn runtime_failure_gates_current_and_background_without_rewriting_committed_stat
             restarted_meta.revision = Cursor::from_raw(4);
             let restarted = SessionSnapshot::from(restarted_meta);
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: view.backend.agents.clone(),
                     sessions: vec![restarted, SessionSnapshot::from(background.meta)],
-                })),
+                }))),
                 window,
                 cx,
             );

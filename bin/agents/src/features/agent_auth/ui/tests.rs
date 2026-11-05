@@ -149,7 +149,9 @@ fn invalid_events_preserve_the_active_attempt_and_url_completion_identity(cx: &m
             panel.event(
                 Ok(service::Event::Elicitation {
                     request_id: "invalid".into(),
-                    request: Err(service::Failure::MissingRequest),
+                    request: Err(service::Failure::InvalidPayload(
+                        tr!("auth-empty-request").into(),
+                    )),
                 }),
                 window,
                 cx,
@@ -166,9 +168,6 @@ fn invalid_events_preserve_the_active_attempt_and_url_completion_identity(cx: &m
             let message = panel.message.clone();
             panel.event(Ok(service::Event::ElicitationComplete(None)), window, cx);
             assert_eq!(panel.message, message);
-            panel.event(Ok(service::Event::Unknown), window, cx);
-            assert_eq!(panel.message, tr!("auth-invalid-event"));
-            assert!(panel.input.is_some());
             panel.event(
                 Ok(service::Event::ElicitationComplete(Some(
                     json!({"elicitationId":"unrelated"}),

@@ -4,7 +4,7 @@ use crate::shared::i18n::tr;
 
 #[gpui_kit::test]
 fn footer_switches_backends_in_place_and_restores_drafts(cx: &mut TestAppContext) {
-    let mut fixture = fixture(cx);
+    let fixture = fixture(cx);
     let original_session = session();
     attach(&fixture, original_session.clone(), cx);
     let old = fixture
@@ -101,18 +101,6 @@ fn footer_switches_backends_in_place_and_restores_drafts(cx: &mut TestAppContext
     })
     .expect("footer menu");
     cx.run_until_parked();
-    let mut presence = Vec::new();
-    while let Ok(command) = fixture.commands.try_recv() {
-        if let Command::Foreground(session) = command {
-            presence.push(session);
-        }
-    }
-    assert!(presence.contains(&Some(original_session.id)));
-    assert_eq!(
-        presence.last(),
-        Some(&None),
-        "hidden backend releases foreground"
-    );
     cx.update(|cx| {
         assert_eq!(cx.windows().len(), 1, "selection must stay in this window");
         assert_eq!(
@@ -159,7 +147,6 @@ fn footer_switches_backends_in_place_and_restores_drafts(cx: &mut TestAppContext
                     );
                 }
                 view.resize_window(window, cx);
-                view.sync_foreground(window);
                 view.focus_input(window, cx);
                 view.operation_error(
                     "Background operation",
@@ -167,7 +154,6 @@ fn footer_switches_backends_in_place_and_restores_drafts(cx: &mut TestAppContext
                     cx,
                 );
                 assert!(view.has_unread_reply(), "hidden replies remain unread");
-                assert!(view.backend.foreground.is_none());
             });
             assert_eq!(
                 window.focused(cx),

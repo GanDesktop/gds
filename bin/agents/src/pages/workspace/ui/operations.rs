@@ -85,6 +85,10 @@ impl Workspace {
             message
         };
         match *command {
+            Command::Workspace(mutation) => {
+                self.finish_workspace_operation(&mutation);
+                self.operation_error(tr!("workspace-update-failed"), message, cx);
+            }
             Command::AgentHistory { .. }
             | Command::ImportHistory { .. }
             | Command::DeleteAgentHistory { .. } => {
@@ -119,7 +123,6 @@ impl Workspace {
             Command::Rename { session, .. } => self.rename_completed(session, Err(message)),
             Command::Archive { session, .. } => {
                 self.sessions.pending.archiving.remove(&session);
-                self.workspace_archive_completed(session, false);
                 self.session_operation_error(
                     session,
                     tr!("session-archive-update-failed"),
@@ -229,7 +232,7 @@ impl Workspace {
                 }
             }
             Command::ForgetHistory(_) => {}
-            Command::Refresh | Command::Detach | Command::Foreground(_) => {}
+            Command::Refresh | Command::Detach => {}
         }
         cx.notify();
         false

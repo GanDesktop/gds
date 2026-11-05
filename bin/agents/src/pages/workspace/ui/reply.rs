@@ -4,7 +4,7 @@ use crate::shared::i18n::tr;
 use gds_uim::el;
 use std::{cell::Cell, rc::Rc, time::Duration};
 
-use bas::model::Message;
+use crate::entities::session::conversation::Message;
 use gpui_kit::{
     AnyView, AnyWindowHandle, Bounds, WeakEntity, WindowBackgroundAppearance, WindowBounds,
     WindowKind, WindowOptions, canvas, point,

@@ -23,10 +23,11 @@ use store::Store as FixtureStore;
 
 type ProgressStream = Pin<Box<dyn Stream<Item = Result<pb::AgentOperation, RpcStatus>> + Send>>;
 
+#[derive(Clone)]
 struct FixtureService {
     store: FixtureStore,
     catalog: Arc<Mutex<Catalog>>,
-    stream: Mutex<Option<mpsc::UnboundedReceiver<Result<pb::AgentOperation, RpcStatus>>>>,
+    stream: Arc<Mutex<Option<mpsc::UnboundedReceiver<Result<pb::AgentOperation, RpcStatus>>>>>,
     started: Arc<AtomicBool>,
     probes: Arc<Mutex<Probes>>,
 }
@@ -53,6 +54,122 @@ struct Probes {
 
 // Keeping the unrelated RPCs explicit makes this fixture fail compilation when
 // the daemon interface changes, without introducing session behavior here.
+impl FixtureService {
+    async fn authentication_stream(
+        &self,
+        input: bas::service::acp::server::AuthenticationInput,
+    ) -> Result<bas::service::acp::server::AuthenticationEvents, RpcStatus> {
+        if let Some(error) = self
+            .probes
+            .lock()
+            .expect("fixture probes")
+            .authentication_error
+            .clone()
+        {
+            return Err(error);
+        }
+        let mut input = input;
+        use futures::StreamExt;
+        let first = input.next().await.transpose()?.expect("start message");
+        let Some(pb::authentication_input::Kind::Start(start)) = first.kind else {
+            panic!("start expected")
+        };
+        let method: bas::authentication::Method =
+            serde_json::from_slice(&start.expected_method_json).expect("normalized method");
+        assert_eq!(method.id, start.method_id);
+        let form = start.method_id == "form-login";
+        let terminal = start.method_id == "terminal-login";
+        self.probes.lock().expect("probes").logins.push(start);
+        if terminal {
+            assert!(matches!(
+                method.execution,
+                bas::authentication::Execution::Terminal(_)
+            ));
+            use futures::StreamExt;
+            let stream = tokio_stream::iter([Ok(pb::AuthenticationEvent {
+                kind: Some(pb::authentication_event::Kind::Progress(
+                    "正在验证认证终端…".into(),
+                )),
+            })])
+            .chain(futures::stream::pending());
+            return Ok(Box::pin(stream));
+        }
+        if form {
+            let (send, receive) = tokio::sync::mpsc::channel(4);
+            let probes = self.probes.clone();
+            tokio::spawn(async move {
+                let request = serde_json::json!({"requestId":"auth-request","mode":"form","message":"Configure provider","requestedSchema":{"type":"object","properties":{"account":{"type":"string","minLength":2},"enabled":{"type":"boolean","default":true}},"required":["account","enabled"]}});
+                send.send(Ok(pb::AuthenticationEvent {
+                    kind: Some(pb::authentication_event::Kind::Elicitation(
+                        pb::PendingElicitation {
+                            request_id: "form-1".into(),
+                            request: Some(pb::AcpPayload {
+                                json: serde_json::to_vec(&request).expect("JSON"),
+                            }),
+                            answered: false,
+                        },
+                    )),
+                }))
+                .await
+                .expect("form event");
+                let answer = input
+                    .next()
+                    .await
+                    .transpose()
+                    .expect("receive reply")
+                    .expect("reply");
+                let Some(pb::authentication_input::Kind::ElicitationResponse(answer)) = answer.kind
+                else {
+                    panic!("form answer")
+                };
+                {
+                    let mut probes = probes.lock().expect("probes");
+                    probes.answers.push(answer);
+                    if let Some(response) = &mut probes.response {
+                        response.status = pb::AgentCheckStatus::Connected as i32;
+                    }
+                }
+                send.send(Ok(pb::AuthenticationEvent {
+                    kind: Some(pb::authentication_event::Kind::Check(
+                        pb::CheckAgentResponse {
+                            status: pb::AgentCheckStatus::Connected as i32,
+                            ..Default::default()
+                        },
+                    )),
+                }))
+                .await
+                .expect("completion");
+            });
+            return Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
+                receive,
+            )));
+        }
+        Ok(Box::pin(tokio_stream::iter([Ok(
+            pb::AuthenticationEvent {
+                kind: Some(pb::authentication_event::Kind::Check(
+                    pb::CheckAgentResponse {
+                        status: pb::AgentCheckStatus::Connected as i32,
+                        resolved_program: "/fixture/codex-acp".into(),
+                        ..Default::default()
+                    },
+                )),
+            },
+        )])))
+    }
+}
+impl bas::service::acp::server::Authentication for FixtureService {
+    fn start(
+        &self,
+        input: bas::service::acp::server::AuthenticationInput,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<bas::service::acp::server::AuthenticationEvents, RpcStatus>,
+    > {
+        let service = self.clone();
+        Box::pin(async move { service.authentication_stream(input).await })
+    }
+}
+
 macro_rules! fixture_service {
     ($($method:ident($request:ty) -> $response:ty;)*) => {
         #[tonic::async_trait]
@@ -148,7 +265,6 @@ macro_rules! fixture_service {
             type AuthenticateAgentInteractiveStream = Pin<Box<dyn Stream<Item = Result<pb::AuthenticationEvent, RpcStatus>> + Send>>;
             type WatchElicitationsStream = Pin<Box<dyn Stream<Item = Result<pb::ElicitationSnapshot, RpcStatus>> + Send>>;
             type AttachStream = Pin<Box<dyn Stream<Item = Result<pb::Event, RpcStatus>> + Send>>;
-            type SetForegroundStream = Pin<Box<dyn Stream<Item = Result<pb::ForegroundResponse, RpcStatus>> + Send>>;
             type WatchPermissionsStream = Pin<Box<dyn Stream<Item = Result<pb::PermissionSnapshot, RpcStatus>> + Send>>;
 
             async fn install_agent(
@@ -189,49 +305,7 @@ macro_rules! fixture_service {
                 &self,
                 request: Request<tonic::Streaming<pb::AuthenticationInput>>,
             ) -> Result<Response<Self::AuthenticateAgentInteractiveStream>, RpcStatus> {
-                if let Some(error) = self.probes.lock().expect("fixture probes").authentication_error.clone() {
-                    return Err(error);
-                }
-                let mut input = request.into_inner();
-                let first = input.message().await?.expect("start message");
-                let Some(pb::authentication_input::Kind::Start(start)) = first.kind else { panic!("start expected") };
-                let method: bas::authentication::Method = serde_json::from_slice(&start.expected_method_json).expect("normalized method");
-                assert_eq!(method.id, start.method_id);
-                let form = start.method_id == "form-login";
-                let terminal = start.method_id == "terminal-login";
-                self.probes.lock().expect("probes").logins.push(start);
-                if terminal {
-                    assert!(matches!(method.execution, bas::authentication::Execution::Terminal(_)));
-                    use futures::StreamExt;
-                    let stream = tokio_stream::iter([Ok(pb::AuthenticationEvent {
-                        kind: Some(pb::authentication_event::Kind::Progress("正在验证认证终端…".into())),
-                    })]).chain(futures::stream::pending());
-                    return Ok(Response::new(Box::pin(stream)));
-                }
-                if form {
-                    let (send, receive) = tokio::sync::mpsc::channel(4);
-                    let probes = self.probes.clone();
-                    tokio::spawn(async move {
-                        let request = serde_json::json!({"requestId":"auth-request","mode":"form","message":"Configure provider","requestedSchema":{"type":"object","properties":{"account":{"type":"string","minLength":2},"enabled":{"type":"boolean","default":true}},"required":["account","enabled"]}});
-                        send.send(Ok(pb::AuthenticationEvent { kind: Some(pb::authentication_event::Kind::Elicitation(pb::PendingElicitation {
-                            request_id: "form-1".into(), request: Some(pb::AcpPayload { json: serde_json::to_vec(&request).expect("JSON") }), answered:false
-                        })) })).await.expect("form event");
-                        let answer = input.message().await.expect("receive reply").expect("reply");
-                        let Some(pb::authentication_input::Kind::ElicitationResponse(answer)) = answer.kind else { panic!("form answer") };
-                        probes.lock().expect("probes").answers.push(answer);
-                        send.send(Ok(pb::AuthenticationEvent { kind: Some(pb::authentication_event::Kind::Check(pb::CheckAgentResponse {
-                            status: pb::AgentCheckStatus::Connected as i32, ..Default::default()
-                        })) })).await.expect("completion");
-                    });
-                    return Ok(Response::new(Box::pin(tokio_stream::wrappers::ReceiverStream::new(receive))));
-                }
-                Ok(Response::new(Box::pin(tokio_stream::iter([Ok(pb::AuthenticationEvent {
-                    kind: Some(pb::authentication_event::Kind::Check(pb::CheckAgentResponse {
-                        status: pb::AgentCheckStatus::Connected as i32,
-                        resolved_program: "/fixture/codex-acp".into(),
-                        ..Default::default()
-                    }))
-                })]))))
+                self.authentication_stream(Box::pin(request.into_inner())).await.map(Response::new)
             }
 
             async fn authenticate_agent(
@@ -269,6 +343,11 @@ macro_rules! fixture_service {
 }
 
 fixture_service! {
+    create_workspace(pb::CreateWorkspaceRequest) -> pb::Workspace;
+    list_workspaces(pb::ListWorkspacesRequest) -> pb::ListWorkspacesResponse;
+    get_workspace(pb::GetWorkspaceRequest) -> pb::Workspace;
+    set_workspace_archived(pb::SetWorkspaceArchivedRequest) -> pb::Workspace;
+    delete_workspace(pb::DeleteWorkspaceRequest) -> pb::DeleteWorkspaceResponse;
     list_agent_sessions(pb::ListAgentSessionsRequest) -> pb::ListAgentSessionsResponse;
     import_agent_session(pb::ImportAgentSessionRequest) -> pb::CreateSessionResponse;
     delete_agent_session(pb::DeleteAgentSessionRequest) -> pb::DeleteSessionResponse;
@@ -282,7 +361,6 @@ fixture_service! {
     set_archived(pb::SetArchivedRequest) -> pb::SetArchivedResponse;
     delete_session(pb::DeleteSessionRequest) -> pb::DeleteSessionResponse;
     attach(pb::AttachRequest) -> Self::AttachStream;
-    set_foreground(tonic::Streaming<pb::ForegroundRequest>) -> Self::SetForegroundStream;
     prompt(pb::PromptSubmission) -> pb::PromptSubmissionResponse;
     get_prompt_acceptance(pb::PromptAcceptanceRequest) -> pb::PromptAcceptanceResponse;
     cancel(pb::AcpPayload) -> pb::CancelResponse;
@@ -364,12 +442,17 @@ impl Fixture {
         let service = FixtureService {
             store: FixtureStore::at(path.clone()),
             catalog: catalog.clone(),
-            stream: Mutex::new(Some(stream)),
+            stream: Arc::new(Mutex::new(Some(stream))),
             started: started.clone(),
             probes: probes.clone(),
         };
         let server_task = AbortOnDropHandle::new(runtime.spawn(async move {
             Server::builder()
+                .add_service(
+                    bas::service::acp::server::Gateway::new(service.clone())
+                        .with_authentication(service.clone())
+                        .into_server(),
+                )
                 .add_service(pb::bas_server::BasServer::new(service))
                 .serve_with_incoming(listener.incoming())
                 .await
@@ -1022,6 +1105,11 @@ fn authentication_form_round_trips_over_the_owned_interactive_stream(cx: &mut Te
         catalog.entries[0].spec = Some(spec.clone());
         catalog.entries[0].status = Status::Installed;
     }
+    fixture.probes.lock().expect("probes").response = Some(pb::CheckAgentResponse {
+        status: pb::AgentCheckStatus::AuthenticationRequired as i32,
+        initialization: Some(pb::AcpPayload { json: serde_json::to_vec(&serde_json::json!({"protocolVersion":1,"agentCapabilities":{},"authMethods":[{"id":"form-login","name":"Configure provider"}]})).expect("initialize JSON") }),
+        ..Default::default()
+    });
     let (window, page) = fixture.open(cx);
     cx.update(|cx| {
         // Management can switch before this backend's panel is even created.

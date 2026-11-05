@@ -16,13 +16,13 @@ use tokio::{
 use tonic::Code;
 
 mod cache;
-mod elicitations;
-mod foreground;
 mod history;
 mod prepared;
 pub(crate) use prepared::{HistoryWeight, Prepared, PreparedHistory, PreparedLocation};
 mod model;
 mod permissions;
+mod protocol;
+pub(crate) use protocol::Pool as ProtocolPool;
 mod tracking;
 
 pub(crate) use crate::shared::api::failure::{Condition, Failure, FailureContext};
@@ -35,13 +35,22 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 
 pub(crate) struct CreateSession {
+    pub workspace: Option<WorkspaceId>,
     pub epoch: u64,
     pub agent: String,
     pub title: String,
     pub cwd: String,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum WorkspaceMutation {
+    Create { cwd: std::path::PathBuf },
+    Archive { id: WorkspaceId, archived: bool },
+    Delete { id: WorkspaceId, force: bool },
+}
+
 pub(crate) enum Command {
+    Workspace(WorkspaceMutation),
     Refresh,
     AgentHistory {
         epoch: u64,
@@ -123,10 +132,10 @@ pub(crate) enum Command {
     },
     ForgetHistory(SessionId),
     Detach,
-    Foreground(Option<SessionId>),
 }
 
 pub(crate) struct Catalog {
+    pub workspaces: Vec<bas::model::Workspace>,
     pub agents: Vec<AgentSummary>,
     pub sessions: Vec<SessionSnapshot>,
 }
@@ -138,6 +147,10 @@ pub(crate) struct AgentHistory {
 }
 
 pub(crate) enum Update {
+    Workspace {
+        mutation: WorkspaceMutation,
+        result: Result<Option<bas::model::Workspace>, Failure>,
+    },
     AgentHistory {
         epoch: u64,
         result: Result<AgentHistory, Failure>,
@@ -346,11 +359,10 @@ async fn run_cached(
     updates: mpsc::Sender<Update>,
     cache: Option<cache::Cache>,
 ) {
+    let protocol = protocol::Pool::default();
     let (history, writer) = history::Store::new(cache);
     let refresh = Arc::new(Notify::new());
     let mut tasks = JoinSet::new();
-    let (foreground, visibility) = tokio::sync::watch::channel(None);
-    tasks.spawn(foreground::watch(client.clone(), visibility));
     tasks.spawn(catalog_loop(
         client.clone(),
         updates.clone(),
@@ -363,16 +375,15 @@ async fn run_cached(
                 let Some(command) = command else { break };
                 match command {
                     Command::Refresh => refresh.notify_one(),
-                    Command::Foreground(session) => { foreground.send_replace(session); }
                     Command::Watch { session, epoch } => {
                         if let Some(task) = attachment.take() { task.abort(); }
                         history.flush().await;
-                        attachment = Some(tasks.spawn(permissions::watch_cached(client.clone(), updates.clone(), session, epoch, None, history.clone())));
+                        attachment = Some(tasks.spawn(permissions::watch_cached(protocol.clone(), client.clone(), updates.clone(), session, epoch, None, history.clone())));
                     }
                     Command::Resume { session, epoch, cursor } => {
                         if let Some(task) = attachment.take() { task.abort(); }
                         history.flush().await;
-                        attachment = Some(tasks.spawn(permissions::watch_cached(client.clone(), updates.clone(), session, epoch, Some(cursor), history.clone())));
+                        attachment = Some(tasks.spawn(permissions::watch_cached(protocol.clone(), client.clone(), updates.clone(), session, epoch, Some(cursor), history.clone())));
                     }
                     Command::OlderHistory { session, epoch, before } => {
                         let history = history.clone();
@@ -412,10 +423,11 @@ async fn run_cached(
                     }
                     command => {
                         let client = client.clone();
+                        let protocol = protocol.clone();
                         let updates = updates.clone();
                         let refresh = refresh.clone();
                         tasks.spawn(async move {
-                            operation(client, command, updates, refresh).await;
+                            operation(protocol, client, command, updates, refresh).await;
                         });
                     }
                 }
@@ -446,12 +458,13 @@ async fn run_cached(
 }
 
 async fn operation(
+    protocol: protocol::Pool,
     client: Client,
     command: Command,
     updates: mpsc::Sender<Update>,
     refresh: Arc<Notify>,
 ) {
-    let update = execute(client.clone(), command).await;
+    let update = execute(protocol, client.clone(), command).await;
     let accepted = match &update {
         Update::Submission {
             session,
@@ -497,7 +510,18 @@ async fn catalog_loop(mut client: Client, updates: mpsc::Sender<Update>, refresh
                 .await?
                 .into_inner()
                 .sessions;
+            let workspaces = client
+                .list_workspaces(pb::ListWorkspacesRequest {
+                    include_archived: true,
+                })
+                .await?
+                .into_inner()
+                .workspaces;
             Ok(Catalog {
+                workspaces: workspaces
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
                 agents: agents.into_iter().map(Into::into).collect(),
                 sessions: sessions
                     .into_iter()
@@ -528,6 +552,7 @@ pub(crate) async fn request<T>(future: impl Future<Output = Result<T>>) -> Resul
 async fn create_session(client: &mut Client, form: CreateSession) -> Update {
     let owner = Owner::current();
     let request = pb::CreateSessionRequest {
+        workspace_id: form.workspace.map(|id| id.to_string()),
         agent: form.agent.clone(),
         title: (!form.title.trim().is_empty()).then(|| form.title.trim().to_owned()),
         cwd: (!form.cwd.trim().is_empty()).then(|| form.cwd.trim().to_owned()),
@@ -571,7 +596,7 @@ fn creation_result(
     Update::Created { epoch, result }
 }
 
-async fn execute(mut client: Client, command: Command) -> Update {
+async fn execute(protocol: protocol::Pool, mut client: Client, command: Command) -> Update {
     match command {
         Command::AgentHistory { epoch, agent, cwd } => {
             let result = request(async {
@@ -693,19 +718,9 @@ async fn execute(mut client: Client, command: Command) -> Update {
             request_id,
             response,
         } => {
-            let result = request(async {
-                client
-                    .respond_elicitation(pb::RespondElicitationRequest {
-                        session: session.to_string(),
-                        request_id: request_id.clone(),
-                        response: Some(pb::AcpPayload {
-                            json: serde_json::to_vec(&response)?,
-                        }),
-                    })
-                    .await?;
-                Ok(())
-            })
-            .await;
+            let result = protocol
+                .respond(session, request_id.clone(), response)
+                .map_err(Failure::from);
             Update::ElicitationResponded {
                 session,
                 request_id,
@@ -717,18 +732,52 @@ async fn execute(mut client: Client, command: Command) -> Update {
             request_id,
             outcome,
         } => {
-            let result = request(async {
-                client
-                    .respond_permission_acp(session, request_id.clone(), outcome)
-                    .await?;
-                Ok(())
-            })
-            .await;
+            let result = serde_json::to_value(acp::RequestPermissionResponse::new(outcome))
+                .map_err(anyhow::Error::from)
+                .and_then(|response| protocol.respond(session, request_id.clone(), response))
+                .map_err(Failure::from);
             Update::PermissionResponded {
                 session,
                 request_id,
                 result,
             }
+        }
+        Command::Workspace(mutation) => {
+            let result = request(async {
+                match &mutation {
+                    WorkspaceMutation::Create { cwd } => {
+                        let workspace = client
+                            .create_workspace(pb::CreateWorkspaceRequest {
+                                cwd: bas::service::utf8_cwd(cwd)?.into(),
+                                name: None,
+                            })
+                            .await?
+                            .into_inner();
+                        Ok(Some(workspace.try_into()?))
+                    }
+                    WorkspaceMutation::Archive { id, archived } => {
+                        let workspace = client
+                            .set_workspace_archived(pb::SetWorkspaceArchivedRequest {
+                                workspace_id: id.to_string(),
+                                archived: *archived,
+                            })
+                            .await?
+                            .into_inner();
+                        Ok(Some(workspace.try_into()?))
+                    }
+                    WorkspaceMutation::Delete { id, force } => {
+                        client
+                            .delete_workspace(pb::DeleteWorkspaceRequest {
+                                workspace_id: id.to_string(),
+                                force: *force,
+                            })
+                            .await?;
+                        Ok(None)
+                    }
+                }
+            })
+            .await;
+            Update::Workspace { mutation, result }
         }
         Command::Create(form) => create_session(&mut client, form).await,
         Command::Rename { session, title } => {
@@ -790,6 +839,7 @@ async fn execute(mut client: Client, command: Command) -> Update {
         } => {
             let result = crate::entities::session::submission::submit(
                 &mut client,
+                &protocol,
                 session,
                 &submission,
                 title,
@@ -808,7 +858,11 @@ async fn execute(mut client: Client, command: Command) -> Update {
         } => {
             let result = request(async {
                 if retry {
-                    Ok(client.submit_prompt(&submission).await?)
+                    Ok(protocol
+                        .session(&client, session)
+                        .await?
+                        .submit(&submission)
+                        .await?)
                 } else {
                     client
                         .prompt_acceptance(session, submission.turn)
@@ -830,14 +884,25 @@ async fn execute(mut client: Client, command: Command) -> Update {
                 .to_string()
                 .parse()
                 .expect("GUI uses daemon session ids");
-            let result = request(async { Ok(client.set_config_option_acp(&config).await?) }).await;
+            let result = request(async {
+                Ok(protocol
+                    .session(&client, session)
+                    .await?
+                    .peer
+                    .send_request(config)
+                    .block_task()
+                    .await?)
+            })
+            .await;
             Update::Configured { session, result }
         }
         Command::Cancel(session) => {
             let result = request(async {
-                client
-                    .cancel_acp(&acp::CancelNotification::new(session.to_string()))
-                    .await?;
+                protocol
+                    .session(&client, session)
+                    .await?
+                    .peer
+                    .send_notification(acp::CancelNotification::new(session.to_string()))?;
                 Ok(())
             })
             .await;
@@ -850,8 +915,7 @@ async fn execute(mut client: Client, command: Command) -> Update {
         | Command::HistoryOverview { .. }
         | Command::HistoryLocation { .. }
         | Command::ForgetHistory(_)
-        | Command::Detach
-        | Command::Foreground(_) => {
+        | Command::Detach => {
             unreachable!("control commands are handled by run")
         }
     }

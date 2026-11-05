@@ -585,9 +585,6 @@ session-directories-title = 会话副工作区
 session-directory-add = 附加工作文件夹…
 session-directory-remove = 移除副目录：{ $path }
 session-directories-unavailable = 需要空闲会话，且智能体支持附加目录和重新加载
-workspace-remove = 移除工作区
-workspace-remove-confirm = 将“{ $path }”从侧栏移除，并归档其中的所有会话。会话记录和文件夹不会删除，可以从归档列表恢复。
-workspace-remove-incomplete = 部分会话未能归档，工作区仍保留。已归档的会话可在归档列表中查看，请稍后重试。
 workspace-update-failed = 无法保存工作区显示状态
 workspace-choose = 切换工作文件夹
 workspace-choose-folder = 选择工作文件夹
@@ -865,3 +862,10 @@ shortcuts-application = 应用
 
 appearance-rounded-corners = 窗口圆角
 appearance-rounded-corners-help = 为浮动窗口启用圆角，默认关闭。
+
+workspace-archive = 归档工作区
+workspace-restore = 恢复工作区
+workspace-delete = 删除工作区
+workspace-archive-confirm = 归档工作区“{ $path }”及其所有会话？正在运行的会话将停止，历史记录保留。
+workspace-delete-confirm = 删除空工作区“{ $path }”？磁盘上的项目文件会保留。
+workspace-delete-cascade-confirm = 工作区“{ $path }”包含 { $count } 个会话（含已归档）。是否一并永久删除这些会话和 Bas 历史记录？磁盘上的项目文件会保留。

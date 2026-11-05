@@ -6,18 +6,18 @@ impl Workspace {
     pub(super) fn archive_blocked(&self, session: SessionId) -> bool {
         self.sessions.pending.archiving.contains(&session)
             || self.sessions.pending.deleting.contains(&session)
-            || self
-                .sessions
-                .entries
-                .iter()
-                .any(|meta| meta.id == session && meta.archived)
+            || self.sessions.entries.iter().any(|meta| {
+                meta.id == session && (meta.archived || self.workspace_blocked(meta.workspace))
+            })
             || self
                 .selected
                 .timeline
                 .conversation
                 .as_ref()
                 .is_some_and(|conversation| {
-                    conversation.session.id == session && conversation.session.archived
+                    conversation.session.id == session
+                        && (conversation.session.archived
+                            || self.workspace_blocked(conversation.session.workspace))
                 })
     }
 
@@ -81,7 +81,8 @@ impl Workspace {
                 accessibility_label: label;
                 disabled: $(!self.backend.connected
                     || self.sessions.pending.archiving.contains(&id)
-                    || self.sessions.pending.deleting.contains(&id));
+                    || self.sessions.pending.deleting.contains(&id)
+                    || self.workspace_blocked(session.workspace));
                 loading: $(self.sessions.pending.archiving.contains(&id));
                 on_click: $(cx.listener(move |this, _, _, cx| {
                             this.on_archive_clicked(id, !archived, cx);

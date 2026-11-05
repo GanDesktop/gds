@@ -15,7 +15,7 @@ fn temporary_cache() -> tempfile::TempDir {
 }
 
 fn window(id: SessionId, start: u64, end: u64, before: Option<u64>) -> HistoryWindow {
-    let mut meta = SessionMeta::new(id, "test".into(), Owner::current());
+    let mut meta = SessionMeta::new(Default::default(), id, "test".into(), Owner::current());
     let events = (start..=end)
         .map(|cursor| event(id, cursor))
         .collect::<Vec<_>>();

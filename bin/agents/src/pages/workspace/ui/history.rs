@@ -69,16 +69,11 @@ impl Workspace {
                 .and_then(|meta| meta.cwd.clone())
                 .or_else(|| self.navigation.selected_directory.clone()),
             workspaces: self
-                .navigation
-                .directories
+                .backend
+                .workspaces
                 .iter()
-                .cloned()
-                .chain(
-                    self.sessions
-                        .entries
-                        .iter()
-                        .filter_map(|meta| meta.cwd.clone()),
-                )
+                .filter(|workspace| !workspace.archived)
+                .map(|workspace| workspace.cwd.clone())
                 .collect(),
             open_session: std::rc::Rc::new(move |snapshot, cx| {
                 if owner.upgrade().is_none() || !cx.windows().contains(&parent) {

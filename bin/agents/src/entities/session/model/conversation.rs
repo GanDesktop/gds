@@ -1,11 +1,13 @@
 use crate::shared::i18n::tr;
 use bas::{acp, acp_v2 as acp2, model::*};
 use std::{collections::HashMap, ops::Range};
+mod message;
 mod protocol;
 mod response;
 mod terminal;
 
-pub(crate) use protocol::{Compaction, ProtocolNotice};
+pub(crate) use message::Message;
+pub(crate) use protocol::{Compaction, ProtocolNotice, content_to_v1};
 
 pub(crate) enum Item {
     Message { message: Message, streaming: bool },
@@ -297,10 +299,7 @@ impl Conversation {
         let index = self.items.len();
         let mut message = Message::new(role, vec![content]);
         // Presentation IDs survive replay and prepending pages within a session.
-        message.id = uuid::Uuid::from_u128(u128::from(self.cursor))
-            .to_string()
-            .parse()
-            .expect("an event cursor produces a valid message UUID");
+        message.id = uuid::Uuid::from_u128(u128::from(self.cursor));
         message.at = at;
         self.items.push(Item::Message {
             message,

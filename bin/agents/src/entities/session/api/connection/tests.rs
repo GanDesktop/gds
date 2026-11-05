@@ -48,6 +48,7 @@ fn native_auth_required_is_typed_but_transport_failures_stay_errors() {
 }
 
 struct Fixture {
+    protocol: protocol::Pool,
     client: Client,
     session: SessionId,
     turn: TurnId,
@@ -85,10 +86,11 @@ enum Scenario {
     Archived,
     Approval,
     ApprovalDisconnected,
-    LegacyApprovals,
 }
 
+#[derive(Clone)]
 struct Service {
+    acp_transport: bool,
     session: SessionMeta,
     runtime: SessionRuntime,
     turn: TurnId,
@@ -106,6 +108,51 @@ struct Service {
 
 #[tonic::async_trait]
 impl Bas for Service {
+    async fn list_workspaces(
+        &self,
+        _: Request<pb::ListWorkspacesRequest>,
+    ) -> Result<Response<pb::ListWorkspacesResponse>, Status> {
+        Ok(Response::new(pb::ListWorkspacesResponse {
+            workspaces: vec![pb::Workspace {
+                id: self.session.workspace.to_string(),
+                name: "test".into(),
+                cwd: self
+                    .session
+                    .cwd
+                    .as_ref()
+                    .map_or("/tmp".into(), |cwd| cwd.display().to_string()),
+                archived: false,
+                revision: 1,
+                created_at: 1,
+                updated_at: 1,
+            }],
+        }))
+    }
+    async fn create_workspace(
+        &self,
+        _: Request<pb::CreateWorkspaceRequest>,
+    ) -> Result<Response<pb::Workspace>, Status> {
+        Err(Status::unimplemented("fixture"))
+    }
+    async fn get_workspace(
+        &self,
+        _: Request<pb::GetWorkspaceRequest>,
+    ) -> Result<Response<pb::Workspace>, Status> {
+        Err(Status::unimplemented("fixture"))
+    }
+    async fn set_workspace_archived(
+        &self,
+        _: Request<pb::SetWorkspaceArchivedRequest>,
+    ) -> Result<Response<pb::Workspace>, Status> {
+        Err(Status::unimplemented("fixture"))
+    }
+    async fn delete_workspace(
+        &self,
+        _: Request<pb::DeleteWorkspaceRequest>,
+    ) -> Result<Response<pb::DeleteWorkspaceResponse>, Status> {
+        Err(Status::unimplemented("fixture"))
+    }
+
     async fn load_history_overview(
         &self,
         _: Request<pb::LoadHistoryOverviewRequest>,
@@ -205,7 +252,7 @@ impl Bas for Service {
         &self,
         _: Request<pb::WatchElicitationsRequest>,
     ) -> Result<Response<Self::WatchElicitationsStream>, Status> {
-        Err(Status::unimplemented("unrelated elicitation"))
+        Ok(Response::new(Box::pin(futures::stream::pending())))
     }
     async fn respond_elicitation(
         &self,
@@ -217,8 +264,6 @@ impl Bas for Service {
     type InstallAgentStream =
         Pin<Box<dyn Stream<Item = Result<pb::AgentOperation, Status>> + Send>>;
     type AttachStream = Pin<Box<dyn Stream<Item = Result<pb::Event, Status>> + Send>>;
-    type SetForegroundStream =
-        Pin<Box<dyn Stream<Item = Result<pb::ForegroundResponse, Status>> + Send>>;
     type WatchPermissionsStream =
         Pin<Box<dyn Stream<Item = Result<pb::PermissionSnapshot, Status>> + Send>>;
 
@@ -228,9 +273,6 @@ impl Bas for Service {
     ) -> Result<Response<Self::WatchPermissionsStream>, Status> {
         if matches!(self.scenario, Scenario::SlowPermissions) {
             return std::future::pending().await;
-        }
-        if matches!(self.scenario, Scenario::LegacyApprovals) {
-            return Err(Status::unimplemented("legacy daemon"));
         }
         assert_eq!(request.into_inner().session, self.session.id.to_string());
         let session = self.session.id;
@@ -300,13 +342,6 @@ impl Bas for Service {
         Ok(Response::new(pb::RespondPermissionResponse {}))
     }
 
-    async fn set_foreground(
-        &self,
-        _: Request<tonic::Streaming<pb::ForegroundRequest>>,
-    ) -> Result<Response<Self::SetForegroundStream>, Status> {
-        Err(Status::unimplemented("not used"))
-    }
-
     async fn get_session(
         &self,
         _: Request<pb::GetSessionRequest>,
@@ -327,6 +362,20 @@ impl Bas for Service {
         request: Request<pb::LoadHistoryRequest>,
     ) -> Result<Response<pb::LoadHistoryResponse>, Status> {
         let request = request.into_inner();
+        if self.acp_transport {
+            let events: Vec<pb::Event> = self
+                .history
+                .iter()
+                .filter(|event| event.cursor.raw() > request.after.unwrap_or(0))
+                .take(request.limit as usize)
+                .map(Into::into)
+                .collect();
+            let next = events
+                .last()
+                .map(|event| event.cursor)
+                .filter(|cursor| *cursor < self.session.revision.raw());
+            return Ok(Response::new(pb::LoadHistoryResponse { events, next }));
+        }
         self.raw_history_requests
             .lock()
             .expect("raw history request log")
@@ -385,6 +434,9 @@ impl Bas for Service {
         &self,
         request: Request<pb::AttachRequest>,
     ) -> Result<Response<Self::AttachStream>, Status> {
+        if self.acp_transport {
+            return Ok(Response::new(Box::pin(futures::stream::pending())));
+        }
         let count = {
             let mut calls = self.attachments.lock().expect("attachment log");
             calls.push(request.into_inner().cursor);
@@ -580,7 +632,13 @@ impl Bas for Service {
 }
 
 async fn fixture(scenario: Scenario) -> Fixture {
-    let mut session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    let mut session = SessionMeta::new(
+        Default::default(),
+        SessionId::new(),
+        "test".into(),
+        Owner::current(),
+    );
+    session.cwd = Some(std::env::current_dir().expect("fixture cwd"));
     session.revision = Cursor::from_raw(300);
     session.archived = matches!(scenario, Scenario::Archived);
     let id = session.id;
@@ -629,6 +687,7 @@ async fn fixture(scenario: Scenario) -> Fixture {
     let permission_snapshots = tokio::sync::watch::channel(initial_permissions).0;
     let turn = TurnId::new();
     let service = Service {
+        acp_transport: false,
         session,
         runtime: SessionRuntime {
             failure: matches!(scenario, Scenario::RuntimeFailure).then(|| {
@@ -654,14 +713,18 @@ async fn fixture(scenario: Scenario) -> Fixture {
         .await
         .expect("test listener");
     let address = listener.local_addr().expect("test address");
+    let mut acp_backend = service.clone();
+    acp_backend.acp_transport = true;
     let task = tokio::spawn(async move {
         Server::builder()
+            .add_service(bas::service::acp::server::Gateway::new(acp_backend).into_server())
             .add_service(BasServer::new(service))
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .expect("test server");
     });
     Fixture {
+        protocol: protocol::Pool::default(),
         client: Client::connect_at(address).await.expect("test client"),
         session: id,
         turn,
@@ -694,6 +757,7 @@ async fn prompt_sends_text_files_and_images_as_native_acp_blocks() {
         attachments[1].content.as_ref().clone(),
     ];
     let update = execute(
+        fixture.protocol.clone(),
         fixture.client.clone(),
         Command::Prompt {
             session: fixture.session,
@@ -721,6 +785,7 @@ async fn prompt_sends_text_files_and_images_as_native_acp_blocks() {
         }
     ));
     let update = execute(
+        fixture.protocol.clone(),
         fixture.client.clone(),
         Command::Prompt {
             session: fixture.session,

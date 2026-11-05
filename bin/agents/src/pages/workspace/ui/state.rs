@@ -65,8 +65,10 @@ impl WindowState {
 pub(super) struct BackendState {
     pub(super) connection: Connection,
     pub(super) server: Target,
-    pub(super) foreground: Option<SessionId>,
     pub(super) agents: Vec<AgentSummary>,
+    pub(super) workspaces: Vec<bas::model::Workspace>,
+    pub(super) observed_workspaces: HashSet<bas::model::WorkspaceId>,
+    pub(super) removed_workspaces: HashSet<bas::model::WorkspaceId>,
     pub(super) metadata: Option<Entity<crate::entities::agent::metadata::Metadata>>,
     pub(super) connected: bool,
     pub(super) error: Option<Failure>,
@@ -83,8 +85,10 @@ impl BackendState {
         Self {
             connection,
             server,
-            foreground: None,
             agents: Vec::new(),
+            workspaces: Vec::new(),
+            removed_workspaces: HashSet::new(),
+            observed_workspaces: HashSet::new(),
             metadata,
             connected: false,
             error: None,
@@ -108,11 +112,10 @@ pub(super) struct NavigationState {
     pub(super) search: Entity<InputState>,
     pub(super) search_expanded: bool,
     pub(super) scroll: gpui_kit::ScrollHandle,
-    pub(super) directories: Vec<PathBuf>,
     pub(super) selected_directory: Option<PathBuf>,
+    pub(super) session_requested: bool,
     pub(super) collapsed: HashSet<Option<PathBuf>>,
-    pub(super) hidden: HashSet<Option<PathBuf>>,
-    pub(super) removing: HashMap<Option<PathBuf>, navigation::removal::Removal>,
+    pub(super) workspace_pending: HashSet<bas::model::WorkspaceId>,
     pub(super) view: navigation::View,
     pub(super) pinned: HashSet<SessionId>,
     pub(super) bookmarks: HashSet<SessionId>,
@@ -129,11 +132,10 @@ impl NavigationState {
             search,
             search_expanded: false,
             scroll: gpui_kit::ScrollHandle::new(),
-            directories: vec![directory.clone()],
             selected_directory: Some(directory),
+            session_requested: true,
             collapsed: HashSet::new(),
-            hidden: HashSet::new(),
-            removing: HashMap::new(),
+            workspace_pending: HashSet::new(),
             view: navigation::View::Workspaces,
             pinned: HashSet::new(),
             bookmarks: HashSet::new(),
@@ -152,10 +154,6 @@ impl NavigationState {
         self.bookmarks = store
             .as_ref()
             .map(navigation::restore::Store::bookmarks)
-            .unwrap_or_default();
-        self.hidden = store
-            .as_ref()
-            .map(navigation::restore::Store::hidden_workspaces)
             .unwrap_or_default();
         self.pinned = store
             .as_ref()

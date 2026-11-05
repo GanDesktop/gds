@@ -245,7 +245,6 @@ impl Authentication {
                         }
                     }
                 }
-                Event::Unknown => self.message = tr!("auth-invalid-event").into(),
             },
         }
         cx.notify();

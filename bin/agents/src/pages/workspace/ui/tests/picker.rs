@@ -108,10 +108,11 @@ fn initialized_agent_waits_for_complete_history_and_no_pending_drafts(cx: &mut T
             let mut newer = meta.clone();
             newer.revision = Cursor::from_raw(1);
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: view.backend.agents.clone(),
                     sessions: vec![newer.into()],
-                })),
+                }))),
                 window,
                 cx,
             );
@@ -200,14 +201,15 @@ fn stale_catalog_cannot_replace_the_agent_while_creating_or_waiting_for_login(
                 });
                 let epoch = view.selected.epoch;
                 let old_catalog = || {
-                    Update::Catalog(Ok(connection::Catalog {
+                    Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                        workspaces: Vec::new(),
                         agents: vec![connection::AgentSummary {
                             id: "embedded".into(),
                             kind: "embedded".into(),
                             command: String::new(),
                         }],
                         sessions: vec![previous.clone().into()],
-                    }))
+                    })))
                 };
                 view.update(old_catalog(), window, cx);
                 assert_eq!(view.selected.agent, "new-agent");

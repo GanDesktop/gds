@@ -4,7 +4,12 @@ use super::*;
 
 #[test]
 fn status_uses_reply_cursor_not_catalog_revision() {
-    let mut session = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+    let mut session = SessionMeta::new(
+        Default::default(),
+        SessionId::new(),
+        "embedded".into(),
+        Owner::current(),
+    );
     session.status = SessionStatus::Idle;
     assert_eq!(Status::for_session(&session, 0, false), Status::Idle);
     session.last_reply = Cursor::from_raw(9);
@@ -28,7 +33,12 @@ fn status_uses_reply_cursor_not_catalog_revision() {
 
 #[test]
 fn runtime_failure_uses_the_snapshots_observable_status() {
-    let mut meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+    let mut meta = SessionMeta::new(
+        Default::default(),
+        SessionId::new(),
+        "embedded".into(),
+        Owner::current(),
+    );
     meta.status = SessionStatus::Idle;
     let mut snapshot = SessionSnapshot::from(meta);
     snapshot.runtime.failure = Some(bas::model::RuntimeFailure::Persistence {

@@ -243,6 +243,7 @@ fn stale_import_controls_and_receipts_cannot_retarget_a_new_filter(cx: &mut Test
     let _query = query(&mut fixture);
     assert!(fixture.commands.try_recv().is_err());
     let snapshot = SessionSnapshot::from(SessionMeta::new(
+        Default::default(),
         SessionId::new(),
         "codex-acp".into(),
         Owner::current(),
@@ -275,6 +276,7 @@ fn primary_action_rejects_stale_controls_after_a_state_change(cx: &mut TestAppCo
     let (request, _, _) = query(&mut fixture);
     let info = row("external", "/repo");
     let mut snapshot = SessionSnapshot::from(SessionMeta::new(
+        Default::default(),
         SessionId::new(),
         "codex-acp".into(),
         Owner::current(),
@@ -338,6 +340,7 @@ fn native_deletion_receipts_are_correlated_and_keep_local_transcripts(cx: &mut T
         cx,
     );
     let local = SessionSnapshot::from(SessionMeta::new(
+        Default::default(),
         SessionId::new(),
         "codex-acp".into(),
         Owner::current(),

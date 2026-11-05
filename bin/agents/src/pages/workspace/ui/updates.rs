@@ -26,7 +26,8 @@ impl Workspace {
             | Update::Cancelled { session, .. } => Some(*session),
             // Creation must still settle its pending attempt; catalogs filter each entry.
             // Session watch messages without an ID are invalidated by selection's epoch.
-            Update::Created { .. }
+            Update::Workspace { .. }
+            | Update::Created { .. }
             | Update::AgentHistory { .. }
             | Update::ImportedHistory { .. }
             | Update::DeletedAgentHistory { .. }
@@ -43,6 +44,9 @@ impl Workspace {
             return;
         }
         match update {
+            Update::Workspace { mutation, result } => {
+                self.workspace_completed(mutation, result, window, cx)
+            }
             // History discovery and mutations belong to the independent history window.
             Update::AgentHistory { .. }
             | Update::ImportedHistory { .. }
@@ -88,6 +92,13 @@ impl Workspace {
             }
             Update::Catalog(result) => match result {
                 Ok(mut catalog) => {
+                    self.merge_workspaces(catalog.workspaces);
+                    catalog.sessions.retain(|session| {
+                        !self
+                            .backend
+                            .removed_workspaces
+                            .contains(&session.meta.workspace)
+                    });
                     let failed_selection = self
                         .selected
                         .id
@@ -250,10 +261,6 @@ impl Workspace {
             }
             Update::Archived { session, result } => {
                 self.sessions.pending.archiving.remove(&session);
-                self.workspace_archive_completed(
-                    session,
-                    result.as_ref().is_ok_and(|snapshot| snapshot.meta.archived),
-                );
                 match result {
                     Ok(incoming) => {
                         if !self.sessions.removed.contains(&session) {
@@ -589,7 +596,6 @@ impl Workspace {
             Update::Elicitations { .. } | Update::ElicitationUnavailable { .. } => {}
         }
         self.pause_archived();
-        self.finish_workspace_removals(window, cx);
         for (id, outbox) in &mut self.sessions.outboxes {
             if self.sessions.runtimes.failure(*id).is_some() {
                 outbox.pause();

@@ -43,7 +43,6 @@ impl Workspace {
         } else {
             self.prepare_to_close(window, cx);
         }
-        self.sync_foreground(window);
         cx.notify();
     }
 }

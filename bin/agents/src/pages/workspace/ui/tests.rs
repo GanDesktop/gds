@@ -72,14 +72,15 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
         });
         workspace.update(cx, |view, cx| {
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: vec![connection::AgentSummary {
                         id: "embedded".into(),
                         kind: "embedded".into(),
                         command: String::new(),
                     }],
                     sessions: Vec::new(),
-                })),
+                }))),
                 window,
                 cx,
             )
@@ -102,9 +103,60 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
 }
 
 fn session() -> SessionMeta {
-    let mut session = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+    let mut session = SessionMeta::new(
+        Default::default(),
+        SessionId::new(),
+        "embedded".into(),
+        Owner::current(),
+    );
+    session.workspace = project(None).id;
+    session.cwd = Some("/tmp".into());
+    session.workspace = project(session.cwd.as_deref()).id;
     session.status = SessionStatus::Idle;
     session
+}
+
+fn project(directory: Option<&std::path::Path>) -> bas::model::Workspace {
+    use std::hash::{Hash, Hasher};
+    let cwd = directory
+        .unwrap_or(std::path::Path::new("/tmp"))
+        .to_path_buf();
+    let mut hash = std::hash::DefaultHasher::new();
+    cwd.hash(&mut hash);
+    bas::model::Workspace {
+        id: uuid::Uuid::from_u128(u128::from(hash.finish()))
+            .to_string()
+            .parse()
+            .expect("workspace ID"),
+        name: cwd
+            .file_name()
+            .unwrap_or(cwd.as_os_str())
+            .to_string_lossy()
+            .into_owned(),
+        cwd,
+        archived: false,
+        revision: 1,
+        created_at: bas::model::Timestamp::now(),
+        updated_at: bas::model::Timestamp::now(),
+    }
+}
+
+fn catalog_workspaces(mut catalog: connection::Catalog) -> connection::Catalog {
+    if catalog.workspaces.is_empty() {
+        catalog.workspaces.push(project(None));
+    }
+    for session in &catalog.sessions {
+        if !catalog
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == session.meta.workspace)
+        {
+            let mut workspace = project(session.meta.cwd.as_deref());
+            workspace.id = session.meta.workspace;
+            catalog.workspaces.push(workspace);
+        }
+    }
+    catalog
 }
 
 fn history_window(epoch: u64, session: bas::model::SessionSnapshot, events: Vec<Event>) -> Update {
@@ -181,9 +233,10 @@ fn title_and_background_catalog_wait_for_receipt_correlated_tracking(cx: &mut Te
         fixture.view.update(cx, |view, cx| {
             let mut completed = first.clone();
             completed.revision = Cursor::from_raw(4);
-            view.update(Update::Catalog(Ok(connection::Catalog {
+            view.update(Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                workspaces: Vec::new(),
                 agents: view.backend.agents.clone(), sessions: vec![completed.into(), second.into()],
-            })), window, cx);
+            }))), window, cx);
             assert!(fixture.commands.try_recv().is_err());
             view.update(Update::TrackedTurn {
                 event: Event::new(first.id, Cursor::from_raw(4), EventKind::TurnFinished {
@@ -239,10 +292,11 @@ fn catalog_and_history_merge_metadata_without_skipping_content(cx: &mut TestAppC
                 cx,
             );
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: view.backend.agents.clone(),
                     sessions: vec![old.into()],
-                })),
+                }))),
                 window,
                 cx,
             );
@@ -354,10 +408,13 @@ fn receipt_after_session_deletion_cannot_recreate_outbox_or_draft(cx: &mut TestA
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
             view.update(
-                Update::Catalog(Ok(crate::entities::session::connection::Catalog {
-                    agents: view.backend.agents.clone(),
-                    sessions: vec![meta.clone().into()],
-                })),
+                Update::Catalog(Ok(catalog_workspaces(
+                    crate::entities::session::connection::Catalog {
+                        workspaces: Vec::new(),
+                        agents: view.backend.agents.clone(),
+                        sessions: vec![meta.clone().into()],
+                    },
+                ))),
                 window,
                 cx,
             );
@@ -367,10 +424,13 @@ fn receipt_after_session_deletion_cannot_recreate_outbox_or_draft(cx: &mut TestA
             view.send_prompt(window, cx);
             let submission = submission::payload(fixture.commands.try_recv().expect("A"));
             view.update(
-                Update::Catalog(Ok(crate::entities::session::connection::Catalog {
-                    agents: Vec::new(),
-                    sessions: Vec::new(),
-                })),
+                Update::Catalog(Ok(catalog_workspaces(
+                    crate::entities::session::connection::Catalog {
+                        workspaces: Vec::new(),
+                        agents: Vec::new(),
+                        sessions: Vec::new(),
+                    },
+                ))),
                 window,
                 cx,
             );
@@ -389,6 +449,16 @@ fn receipt_after_session_deletion_cannot_recreate_outbox_or_draft(cx: &mut TestA
 fn attach(fixture: &Fixture, session: SessionMeta, cx: &mut TestAppContext) {
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
+            if !view
+                .backend
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.id == session.workspace)
+            {
+                let mut workspace = project(session.cwd.as_deref());
+                workspace.id = session.workspace;
+                view.backend.workspaces.push(workspace);
+            }
             view.sessions.entries.push(session.clone());
             view.select(session.id, window, cx);
             view.update(
@@ -523,6 +593,7 @@ fn selecting_an_agent_initializes_options_before_any_prompt(cx: &mut TestAppCont
     assert_eq!(fixture.initial_create.cwd, "/tmp");
     let mut created = session();
     created.cwd = Some(PathBuf::from("/tmp"));
+    created.workspace = project(created.cwd.as_deref()).id;
     created.acp = Some(
         bas::acp::NewSessionResponse::new(created.id.to_string()).config_options(vec![
             serde_json::from_value(serde_json::json!({
@@ -712,6 +783,7 @@ fn late_initialization_cannot_steal_another_agent_or_workspace(cx: &mut TestAppC
     assert!(fixture.commands.try_recv().is_err());
     let mut latest = session();
     latest.cwd = Some(PathBuf::from("/other"));
+    latest.workspace = project(latest.cwd.as_deref()).id;
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
             view.update(
@@ -1100,7 +1172,6 @@ fn rejected_png_restores_editing_and_does_not_block_a_text_prompt(cx: &mut TestA
     })
     .expect("window");
     let mut sent = false;
-    // The foreground update may accompany a render or activation.
     while let Ok(command) = fixture.commands.try_recv() {
         if let Command::Prompt { submission, .. } = command {
             assert_eq!(submission::text(&submission), "草");
@@ -1109,47 +1180,6 @@ fn rejected_png_restores_editing_and_does_not_block_a_text_prompt(cx: &mut TestA
         }
     }
     assert!(sent);
-}
-
-#[gpui_kit::test]
-fn foreground_presence_tracks_window_activation_and_selected_thread(cx: &mut TestAppContext) {
-    let mut primary = fixture(cx);
-    let first = session();
-    attach(&primary, first.clone(), cx);
-    while primary.commands.try_recv().is_ok() {}
-    cx.update_window(primary.window.into(), |_, window, cx| {
-        window.activate_window();
-        window.render_frame(cx);
-    })
-    .expect("activate window");
-    cx.executor().run_until_parked();
-    let mut presence = Vec::new();
-    while let Ok(command) = primary.commands.try_recv() {
-        if let Command::Foreground(session) = command {
-            presence.push(session);
-        }
-    }
-    assert_eq!(presence, vec![Some(first.id)]);
-    let second = session();
-    attach(&primary, second.clone(), cx);
-    cx.update_window(primary.window.into(), |_, window, cx| {
-        window.render_frame(cx)
-    })
-    .expect("selected thread");
-    let other_window = fixture(cx);
-    cx.update_window(other_window.window.into(), |_, window, cx| {
-        window.activate_window();
-        window.render_frame(cx);
-    })
-    .expect("activate other window");
-    cx.executor().run_until_parked();
-    presence.clear();
-    while let Ok(command) = primary.commands.try_recv() {
-        if let Command::Foreground(session) = command {
-            presence.push(session);
-        }
-    }
-    assert_eq!(presence, vec![Some(second.id), None]);
 }
 
 #[gpui_kit::test]
@@ -1561,6 +1591,7 @@ fn reopening_restores_the_selected_thread_and_deleted_threads_fall_back(cx: &mut
     let state_path = directory.path().join("window.json");
     let mut previous = session();
     previous.cwd = Some(PathBuf::from("/saved/project"));
+    previous.workspace = project(previous.cwd.as_deref()).id;
     previous.agent = "saved-agent".into();
     let recent = session();
     workspace_navigation::restore::Store::open(state_path.clone())
@@ -1580,10 +1611,11 @@ fn reopening_restores_the_selected_thread_and_deleted_threads_fall_back(cx: &mut
                 "a transient connection failure must not consume restoration"
             );
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: vec![],
                     sessions: vec![recent.clone().into(), previous.clone().into()],
-                })),
+                }))),
                 window,
                 cx,
             );
@@ -1624,10 +1656,11 @@ fn reopening_restores_the_selected_thread_and_deleted_threads_fall_back(cx: &mut
             ));
             view.navigation.restore.on_connect = true;
             view.update(
-                Update::Catalog(Ok(connection::Catalog {
+                Update::Catalog(Ok(catalog_workspaces(connection::Catalog {
+                    workspaces: Vec::new(),
                     agents: vec![],
                     sessions: vec![previous.clone().into()],
-                })),
+                }))),
                 window,
                 cx,
             );

@@ -29,6 +29,7 @@ pub(crate) fn prepare(
 /// acceptance unknown. Both retain the original transport diagnostics.
 pub(crate) async fn submit(
     client: &mut Client,
+    protocol: &crate::entities::session::connection::ProtocolPool,
     session: SessionId,
     submission: &PromptSubmission,
     title: Option<String>,
@@ -46,7 +47,14 @@ pub(crate) async fn submit(
         .await
         .map_err(|failure| Failure::Preflight(Box::new(failure)))?;
     }
-    request(async { Ok(client.submit_prompt(submission).await?) }).await
+    request(async {
+        Ok(protocol
+            .session(client, session)
+            .await?
+            .submit(submission)
+            .await?)
+    })
+    .await
 }
 
 #[cfg(test)]

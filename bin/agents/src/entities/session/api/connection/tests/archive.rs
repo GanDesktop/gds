@@ -23,6 +23,7 @@ async fn catalog_requests_and_keeps_archived_metadata() {
 async fn old_daemon_archive_is_actionable_and_never_deletes() {
     let fixture = fixture(Scenario::Reconnect).await;
     let update = execute(
+        fixture.protocol.clone(),
         fixture.client.clone(),
         Command::Archive {
             session: fixture.session,

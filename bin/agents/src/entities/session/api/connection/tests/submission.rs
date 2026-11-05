@@ -87,12 +87,18 @@ async fn lost_response_queries_do_not_resubmit_and_acceptance_starts_background_
             submission,
             result: Err(_),
             ..
-        } = execute(fixture.client.clone(), initial(&fixture)).await
+        } = execute(
+            fixture.protocol.clone(),
+            fixture.client.clone(),
+            initial(&fixture),
+        )
+        .await
         else {
             panic!("lost response must remain unknown");
         };
         let (updates, mut events) = mpsc::channel(8);
         operation(
+            fixture.protocol.clone(),
             fixture.client.clone(),
             Command::ResolvePrompt {
                 session: fixture.session,
@@ -136,11 +142,17 @@ async fn explicit_retry_reuses_original_identity_payload_and_does_not_restore_ol
         submission,
         result: Err(_),
         ..
-    } = execute(fixture.client.clone(), initial(&fixture)).await
+    } = execute(
+        fixture.protocol.clone(),
+        fixture.client.clone(),
+        initial(&fixture),
+    )
+    .await
     else {
         panic!("unknown");
     };
     execute(
+        fixture.protocol.clone(),
         fixture.client.clone(),
         Command::Rename {
             session: fixture.session,
@@ -149,6 +161,7 @@ async fn explicit_retry_reuses_original_identity_payload_and_does_not_restore_ol
     )
     .await;
     let update = execute(
+        fixture.protocol.clone(),
         fixture.client.clone(),
         Command::ResolvePrompt {
             session: fixture.session,
@@ -182,7 +195,12 @@ async fn invalid_receipt_is_unknown_but_preflight_and_explicit_rejections_are_de
         Scenario::Rejected,
     ] {
         let fixture = fixture(super::Scenario::Submission(scenario)).await;
-        let update = execute(fixture.client.clone(), initial(&fixture)).await;
+        let update = execute(
+            fixture.protocol.clone(),
+            fixture.client.clone(),
+            initial(&fixture),
+        )
+        .await;
         if matches!(scenario, Scenario::BadReceipt) {
             assert!(matches!(update, Update::Submission { result: Err(_), .. }));
         } else if matches!(scenario, Scenario::TitleFailure) {

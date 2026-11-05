@@ -8,7 +8,12 @@ mod response;
 
 #[test]
 fn old_history_builds_content_without_rolling_back_newer_metadata() {
-    let mut meta = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    let mut meta = SessionMeta::new(
+        Default::default(),
+        SessionId::new(),
+        "test".into(),
+        Owner::current(),
+    );
     let turn1 = TurnId::new();
     let turn2 = TurnId::new();
     meta.status = SessionStatus::Working;
@@ -46,7 +51,12 @@ fn old_history_builds_content_without_rolling_back_newer_metadata() {
 
 #[test]
 fn events_newer_than_snapshot_survive_history_replay() {
-    let meta = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    let meta = SessionMeta::new(
+        Default::default(),
+        SessionId::new(),
+        "test".into(),
+        Owner::current(),
+    );
     let mut conversation = Conversation::new(meta.clone());
     let turn = TurnId::new();
     conversation.apply(Event::new(
@@ -61,6 +71,7 @@ fn events_newer_than_snapshot_survive_history_replay() {
 
 fn conversation() -> Conversation {
     Conversation::new(SessionMeta::new(
+        Default::default(),
         SessionId::new(),
         "embedded".into(),
         Owner::current(),

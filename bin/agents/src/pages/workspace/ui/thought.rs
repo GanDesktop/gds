@@ -1,5 +1,6 @@
+use crate::entities::session::conversation::Message;
 use crate::shared::i18n::tr;
-use bas::model::{Message, Role, ToolCallStatus};
+use bas::model::{Role, ToolCallStatus};
 use gds_uim::el;
 
 use super::*;

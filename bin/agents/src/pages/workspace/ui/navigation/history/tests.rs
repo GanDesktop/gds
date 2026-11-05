@@ -2,7 +2,12 @@ use super::*;
 use bas::model::{Owner, SessionId};
 
 fn session(title: &str, at: &str) -> SessionMeta {
-    let mut session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    let mut session = SessionMeta::new(
+        Default::default(),
+        SessionId::new(),
+        "test".into(),
+        Owner::current(),
+    );
     session.title = Some(title.into());
     session.updated_at = bas::model::Timestamp::from_millis(
         at.parse::<Timestamp>().expect("timestamp").as_millisecond() as u64,

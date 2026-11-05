@@ -12,38 +12,30 @@ pub(in crate::pages::workspace) struct Group<'a> {
 
 pub(in crate::pages::workspace) fn group_threads<'a>(
     sessions: &'a [SessionMeta],
-    directories: &[PathBuf],
+    workspaces: &[bas::model::Workspace],
     query: &str,
 ) -> Vec<Group<'a>> {
-    let mut groups: Vec<Group<'a>> = Vec::new();
-    for session in sessions
+    workspaces
         .iter()
-        .filter(|session| crate::pages::workspace::ui::matches_query(session, query))
-    {
-        let directory = session.cwd.as_deref().map(normalize);
-        if let Some(group) = groups.iter_mut().find(|group| group.directory == directory) {
-            group.threads.push(session);
-        } else {
-            groups.push(Group {
-                directory,
-                threads: vec![session],
-            });
-        }
-    }
-    for directory in directories {
-        let directory = normalize(directory);
-        if (query.is_empty() || directory.to_string_lossy().to_lowercase().contains(query))
-            && !groups
+        .filter_map(|workspace| {
+            let threads: Vec<_> = sessions
                 .iter()
-                .any(|group| group.directory.as_ref() == Some(&directory))
-        {
-            groups.push(Group {
-                directory: Some(directory),
-                threads: Vec::new(),
-            });
-        }
-    }
-    groups
+                .filter(|session| session.workspace == workspace.id)
+                .filter(|session| crate::pages::workspace::ui::matches_query(session, query))
+                .collect();
+            let matches = query.is_empty()
+                || workspace.name.to_lowercase().contains(query)
+                || workspace
+                    .cwd
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .contains(query);
+            (matches || !threads.is_empty()).then(|| Group {
+                directory: Some(workspace.cwd.clone()),
+                threads,
+            })
+        })
+        .collect()
 }
 
 pub(in crate::pages::workspace) fn name(directory: Option<&Path>) -> String {

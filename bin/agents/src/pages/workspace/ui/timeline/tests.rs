@@ -2,7 +2,12 @@ use super::*;
 use bas::model::{Cursor, Event, EventKind, Owner};
 
 fn synthetic(first: u64, count: usize, text_bytes: usize) -> PreparedHistory {
-    let meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+    let meta = SessionMeta::new(
+        Default::default(),
+        SessionId::new(),
+        "embedded".into(),
+        Owner::current(),
+    );
     let events = (first..first + count as u64)
         .map(|cursor| {
             Event::new(

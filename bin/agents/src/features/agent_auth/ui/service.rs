@@ -26,7 +26,6 @@ pub(super) enum Event {
     ElicitationComplete(Option<serde_json::Value>),
     ElicitationCancelled(String),
     Terminal(Result<Invocation, Failure>),
-    Unknown,
 }
 
 pub(super) enum Control {
@@ -39,75 +38,9 @@ pub(super) enum Control {
     },
 }
 
-fn encode(control: Control) -> pb::AuthenticationInput {
-    use pb::authentication_input::Kind;
-    let kind = match control {
-        Control::ElicitationResponse {
-            request_id,
-            response,
-        } => Kind::ElicitationResponse(pb::ElicitationAnswer {
-            request_id,
-            response: Some(pb::AcpPayload {
-                json: serde_json::to_vec(&response).expect("JSON value serializes"),
-            }),
-        }),
-        Control::TerminalResult { exit_code } => {
-            Kind::TerminalResult(pb::TerminalAuthenticationResult { exit_code })
-        }
-    };
-    pb::AuthenticationInput { kind: Some(kind) }
-}
-
-fn decode(event: pb::AuthenticationEvent) -> Event {
-    use pb::authentication_event::Kind;
-    match event.kind {
-        Some(Kind::Progress(message)) => Event::Progress(message),
-        Some(Kind::Check(response)) => {
-            Event::Check(check::decode_response(response).unwrap_or_else(Status::Failed))
-        }
-        Some(Kind::Elicitation(pending)) => {
-            let request = pending
-                .request
-                .as_ref()
-                .ok_or(Failure::MissingRequest)
-                .and_then(|payload| {
-                    payload
-                        .decode::<serde_json::Value>()
-                        .map_err(|error| Failure::InvalidPayload(error.to_string()))
-                })
-                .and_then(|raw| {
-                    bas::authentication::elicitation::parse_request(&raw)
-                        .map_err(|error| Failure::InvalidPayload(error.to_string()))
-                });
-            Event::Elicitation {
-                request_id: pending.request_id,
-                request,
-            }
-        }
-        Some(Kind::ElicitationComplete(payload)) => {
-            Event::ElicitationComplete(payload.decode::<serde_json::Value>().ok())
-        }
-        Some(Kind::ElicitationCancelled(request_id)) => Event::ElicitationCancelled(request_id),
-        Some(Kind::Terminal(payload)) => Event::Terminal(
-            payload
-                .decode::<Invocation>()
-                .map_err(|error| Failure::InvalidPayload(error.to_string())),
-        ),
-        None => Event::Unknown,
-    }
-}
-
-fn next_event(
-    next: Result<Option<pb::AuthenticationEvent>, tonic::Status>,
-) -> Result<Event, Failure> {
-    next.map_err(|error| Failure::StreamRpc(error.into()))?
-        .map(decode)
-        .ok_or(Failure::StreamEnded)
-}
-
-fn start_input(spec: &AgentSpec, method: &Method) -> Result<pb::AuthenticationInput, Failure> {
-    Ok(pb::AuthenticationInput {
-        kind: Some(pb::authentication_input::Kind::Start(
+fn preparation(spec: &AgentSpec, method: &Method) -> Result<pb::PrepareAcpRequest, Failure> {
+    Ok(pb::PrepareAcpRequest {
+        target: Some(pb::prepare_acp_request::Target::Authentication(
             pb::AuthenticateAgentRequest {
                 agent: spec.id.to_string(),
                 expected_spec_json: serde_json::to_vec(spec)
@@ -117,6 +50,7 @@ fn start_input(spec: &AgentSpec, method: &Method) -> Result<pb::AuthenticationIn
                     .map_err(|error| Failure::External(error.to_string()))?,
             },
         )),
+        interactive: true,
     })
 }
 
@@ -159,25 +93,93 @@ async fn run(
     let mut client = check::verified_client(service.address(), &path)
         .await
         .map_err(Failure::External)?;
-    let request = start_input(&spec, &method)?;
-    let (send, receive) = mpsc::channel(16);
-    send.send(request).await.map_err(|_| Failure::InputEnded)?;
-    let mut stream = client
-        .authenticate_agent_interactive(tokio_stream::wrappers::ReceiverStream::new(receive))
+    use bas::service::acp::{Incoming, Link, prepare, sdk};
+    use futures::StreamExt;
+    let prepared = prepare(client.channel(), preparation(&spec, &method)?)
+        .await
+        .map_err(|error| Failure::StartRpc(error.into()))?;
+    let (link, mut incoming) = Link::open(prepared)
+        .await
+        .map_err(|error| Failure::StartRpc(error.into()))?;
+    let mut control = link.prepared.control.clone();
+    let mut auxiliary = control
+        .watch_auxiliary(pb::AcpConnectionRequest {
+            connection: link.prepared.id.clone(),
+        })
         .await
         .map_err(|error| Failure::StartRpc(error.into()))?
         .into_inner();
+    link.peer
+        .send_request(
+            bas::acp::InitializeRequest::new(sdk::schema::ProtocolVersion::V1).client_capabilities(
+                bas::acp::ClientCapabilities::new().elicitation(
+                    bas::acp::ElicitationCapabilities::new()
+                        .form(bas::acp::ElicitationFormCapabilities::new())
+                        .url(bas::acp::ElicitationUrlCapabilities::new()),
+                ),
+            ),
+        )
+        .block_task()
+        .await
+        .map_err(|error| Failure::External(error.to_string()))?;
+    let authenticate = link
+        .peer
+        .send_request(bas::acp::AuthenticateRequest::new(method.id.clone()))
+        .block_task();
+    tokio::pin!(authenticate);
+    let mut pending = std::collections::HashMap::<String, sdk::Responder>::new();
+    let mut cancelled = futures::stream::FuturesUnordered::new();
     loop {
         tokio::select! {
-            next = input.recv() => {
-                let Some(next) = next else { return Ok(()); };
-                send.send(encode(next)).await.map_err(|_| Failure::InputClosed)?;
+            result = &mut authenticate => {
+                result.map_err(|error| Failure::External(error.to_string()))?;
+                let response = client.check_agent(pb::CheckAgentRequest {
+                    agent: spec.id.to_string(), expected_spec_json: serde_json::to_vec(&spec).map_err(|error| Failure::External(error.to_string()))?, connect: true,
+                }).await.map_err(|error| Failure::StreamRpc(error.into()))?.into_inner();
+                let status = check::decode_response(response).unwrap_or_else(Status::Failed);
+                let _ = events.unbounded_send(Ok(Event::Check(status)));
+                return Ok(());
             }
-            next = stream.message() => {
-                let event = next_event(next)?;
-                let complete = matches!(event, Event::Check(_));
+            id = cancelled.next(), if !cancelled.is_empty() => {
+                let id: String = id.expect("pending cancellation");
+                if pending.remove(&id).is_some() { let _ = events.unbounded_send(Ok(Event::ElicitationCancelled(id))); }
+            }
+            next = input.recv() => {
+                match next {
+                    None => return Ok(()),
+                    Some(Control::TerminalResult { exit_code }) => {
+                        control.terminal_result(pb::AcpTerminalResultRequest { connection: link.prepared.id.clone(), exit_code }).await.map_err(|error| Failure::StreamRpc(error.into()))?;
+                    }
+                    Some(Control::ElicitationResponse { request_id, response }) => {
+                        let responder = pending.remove(&request_id).ok_or(Failure::InputClosed)?;
+                        responder.respond_with_result(Ok(response)).map_err(|error| Failure::External(error.to_string()))?;
+                    }
+                }
+            }
+            next = incoming.recv() => {
+                match next.ok_or(Failure::StreamEnded)? {
+                    Incoming::Request(request, responder) if request.method == "elicitation/create" => {
+                        let request_id = serde_json::to_string(responder.id()).map_err(|error| Failure::External(error.to_string()))?;
+                        let request = bas::authentication::elicitation::parse_request(&request.params).map_err(|error| Failure::InvalidPayload(error.to_string()));
+                        let cancellation = responder.cancellation();
+                        let id = request_id.clone();
+                        cancelled.push(async move { cancellation.cancelled().await; id });
+                        pending.insert(request_id.clone(), responder);
+                        let _ = events.unbounded_send(Ok(Event::Elicitation { request_id, request }));
+                    }
+                    Incoming::Request(_, responder) => { responder.respond_with_error(bas::acp::Error::method_not_found()).map_err(|error| Failure::External(error.to_string()))?; }
+                    Incoming::Notification(notification) if notification.method == "elicitation/complete" => { let _ = events.unbounded_send(Ok(Event::ElicitationComplete(Some(notification.params)))); }
+                    Incoming::Notification(_) => {}
+                }
+            }
+            next = auxiliary.message() => {
+                let next = next.map_err(|error| Failure::StreamRpc(error.into()))?.ok_or(Failure::StreamEnded)?;
+                let event = match next.kind {
+                    Some(pb::acp_auxiliary_event::Kind::Terminal(payload)) => Event::Terminal(payload.decode().map_err(|error| Failure::InvalidPayload(error.to_string()))),
+                    Some(pb::acp_auxiliary_event::Kind::Progress(message)) => Event::Progress(message),
+                    None => return Err(Failure::InvalidPayload("empty authentication control event".into())),
+                };
                 if events.unbounded_send(Ok(event)).is_err() { return Ok(()); }
-                if complete { return Ok(()); }
             }
         }
     }

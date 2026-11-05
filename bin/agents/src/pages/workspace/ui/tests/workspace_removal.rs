@@ -1,186 +1,190 @@
-use super::archive::archived;
 use super::*;
-
-fn archive_requests(fixture: &mut Fixture) -> HashSet<SessionId> {
-    std::iter::from_fn(|| fixture.commands.try_recv().ok())
-        .filter_map(|command| match command {
-            Command::Archive {
-                session,
-                archived: true,
-            } => Some(session),
-            Command::Foreground(_)
-            | Command::Watch { .. }
-            | Command::Resume { .. }
-            | Command::HistoryOverview { .. }
-            | Command::Detach => None,
-            _ => panic!("removing a workspace must only archive and change navigation"),
-        })
-        .collect()
-}
+use connection::WorkspaceMutation;
 
 #[gpui_kit::test]
-fn workspace_removal_archives_all_members_ignoring_search_and_preserves_data(
-    cx: &mut TestAppContext,
-) {
-    let mut fixture = fixture(cx);
-    let mut first = session();
-    first.cwd = Some("/one".into());
-    first.status = SessionStatus::Working;
-    let mut second = session();
-    second.cwd = first.cwd.clone();
-    let mut other = session();
-    other.cwd = Some("/one/child".into());
-    attach(&fixture, other.clone(), cx);
-    attach(&fixture, second.clone(), cx);
-    attach(&fixture, first.clone(), cx);
-    let state = tempfile::tempdir().expect("window state");
-    let state_path = state.path().join("window.json");
-    let confirmation = cx
-        .update_window(fixture.window.into(), |_, window, cx| {
-            fixture.view.update(cx, |view, cx| {
-                view.attach_restore(Some(workspace_navigation::restore::Store::open(
-                    state_path.clone(),
-                )));
-                view.navigation.restore.on_connect = false;
-                view.navigation.search.update(cx, |input, cx| {
-                    input.set_value("only one visible", window, cx)
-                });
-                view.composer
-                    .input
-                    .update(cx, |input, cx| input.set_value("keep draft", window, cx));
-                let before = cx.windows();
-                view.request_remove_workspace(Some("/one".into()), cx);
-                cx.windows()
-                    .into_iter()
-                    .find(|window| !before.contains(window))
-                    .expect("confirmation")
-            })
-        })
-        .expect("request workspace removal");
-    while fixture.commands.try_recv().is_ok() {}
-    cx.update_window(confirmation, |_, window, cx| {
-        window.render_frame(cx);
-        window.click("message-confirm", cx);
-    })
-    .expect("confirm");
-    cx.run_until_parked();
-    assert_eq!(
-        archive_requests(&mut fixture),
-        HashSet::from([first.id, second.id])
-    );
-    cx.update_window(fixture.window.into(), |_, window, cx| {
-        fixture.view.update(cx, |view, cx| {
-            view.update(
-                Update::Archived {
-                    session: first.id,
-                    result: Ok(archived(first.clone(), true, 2).into()),
-                },
-                window,
-                cx,
-            );
-            assert!(!view.navigation.hidden.contains(&Some("/one".into())));
-            view.update(
-                Update::Archived {
-                    session: second.id,
-                    result: Ok(archived(second.clone(), true, 2).into()),
-                },
-                window,
-                cx,
-            );
-            assert!(view.navigation.removing.is_empty());
-            assert!(view.navigation.hidden.contains(&Some("/one".into())));
-            assert_eq!(view.selected.id, Some(other.id));
-            assert_eq!(view.sessions.entries.len(), 3);
-            assert_eq!(view.sessions.drafts[&first.id].text, "keep draft");
-            assert!(
-                view.sessions
-                    .entries
-                    .iter()
-                    .find(|s| s.id == first.id)
-                    .expect("archived first")
-                    .archived
-            );
-            assert_eq!(
-                view.sessions
-                    .entries
-                    .iter()
-                    .find(|s| s.id == first.id)
-                    .expect("running first")
-                    .status,
-                SessionStatus::Working
-            );
-            let visible = view.visible_sessions();
-            assert!(
-                view.grouped_threads(&visible, "")
-                    .iter()
-                    .all(|g| g.directory != Some("/one".into()))
-            );
-            view.navigation.view = workspace_navigation::View::Archived;
-            let archived = view.visible_sessions();
-            assert_eq!(
-                view.grouped_threads(&archived, "")
-                    .iter()
-                    .find(|g| g.directory == Some("/one".into()))
-                    .expect("archive group")
-                    .threads
-                    .len(),
-                2
-            );
-        });
-    })
-    .expect("archive receipts");
-    assert!(
-        workspace_navigation::restore::Store::open(state_path)
-            .hidden_workspaces()
-            .contains(&Some("/one".into()))
-    );
-    assert!(archive_requests(&mut fixture).is_empty());
-}
-
-#[gpui_kit::test]
-fn partial_workspace_archive_keeps_the_group_and_retry_only_targets_unarchived_members(
+fn workspace_delete_requires_confirmation_and_cascades_only_when_confirmed(
     cx: &mut TestAppContext,
 ) {
     let mut fixture = fixture(cx);
     let first = session();
-    let second = session();
+    let mut archived = session();
+    archived.archived = true;
+    attach(&fixture, archived.clone(), cx);
     attach(&fixture, first.clone(), cx);
-    attach(&fixture, second.clone(), cx);
     while fixture.commands.try_recv().is_ok() {}
-    cx.update_window(fixture.window.into(), |_, window, cx| {
+    cx.update_window(fixture.window.into(), |_, _, cx| {
         fixture.view.update(cx, |view, cx| {
-            view.remove_workspace(first.cwd.clone(), window, cx);
-            view.update(
-                Update::Archived {
-                    session: first.id,
-                    result: Ok(archived(first.clone(), true, 2).into()),
-                },
-                window,
-                cx,
-            );
-            view.update(
-                Update::Archived {
-                    session: second.id,
-                    result: Err("could not archive".into()),
-                },
-                window,
-                cx,
-            );
-            assert!(view.navigation.removing.is_empty());
-            assert!(!view.navigation.hidden.contains(&first.cwd));
-            assert_eq!(view.selected.id, Some(second.id));
+            view.request_remove_workspace(first.cwd.clone(), cx)
         });
     })
-    .expect("partial failure");
-    assert_eq!(
-        archive_requests(&mut fixture),
-        HashSet::from([first.id, second.id])
+    .expect("request delete");
+    assert!(fixture.commands.try_recv().is_err());
+    let confirmation = cx
+        .windows()
+        .into_iter()
+        .find(|window| window.window_id() != fixture.window.window_id())
+        .expect("confirmation");
+    cx.update_window(confirmation, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("message-close", cx);
+    })
+    .expect("cancel");
+    assert!(fixture.commands.try_recv().is_err());
+    cx.update_window(fixture.window.into(), |_, _, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.request_remove_workspace(first.cwd.clone(), cx)
+        });
+    })
+    .expect("request again");
+    let confirmation = cx
+        .windows()
+        .into_iter()
+        .find(|window| window.window_id() != fixture.window.window_id())
+        .expect("confirmation");
+    cx.update_window(confirmation, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("message-confirm", cx);
+    })
+    .expect("confirm cascade");
+    assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::Workspace(WorkspaceMutation::Delete { id, force: true })) if id == first.workspace)
+    );
+    assert!(
+        fixture.commands.try_recv().is_err(),
+        "one daemon operation, no client cascade"
     );
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
-            view.remove_workspace(first.cwd.clone(), window, cx)
+            view.update(
+                Update::Workspace {
+                    mutation: WorkspaceMutation::Delete {
+                        id: first.workspace,
+                        force: true,
+                    },
+                    result: Err("offline".into()),
+                },
+                window,
+                cx,
+            );
+            assert_eq!(view.sessions.entries.len(), 2);
+            assert_eq!(view.backend.workspaces.len(), 1);
+            assert!(view.navigation.workspace_pending.is_empty());
+            view.update(
+                Update::Workspace {
+                    mutation: WorkspaceMutation::Delete {
+                        id: first.workspace,
+                        force: true,
+                    },
+                    result: Ok(None),
+                },
+                window,
+                cx,
+            );
+            assert!(view.sessions.entries.is_empty());
+            assert!(view.backend.workspaces.is_empty());
+            assert!(view.sessions.removed.contains(&archived.id));
         });
     })
-    .expect("retry");
-    assert_eq!(archive_requests(&mut fixture), HashSet::from([second.id]));
+    .expect("failure preserves data; receipt removes all known members");
+    assert!(
+        !std::iter::from_fn(|| fixture.commands.try_recv().ok())
+            .any(|command| matches!(command, Command::Create(_))),
+        "deleting the last workspace must not recreate it through session preparation"
+    );
+}
+
+#[gpui_kit::test]
+fn workspace_archive_is_one_server_operation_and_stale_catalog_cannot_restore_it(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            let mutation = WorkspaceMutation::Archive {
+                id: meta.workspace,
+                archived: true,
+            };
+            view.mutate_workspace(mutation.clone(), cx);
+            let mut workspace = view.backend.workspaces[0].clone();
+            workspace.archived = true;
+            workspace.revision += 1;
+            view.update(
+                Update::Workspace {
+                    mutation,
+                    result: Ok(Some(workspace)),
+                },
+                window,
+                cx,
+            );
+            assert!(view.selected.id.is_none());
+            view.merge_workspaces(vec![project(meta.cwd.as_deref())]);
+            assert!(view.backend.workspaces[0].archived);
+            assert!(view.grouped_threads(&view.sessions.entries, "").is_empty());
+            view.navigation.view = workspace_navigation::View::Archived;
+            assert_eq!(
+                view.grouped_threads(&[], "").len(),
+                1,
+                "archived empty workspace remains accessible"
+            );
+        });
+    })
+    .expect("archive workspace");
+    let commands: Vec<_> = std::iter::from_fn(|| fixture.commands.try_recv().ok()).collect();
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|command| matches!(
+                command,
+                Command::Workspace(WorkspaceMutation::Archive { archived: true, .. })
+            ))
+            .count(),
+        1
+    );
+    assert!(
+        !commands
+            .iter()
+            .any(|command| matches!(command, Command::Archive { .. } | Command::Delete(_)))
+    );
+}
+
+#[gpui_kit::test]
+fn empty_workspace_is_displayed_without_creating_a_session(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            let workspace = project(Some(std::path::Path::new("/empty")));
+            view.update(
+                Update::Workspace {
+                    mutation: WorkspaceMutation::Create {
+                        cwd: workspace.cwd.clone(),
+                    },
+                    result: Ok(Some(workspace.clone())),
+                },
+                window,
+                cx,
+            );
+            assert!(view.sessions.entries.is_empty());
+            assert!(view.backend.workspaces.contains(&workspace));
+            view.update(
+                Update::Catalog(Ok(connection::Catalog {
+                    workspaces: view.backend.workspaces.clone(),
+                    agents: view.backend.agents.clone(),
+                    sessions: Vec::new(),
+                })),
+                window,
+                cx,
+            );
+            assert!(view.sessions.entries.is_empty());
+            assert_eq!(view.grouped_threads(&[], "").len(), 2);
+        });
+    })
+    .expect("empty project and periodic catalog refresh");
+    assert!(
+        !std::iter::from_fn(|| fixture.commands.try_recv().ok())
+            .any(|command| matches!(command, Command::Create(_)))
+    );
 }

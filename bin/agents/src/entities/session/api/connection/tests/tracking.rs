@@ -75,6 +75,7 @@ async fn operation_updates(scenario: Scenario) -> (Fixture, Vec<Update>) {
     let fixture = fixture(super::Scenario::Tracking(scenario)).await;
     let (updates, mut events) = mpsc::channel(8);
     operation(
+        fixture.protocol.clone(),
         fixture.client.clone(),
         prompt(fixture.session, fixture.turn),
         updates,

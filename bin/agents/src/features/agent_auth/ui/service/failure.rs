@@ -3,12 +3,8 @@ use crate::shared::i18n::tr;
 
 #[derive(Debug, thiserror::Error)]
 pub(in crate::features::agent_auth) enum Failure {
-    #[error("authentication elicitation has no request")]
-    MissingRequest,
     #[error("invalid authentication payload: {0}")]
     InvalidPayload(String),
-    #[error("authentication input ended before start")]
-    InputEnded,
     #[error("authentication input closed")]
     InputClosed,
     #[error("authentication stream ended without a check")]
@@ -24,9 +20,7 @@ pub(in crate::features::agent_auth) enum Failure {
 impl Failure {
     pub(in crate::features::agent_auth) fn presentation(&self) -> String {
         match self {
-            Self::MissingRequest => tr!("auth-empty-request").into(),
             Self::InvalidPayload(message) => message.clone(),
-            Self::InputEnded => tr!("auth-ended").into(),
             Self::InputClosed => tr!("auth-connection-closed").into(),
             Self::StreamEnded => tr!("auth-disconnected").into(),
             Self::StartRpc(error) => rpc_error(tr!("auth-start-failed"), error),

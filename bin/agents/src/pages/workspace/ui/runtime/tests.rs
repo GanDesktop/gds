@@ -4,6 +4,7 @@ use bas::model::{Owner, SessionMeta};
 #[test]
 fn failure_latches_until_serial_catalog_replaces_runtime() {
     let healthy = SessionSnapshot::from(SessionMeta::new(
+        Default::default(),
         SessionId::new(),
         "test".into(),
         Owner::current(),

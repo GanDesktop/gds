@@ -7,11 +7,6 @@ pub(crate) enum Condition {
     MissingArchivedSession,
     MissingSessionInfo,
     UnknownSubmission,
-    ElicitationWrongSession,
-    ElicitationEnded,
-    MissingElicitationRequest,
-    PermissionStreamClosed,
-    PermissionWrongSession,
     TrackingWrongSession,
     TrackingEnded,
 }
@@ -21,13 +16,6 @@ pub(crate) enum FailureContext {
     StreamDeadline,
     RpcDeadline,
     ArchiveUnsupported,
-    PermissionsUnsupported,
-    PermissionSubscription,
-    PermissionConnection,
-    PermissionDisconnected,
-    InvalidPermission,
-    ElicitationDisconnected,
-    ElicitationRead,
     InvalidEvent,
 }
 
@@ -89,11 +77,6 @@ impl Failure {
                 Condition::MissingArchivedSession => tr!("session-archive-empty").into(),
                 Condition::MissingSessionInfo => tr!("session-info-empty").into(),
                 Condition::UnknownSubmission => tr!("submission-unknown").into(),
-                Condition::ElicitationWrongSession => tr!("interaction-wrong-session").into(),
-                Condition::ElicitationEnded => tr!("interaction-ended").into(),
-                Condition::MissingElicitationRequest => tr!("elicitation-empty").into(),
-                Condition::PermissionStreamClosed => tr!("approval-closed").into(),
-                Condition::PermissionWrongSession => tr!("approval-wrong-session").into(),
                 Condition::TrackingWrongSession => tr!("turn-tracking-wrong-session").into(),
                 Condition::TrackingEnded => tr!("turn-tracking-ended").into(),
             },
@@ -105,25 +88,6 @@ impl Failure {
                         tonic::Status::deadline_exceeded(error).to_string()
                     }
                     FailureContext::ArchiveUnsupported => tr!("session-archive-upgrade").into(),
-                    FailureContext::PermissionsUnsupported => tr!("approval-upgrade").into(),
-                    FailureContext::PermissionSubscription => {
-                        tr!("approval-subscribe-failed", status = error)
-                    }
-                    FailureContext::PermissionConnection => {
-                        tr!("approval-connect-failed", error = error)
-                    }
-                    FailureContext::PermissionDisconnected => {
-                        tr!("approval-disconnected", error = error)
-                    }
-                    FailureContext::InvalidPermission => {
-                        tr!("approval-invalid", error = error)
-                    }
-                    FailureContext::ElicitationDisconnected => {
-                        tr!("interaction-disconnected", error = error)
-                    }
-                    FailureContext::ElicitationRead => {
-                        tr!("interaction-read-failed", error = error)
-                    }
                     FailureContext::InvalidEvent => {
                         tr!("session-invalid-event", error = error)
                     }

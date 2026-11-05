@@ -277,7 +277,6 @@ impl Workspace {
                 cx.notify();
             }),
             cx.observe_window_activation(window, |this, window, cx| {
-                this.sync_foreground(window);
                 this.resume_workspace_picker(window, cx);
                 if !window.is_window_active() {
                     this.close_reply_preview(window, cx);
@@ -331,6 +330,13 @@ impl Workspace {
                     this.send_prompt(window, cx);
                 }
                 if matches!(event, InputEvent::Change) {
+                    if this.selected.id.is_none()
+                        && !this.navigation.session_requested
+                        && !this.composer.input.read(cx).value().trim().is_empty()
+                    {
+                        this.navigation.session_requested = true;
+                        this.prepare_session(cx);
+                    }
                     if this.selected.id.is_none() {
                         this.navigation
                             .drafts
@@ -389,20 +395,6 @@ impl Workspace {
             audio,
             terminals,
             _subscriptions: subscriptions,
-        }
-    }
-
-    fn sync_foreground(&mut self, window: &Window) {
-        let foreground = self
-            .selected
-            .id
-            .filter(|_| self.window.presented && window.is_window_active());
-        if self.backend.foreground != foreground {
-            self.backend.foreground = foreground;
-            let _ = self
-                .backend
-                .connection
-                .send(Command::Foreground(foreground));
         }
     }
 
@@ -519,8 +511,13 @@ impl Workspace {
             .find(|session| session.id == id)
         {
             self.selected.agent = session.agent.to_string();
-            self.navigation.selected_directory =
-                session.cwd.as_deref().map(navigation::groups::normalize);
+            self.navigation.selected_directory = self
+                .backend
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == session.workspace)
+                .map(|workspace| workspace.cwd.clone())
+                .or_else(|| session.cwd.as_deref().map(navigation::groups::normalize));
             self.navigation
                 .collapsed
                 .remove(&self.navigation.selected_directory);
@@ -569,15 +566,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.navigation.removing.contains_key(&directory) {
-            return;
-        }
-        if self.navigation.hidden.contains(&directory)
-            && !self.set_workspace_hidden(directory.clone(), false, cx)
+        if self
+            .workspace_for_directory(&directory)
+            .is_some_and(|workspace| {
+                workspace.archived || self.navigation.workspace_pending.contains(&workspace.id)
+            })
         {
             return;
         }
         self.detach_thread(directory, window, cx);
+        self.navigation.session_requested = true;
         self.selected.agent = agent;
         self.selected.waiting_for_agent_selection = self.selected.agent.is_empty();
         self.navigation
@@ -618,11 +616,6 @@ impl Workspace {
         self.remember_thread(cx);
         self.composer.commands.dismissed = false;
         self.navigation.selected_directory = directory;
-        if let Some(directory) = &self.navigation.selected_directory
-            && !self.navigation.directories.contains(directory)
-        {
-            self.navigation.directories.push(directory.clone());
-        }
         self.navigation
             .collapsed
             .remove(&self.navigation.selected_directory);
@@ -698,7 +691,13 @@ impl Workspace {
     }
 
     fn prepare_session(&mut self, cx: &mut Context<Self>) {
-        if !self.backend.connected
+        if !self.navigation.session_requested
+            || self
+                .workspace_for_directory(&self.navigation.selected_directory)
+                .is_some_and(|workspace| {
+                    workspace.archived || self.navigation.workspace_pending.contains(&workspace.id)
+                })
+            || !self.backend.connected
             || self.navigation.view == navigation::View::Archived
             || self.selected.id.is_some()
             || self.selected.creating
@@ -726,6 +725,9 @@ impl Workspace {
         self.selected.creating = true;
         self.command(
             Command::Create(connection::CreateSession {
+                workspace: self
+                    .workspace_for_directory(&self.navigation.selected_directory)
+                    .map(|workspace| workspace.id),
                 epoch: self.selected.epoch,
                 agent: self.selected.agent.clone(),
                 title: self
@@ -823,6 +825,7 @@ impl Workspace {
             return;
         }
         self.detach_thread(self.navigation.selected_directory.clone(), window, cx);
+        self.navigation.session_requested = true;
         self.selected.agent = agent;
         self.selected.waiting_for_agent_selection = false;
         self.prepare_session(cx);
@@ -835,7 +838,6 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_terminal_panel(window, cx);
         self.measure_composer(cx);
-        self.sync_foreground(window);
         self.sync_reply_visibility(window, cx);
         if self.window.compact {
             self.resize_window(window, cx);

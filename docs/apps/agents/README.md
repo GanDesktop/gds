@@ -29,6 +29,12 @@ Session management, Agent installation, About and settings appear inside the mai
 
 Compact/full mode is a window control in the top-right toolbar. Management views temporarily expand a compact window and restore its mode on return.
 
+Workspaces are persistent Bas entities with stable IDs, names, primary directories, revisions and archive states. Sessions reference their workspace by ID. The sidebar reads the daemon's workspace catalog, including empty workspaces; adding an empty workspace does not launch an Agent. Typing a prompt, selecting an Agent or explicitly creating a session starts session preparation. Collapsed groups, drafts and terminal panels live in memory; GDS separately persists the selected session, pins, bookmarks and read cursors.
+
+Archiving a workspace stops and archives all its sessions on Bas. Restoring the workspace leaves those sessions archived until individually restored. Deleting a workspace requires confirmation in GDS: an empty workspace uses the default checked delete, and confirming deletion of a nonempty workspace sends `force=true` to delete all associated sessions and Bas history, including archived sessions. Project files are retained. Both operations are performed by the daemon rather than a sequence of client-owned session requests. Failed cascades retain the workspace and refresh the catalog so partial progress remains visible.
+
+The frontend requires the workspace protocol pinned in `Cargo.lock`. Bas session records must contain workspace IDs; this development change does not synthesize workspaces from old records. Existing services and data files must be handled explicitly when switching builds.
+
 Frontend preferences and service configuration have separate ownership. Local preferences apply to this application. Service management identifies the connected Bas service and uses revision-aware RPC updates; disconnected edits remain drafts. Agents does not write the daemon's local configuration file.
 
 ## Configuration and state
@@ -37,7 +43,7 @@ Frontend preferences and service configuration have separate ownership. Local pr
 | --- | --- |
 | Frontend settings | `$XDG_CONFIG_HOME/gds/agents/settings.json` |
 | Connection history cache | `$XDG_CACHE_HOME/gds/agents/history-v1/history.sqlite` |
-| Navigation state | The user state directory under `gds/agents` |
+| Navigation state | `$XDG_STATE_HOME/gds-agents/<connection-key>.json` |
 
 XDG directories use their normal user-directory fallbacks. Override the settings file with `--settings-file` or `GDS_AGENTS_SETTINGS_FILE`. BasG preferences are not imported automatically. Settings writes use the shared atomic persistence mechanism, including conflict detection and protection for managed files. The cache is rebuildable and has an application-managed 512 MiB budget.
 
@@ -47,6 +53,12 @@ In-memory diagnostic logs and the log viewer require `--enable-logs`; Ctrl+Shift
 
 Application code is in [`bin/agents/src`](../../../bin/agents/src), organized as `app → pages → widgets → features → entities → shared`. Session and backend entities own protocol state and history; widgets own settings, history and help views; features own navigation, authentication and session deletion. Frontend configuration lives in `shared/config`.
 
-The root manifest pins `bas-client` to a Git revision. The frontend does not embed the Bas daemon or CLI. Agent protocol, authentication, installation and session models remain application code. Shared appearance, typography, Frame, navigation, notifications, shortcuts, clipboard access, timestamps and terminal rendering come from `gds`.
+The root manifest uses the `gds-client-headless` branch of `GanDesktop/bas`; `Cargo.lock` pins the `bas-client` revision. The frontend does not embed the Bas daemon or CLI. Agent protocol, authentication, installation and session models remain application code. Shared appearance, typography, Frame, navigation, notifications, shortcuts, clipboard access, timestamps and terminal rendering come from `gds`.
+
+Bas runs as a headless service. GDS Agents owns message assembly, rich-content conversion and window visibility; it does not send foreground-presence RPCs or rely on daemon desktop notifications.
 
 Project-owned code uses the root Apache-2.0 [license](../../../LICENSE). Dependencies retain their own licenses. Development commands and shared service boundaries are documented in [development](../../development.md).
+
+Session commands and authentication use `bas.v1.AcpTransport`: prepare the target through Bas, open a connection, then use standard ACP `initialize`, `session/load`, `session/prompt`, configuration, permission and elicitation messages. ACP frames contain complete JSON-RPC messages. Terminal authentication plans and durable submission receipts use separate Bas controls.
+
+Bas owns background execution. GDS keeps its cursor-based history and acceptance queries on the Bas management API, so reconnecting restores the timeline without resending a prompt. Callback IDs belong to one ACP connection; responses from a disconnected connection are rejected. The frontend requires the pinned Bas protocol; it has no old-protocol fallback or historical-record conversion.

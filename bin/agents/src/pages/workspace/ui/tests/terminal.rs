@@ -149,7 +149,8 @@ async fn terminal_navigation_is_nested_in_its_workspace_and_dock_does_not_split_
             let first = fixture.view.update(cx, |view, cx| {
                 view.backend.server =
                     bas::service::Target::Unix("/tmp/terminal-test.sock".into()).into();
-                view.navigation.directories = vec![first_cwd.clone(), second_cwd.clone()];
+                view.backend.workspaces =
+                    vec![project(Some(&first_cwd)), project(Some(&second_cwd))];
                 view.navigation.selected_directory = Some(first_cwd.clone());
                 view.toggle_terminal(window, cx);
                 view.terminal_panel()
@@ -245,7 +246,7 @@ async fn dock_switch_and_close_work_without_sidebar_terminal_controls(cx: &mut T
             fixture.view.update(cx, |view, cx| {
                 view.backend.server =
                     bas::service::Target::Unix("/tmp/terminal-test.sock".into()).into();
-                view.navigation.directories = vec![cwd.clone()];
+                view.backend.workspaces = vec![project(Some(&cwd))];
                 view.navigation.selected_directory = Some(cwd.clone());
                 view.terminals.visible = true;
                 view.sync_terminal_panel(window, cx);
@@ -482,7 +483,7 @@ async fn sidebar_terminal_close_follows_hover_and_keyboard_target(cx: &mut TestA
             fixture.view.update(cx, |view, cx| {
                 view.backend.server =
                     bas::service::Target::Unix("/tmp/terminal-test.sock".into()).into();
-                view.navigation.directories = vec![directory.path().to_path_buf()];
+                view.backend.workspaces = vec![project(Some(directory.path()))];
                 view.navigation.selected_directory = Some(directory.path().to_path_buf());
                 view.terminals.visible = true;
                 view.sync_terminal_panel(window, cx);

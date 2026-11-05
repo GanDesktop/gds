@@ -179,8 +179,15 @@ impl Workspace {
     ) -> AnyElement {
         let group = SharedString::from(format!("workspace-header-{index}"));
         let disclosure_id = SharedString::from(format!("workspace-disclosure-{directory:?}"));
-        let name = groups::name(directory.as_deref());
+        let name = self
+            .workspace_for_directory(&directory)
+            .map(|workspace| workspace.name.clone())
+            .unwrap_or_else(|| groups::name(directory.as_deref()));
         let active = self.navigation.selected_directory == directory;
+        let can_create = self.can_remove_workspace(&directory)
+            && self
+                .workspace_for_directory(&directory)
+                .is_some_and(|workspace| !workspace.archived);
         let new_directory = directory.clone();
         let menu = self.workspace_menu(directory.clone(), collapsed, cx);
         let button_menu = menu.clone();
@@ -213,6 +220,7 @@ impl Workspace {
                 ($(SharedString::from(format!("new-thread-{index}"))), IconName::Plus).layout::icon_button {
                     accessibility_label: tr!("workspace-new-session");
                     tooltip: tr!("workspace-new-session");
+                    disabled: $(!can_create);
                     on_click: $(cx.listener(move |this, _, window, cx| {
                                 this.on_sidebar_new_thread(new_directory.clone(), window, cx);
                     }));
@@ -328,12 +336,17 @@ impl Workspace {
         let owner = cx.entity().downgrade();
         let parent = self.window.handle;
         let removable = self.can_remove_workspace(&directory);
+        let archived = self
+            .workspace_for_directory(&directory)
+            .is_some_and(|workspace| workspace.archived);
         std::rc::Rc::new(move |menu, _, _| {
             let new_owner = owner.clone();
             let new_directory = directory.clone();
             let collapse_owner = owner.clone();
             let collapse_directory = directory.clone();
             let add_owner = owner.clone();
+            let archive_owner = owner.clone();
+            let archive_directory = directory.clone();
             let remove_owner = owner.clone();
             let remove_directory = directory.clone();
             let path = directory
@@ -342,6 +355,7 @@ impl Workspace {
             menu.item(
                 shortcuts::menu_item(tr!("session-new"), Some(Box::new(NewSession)))
                     .icon(IconName::Plus)
+                    .disabled(archived || !removable)
                     .on_click(move |_, window, cx| {
                         menus::in_parent(parent, window, cx, |window, cx| {
                             let _ = new_owner.update(cx, |this, cx| {
@@ -391,8 +405,28 @@ impl Workspace {
                 }),
             )
             .item(
-                PopupMenuItem::new(tr!("workspace-remove"))
-                    .icon(IconName::Archive)
+                PopupMenuItem::new(if archived {
+                    tr!("workspace-restore")
+                } else {
+                    tr!("workspace-archive")
+                })
+                .icon(if archived {
+                    IconName::ArchiveRestore
+                } else {
+                    IconName::Archive
+                })
+                .disabled(!removable)
+                .on_click(move |_, window, cx| {
+                    menus::in_parent(parent, window, cx, |_, cx| {
+                        let _ = archive_owner.update(cx, |this, cx| {
+                            this.request_archive_workspace(archive_directory.clone(), cx)
+                        });
+                    });
+                }),
+            )
+            .item(
+                PopupMenuItem::new(tr!("workspace-delete"))
+                    .icon(IconName::Trash)
                     .disabled(!removable)
                     .on_click(move |_, window, cx| {
                         menus::in_parent(parent, window, cx, |_, cx| {

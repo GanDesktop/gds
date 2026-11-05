@@ -172,6 +172,7 @@ async fn reopening_disk_history_attaches_without_loading_history_again() {
     let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
     let task = tokio::spawn(
         crate::entities::session::connection::permissions::watch_cached(
+            fixture.protocol.clone(),
             fixture.client.clone(),
             updates,
             fixture.session,
@@ -233,6 +234,7 @@ async fn cached_history_is_visible_before_the_permission_connection_finishes() {
     let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
     let task = tokio::spawn(
         crate::entities::session::connection::permissions::watch_cached(
+            fixture.protocol.clone(),
             fixture.client.clone(),
             updates,
             fixture.session,

@@ -9,10 +9,10 @@ pub(super) mod draft_row;
 mod folders;
 pub(super) mod groups;
 pub(super) mod history;
-pub(super) mod removal;
 pub(super) mod restore;
 mod sidebar;
 pub(super) mod thread_row;
+mod workspaces;
 
 pub(super) struct CycleTargets {
     current: Option<SessionId>,
@@ -152,10 +152,23 @@ impl Workspace {
         sessions: &'a [SessionMeta],
         query: &str,
     ) -> Vec<groups::Group<'a>> {
-        let mut groups = groups::group_threads(sessions, &self.navigation.directories, query);
-        groups.retain(|group| {
-            !group.threads.is_empty() || !self.navigation.hidden.contains(&group.directory)
-        });
+        let workspaces: Vec<_> = self
+            .backend
+            .workspaces
+            .iter()
+            .filter(|workspace| {
+                if self.navigation.view == View::Archived {
+                    workspace.archived
+                        || sessions
+                            .iter()
+                            .any(|session| session.workspace == workspace.id)
+                } else {
+                    !workspace.archived
+                }
+            })
+            .cloned()
+            .collect();
+        let mut groups = groups::group_threads(sessions, &workspaces, query);
         for group in &mut groups {
             group
                 .threads

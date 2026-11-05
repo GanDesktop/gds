@@ -183,3 +183,13 @@ impl Conversation {
         }
     }
 }
+
+/// Converts ACP v2 presentation content for the v1 rich-content renderer.
+///
+/// # Errors
+/// Returns an error when the content has no compatible v1 representation.
+pub(crate) fn content_to_v1(
+    content: &acp2::ContentBlock,
+) -> Result<acp::ContentBlock, serde_json::Error> {
+    serde_json::from_value(serde_json::to_value(content)?)
+}

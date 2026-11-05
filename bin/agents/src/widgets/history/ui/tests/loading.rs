@@ -38,6 +38,7 @@ fn initial_catalog_wait_ends_in_genuine_empty_state(cx: &mut TestAppContext) {
     deliver(
         &fixture,
         Update::Catalog(Ok(connection::Catalog {
+            workspaces: Vec::new(),
             agents: Vec::new(),
             sessions: Vec::new(),
         })),
@@ -133,6 +134,7 @@ fn partial_groups_remain_visible_until_remaining_discovery_finishes(cx: &mut Tes
     deliver(
         &fixture,
         Update::Catalog(Ok(connection::Catalog {
+            workspaces: Vec::new(),
             agents: agents(),
             sessions: Vec::new(),
         })),
@@ -287,6 +289,7 @@ fn open_saved_record(archived: bool, cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let (request, _, _) = query(&mut fixture);
     let mut snapshot = SessionSnapshot::from(SessionMeta::new(
+        Default::default(),
         SessionId::new(),
         "codex-acp".into(),
         Owner::current(),

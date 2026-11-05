@@ -16,7 +16,12 @@ fn draft(text: &str) -> Draft {
 }
 
 fn idle(revision: u64) -> SessionMeta {
-    let mut meta = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    let mut meta = SessionMeta::new(
+        Default::default(),
+        SessionId::new(),
+        "test".into(),
+        Owner::current(),
+    );
     meta.status = SessionStatus::Idle;
     meta.revision = Cursor::from_raw(revision);
     meta

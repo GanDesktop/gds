@@ -1,3 +1,4 @@
+use crate::entities::session::conversation::Message;
 use crate::shared::i18n::tr;
 use bas::acp;
 use bas::model::{ContentBlock, Role, ToolCall, ToolCallStatus};
@@ -8,10 +9,7 @@ use super::super::markdown::code_block;
 use super::super::*;
 use gpui_kit::component::message::{Message as MessageView, MessageContent};
 
-pub(in crate::pages::workspace) fn message_block_id(
-    message: &bas::model::Message,
-    index: usize,
-) -> String {
+pub(in crate::pages::workspace) fn message_block_id(message: &Message, index: usize) -> String {
     format!("message-{}-{index}", message.id)
 }
 

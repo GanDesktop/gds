@@ -13,7 +13,10 @@ impl Workspace {
         let groups = self.grouped_threads(&sessions, "");
         let directories: Vec<_> = groups.into_iter().map(|group| group.directory).collect();
         let selected = self.navigation.selected_directory.clone();
-        let name = groups::name(selected.as_deref());
+        let name = self
+            .workspace_for_directory(&selected)
+            .map(|workspace| workspace.name.clone())
+            .unwrap_or_else(|| groups::name(selected.as_deref()));
         let hint = tr!("workspace-choose");
         let view = cx.entity().downgrade();
         let parent = self.window.handle;
@@ -195,7 +198,13 @@ impl Workspace {
                             if this.window.presented && this.window.compact {
                                 this.toggle_mode(window, cx);
                             }
-                            this.new_thread(Some(groups::normalize(&path)), window, cx);
+                            this.navigation.picker.pending = true;
+                            this.command(
+                                Command::Workspace(connection::WorkspaceMutation::Create {
+                                    cwd: path,
+                                }),
+                                cx,
+                            );
                         }
                     }
                     Ok(None) => {}

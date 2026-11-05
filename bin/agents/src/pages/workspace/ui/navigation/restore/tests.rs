@@ -46,7 +46,6 @@ fn queued_navigation_is_ordered_detached_and_merges_other_sections(
     let mut concurrent = Store::open(path.clone());
     concurrent.set_bookmarked(first, true).expect("bookmark");
     concurrent.set_pinned(last, true).expect("pin");
-    concurrent.set_workspace_hidden(None, true).expect("hide");
     concurrent
         .save_reads(&HashMap::from([(last, 7)]))
         .expect("other window read");
@@ -62,7 +61,6 @@ fn queued_navigation_is_ordered_detached_and_merges_other_sections(
     );
     assert_eq!(restored.bookmarks(), HashSet::from([first]));
     assert_eq!(restored.pinned(), HashSet::from([last]));
-    assert_eq!(restored.hidden_workspaces(), HashSet::from([None]));
     let other = Store::open(other_path);
     assert_eq!(other.thread(), Some(first));
     assert!(other.seen_replies().is_empty());
@@ -114,29 +112,6 @@ fn bookmarks_persist_independently_and_stale_writers_preserve_them() {
     assert!(restored.bookmarks().is_empty());
     assert_eq!(restored.thread(), Some(pinned));
     assert_eq!(restored.pinned(), HashSet::from([pinned]));
-}
-
-#[test]
-fn hidden_workspaces_persist_without_overwriting_other_window_state() {
-    let dir = tempfile::tempdir().expect("state directory");
-    let path = dir.path().join("window.json");
-    let mut a = Store::open(path.clone());
-    let mut b = Store::open(path.clone());
-    let thread = SessionId::new();
-    a.set_workspace_hidden(Some("/workspace".into()), true)
-        .expect("hide");
-    b.set_pinned(thread, true).expect("pin from stale reader");
-    b.save(Some(thread)).expect("selection");
-    let restored = Store::open(path.clone());
-    assert!(
-        restored
-            .hidden_workspaces()
-            .contains(&Some("/workspace".into()))
-    );
-    assert!(restored.pinned().contains(&thread));
-    a.set_workspace_hidden(Some("/workspace".into()), false)
-        .expect("show");
-    assert!(Store::open(path).hidden_workspaces().is_empty());
 }
 
 #[test]

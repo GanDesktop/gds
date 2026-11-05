@@ -44,8 +44,6 @@ struct Saved {
     marker_bookmarks: std::collections::BTreeMap<SessionId, std::collections::BTreeSet<u64>>,
     #[serde(default)]
     seen_replies: std::collections::BTreeMap<SessionId, u64>,
-    #[serde(default)]
-    hidden_workspaces: std::collections::BTreeSet<Option<PathBuf>>,
 }
 
 impl Saved {
@@ -118,27 +116,6 @@ impl Store {
 
     pub fn thread(&self) -> Option<SessionId> {
         self.saved.thread
-    }
-
-    pub fn hidden_workspaces(&self) -> HashSet<Option<PathBuf>> {
-        self.saved.hidden_workspaces.iter().cloned().collect()
-    }
-
-    /// # Errors
-    /// Returns lock, read or write failures without altering unrelated window state.
-    pub fn set_workspace_hidden(
-        &mut self,
-        directory: Option<PathBuf>,
-        hidden: bool,
-    ) -> Result<(), Error> {
-        let _lock = self.lock()?;
-        let mut saved = self.latest()?;
-        if hidden {
-            saved.hidden_workspaces.insert(directory);
-        } else {
-            saved.hidden_workspaces.remove(&directory);
-        }
-        self.write(saved)
     }
 
     pub fn pinned(&self) -> HashSet<SessionId> {
@@ -527,11 +504,9 @@ impl Workspace {
         if let Some(thread) = thread {
             self.activate(thread, true, window, cx);
         } else if self
-            .navigation
-            .hidden
-            .contains(&self.navigation.selected_directory)
+            .workspace_for_directory(&self.navigation.selected_directory)
+            .is_some_and(|workspace| workspace.archived)
         {
-            // Do not recreate a removed workspace merely because it is the launch cwd.
             self.detach_thread(None, window, cx);
         }
     }

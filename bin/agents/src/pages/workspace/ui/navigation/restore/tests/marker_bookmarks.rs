@@ -77,7 +77,6 @@ fn stale_marker_writers_merge_only_the_targeted_marker() {
         .expect("remove only one marker");
     b.set_bookmarked(first, true).expect("thread bookmark");
     b.set_pinned(second, true).expect("pin");
-    b.set_workspace_hidden(None, true).expect("hide workspace");
     b.save(Some(second)).expect("selection");
     b.save_reads(&HashMap::from([(second, 93)]))
         .expect("read cursor");
@@ -96,7 +95,6 @@ fn stale_marker_writers_merge_only_the_targeted_marker() {
     assert_eq!(restored.thread(), Some(second));
     assert_eq!(restored.bookmarks(), HashSet::from([first]));
     assert_eq!(restored.pinned(), HashSet::from([second]));
-    assert_eq!(restored.hidden_workspaces(), HashSet::from([None]));
     assert_eq!(restored.seen_replies(), HashMap::from([(second, 93)]));
 }
 

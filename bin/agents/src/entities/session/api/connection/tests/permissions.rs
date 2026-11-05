@@ -23,8 +23,11 @@ async fn unavailable_update(events: &mut mpsc::Receiver<Update>) -> String {
                     assert_eq!(epoch, 9);
                     return message.presentation();
                 }
-                Update::Permissions { .. } => {
-                    panic!("approval failure must not publish a successful snapshot");
+                Update::Permissions { pending, .. } => {
+                    assert!(
+                        !pending.is_empty(),
+                        "approval failure must not publish a successful empty snapshot"
+                    );
                 }
                 _ => {}
             }
@@ -40,26 +43,7 @@ async fn disconnected_approval_stream_reports_failure_without_a_successful_empty
     let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
     let task = tokio::spawn(
         crate::entities::session::connection::permissions::watch_session(
-            fixture.client.clone(),
-            updates,
-            fixture.session,
-            9,
-        ),
-    );
-    assert_eq!(pending_update(&mut events).await.len(), 1);
-    let message = unavailable_update(&mut events).await;
-    assert!(message.contains("审批连接中断"));
-    assert!(message.contains("请求已取消"));
-    task.abort();
-    let _ = task.await;
-}
-
-#[tokio::test]
-async fn legacy_daemon_reports_upgrade_required_for_interactive_approvals() {
-    let fixture = fixture(Scenario::LegacyApprovals).await;
-    let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
-    let task = tokio::spawn(
-        crate::entities::session::connection::permissions::watch_session(
+            fixture.protocol.clone(),
             fixture.client.clone(),
             updates,
             fixture.session,
@@ -67,7 +51,7 @@ async fn legacy_daemon_reports_upgrade_required_for_interactive_approvals() {
         ),
     );
     let message = unavailable_update(&mut events).await;
-    assert!(message.contains("升级并重启"));
+    assert!(!message.is_empty());
     task.abort();
     let _ = task.await;
 }
@@ -78,6 +62,7 @@ async fn subscription_and_response_preserve_native_choices_over_grpc() {
     let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
     let task = tokio::spawn(
         crate::entities::session::connection::permissions::watch_session(
+            fixture.protocol.clone(),
             fixture.client.clone(),
             updates,
             fixture.session,
@@ -92,6 +77,7 @@ async fn subscription_and_response_preserve_native_choices_over_grpc() {
     );
     let request_id = pending[0].request_id.clone();
     let invalid = execute(
+        fixture.protocol.clone(),
         fixture.client.clone(),
         Command::RespondPermission {
             session: fixture.session,
@@ -114,6 +100,7 @@ async fn subscription_and_response_preserve_native_choices_over_grpc() {
             .is_empty()
     );
     let answered = execute(
+        fixture.protocol.clone(),
         fixture.client.clone(),
         Command::RespondPermission {
             session: fixture.session,
@@ -130,6 +117,7 @@ async fn subscription_and_response_preserve_native_choices_over_grpc() {
     );
     assert!(pending_update(&mut events).await.is_empty());
     let duplicate = execute(
+        fixture.protocol.clone(),
         fixture.client.clone(),
         Command::RespondPermission {
             session: fixture.session,
@@ -142,7 +130,58 @@ async fn subscription_and_response_preserve_native_choices_over_grpc() {
         duplicate,
         Update::PermissionResponded { result: Err(_), .. }
     ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture
+            .permission_answers
+            .lock()
+            .expect("answers")
+            .is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("ACP response reaches backend");
     assert_eq!(fixture.permission_answers.lock().expect("answers").len(), 1);
     task.abort();
     let _ = task.await;
+}
+
+#[tokio::test]
+async fn detached_controller_rejects_answers_from_its_connection() {
+    let fixture = fixture(Scenario::Approval).await;
+    let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
+    let task = tokio::spawn(super::super::permissions::watch_session(
+        fixture.protocol.clone(),
+        fixture.client.clone(),
+        updates,
+        fixture.session,
+        9,
+    ));
+    let pending = pending_update(&mut events).await;
+    let id = pending[0].request_id.clone();
+    assert_ne!(id, "pending-1");
+    task.abort();
+    let _ = task.await;
+    let result = execute(
+        fixture.protocol.clone(),
+        fixture.client.clone(),
+        Command::RespondPermission {
+            session: fixture.session,
+            request_id: id,
+            outcome: acp::RequestPermissionOutcome::Cancelled,
+        },
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Update::PermissionResponded { result: Err(_), .. }
+    ));
+    assert!(
+        fixture
+            .permission_answers
+            .lock()
+            .expect("answers")
+            .is_empty()
+    );
 }

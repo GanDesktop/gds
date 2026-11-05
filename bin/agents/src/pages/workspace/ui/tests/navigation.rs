@@ -617,10 +617,12 @@ fn sidebar_motion_keeps_shared_boundaries_rows_and_scroll(cx: &mut TestAppContex
     let mut sessions: Vec<_> = (0..30).map(|_| session()).collect();
     for session in &mut sessions {
         session.cwd = Some(PathBuf::from("/tmp"));
+        session.workspace = project(session.cwd.as_deref()).id;
     }
     let target = sessions[8].id;
     let mut hidden = session();
     hidden.cwd = Some(PathBuf::from("/var"));
+    hidden.workspace = project(hidden.cwd.as_deref()).id;
     let hidden_id = hidden.id;
     sessions.push(hidden);
     cx.update(|cx| {

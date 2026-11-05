@@ -232,3 +232,16 @@ fn protocol_notices_are_transient_and_separate_from_local_turn_notices() {
     assert!(matches!(conversation.items[0], Item::Notice { .. }));
     assert_eq!(conversation.notices.len(), 1);
 }
+
+#[test]
+fn summary_content_conversion_retains_annotations_and_metadata() {
+    let value = serde_json::json!({
+        "type": "text",
+        "text": "Summary with metadata",
+        "annotations": {"audience": ["assistant"], "priority": 0.75},
+        "_meta": {"source": "compaction"}
+    });
+    let content = serde_json::from_value::<acp2::ContentBlock>(value.clone()).expect("v2 summary");
+    let rendered = content_to_v1(&content).expect("renderable summary");
+    assert_eq!(serde_json::to_value(rendered).expect("v1 content"), value);
+}

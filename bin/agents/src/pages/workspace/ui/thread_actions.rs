@@ -9,6 +9,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let workspace_unavailable = self
+            .workspace_for_directory(&self.navigation.selected_directory)
+            .is_none_or(|workspace| workspace.archived);
         // Invalidate the whole batch before selection can commit an outgoing title or draft.
         for &session in removed {
             self.sessions.mark_removed(session);
@@ -31,6 +34,10 @@ impl Workspace {
                 .map(|meta| meta.id)
             {
                 self.select(next, window, cx);
+            } else if workspace_unavailable {
+                self.detach_thread(None, window, cx);
+                self.navigation.session_requested = false;
+                self.composer.switch_target(Draft::default(), window, cx);
             } else {
                 self.start_agent_chat(self.selected.agent.clone(), window, cx);
             }
