@@ -47,13 +47,23 @@ fn overview(meta: &SessionMeta, frontier: u64) -> HistoryOverview {
 }
 
 fn show_latest(fixture: &Fixture, meta: &SessionMeta, frontier: u64, cx: &mut TestAppContext) {
+    show_window(fixture, meta, frontier - 1, frontier, cx);
+}
+
+fn show_window(
+    fixture: &Fixture,
+    meta: &SessionMeta,
+    first: u64,
+    frontier: u64,
+    cx: &mut TestAppContext,
+) {
     attach(fixture, meta.clone(), cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
             view.update(
                 Update::HistoryWindow {
                     epoch: view.selected.epoch,
-                    window: body(meta, frontier - 1, frontier, frontier).into(),
+                    window: body(meta, first, frontier, frontier).into(),
                     cached: false,
                 },
                 window,
@@ -114,9 +124,101 @@ fn location(
 }
 
 #[gpui_kit::test]
-fn whole_overview_appears_without_backfilling_and_ctrl_click_only_bookmarks(
-    cx: &mut TestAppContext,
-) {
+fn unloaded_ranges_open_a_catalog_and_only_the_chosen_turn_loads(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let meta = session();
+    show_latest(&fixture, &meta, 20, cx);
+    while fixture.commands.try_recv().is_ok() {}
+    let loaded_size = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            window.activate_window();
+            gds::appearance::motion::set_animations_enabled(false, cx);
+            assert!(window.try_find("turn-marker-1").is_none());
+            assert!(window.try_find("turn-marker-17").is_none());
+            assert!(window.find("turn-unloaded-1").visible());
+            assert!(window.find("turn-marker-19").visible());
+            let loaded_size = window.find("turn-marker-19").bounds().size;
+            window.click("turn-unloaded-1", cx);
+            window.render_frame(cx);
+            loaded_size
+        })
+        .expect("open history catalog");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("turn-unloaded-choice-3").visible());
+        assert!(
+            fixture.commands.try_recv().is_err(),
+            "opening summaries does not fetch bodies"
+        );
+
+        window.click_with_modifiers(
+            "turn-unloaded-choice-1",
+            Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(fixture.view.read(cx).navigation.marker_bookmarks[&meta.id].contains(&1));
+        assert!(
+            fixture.commands.try_recv().is_err(),
+            "bookmarking does not fetch bodies"
+        );
+    })
+    .expect("bookmark unloaded turn");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.click("turn-unloaded-1", cx);
+        window.render_frame(cx);
+    })
+    .expect("reopen history catalog");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("turn-unloaded-choice-3", cx);
+        window.render_frame(cx);
+        assert!(matches!(
+            fixture.commands.try_recv().expect("chosen body"),
+            Command::HistoryLocation { cursor: 3, .. }
+        ));
+        assert!(fixture.commands.try_recv().is_err());
+
+        fixture
+            .view
+            .update(cx, |view, cx| location(view, &meta, 3, 4, 20, window, cx));
+        window.render_frame(cx);
+        assert!(
+            window.find("turn-unloaded-1").visible(),
+            "older gap stays compact"
+        );
+        assert!(
+            window.find("turn-unloaded-5").visible(),
+            "newer gap stays compact"
+        );
+        assert!(window.find("turn-marker-3").visible());
+        assert!(window.try_find("turn-marker-19").is_none());
+        assert_eq!(window.find("turn-marker-3").bounds().size, loaded_size);
+        assert_eq!(
+            fixture
+                .view
+                .read(cx)
+                .selected
+                .timeline
+                .history
+                .as_ref()
+                .expect("chosen history")
+                .events
+                .len(),
+            2
+        );
+    })
+    .expect("grouped history selection");
+}
+
+#[gpui_kit::test]
+fn loaded_markers_keep_previews_and_ctrl_click_only_bookmarks(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let meta = session();
     let saved = tempfile::tempdir().expect("navigation state");
@@ -127,14 +229,14 @@ fn whole_overview_appears_without_backfilling_and_ctrl_click_only_bookmarks(
             )));
         })
     });
-    show_latest(&fixture, &meta, 100, cx);
+    show_window(&fixture, &meta, 1, 6, cx);
     while fixture.commands.try_recv().is_ok() {}
     cx.update_window(fixture.window.into(), |_, window, cx| {
         assert!(
             window.find("turn-marker-1").visible(),
-            "oldest is present without old body"
+            "loaded turns stay individually accessible"
         );
-        assert!(window.find("turn-marker-99").visible());
+        assert!(window.find("turn-marker-5").visible());
         assert!(
             window.try_find("turn-navigation-count").is_none(),
             "no unsolicited count label"
@@ -150,7 +252,7 @@ fn whole_overview_appears_without_backfilling_and_ctrl_click_only_bookmarks(
                 .expect("body")
                 .events
                 .len(),
-            2
+            6
         );
         let before = window.find("turn-marker-line-1").bounds().size;
         window.click_with_modifiers(
@@ -174,7 +276,7 @@ fn whole_overview_appears_without_backfilling_and_ctrl_click_only_bookmarks(
                 .is_none(),
             "Ctrl-click does not jump"
         );
-        window.hover("turn-marker-99", cx);
+        window.hover("turn-marker-5", cx);
         window.render_frame(cx);
         assert_eq!(window.find("turn-marker-line-1").bounds().size, before);
         let hint = window
@@ -246,7 +348,7 @@ fn whole_overview_appears_without_backfilling_and_ctrl_click_only_bookmarks(
             "hints include actual keyboard bindings"
         );
         window.click("turn-marker-1", cx);
-        window.hover("turn-marker-99", cx);
+        window.hover("turn-marker-5", cx);
         window.render_frame(cx);
         assert_eq!(
             window.find("turn-marker-line-1").bounds().size.width,
@@ -256,9 +358,9 @@ fn whole_overview_appears_without_backfilling_and_ctrl_click_only_bookmarks(
     .expect("bookmarked hover and direct jump");
     let commands: Vec<_> = std::iter::from_fn(|| fixture.commands.try_recv().ok()).collect();
     assert!(
-        commands
+        !commands
             .iter()
-            .any(|command| matches!(command, Command::HistoryLocation { cursor: 1, .. }))
+            .any(|command| matches!(command, Command::HistoryLocation { .. }))
     );
     assert!(
         !commands
@@ -273,7 +375,7 @@ fn whole_overview_appears_without_backfilling_and_ctrl_click_only_bookmarks(
 fn current_marker_is_bold_without_lengthening_or_confusing_bookmarks(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
     let meta = session();
-    show_latest(&fixture, &meta, 6, cx);
+    show_window(&fixture, &meta, 1, 6, cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
             view.navigation

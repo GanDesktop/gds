@@ -513,6 +513,7 @@ conversation-choose-agent = Choose an agent to start a conversation
 conversation-empty = Send a message to start a conversation
 conversation-end = Go to conversation end
 conversation-end-shortcut = Go to conversation end
+turn-marker-unloaded = { $count } unloaded turns — choose a turn
 turn-marker-bookmarked = Bookmarked
 turn-marker-add-bookmark = Add bookmark
 turn-marker-remove-bookmark = Remove bookmark

@@ -512,6 +512,7 @@ conversation-choose-agent = 选择智能体，开始对话
 conversation-empty = 发送消息，开始对话
 conversation-end = 跳到对话末尾
 conversation-end-shortcut = 跳到对话末尾
+turn-marker-unloaded = { $count } 轮未加载 · 选择轮次
 turn-marker-bookmarked = 书签
 turn-marker-add-bookmark = 添加书签
 turn-marker-remove-bookmark = 移除书签

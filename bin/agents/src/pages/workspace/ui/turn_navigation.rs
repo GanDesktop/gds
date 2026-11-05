@@ -8,6 +8,7 @@ use super::*;
 
 mod history;
 mod state;
+mod unloaded;
 mod view;
 pub(super) use state::Navigation;
 

@@ -35,6 +35,8 @@ Archiving a workspace stops and archives all its sessions on Bas. Restoring the 
 
 The frontend requires the workspace protocol pinned in `Cargo.lock`. Bas session records must contain workspace IDs; this development change does not synthesize workspaces from old records. Existing services and data files must be handled explicitly when switching builds.
 
+The conversation rail keeps loaded turns at a fixed spacing. Each consecutive range of unloaded turns becomes one compact menu button; opening it shows prompt summaries, and selecting a turn loads that turn's body. Earlier and later unloaded ranges stay on their respective sides of the loaded turns. Ctrl-click toggles a turn bookmark in either the rail or the menu.
+
 Frontend preferences and service configuration have separate ownership. Local preferences apply to this application. Service management identifies the connected Bas service and uses revision-aware RPC updates; disconnected edits remain drafts. Agents does not write the daemon's local configuration file.
 
 ## Configuration and state
