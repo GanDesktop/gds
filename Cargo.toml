@@ -48,6 +48,11 @@ name = "xdg-desktop-portal-gds"
 path = "bin/portal/src/main.rs"
 required-features = ["portal"]
 
+[[bin]]
+name = "gds-nixes"
+path = "bin/nixes/src/main.rs"
+required-features = ["nixes"]
+
 [features]
 # Capability features. Dependencies are declared once in the group of the
 # capability that owns them; every feature enables the packages its own code
@@ -110,6 +115,7 @@ agents = [
     "dep:strum", "dep:time", "dep:agent-client-protocol",
     "dep:process-wrap",
 ]
+nixes = ["ui", "dep:clap", "dep:tokio", "dep:serde", "dep:serde_json", "dep:anyhow"]
 portal = [
     "desktop-protocol", "dep:anyhow", "dep:tokio", "dep:clap", "dep:nix",
     "dep:serde_json", "dep:thiserror", "dep:url", "dep:zbus",

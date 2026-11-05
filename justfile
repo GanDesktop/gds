@@ -19,7 +19,7 @@ dev app *args:
 shell:
     {{ develop }}
 
-# 构建整个套件，或指定 files / agents / portal。
+# 构建整个套件，或指定 files / agents / portal / nixes。
 build app="all":
     @just _cargo build "$@"
 
@@ -58,11 +58,11 @@ uninstall-dev app="all":
 
 # 检查全部 Rust 目标。
 check:
-    {{ develop }} --command cargo check --workspace --features files,agents,portal,gpui-kit/test-support --all-targets
+    {{ develop }} --command cargo check --workspace --features files,agents,portal,nixes,gpui-kit/test-support --all-targets
 
 # 运行测试，可传测试名称等 Cargo 参数。
 test *args:
-    {{ develop }} --command cargo test --workspace --features files,agents,portal,gpui-kit/test-support "$@"
+    {{ develop }} --command cargo test --workspace --features files,agents,portal,nixes,gpui-kit/test-support "$@"
 
 # 格式化项目代码。
 fmt:
@@ -82,16 +82,17 @@ _cargo command app *args:
     case "$app" in
         all)
             if [ "$command" = run ]; then
-                printf '%s\n' '启动时请指定目标：just dev files / just dev agents / just dev portal' >&2
+                printf '%s\n' '启动时请指定目标：just dev files / just dev agents / just dev portal / just dev nixes' >&2
                 exit 2
             fi
-            targets=(--bins --features files,agents,portal)
+            targets=(--bins --features files,agents,portal,nixes)
             ;;
         files) targets=(--bin gds-files --features files) ;;
         agents) targets=(--bin gds-agents --features agents) ;;
+        nixes) targets=(--bin gds-nixes --features nixes) ;;
         portal) targets=(--bin xdg-desktop-portal-gds --features portal) ;;
         *)
-            printf '未知应用：%s；可选 files、agents、portal\n' "$app" >&2
+            printf '未知应用：%s；可选 files、agents、portal、nixes\n' "$app" >&2
             exit 2
             ;;
     esac
