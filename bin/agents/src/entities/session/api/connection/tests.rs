@@ -263,7 +263,7 @@ impl Bas for Service {
 
     type InstallAgentStream =
         Pin<Box<dyn Stream<Item = Result<pb::AgentOperation, Status>> + Send>>;
-    type AttachStream = Pin<Box<dyn Stream<Item = Result<pb::Event, Status>> + Send>>;
+    type AttachStream = Pin<Box<dyn Stream<Item = Result<pb::ManagementEvent, Status>> + Send>>;
     type WatchPermissionsStream =
         Pin<Box<dyn Stream<Item = Result<pb::PermissionSnapshot, Status>> + Send>>;
 
@@ -430,68 +430,80 @@ impl Bas for Service {
         }))
     }
 
-    async fn attach(
+    type ObserveAcpStream = Pin<Box<dyn Stream<Item = Result<pb::AcpObservation, Status>> + Send>>;
+
+    async fn observe_acp(
         &self,
         request: Request<pb::AttachRequest>,
-    ) -> Result<Response<Self::AttachStream>, Status> {
-        if self.acp_transport {
-            return Ok(Response::new(Box::pin(futures::stream::pending())));
-        }
-        let count = {
-            let mut calls = self.attachments.lock().expect("attachment log");
-            calls.push(request.into_inner().cursor);
-            calls.len()
-        };
-        if matches!(self.scenario, Scenario::LateTool) {
-            let events = if count == 1 {
-                vec![Ok((&windows::late_event(self.session.id)).into())]
-            } else {
-                Vec::new()
-            };
-            return Ok(Response::new(Box::pin(tokio_stream::iter(events))));
-        }
-        if let Scenario::Tracking(scenario) = self.scenario {
-            return tracking::attach(self, scenario, count);
-        }
-        if matches!(self.scenario, Scenario::Submission(_)) {
-            return tracking::attach(self, tracking::Scenario::Finished, count);
-        }
-        if matches!(self.scenario, Scenario::Expired) && count == 1 {
-            return Err(Status::data_loss("cursor evicted"));
-        }
-        if matches!(self.scenario, Scenario::AttachFailedPrecondition) {
-            return Err(Status::failed_precondition(
-                "session persistence failed: disk full",
-            ));
-        }
-        if matches!(self.scenario, Scenario::StreamFailedPrecondition) {
-            return Ok(Response::new(Box::pin(tokio_stream::iter(vec![Err(
-                Status::failed_precondition("session persistence failed: disk full"),
-            )]))));
-        }
-        let events = if count == 1 {
-            vec![
-                Ok((&Event::new(
-                    self.session.id,
-                    Cursor::from_raw(301),
-                    EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(
-                        acp::ContentChunk::new("partial".into()),
-                    )),
-                ))
-                    .into()),
-                Err(Status::unavailable("connection interrupted")),
-            ]
+    ) -> Result<Response<Self::ObserveAcpStream>, Status> {
+        use futures::StreamExt;
+        let stream = self.journal(request).await?.into_inner();
+        let stream = stream.filter_map(|event| {
+            futures::future::ready(match event {
+                Err(error) => Some(Err(error)),
+                Ok(raw) => match Event::try_from(raw) {
+                    Err(error) => Some(Err(Status::invalid_argument(error.to_string()))),
+                    Ok(mut event) => {
+                        if let EventKind::TurnFinished { turn, result } = &event.kind {
+                            let mut message =
+                                serde_json::json!({"jsonrpc":"2.0", "id":turn.to_string()});
+                            match result {
+                                Ok(response) => {
+                                    message["result"] =
+                                        serde_json::to_value(response).expect("response")
+                                }
+                                Err(error) => {
+                                    message["error"] = serde_json::to_value(error).expect("error")
+                                }
+                            }
+                            event.protocol = Some(ProtocolRecord {
+                                message,
+                                start: event.cursor,
+                                turn: Some(*turn),
+                            });
+                        }
+                        pb::AcpObservation::from_event(&event).map(Ok)
+                    }
+                },
+            })
+        });
+        if matches!(
+            self.scenario,
+            Scenario::Tracking(tracking::Scenario::Interrupted)
+        ) {
+            Ok(Response::new(Box::pin(
+                stream.chain(futures::stream::pending()),
+            )))
         } else {
-            vec![Ok((&Event::new(
-                self.session.id,
-                Cursor::from_raw(302),
-                EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(
-                    acp::ContentChunk::new("complete reply".into()),
-                )),
-            ))
-                .into())]
-        };
-        Ok(Response::new(Box::pin(tokio_stream::iter(events))))
+            Ok(Response::new(Box::pin(stream)))
+        }
+    }
+
+    async fn attach(
+        &self,
+        _: Request<pb::AttachRequest>,
+    ) -> Result<Response<Self::AttachStream>, Status> {
+        use futures::StreamExt;
+        if matches!(
+            self.scenario,
+            Scenario::Tracking(tracking::Scenario::Interrupted)
+        ) {
+            let stream = tracking::attach(self, tracking::Scenario::Interrupted, 1)?.into_inner();
+            let stream = stream.filter_map(|event| {
+                futures::future::ready(
+                    event
+                        .ok()
+                        .and_then(|event| Event::try_from(event).ok())
+                        .and_then(|event| event.management())
+                        .and_then(|event| pb::ManagementEvent::from_event(&event))
+                        .map(Ok),
+                )
+            });
+            return Ok(Response::new(Box::pin(
+                stream.chain(futures::stream::pending()),
+            )));
+        }
+        Ok(Response::new(Box::pin(futures::stream::empty())))
     }
 
     async fn list_agents(
@@ -579,6 +591,7 @@ impl Bas for Service {
             .push(submission.request);
         Ok(Response::new(
             PromptSubmissionOutcome::Accepted(TurnReceipt {
+                request_id: None,
                 turn: submission.turn,
                 cursor: Cursor::from_raw(7),
             })
@@ -717,7 +730,7 @@ async fn fixture(scenario: Scenario) -> Fixture {
     acp_backend.acp_transport = true;
     let task = tokio::spawn(async move {
         Server::builder()
-            .add_service(bas::service::acp::server::Gateway::new(acp_backend).into_server())
+            .add_service(bas_server::Gateway::new(acp_backend).into_server())
             .add_service(BasServer::new(service))
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
@@ -923,3 +936,71 @@ async fn watch(client: Client, updates: mpsc::Sender<Update>, session: SessionId
     let (store, _) = super::history::Store::new(None);
     watch_cached(client, updates, session, epoch, None, store).await;
 }
+
+impl Service {
+    async fn journal(
+        &self,
+        request: Request<pb::AttachRequest>,
+    ) -> Result<Response<JournalStream>, Status> {
+        if self.acp_transport {
+            return Ok(Response::new(Box::pin(futures::stream::pending())));
+        }
+        let count = {
+            let mut calls = self.attachments.lock().expect("attachment log");
+            calls.push(request.into_inner().cursor);
+            calls.len()
+        };
+        if matches!(self.scenario, Scenario::LateTool) {
+            let events = if count == 1 {
+                vec![Ok((&windows::late_event(self.session.id)).into())]
+            } else {
+                Vec::new()
+            };
+            return Ok(Response::new(Box::pin(tokio_stream::iter(events))));
+        }
+        if let Scenario::Tracking(scenario) = self.scenario {
+            return tracking::attach(self, scenario, count);
+        }
+        if matches!(self.scenario, Scenario::Submission(_)) {
+            return tracking::attach(self, tracking::Scenario::Finished, count);
+        }
+        if matches!(self.scenario, Scenario::Expired) && count == 1 {
+            return Err(Status::data_loss("cursor evicted"));
+        }
+        if matches!(self.scenario, Scenario::AttachFailedPrecondition) {
+            return Err(Status::failed_precondition(
+                "session persistence failed: disk full",
+            ));
+        }
+        if matches!(self.scenario, Scenario::StreamFailedPrecondition) {
+            return Ok(Response::new(Box::pin(tokio_stream::iter(vec![Err(
+                Status::failed_precondition("session persistence failed: disk full"),
+            )]))));
+        }
+        let events = if count == 1 {
+            vec![
+                Ok((&Event::new(
+                    self.session.id,
+                    Cursor::from_raw(301),
+                    EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(
+                        acp::ContentChunk::new("partial".into()),
+                    )),
+                ))
+                    .into()),
+                Err(Status::unavailable("connection interrupted")),
+            ]
+        } else {
+            vec![Ok((&Event::new(
+                self.session.id,
+                Cursor::from_raw(302),
+                EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(
+                    acp::ContentChunk::new("complete reply".into()),
+                )),
+            ))
+                .into())]
+        };
+        Ok(Response::new(Box::pin(tokio_stream::iter(events))))
+    }
+}
+
+type JournalStream = Pin<Box<dyn Stream<Item = Result<pb::Event, Status>> + Send>>;

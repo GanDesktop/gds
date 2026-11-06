@@ -103,7 +103,14 @@ impl Conversation {
 
     /// Returns the first item whose layout changed, if any.
     pub fn apply(&mut self, event: Event) -> Option<usize> {
-        let changed = self.apply_event(event);
+        let changed = self.apply_event(event, false);
+        self.append_rows();
+        changed
+    }
+
+    /// Live protocol rendering does not change BAS-owned session activity.
+    pub fn apply_protocol(&mut self, event: Event) -> Option<usize> {
+        let changed = self.apply_event(event, true);
         self.append_rows();
         changed
     }
@@ -135,7 +142,7 @@ impl Conversation {
         }
     }
 
-    fn apply_event(&mut self, event: Event) -> Option<usize> {
+    fn apply_event(&mut self, event: Event, live: bool) -> Option<usize> {
         if event.session != self.session.id {
             return None;
         }
@@ -152,7 +159,11 @@ impl Conversation {
             return None;
         }
         self.cursor = event.cursor.raw();
-        self.session.apply_event(&event);
+        if live {
+            self.session.apply_protocol(&event);
+        } else {
+            self.session.apply_event(&event);
+        }
         match event.kind {
             EventKind::Acp(update) => match update {
                 acp::SessionUpdate::UserMessageChunk(chunk) => {
@@ -240,6 +251,7 @@ impl Conversation {
             | EventKind::Subagent(_)
             | EventKind::ArchiveChanged { .. }
             | EventKind::WorkspaceChanged { .. }
+            | EventKind::ActivityChanged { .. }
             | EventKind::StatusChanged { .. } => None,
             EventKind::Failed { message } => {
                 self.foreground_state = Some(acp2::StateUpdate::Idle(acp2::IdleStateUpdate::new()));
@@ -351,7 +363,7 @@ impl Conversation {
     }
 }
 
-fn interruption_notice(reason: InterruptionReason) -> String {
+pub(crate) fn interruption_notice(reason: InterruptionReason) -> String {
     match reason {
         InterruptionReason::BackendFailure { message } => {
             tr!("turn-interrupted-backend", message = message)

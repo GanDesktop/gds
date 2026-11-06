@@ -83,6 +83,7 @@ fn immediate_send_waits_for_cancel_and_turn_completion_without_resuming_paused_d
     assert_eq!(send.draft.text, "B");
     let submission = submission(send);
     let receipt = TurnReceipt {
+        request_id: None,
         turn: submission.turn,
         cursor: Cursor::from_raw(3),
     };
@@ -102,6 +103,7 @@ fn completion_before_cancel_acknowledgement_never_releases_the_pending_send_earl
         let meta = idle(1);
         let submission = submission(outbox.start(draft("current turn"), Origin::Composer));
         let accepted = TurnReceipt {
+            request_id: None,
             turn: submission.turn,
             cursor: Cursor::from_raw(1),
         };

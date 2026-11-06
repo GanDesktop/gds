@@ -33,7 +33,14 @@ fn consecutive_messages_with_different_ids_remain_distinct() {
 fn interleaved_chunks_return_to_their_message_and_track_the_actual_reply() {
     let mut conversation = conversation();
     let turn = TurnId::new();
-    apply(&mut conversation, 1, EventKind::TurnStarted { turn });
+    apply(
+        &mut conversation,
+        1,
+        EventKind::TurnStarted {
+            request_id: None,
+            turn,
+        },
+    );
     apply(&mut conversation, 2, identified(Role::Agent, "a", "A"));
     apply(&mut conversation, 3, identified(Role::Agent, "b", "B"));
     apply(

@@ -21,6 +21,7 @@ fn interruption_and_receipt_in_either_order_release_but_pause() {
             outbox.enqueue(draft("unsent"));
             let submission = submission(outbox.advance(&meta, true).expect("send"));
             let receipt = TurnReceipt {
+                request_id: None,
                 turn: submission.turn,
                 cursor: Cursor::from_raw(2),
             };
@@ -65,6 +66,7 @@ fn unrelated_or_old_interruption_never_releases_or_pauses_current_send() {
         outbox.enqueue(draft("unsent"));
         let submission = submission(outbox.advance(&meta, true).expect("send"));
         let receipt = TurnReceipt {
+            request_id: None,
             turn: submission.turn,
             cursor: Cursor::from_raw(3),
         };

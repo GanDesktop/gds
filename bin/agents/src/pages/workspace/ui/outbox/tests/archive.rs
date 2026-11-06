@@ -8,6 +8,7 @@ fn archive_keeps_accepted_turn_and_restore_requires_explicit_retry() {
     outbox.enqueue(draft("B"));
     let submission = submission(outbox.advance(&meta, true).expect("send A"));
     let receipt = TurnReceipt {
+        request_id: None,
         turn: submission.turn,
         cursor: Cursor::from_raw(2),
     };

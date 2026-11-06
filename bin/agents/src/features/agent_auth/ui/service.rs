@@ -40,6 +40,7 @@ pub(super) enum Control {
 
 fn preparation(spec: &AgentSpec, method: &Method) -> Result<pb::PrepareAcpRequest, Failure> {
     Ok(pb::PrepareAcpRequest {
+        callbacks_only: false,
         target: Some(pb::prepare_acp_request::Target::Authentication(
             pb::AuthenticateAgentRequest {
                 agent: spec.id.to_string(),

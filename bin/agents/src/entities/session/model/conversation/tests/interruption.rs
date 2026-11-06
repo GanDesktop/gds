@@ -4,7 +4,14 @@ use super::*;
 fn interruption_seals_partial_content_and_deduplicates_following_failure() {
     let mut conversation = conversation();
     let turn = TurnId::new();
-    apply(&mut conversation, 1, EventKind::TurnStarted { turn });
+    apply(
+        &mut conversation,
+        1,
+        EventKind::TurnStarted {
+            request_id: None,
+            turn,
+        },
+    );
     apply(
         &mut conversation,
         2,
@@ -54,7 +61,14 @@ fn interruption_seals_partial_content_and_deduplicates_following_failure() {
 fn native_error_uses_agent_message_not_generic_error_display() {
     let mut conversation = conversation();
     let turn = TurnId::new();
-    apply(&mut conversation, 1, EventKind::TurnStarted { turn });
+    apply(
+        &mut conversation,
+        1,
+        EventKind::TurnStarted {
+            request_id: None,
+            turn,
+        },
+    );
     apply(
         &mut conversation,
         2,

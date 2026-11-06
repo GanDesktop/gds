@@ -22,7 +22,10 @@ fn old_history_builds_content_without_rolling_back_newer_metadata() {
     meta.title = Some("new".into());
     let mut conversation = Conversation::new(meta.clone());
     let events = [
-        EventKind::TurnStarted { turn: turn1 },
+        EventKind::TurnStarted {
+            request_id: None,
+            turn: turn1,
+        },
         EventKind::TitleChanged {
             title: "old".into(),
         },
@@ -62,7 +65,10 @@ fn events_newer_than_snapshot_survive_history_replay() {
     conversation.apply(Event::new(
         meta.id,
         Cursor::from_raw(1),
-        EventKind::TurnStarted { turn },
+        EventKind::TurnStarted {
+            request_id: None,
+            turn,
+        },
     ));
     conversation.merge_meta(&meta);
     assert_eq!(conversation.session.active_turn, Some(turn));
@@ -95,7 +101,10 @@ fn live_and_replayed_acp_chunks_produce_the_same_messages() {
     let mut live = conversation();
     let turn = TurnId::new();
     let events = vec![
-        EventKind::TurnStarted { turn },
+        EventKind::TurnStarted {
+            request_id: None,
+            turn,
+        },
         EventKind::Acp(acp::SessionUpdate::AgentThoughtChunk(
             acp::ContentChunk::new("思考".into()),
         )),
@@ -132,7 +141,14 @@ fn live_and_replayed_acp_chunks_produce_the_same_messages() {
 fn completion_selects_the_final_reply_and_never_reuses_a_previous_turn() {
     let mut conversation = conversation();
     let turn = TurnId::new();
-    apply(&mut conversation, 1, EventKind::TurnStarted { turn });
+    apply(
+        &mut conversation,
+        1,
+        EventKind::TurnStarted {
+            request_id: None,
+            turn,
+        },
+    );
     apply(&mut conversation, 2, chunk("先检查文件"));
     apply(
         &mut conversation,
@@ -156,6 +172,7 @@ fn completion_selects_the_final_reply_and_never_reuses_a_previous_turn() {
         &mut conversation,
         6,
         EventKind::TurnStarted {
+            request_id: None,
             turn: TurnId::new(),
         },
     );
@@ -266,7 +283,14 @@ fn images_files_and_configuration_survive_replay() {
 fn cancellation_and_failure_update_status_and_seal_partial_output() {
     let mut conversation = conversation();
     let turn = TurnId::new();
-    apply(&mut conversation, 1, EventKind::TurnStarted { turn });
+    apply(
+        &mut conversation,
+        1,
+        EventKind::TurnStarted {
+            request_id: None,
+            turn,
+        },
+    );
     apply(&mut conversation, 2, chunk("partial"));
     apply(
         &mut conversation,
@@ -423,7 +447,10 @@ fn timeline_activity_does_not_merge_across_turns_or_notices() {
     let first = TurnId::new();
     let second = TurnId::new();
     let events = [
-        EventKind::TurnStarted { turn: first },
+        EventKind::TurnStarted {
+            request_id: None,
+            turn: first,
+        },
         EventKind::Acp(acp::SessionUpdate::ToolCall(ToolCall::new(
             "first",
             "第一次",
@@ -432,7 +459,10 @@ fn timeline_activity_does_not_merge_across_turns_or_notices() {
             turn: first,
             result: Ok(acp::PromptResponse::new(StopReason::EndTurn)),
         },
-        EventKind::TurnStarted { turn: second },
+        EventKind::TurnStarted {
+            request_id: None,
+            turn: second,
+        },
         EventKind::Acp(acp::SessionUpdate::ToolCall(ToolCall::new(
             "second",
             "第二次",
@@ -458,4 +488,55 @@ fn timeline_activity_does_not_merge_across_turns_or_notices() {
         [0..1, 1..2, 2..3, 3..4],
     );
     assert!(!conversation.rows[2].activity, "notices remain visible");
+}
+
+#[test]
+fn management_ahead_of_protocol_does_not_drop_content_or_change_protocol_position() {
+    let meta = SessionMeta::new(
+        Default::default(),
+        SessionId::new(),
+        "test".into(),
+        Owner::current(),
+    );
+    let mut conversation = Conversation::new(meta.clone());
+    conversation.session.apply_management(&Event::new(
+        meta.id,
+        Cursor::from_raw(10),
+        EventKind::TitleChanged {
+            title: "BAS title".into(),
+        },
+    ));
+    assert_eq!(conversation.cursor, 0);
+    conversation.apply_protocol(Event::new(
+        meta.id,
+        Cursor::from_raw(2),
+        EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(
+            acp::ContentChunk::new("late content".into()),
+        )),
+    ));
+    assert_eq!(conversation.cursor, 2);
+    assert_eq!(conversation.session.last_reply.raw(), 2);
+    assert_eq!(conversation.session.title.as_deref(), Some("BAS title"));
+    assert!(
+        matches!(&conversation.items[0], Item::Message { message, .. } if message.plain_text() == "late content")
+    );
+    conversation.session.apply_management(&Event::new(
+        meta.id,
+        Cursor::from_raw(11),
+        EventKind::ArchiveChanged { archived: true },
+    ));
+    conversation.apply_protocol(Event::new(
+        meta.id,
+        Cursor::from_raw(3),
+        EventKind::TurnStarted {
+            turn: TurnId::new(),
+            request_id: None,
+        },
+    ));
+    assert!(conversation.session.archived);
+    assert_eq!(
+        conversation.session.status,
+        SessionStatus::Starting,
+        "ACP requests do not own BAS Session status"
+    );
 }

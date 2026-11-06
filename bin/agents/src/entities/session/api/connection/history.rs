@@ -148,7 +148,9 @@ impl Store {
 }
 
 async fn flush(cache: &cache::Cache, pending: &mut HashMap<SessionId, Vec<Event>>) {
-    for (session, events) in pending.drain() {
+    for (session, mut events) in pending.drain() {
+        events.sort_by_key(|event| event.cursor);
+        events.dedup_by_key(|event| event.cursor);
         if let Err(error) = cache.append(session, &events).await {
             tracing::warn!(%session, %error, "Cannot persist live history");
         }

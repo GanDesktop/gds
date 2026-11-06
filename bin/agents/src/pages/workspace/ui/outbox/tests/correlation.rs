@@ -2,6 +2,7 @@ use super::*;
 
 fn accepted(turn: TurnId, cursor: u64) -> Result<PromptSubmissionOutcome, String> {
     Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+        request_id: None,
         turn,
         cursor: Cursor::from_raw(cursor),
     }))

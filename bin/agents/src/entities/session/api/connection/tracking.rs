@@ -12,10 +12,11 @@ pub(super) async fn track(
     receipt: TurnReceipt,
 ) -> Result<Event, Failure> {
     let mut cursor = receipt.cursor.raw();
+    let mut management_cursor = cursor;
     loop {
         let response = tokio::time::timeout(
             REQUEST_TIMEOUT,
-            client.attach(pb::AttachRequest {
+            client.observe_acp(pb::AttachRequest {
                 session: session.to_string(),
                 cursor: Some(cursor),
                 replay: 0,
@@ -30,30 +31,68 @@ pub(super) async fn track(
                 continue;
             }
         };
+        let mut management = match tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            client.attach(pb::AttachRequest {
+                session: session.to_string(),
+                cursor: Some(management_cursor),
+                replay: 0,
+            }),
+        )
+        .await
+        {
+            Ok(Ok(response)) => response.into_inner(),
+            Ok(Err(error)) if !retryable(&error) => return Err(error.into()),
+            _ => {
+                tokio::time::sleep(RECONNECT_DELAY).await;
+                continue;
+            }
+        };
+        let mut management_open = true;
+        let mut protocol_open = true;
         loop {
-            match stream.message().await {
-                Ok(Some(event)) => {
-                    let event = Event::try_from(event).map_err(|error| {
-                        Failure::InvalidPayload(error.to_string())
-                            .context(FailureContext::InvalidEvent)
-                    })?;
-                    if event.session != session {
-                        return Err(Failure::Condition(Condition::TrackingWrongSession));
-                    }
-                    if event.is_transient() || event.cursor.raw() <= cursor {
-                        continue;
-                    }
-                    cursor = event.cursor.raw();
-                    if matches!(
-                        event.kind,
-                        EventKind::TurnFinished { turn, .. }
-                            | EventKind::TurnInterrupted { turn, .. }
-                            if turn == receipt.turn
-                    ) {
-                        return Ok(event);
+            if !protocol_open && !management_open {
+                return Err(Failure::Condition(Condition::TrackingEnded));
+            }
+            let next = tokio::select! {
+                message = stream.message(), if protocol_open => message,
+                message = management.message(), if management_open => {
+                    match message {
+                        Ok(Some(raw)) => {
+                            let event = Event::try_from(raw).map_err(|error| Failure::InvalidPayload(error.to_string()))?;
+                            if event.session != session { return Err(Failure::Condition(Condition::TrackingWrongSession)); }
+                            management_cursor = management_cursor.max(event.cursor.raw());
+                            if matches!(event.kind, EventKind::TurnInterrupted { turn, .. } if turn == receipt.turn) { return Ok(event); }
+                            continue;
+                        }
+                        Ok(None) => { management_open = false; continue; }
+                        Err(error) if !retryable(&error) => return Err(error.into()),
+                        Err(_) => { tokio::time::sleep(RECONNECT_DELAY).await; break; }
                     }
                 }
-                Ok(None) => return Err(Failure::Condition(Condition::TrackingEnded)),
+            };
+            match next {
+                Ok(Some(event)) => {
+                    if event.session != session.to_string() {
+                        return Err(Failure::Condition(Condition::TrackingWrongSession));
+                    }
+                    if event.cursor == 0 || event.cursor <= cursor {
+                        continue;
+                    }
+                    cursor = event.cursor;
+                    for event in event
+                        .history_events()
+                        .map_err(|error| Failure::InvalidPayload(error.to_string()))?
+                    {
+                        if matches!(event.kind, EventKind::TurnFinished { turn, .. } if turn == receipt.turn)
+                        {
+                            return Ok(event);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    protocol_open = false;
+                }
                 Err(error) if !retryable(&error) => return Err(error.into()),
                 Err(_) => {
                     tokio::time::sleep(RECONNECT_DELAY).await;

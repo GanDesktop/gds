@@ -18,7 +18,7 @@ pub(super) fn attach(
     service: &Service,
     scenario: Scenario,
     count: usize,
-) -> Result<Response<<Service as Bas>::AttachStream>, Status> {
+) -> Result<Response<JournalStream>, Status> {
     let event =
         |cursor, kind| Ok((&Event::new(service.session.id, Cursor::from_raw(cursor), kind)).into());
     let finished = |turn| EventKind::TurnFinished {

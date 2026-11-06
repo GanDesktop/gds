@@ -71,6 +71,7 @@ fn events_before_receipt_wait_for_acceptance_and_match_the_turn() {
     outbox.settle(
         submission,
         Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+            request_id: None,
             turn,
             cursor: Cursor::from_raw(2),
         })),
@@ -102,6 +103,7 @@ fn unknown_retains_only_its_latest_completion_and_ignores_other_turns() {
     outbox.settle(
         submission,
         Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+            request_id: None,
             turn,
             cursor: Cursor::from_raw(2),
         })),
@@ -120,6 +122,7 @@ fn receipts_need_the_specific_turn_even_after_newer_idle_catalogs() {
     outbox.settle(
         submission.clone(),
         Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+            request_id: None,
             turn,
             cursor: Cursor::from_raw(1),
         })),
@@ -130,6 +133,7 @@ fn receipts_need_the_specific_turn_even_after_newer_idle_catalogs() {
     outbox.settle(
         submission,
         Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+            request_id: None,
             turn,
             cursor: Cursor::from_raw(1),
         })),

@@ -220,7 +220,14 @@ fn protocol_notices_are_transient_and_separate_from_local_turn_notices() {
     );
     assert!(conversation.items.is_empty());
     let turn = TurnId::new();
-    apply(&mut conversation, 2, EventKind::TurnStarted { turn });
+    apply(
+        &mut conversation,
+        2,
+        EventKind::TurnStarted {
+            request_id: None,
+            turn,
+        },
+    );
     apply(
         &mut conversation,
         3,

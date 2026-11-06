@@ -8,7 +8,7 @@ impl Workspace {
         let target = match &update {
             Update::HistoryMeta { session, .. } => Some(session.meta.id),
             Update::HistoryWindow { window, .. } => Some(window.session.meta.id),
-            Update::Event { event, .. } => Some(event.session),
+            Update::Event { event, .. } | Update::Management { event, .. } => Some(event.session),
             Update::TrackedTurn { event } => Some(event.session),
             Update::ElicitationResponded { session, .. }
             | Update::PermissionResponded { session, .. }
@@ -405,6 +405,43 @@ impl Workspace {
                         .merge_meta(session.bytes);
                 }
             }
+            Update::Management { epoch, event } if epoch == self.selected.epoch => {
+                if let Some(meta) = self
+                    .sessions
+                    .entries
+                    .iter_mut()
+                    .find(|meta| meta.id == event.session)
+                {
+                    meta.apply_management(&event);
+                }
+                if let Some(history) = &mut self.selected.timeline.history
+                    && history.session.meta.id == event.session
+                {
+                    history.session.meta.apply_management(&event);
+                }
+                if let Some(conversation) = &mut self.selected.timeline.conversation
+                    && conversation.session.id == event.session
+                {
+                    conversation.session.apply_management(&event);
+                }
+                if let Some(outbox) = self.sessions.outboxes.get_mut(&event.session) {
+                    outbox.observe(&event);
+                }
+                if self.selected.id == Some(event.session) {
+                    match &event.kind {
+                        bas::model::EventKind::Failed { message } => {
+                            self.selected.error = Some(message.clone())
+                        }
+                        bas::model::EventKind::TurnInterrupted { reason, .. } => {
+                            self.selected.error =
+                                Some(crate::entities::session::conversation::interruption_notice(
+                                    reason.clone(),
+                                ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
             Update::Event { epoch, event } if epoch == self.selected.epoch => {
                 let crate::entities::session::connection::Prepared {
                     value: event,
@@ -429,7 +466,7 @@ impl Workspace {
                     && event.cursor.raw() > history.cursor
                 {
                     history.cursor = event.cursor.raw();
-                    history.session.meta.apply_event(&event);
+                    history.session.meta.apply_protocol(&event);
                     history.events.push(event.clone());
                     self.selected.timeline.history_weight.append(bytes);
                 }
@@ -458,7 +495,7 @@ impl Workspace {
                     .iter_mut()
                     .find(|meta| meta.id == event.session)
                 {
-                    meta.apply_event(&event);
+                    meta.apply_protocol(&event);
                     // Browsing an older slice must not freeze current controls.
                     // Text deltas do not change their state; avoid measuring the
                     // metadata snapshot for every streamed text fragment.
@@ -488,7 +525,7 @@ impl Workspace {
                         .filter(|row| row.activity && row.items.len() == 1)
                         .map(|row| conversation.items[row.items.start].id())
                         .filter(|id| self.selected.timeline.expanded.contains(id));
-                    let changed = conversation.apply(event);
+                    let changed = conversation.apply_protocol(event);
                     let count = conversation.rows.len();
                     if let Some(id) = expanded_activity
                         && conversation
@@ -590,6 +627,7 @@ impl Workspace {
             | Update::HistoryLocation { .. }
             | Update::HistoryMeta { .. }
             | Update::Event { .. }
+            | Update::Management { .. }
             | Update::Stream { .. }
             | Update::Permissions { .. }
             | Update::PermissionUnavailable { .. } => {}

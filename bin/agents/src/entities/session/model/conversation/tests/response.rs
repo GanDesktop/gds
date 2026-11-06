@@ -47,14 +47,20 @@ fn unanswered_second_turn_does_not_copy_the_previous_response() {
         apply(
             &mut conversation,
             [
-                EventKind::TurnStarted { turn: first },
+                EventKind::TurnStarted {
+                    request_id: None,
+                    turn: first,
+                },
                 user("first"),
                 agent("first answer"),
                 EventKind::TurnFinished {
                     turn: first,
                     result: Ok(acp::PromptResponse::new(StopReason::EndTurn)),
                 },
-                EventKind::TurnStarted { turn: second },
+                EventKind::TurnStarted {
+                    request_id: None,
+                    turn: second,
+                },
                 user("second"),
                 thought(),
                 tool("second-tool"),

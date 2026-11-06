@@ -97,6 +97,7 @@ async fn open(
                 session.to_string(),
             )),
             interactive,
+            callbacks_only: true,
         },
     )
     .await?;
@@ -188,7 +189,7 @@ async fn watch_once(
         session,
         prefix: format!("{}:", link.prepared.id),
     };
-    // Drain replay while loading; the durable Bas journal supplies the UI timeline.
+    // This connection handles callbacks/commands; ObserveAcp drives the timeline.
     let ready = tokio::time::timeout(REQUEST_TIMEOUT, initialize(&link, client, session));
     tokio::pin!(ready);
     let mut initialized = false;

@@ -57,8 +57,8 @@ struct Probes {
 impl FixtureService {
     async fn authentication_stream(
         &self,
-        input: bas::service::acp::server::AuthenticationInput,
-    ) -> Result<bas::service::acp::server::AuthenticationEvents, RpcStatus> {
+        input: bas_server::AuthenticationInput,
+    ) -> Result<bas_server::AuthenticationEvents, RpcStatus> {
         if let Some(error) = self
             .probes
             .lock()
@@ -157,14 +157,12 @@ impl FixtureService {
         )])))
     }
 }
-impl bas::service::acp::server::Authentication for FixtureService {
+impl bas_server::Authentication for FixtureService {
     fn start(
         &self,
-        input: bas::service::acp::server::AuthenticationInput,
-    ) -> futures::future::BoxFuture<
-        'static,
-        Result<bas::service::acp::server::AuthenticationEvents, RpcStatus>,
-    > {
+        input: bas_server::AuthenticationInput,
+    ) -> futures::future::BoxFuture<'static, Result<bas_server::AuthenticationEvents, RpcStatus>>
+    {
         let service = self.clone();
         Box::pin(async move { service.authentication_stream(input).await })
     }
@@ -449,7 +447,7 @@ impl Fixture {
         let server_task = AbortOnDropHandle::new(runtime.spawn(async move {
             Server::builder()
                 .add_service(
-                    bas::service::acp::server::Gateway::new(service.clone())
+                    bas_server::Gateway::new(service.clone())
                         .with_authentication(service.clone())
                         .into_server(),
                 )

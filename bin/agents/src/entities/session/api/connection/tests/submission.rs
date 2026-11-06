@@ -16,6 +16,7 @@ pub(super) fn prompt(
     submission: PromptSubmission,
 ) -> Result<Response<pb::PromptSubmissionResponse>, Status> {
     let receipt = TurnReceipt {
+        request_id: None,
         turn: submission.turn,
         cursor: Cursor::from_raw(7),
     };
@@ -55,6 +56,7 @@ pub(super) fn acceptance(
     }
     Ok(Response::new(pb::PromptAcceptanceResponse {
         accepted: matches!(scenario, Scenario::LostAccepted).then(|| pb::TurnAccepted {
+            request_id: None,
             turn: request.turn,
             cursor: 7,
         }),

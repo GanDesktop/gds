@@ -22,7 +22,6 @@ pub(crate) use prepared::{HistoryWeight, Prepared, PreparedHistory, PreparedLoca
 mod model;
 mod permissions;
 mod protocol;
-pub(crate) use protocol::Pool as ProtocolPool;
 mod tracking;
 
 pub(crate) use crate::shared::api::failure::{Condition, Failure, FailureContext};
@@ -270,6 +269,10 @@ pub(crate) enum Update {
     HistoryMeta {
         epoch: u64,
         session: Prepared<SessionSnapshot>,
+    },
+    Management {
+        epoch: u64,
+        event: Prepared<Event>,
     },
     Event {
         epoch: u64,
@@ -839,7 +842,6 @@ async fn execute(protocol: protocol::Pool, mut client: Client, command: Command)
         } => {
             let result = crate::entities::session::submission::submit(
                 &mut client,
-                &protocol,
                 session,
                 &submission,
                 title,
@@ -858,11 +860,7 @@ async fn execute(protocol: protocol::Pool, mut client: Client, command: Command)
         } => {
             let result = request(async {
                 if retry {
-                    Ok(protocol
-                        .session(&client, session)
-                        .await?
-                        .submit(&submission)
-                        .await?)
+                    Ok(client.submit_prompt(&submission).await?)
                 } else {
                     client
                         .prompt_acceptance(session, submission.turn)
@@ -930,6 +928,7 @@ async fn watch_cached(
     store: history::Store,
 ) {
     let mut resynced = false;
+    let mut management_cursor = cursor;
     let mut knowledge = history::Knowledge::default();
     if let Some(frontier) = cursor
         && let Some(window) = store.latest(session).await
@@ -959,6 +958,7 @@ async fn watch_cached(
                 if cursor.is_some_and(|cursor| cursor > meta.meta.revision.raw()) {
                     cursor = None;
                 }
+                management_cursor = Some(meta.meta.revision.raw());
                 let failure = meta.runtime.failure.clone().map(Failure::Runtime);
                 let _ = updates
                     .send(Update::HistoryMeta {
@@ -1005,7 +1005,10 @@ async fn watch_cached(
             )
             .await
             {
-                Ok(frontier) => cursor = Some(frontier),
+                Ok(frontier) => {
+                    cursor = Some(frontier);
+                    management_cursor = Some(frontier);
+                }
                 Err(error) => {
                     tracing::warn!(%session, epoch, %error, "Conversation history load failed");
                     let _ = updates
@@ -1020,7 +1023,7 @@ async fn watch_cached(
         }
         let result = tokio::time::timeout(
             REQUEST_TIMEOUT,
-            client.attach(pb::AttachRequest {
+            client.observe_acp(pb::AttachRequest {
                 session: session.to_string(),
                 cursor,
                 replay: 0,
@@ -1070,6 +1073,44 @@ async fn watch_cached(
                 continue;
             }
         };
+        let state_after = management_cursor.unwrap_or(cursor.unwrap_or(0));
+        let mut management = match tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            client.attach(pb::AttachRequest {
+                session: session.to_string(),
+                cursor: Some(state_after),
+                replay: 0,
+            }),
+        )
+        .await
+        {
+            Ok(Ok(response)) => response.into_inner(),
+            Ok(Err(error)) => {
+                if terminal_watch_status(error.code()) {
+                    let _ = updates
+                        .send(Update::Stream {
+                            epoch,
+                            state: StreamState::Unavailable(error.into()),
+                        })
+                        .await;
+                    return;
+                }
+                if error.code() == Code::DataLoss {
+                    cursor = None;
+                    management_cursor = None;
+                }
+                if !retry(&updates, epoch, error.into()).await {
+                    return;
+                }
+                continue;
+            }
+            Err(_) => {
+                if !retry(&updates, epoch, Failure::Timeout).await {
+                    return;
+                }
+                continue;
+            }
+        };
         if updates
             .send(Update::Stream {
                 epoch,
@@ -1080,11 +1121,68 @@ async fn watch_cached(
         {
             return;
         }
+        let mut management_open = true;
+        let mut protocol_open = true;
         loop {
-            match stream.message().await {
-                Ok(Some(event)) => {
-                    let event: Event = match event.try_into() {
-                        Ok(event) => event,
+            if !protocol_open && !management_open {
+                let _ = updates
+                    .send(Update::Stream {
+                        epoch,
+                        state: StreamState::Closed,
+                    })
+                    .await;
+                return;
+            }
+            let message = tokio::select! {
+                event = stream.message(), if protocol_open => event,
+                event = management.message(), if management_open => {
+                    match event {
+                        Ok(Some(raw)) => {
+                            let event = match Event::try_from(raw) {
+                                Ok(event) if event.session == session && event.cursor.raw() > state_after
+                                    && event.management().is_some_and(|management| management.kind == event.kind) && event.protocol.is_none() => event,
+                                _ => {
+                                    let _ = updates.send(Update::Stream { epoch, state: StreamState::Unavailable(Failure::InvalidPayload("invalid BAS management event".into())) }).await;
+                                    return;
+                                }
+                            };
+                            if management_cursor.is_none_or(|cursor| event.cursor.raw() > cursor) {
+                                management_cursor = Some(event.cursor.raw());
+                                if !matches!(event.kind, EventKind::ActivityChanged { .. }) { store.event(&event).await; }
+                                if updates.send(Update::Management { epoch, event: event.into() }).await.is_err() { return; }
+                            }
+                            continue;
+                        }
+                        Ok(None) => { management_open = false; continue; }
+                        Err(error) => {
+                            if terminal_watch_status(error.code()) {
+                                let _ = updates.send(Update::Stream { epoch, state: StreamState::Unavailable(error.into()) }).await;
+                                return;
+                            }
+                            if error.code() == Code::DataLoss { cursor = None; management_cursor = None; }
+                            if !retry(&updates, epoch, error.into()).await { return; }
+                            break;
+                        }
+                    }
+                }
+            };
+            match message {
+                Ok(Some(observation)) => {
+                    if observation.session != session.to_string()
+                        || (observation.cursor != 0 && observation.cursor <= cursor.unwrap_or(0))
+                    {
+                        let _ = updates
+                            .send(Update::Stream {
+                                epoch,
+                                state: StreamState::Unavailable(Failure::InvalidPayload(
+                                    "invalid ACP observation position".into(),
+                                )),
+                            })
+                            .await;
+                        return;
+                    }
+                    let events = match observation.history_events() {
+                        Ok(events) => events,
                         Err(error) => {
                             let _ = updates
                                 .send(Update::Stream {
@@ -1098,52 +1196,44 @@ async fn watch_cached(
                             return;
                         }
                     };
-                    if event.session != session
-                        || (!event.is_transient() && event.cursor.raw() <= cursor.unwrap_or(0))
-                    {
-                        let _ = updates
-                            .send(Update::Stream {
-                                epoch,
-                                state: StreamState::Unavailable(Failure::InvalidPayload(
-                                    "live event has wrong session or non-advancing cursor".into(),
-                                )),
-                            })
-                            .await;
-                        return;
-                    }
-                    if !event.is_transient() {
-                        if knowledge.needs_reload(&event) {
-                            // Do not expose an update whose original message/tool is
-                            // outside the loaded range. Reload a dependency-safe window
-                            // and attach at its captured frontier instead.
-                            knowledge.require(event.cursor.raw());
-                            cursor = None;
+                    let mut reload = false;
+                    for event in &events {
+                        if event.is_transient() {
+                            continue;
+                        }
+                        if knowledge.needs_reload(event) {
+                            reload = true;
                             break;
                         }
-                        knowledge.observe(&event);
-                        cursor = Some(event.cursor.raw());
-                        resynced = false;
-                        store.event(&event).await;
+                        knowledge.observe(event);
                     }
-                    if updates
-                        .send(Update::Event {
-                            epoch,
-                            event: event.into(),
-                        })
-                        .await
-                        .is_err()
-                    {
-                        return;
+                    if reload {
+                        knowledge.require(observation.cursor);
+                        cursor = None;
+                        break;
+                    }
+                    for event in events {
+                        if !event.is_transient() {
+                            store.event(&event).await;
+                        }
+                        if updates
+                            .send(Update::Event {
+                                epoch,
+                                event: event.into(),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    if observation.cursor != 0 {
+                        cursor = Some(observation.cursor);
+                        resynced = false;
                     }
                 }
                 Ok(None) => {
-                    let _ = updates
-                        .send(Update::Stream {
-                            epoch,
-                            state: StreamState::Closed,
-                        })
-                        .await;
-                    return;
+                    protocol_open = false;
                 }
                 Err(error) => {
                     if terminal_watch_status(error.code()) {
