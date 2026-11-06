@@ -32,6 +32,7 @@ fn card_checks_its_saved_target_without_selecting_or_writing(cx: &mut TestAppCon
         .expect("test runtime");
     let server = runtime.block_on(Server::start(None));
     let profile = ConnectionProfile {
+        local: false,
         id: "checked".into(),
         name: "Checked service".into(),
         note: None,
@@ -118,6 +119,7 @@ fn changed_profiles_cancel_checks_and_stale_results_cannot_replace_retries(
 ) {
     let (_directory, window, page) = setup(cx);
     let profile = ConnectionProfile {
+        local: false,
         id: "checked".into(),
         name: "Checked service".into(),
         note: None,

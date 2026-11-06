@@ -179,29 +179,66 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let position = window.mouse_position();
-        // The previous popup dismisses after its item callback. Open the next menu afterward.
-        cx.defer_in(window, move |this, window, cx| {
-            let owner = cx.entity().downgrade();
-            let parent = this.window.handle;
-            let pending = this.navigation.picker.pending;
-            let build: menus::Builder = std::rc::Rc::new(move |menu, _, _| {
-                let owner = owner.clone();
-                menu.item(
-                    PopupMenuItem::new(tr!("workspace-local-folder"))
-                        .icon(IconName::Folder)
-                        .disabled(pending)
-                        .on_click(move |_, window, cx| {
-                            menus::in_parent(parent, window, cx, |window, cx| {
-                                let _ = owner.update(cx, |this, cx| {
-                                    this.choose_local_workspace(window, cx);
-                                });
-                            });
-                        }),
-                )
-            });
-            this.open_context_menu(position, 1, build, window, cx);
-        });
+        if self.navigation.picker.pending
+            || self
+                .navigation
+                .picker
+                .launch
+                .as_ref()
+                .is_some_and(|launch| launch.read(cx).is_active())
+        {
+            return;
+        }
+        self.close_menu(window, cx);
+        let target = self.backend.server.clone();
+        let profiles = crate::features::navigation::shared(cx);
+        let local = profiles
+            .read(cx)
+            .matching(&target)
+            .is_some_and(|profile| profile.local);
+        let runtime = cx
+            .global::<crate::entities::agent::catalog::Service>()
+            .runtime()
+            .clone();
+        let owner = cx.entity().downgrade();
+        let parent = self.window.handle;
+        let expected = target.clone();
+        let launch = crate::features::workspace_launch::open(
+            target,
+            local,
+            runtime,
+            move |workspace, cx| {
+                let _ = parent.update(cx, |_, window, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        if this.backend.server != expected {
+                            return;
+                        }
+                        if this.window.presented && this.window.compact {
+                            this.toggle_mode(window, cx);
+                        }
+                        this.workspace_completed(
+                            connection::WorkspaceMutation::Create {
+                                cwd: workspace.cwd.clone(),
+                            },
+                            Ok(Some(workspace)),
+                            window,
+                            cx,
+                        );
+                    });
+                });
+            },
+            window,
+            cx,
+        );
+        cx.subscribe_in(
+            &launch,
+            window,
+            |this, _, _: &crate::features::workspace_launch::ChooseDirectory, window, cx| {
+                this.choose_local_workspace(window, cx);
+            },
+        )
+        .detach();
+        self.navigation.picker.launch = Some(launch);
     }
 
     pub(in crate::pages::workspace) fn choose_local_workspace(
@@ -249,6 +286,11 @@ impl Workspace {
 
     fn prompt_local_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target = self.navigation.picker.session.take();
+        let launch = target
+            .is_none()
+            .then(|| self.navigation.picker.launch.clone())
+            .flatten()
+            .filter(|launch| launch.read(cx).choosing_directory());
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -266,6 +308,14 @@ impl Workspace {
             let result = async { paths.await? }.await;
             let _ = view.update_in(cx, |this, window, cx| {
                 this.navigation.picker.pending = false;
+                if let Some(launch) = launch {
+                    let result = result
+                        .map(|paths| paths.and_then(|paths| paths.into_iter().next()))
+                        .map_err(|error| format!("{error:#}"));
+                    launch.update(cx, |launch, cx| launch.directory_chosen(result, window, cx));
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(Some(paths)) => {
                         if let Some((session, epoch)) = target {

@@ -66,6 +66,7 @@ pub(in crate::widgets::settings) struct Page {
     tls_server_name: Entity<InputState>,
     certificate_picker_open: bool,
     certificate_editor_generation: u64,
+    local: bool,
     transport: Transport,
     addresses: HashMap<Transport, String>,
     editor: Option<Editor>,
@@ -134,6 +135,7 @@ impl Page {
             tls_server_name,
             certificate_picker_open: false,
             certificate_editor_generation: 0,
+            local: true,
             transport: Transport::Local,
             addresses: HashMap::new(),
             editor: None,
@@ -175,6 +177,7 @@ impl Page {
         self.certificate_editor_generation += 1;
         self.scroll_to = Some(0);
         self.transport = Transport::Local;
+        self.local = true;
         self.addresses.clear();
         self.name
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -216,6 +219,7 @@ impl Page {
             .iter()
             .position(|entry| entry.id == profile.id);
         self.transport = Transport::from_target(&profile.target);
+        self.local = profile.local;
         self.addresses.clear();
         self.name.update(cx, |input, cx| {
             input.set_value(profile.name.clone(), window, cx)
@@ -275,6 +279,7 @@ impl Page {
         self.addresses
             .insert(self.transport, self.target.read(cx).value().to_string());
         self.transport = transport;
+        self.local = transport == Transport::Local;
         let address = self.addresses.get(&transport).cloned().unwrap_or_default();
         self.target.update(cx, |input, cx| {
             input.set_value(address, window, cx);
@@ -344,6 +349,7 @@ impl Page {
             }
         });
         let profile = ConnectionProfile {
+            local: self.local,
             id,
             name,
             note: (!note.is_empty()).then_some(note),

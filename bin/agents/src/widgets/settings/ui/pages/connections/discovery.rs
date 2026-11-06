@@ -104,6 +104,7 @@ impl Page {
             return;
         }
         let profile = ConnectionProfile {
+            local: true,
             id: uuid::Uuid::new_v4().to_string(),
             name: LOCAL_NAME.into(),
             note: None,

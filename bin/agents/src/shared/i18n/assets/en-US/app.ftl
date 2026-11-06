@@ -900,3 +900,16 @@ workspace-delete = Delete workspace
 workspace-archive-confirm = Archive “{ $path }” and all its sessions? Running sessions will stop; history will be retained.
 workspace-delete-confirm = Delete the empty workspace “{ $path }”? Project files will be retained.
 workspace-delete-cascade-confirm = “{ $path }” contains { $count } sessions, including archived sessions. Permanently delete them and their Bas history too? Project files will be retained.
+
+connections-local-filesystem = Shares this computer’s filesystem
+workspace-provider-empty = No workspace providers are available.
+workspace-path-encoding = The path must be valid UTF-8.
+workspace-browse = Browse
+workspace-select = Select
+workspace-load-more = Load more
+workspace-search = Search
+workspace-loading = Loading…
+workspace-open = Open workspace
+workspace-provider-upgrade = Update and restart BAS to create workspaces with providers.
+
+workspace-directory = Folder

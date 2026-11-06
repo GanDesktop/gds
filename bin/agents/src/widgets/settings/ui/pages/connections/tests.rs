@@ -62,6 +62,7 @@ fn connection_description_is_plain_text_without_a_copy_action(cx: &mut TestAppCo
             profiles
                 .put(
                     ConnectionProfile {
+                        local: false,
                         id: "remote".into(),
                         name: "Remote".into(),
                         note: Some(note.clone()),
@@ -140,6 +141,7 @@ fn discovery_is_read_only_until_add_and_never_retargets(cx: &mut TestAppContext)
             profiles
                 .put(
                     ConnectionProfile {
+                        local: false,
                         id: "remote".into(),
                         name: "Remote".into(),
                         note: Some("keep".into()),
@@ -340,6 +342,7 @@ fn remove_confirmation_rechecks_the_original_profile(cx: &mut TestAppContext) {
     let (directory, window, page) = setup(cx);
     let store = crate::shared::config::Store::at(directory.path().join("settings.json"));
     let original = ConnectionProfile {
+        local: false,
         id: "other".into(),
         name: "Original".into(),
         note: None,
@@ -597,6 +600,7 @@ fn minimum_width_keeps_controls_in_bounds_and_icon_actions_named(cx: &mut TestAp
     cx.update_window(window.into(), |_, window, cx| {
         page.read(cx).profiles.clone().update(cx, |profiles, cx| {
             profiles.put(ConnectionProfile {
+    local: false,
                 id: "long".into(),
                 name: "A connection name that should never push its actions off screen".into(),
                 note: Some("A long optional note should remain secondary and stay inside its card.".into()),
@@ -675,6 +679,7 @@ fn cards_share_name_endpoint_and_optional_note_rows(cx: &mut TestAppContext) {
                 profiles
                     .put(
                         ConnectionProfile {
+                            local: false,
                             id: id.into(),
                             name: format!("Saved {id}"),
                             note: Some("My note".into()),

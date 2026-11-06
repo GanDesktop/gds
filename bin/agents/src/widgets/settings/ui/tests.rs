@@ -154,6 +154,7 @@ fn frontend_connections_and_backend_switching_are_distinct_settings_scopes(
                 .update(cx, |profiles, cx| {
                     profiles.put(
                         ConnectionProfile {
+                            local: false,
                             id: "second".into(),
                             name: "Second server".into(),
                             note: None,

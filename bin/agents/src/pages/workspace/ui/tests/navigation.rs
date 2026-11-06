@@ -710,6 +710,17 @@ fn sidebar_motion_keeps_shared_boundaries_rows_and_scroll(cx: &mut TestAppContex
 #[gpui_kit::test]
 fn sidebar_collapsed_menu_keeps_commands_and_focus_available(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
+    // Keep the provider request pending without contacting a real daemon.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    cx.update(|cx| {
+        cx.set_global(crate::entities::agent::catalog::Service::new(
+            "127.0.0.1:0".parse().expect("isolated target"),
+            runtime.handle().clone(),
+        ))
+    });
     attach(&fixture, session(), cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.activate_window();
@@ -758,13 +769,19 @@ fn sidebar_collapsed_menu_keeps_commands_and_focus_available(cx: &mut TestAppCon
     })
     .expect("open add-workspace without moving the narrow menu control");
     cx.run_until_parked();
-    cx.update_window(fixture.window.into(), |_, window, cx| {
+    cx.update_window(fixture.window.into(), |_, _, cx| {
         assert!(!fixture.view.read(cx).window.sidebar_visible);
-        assert!(window.find("popup-menu").visible());
-        assert!(fixture.view.read(cx).window.menu.is_some());
-        window.press("escape", cx);
+        let view = fixture.view.read(cx);
+        assert!(view.window.menu.is_none());
+        assert!(
+            view.navigation
+                .picker
+                .launch
+                .as_ref()
+                .is_some_and(|launch| launch.read(cx).is_active())
+        );
     })
-    .expect("workspace add menu remains accessible");
+    .expect("workspace provider launch remains accessible");
 }
 
 #[gpui_kit::test]

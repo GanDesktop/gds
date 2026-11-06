@@ -262,7 +262,11 @@ macro_rules! fixture_service {
             type InstallAgentStream = ProgressStream;
             type AuthenticateAgentInteractiveStream = Pin<Box<dyn Stream<Item = Result<pb::AuthenticationEvent, RpcStatus>> + Send>>;
             type WatchElicitationsStream = Pin<Box<dyn Stream<Item = Result<pb::ElicitationSnapshot, RpcStatus>> + Send>>;
-            type AttachStream = Pin<Box<dyn Stream<Item = Result<pb::Event, RpcStatus>> + Send>>;
+            type AttachStream = Pin<Box<dyn Stream<Item = Result<pb::ManagementEvent, RpcStatus>> + Send>>;
+            type ObserveAcpStream = Pin<Box<dyn Stream<Item = Result<pb::AcpObservation, RpcStatus>> + Send>>;
+            async fn observe_acp(&self, _: Request<pb::AttachRequest>) -> Result<Response<Self::ObserveAcpStream>, RpcStatus> {
+                Err(RpcStatus::unimplemented("unrelated fixture RPC"))
+            }
             type WatchPermissionsStream = Pin<Box<dyn Stream<Item = Result<pb::PermissionSnapshot, RpcStatus>> + Send>>;
 
             async fn install_agent(
@@ -341,6 +345,11 @@ macro_rules! fixture_service {
 }
 
 fixture_service! {
+    list_workspace_providers(pb::ListWorkspaceProvidersRequest) -> pb::ListWorkspaceProvidersResponse;
+    open_workspace(pb::OpenWorkspaceRequest) -> pb::Workspace;
+    query_workspace_choices(pb::QueryWorkspaceChoicesRequest) -> pb::QueryWorkspaceChoicesResponse;
+    browse_server_directories(pb::BrowseServerDirectoriesRequest) -> pb::BrowseServerDirectoriesResponse;
+
     create_workspace(pb::CreateWorkspaceRequest) -> pb::Workspace;
     list_workspaces(pb::ListWorkspacesRequest) -> pb::ListWorkspacesResponse;
     get_workspace(pb::GetWorkspaceRequest) -> pb::Workspace;

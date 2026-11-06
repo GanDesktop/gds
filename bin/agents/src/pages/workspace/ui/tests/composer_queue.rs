@@ -145,13 +145,10 @@ fn immediate_queue_send_waits_for_cancel_and_completion_and_keeps_other_drafts_p
         });
         assert!(fixture.commands.try_recv().is_err(), "cancel acknowledgement is not turn completion");
         fixture.view.update(cx, |view, cx| {
-            view.update(Update::Event {
-                epoch: view.selected.epoch,
-                event: Event::new(meta.id, Cursor::from_raw(1), EventKind::TurnFinished {
+            observe_event(view, Event::new(meta.id, Cursor::from_raw(1), EventKind::TurnFinished {
                     turn: previous,
                     result: Ok(bas::acp::PromptResponse::new(bas::acp::StopReason::Cancelled)),
-                }).into(),
-            }, window, cx);
+                }), window, cx);
         });
         let command = fixture.commands.try_recv().expect("send selected draft");
         let Command::Prompt { submission, .. } = &command else {
@@ -159,16 +156,13 @@ fn immediate_queue_send_waits_for_cancel_and_completion_and_keeps_other_drafts_p
         };
         assert_eq!(submission::text(submission), "B");
         let submission = submission::payload(command);
-        let accepted = bas::model::TurnReceipt { turn: submission.turn, cursor: Cursor::from_raw(2) };
+        let accepted = bas::model::TurnReceipt { request_id: None, turn: submission.turn, cursor: Cursor::from_raw(2) };
         fixture.view.update(cx, |view, cx| {
             view.update(submission::accepted_at(meta.id, &submission, 2), window, cx);
-            view.update(Update::Event {
-                epoch: view.selected.epoch,
-                event: Event::new(meta.id, Cursor::from_raw(3), EventKind::TurnFinished {
+            observe_event(view, Event::new(meta.id, Cursor::from_raw(3), EventKind::TurnFinished {
                     turn: accepted.turn,
                     result: Ok(bas::acp::PromptResponse::new(bas::acp::StopReason::EndTurn)),
-                }).into(),
-            }, window, cx);
+                }), window, cx);
         });
         assert!(fixture.commands.try_recv().is_err());
         assert_eq!(fixture.view.read(cx).sessions.outboxes[&meta.id].front().expect("paused A").text, "A");
@@ -197,13 +191,10 @@ fn finishing_before_cancel_acknowledgement_keeps_the_immediate_draft_until_succe
             window.click("send-immediately", cx);
             assert!(matches!(fixture.commands.try_recv().expect("cancel current turn"), Command::Cancel(id) if id == meta.id));
             fixture.view.update(cx, |view, cx| {
-                view.update(Update::Event {
-                    epoch: view.selected.epoch,
-                    event: Event::new(meta.id, Cursor::from_raw(1), EventKind::TurnFinished {
+                observe_event(view, Event::new(meta.id, Cursor::from_raw(1), EventKind::TurnFinished {
                         turn: previous,
                         result: Ok(bas::acp::PromptResponse::new(bas::acp::StopReason::EndTurn)),
-                    }).into(),
-                }, window, cx);
+                    }), window, cx);
             });
             assert!(fixture.commands.try_recv().is_err(), "a finished turn cannot bypass cancel acknowledgement");
             fixture.view.update(cx, |view, cx| {

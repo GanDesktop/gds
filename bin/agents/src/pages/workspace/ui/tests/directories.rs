@@ -50,13 +50,13 @@ fn directories_reject_busy_unsupported_and_stale_targets_without_optimistic_chan
                     .is_empty()
             );
             view.update(
-                Update::Event {
+                Update::Management {
                     epoch,
                     event: Event::new(
                         meta.id,
                         Cursor::from_raw(2),
-                        EventKind::TurnStarted {
-                            turn: bas::model::TurnId::new(),
+                        EventKind::ActivityChanged {
+                            turn: Some(bas::model::TurnId::new()),
                         },
                     )
                     .into(),

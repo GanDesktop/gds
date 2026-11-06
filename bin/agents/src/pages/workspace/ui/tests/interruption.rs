@@ -13,7 +13,7 @@ fn tracked_outcome_does_not_skip_metadata_and_waits_for_idle_catalog(cx: &mut Te
         fixture.view.update(cx, |view, cx| {
             let outbox = view.sessions.outboxes.entry(background.id).or_default();
             let send = outbox.start(Draft { text: "accepted".into(), attachments: Vec::new() }, outbox::Origin::Composer);
-            let accepted = bas::model::TurnReceipt { turn: send.turn, cursor: Cursor::from_raw(3) };
+            let accepted = bas::model::TurnReceipt { request_id: None, turn: send.turn, cursor: Cursor::from_raw(3) };
             background.active_turn = Some(send.turn);
             view.sessions.entries.push(background.clone());
             outbox.settle(std::sync::Arc::new(bas::model::PromptSubmission {

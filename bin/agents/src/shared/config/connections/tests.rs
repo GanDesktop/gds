@@ -6,7 +6,7 @@ use std::fs;
 #[test]
 fn mtls_profiles_store_only_references_and_separate_identity_state() {
     let value = serde_json::json!({
-        "id": "secure", "name": "Secure", "target": "mtls://workstation:7338",
+        "id": "secure", "name": "Secure", "local": false, "target": "mtls://workstation:7338",
         "tls": {
             "ca": "/certs/ca.pem", "certificate": "/certs/client.pem",
             "private_key": "/certs/client.key", "server_name": "workstation"
@@ -47,6 +47,7 @@ fn defaults_and_old_documents_are_read_without_writing() {
     assert_eq!(
         frontend.selected_connection(),
         Some(&ConnectionProfile {
+            local: true,
             id: "local".into(),
             name: "Local".into(),
             note: None,
@@ -143,4 +144,17 @@ fn strict_syntax_and_domain_validation() {
     duplicate_target.id = "other".into();
     frontend.connections.push(duplicate_target);
     frontend.validate().expect("duplicate addresses allowed");
+}
+
+#[test]
+fn filesystem_locality_is_explicit_and_independent_of_transport() {
+    for target in ["local", "unix:///tmp/bas.sock", "tcp://127.0.0.1:7338"] {
+        let mut value = serde_json::json!({"id":"test", "name":"Test", "target":target});
+        let remote: ConnectionProfile = serde_json::from_value(value.clone()).expect("profile");
+        assert!(!remote.local);
+        value["local"] = true.into();
+        let local: ConnectionProfile = serde_json::from_value(value).expect("declared local");
+        assert!(local.local);
+        assert_eq!(local.options(), remote.options());
+    }
 }

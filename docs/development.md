@@ -395,3 +395,42 @@ GDS_TERMINAL=alacritty cargo run --bin gds-files --features files
 日常检查使用 `just fmt-check`、`just check` 和 `just test`；只检查某个应用时显式传入其 feature 和 binary target。需要 GPUI 测试支持的回归使用 `gui-tests`。编译、单元测试与无显示服务器的 GPUI 测试不能代替目标桌面的输入、IME、父窗口和材质验收。
 
 文件操作和配置写入的验证使用独立临时目录与 XDG 环境。一次性验证脚本、日志、截图和逐轮结果不纳入项目文档。文档描述当前行为、接口与限制；数据库和配置的运行时迁移机制仍按其兼容契约维护。
+
+## Agents workspace launch forms
+
+The workspace add action loads provider descriptors from the selected BAS connection.
+Provider parameter types and validation use JSON Schema 2020-12 with Schemars and
+`jsonschema`; GDS implements native controls, not schema validation rules. See the
+BAS `docs/rpc.md` workspace provider contract. The `workspace_launch` feature slice
+owns the form, backend requests, and provider selection.
+
+Connection profiles expose an explicit `local` boolean meaning that the connection
+shares the frontend filesystem namespace. The built-in local profile and locally
+discovered profiles set it to true. Existing saved profiles without this field
+conservatively use remote browsing; the connection editor can change the declaration.
+A loopback TCP or Unix socket address alone does not enable local directory browsing.
+
+`ServerDirectoryPath` fields use the native directory picker for declared local
+connections and `BrowseServerDirectories` for other connections. Manual path entry
+is available in parameter forms. When a local connection exposes a single provider
+with only one required directory field, the add action reuses the workspace's
+existing native chooser and activation lifecycle, then submits the selected path
+through that provider. Other parameter forms use the existing parent-window alert
+dialog, Kit form fields, and shared `DialogActions`; they do not create a separate
+window. Provider choice sources are queried with partial form values, search text
+and pagination. Schema versions are sent back on open/query.
+An unsupported schema or an older BAS without provider RPCs produces an error;
+GDS never substitutes a local filesystem picker for a remote backend.
+
+Remote directory forms embed the shared `gds::ui::picker::directory::DirectoryPicker`
+in an alert dialog. Its injected `Loader` returns paginated `Page` data, including
+opaque source paths, parent and breadcrumb locations. The shared UI has no BAS or
+filesystem dependency; `workspace_launch::api` adapts BAS responses. Dropping a
+loader future must cancel its work. Hosts call `cancel_loading` on dialog close and
+read `selected_path` for confirmation; `None` disables the decision while loading,
+editing a location, or showing an error. Local connections retain the native chooser.
+
+BAS channels use the shared HTTP/2 heartbeat policy, including lazy channels:
+15 seconds idle before a PING and a 5-second ACK timeout. Transport failure reaches
+the existing stream reconnection logic; subscriptions resume using their cursors.
+Heartbeat frames do not enter conversation history and never retry a prompt.

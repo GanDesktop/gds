@@ -159,6 +159,34 @@ fn catalog_workspaces(mut catalog: connection::Catalog) -> connection::Catalog {
     catalog
 }
 
+// A recorded turn reaches the frontend through both independent subscriptions.
+fn observe_event(
+    view: &mut Workspace,
+    event: Event,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let management = event.management();
+    view.update(
+        Update::Event {
+            epoch: view.selected.epoch,
+            event: event.into(),
+        },
+        window,
+        cx,
+    );
+    if let Some(event) = management {
+        view.update(
+            Update::Management {
+                epoch: view.selected.epoch,
+                event: event.into(),
+            },
+            window,
+            cx,
+        );
+    }
+}
+
 fn history_window(epoch: u64, session: bas::model::SessionSnapshot, events: Vec<Event>) -> Update {
     Update::HistoryWindow {
         epoch,
@@ -221,6 +249,7 @@ fn title_and_background_catalog_wait_for_receipt_correlated_tracking(cx: &mut Te
                 );
                 assert!(fixture.commands.try_recv().is_err());
                 bas::model::TurnReceipt {
+                    request_id: None,
                     turn: submission.turn,
                     cursor: Cursor::from_raw(3),
                 }
@@ -311,21 +340,16 @@ fn catalog_and_history_merge_metadata_without_skipping_content(cx: &mut TestAppC
             assert_eq!(conversation.items.len(), 1);
             assert_eq!(view.sessions.entries[0], newest);
             // A completion between history and GetSession stays newer than the snapshot.
-            view.update(
-                Update::Event {
-                    epoch: view.selected.epoch,
-                    event: Event::new(
-                        newest.id,
-                        Cursor::from_raw(11),
-                        EventKind::TurnFinished {
-                            turn: newest.active_turn.expect("turn"),
-                            result: Ok(bas::acp::PromptResponse::new(
-                                bas::acp::StopReason::EndTurn,
-                            )),
-                        },
-                    )
-                    .into(),
-                },
+            observe_event(
+                view,
+                Event::new(
+                    newest.id,
+                    Cursor::from_raw(11),
+                    EventKind::TurnFinished {
+                        turn: newest.active_turn.expect("turn"),
+                        result: Ok(bas::acp::PromptResponse::new(bas::acp::StopReason::EndTurn)),
+                    },
+                ),
                 window,
                 cx,
             );
@@ -366,10 +390,7 @@ fn editing_queue_head_keeps_order_and_escape_restores_composition(cx: &mut TestA
                 .update(cx, |input, cx| input.set_value("A'", window, cx));
             view.send_prompt(window, cx);
             assert_eq!(view.composer.input.read(cx).value(), "composition");
-            view.update(
-                Update::Event {
-                    epoch: view.selected.epoch,
-                    event: Event::new(
+            observe_event(view, Event::new(
                         meta.id,
                         Cursor::from_raw(1),
                         EventKind::TurnFinished {
@@ -378,12 +399,7 @@ fn editing_queue_head_keeps_order_and_escape_restores_composition(cx: &mut TestA
                                 bas::acp::StopReason::EndTurn,
                             )),
                         },
-                    )
-                    .into(),
-                },
-                window,
-                cx,
-            );
+                    ), window, cx);
         });
         assert!(
             matches!(fixture.commands.try_recv(), Ok(Command::Prompt { submission, .. }) if submission::text(&submission) == "A'")
@@ -1260,7 +1276,10 @@ fn folded_reply_stays_unread_until_opened_and_survives_replay(cx: &mut TestAppCo
 fn completed_events(session: SessionId, text: &str) -> Vec<Event> {
     let turn = bas::model::TurnId::new();
     [
-        EventKind::TurnStarted { turn },
+        EventKind::TurnStarted {
+            request_id: None,
+            turn,
+        },
         EventKind::Acp(bas::acp::SessionUpdate::AgentMessageChunk(
             bas::acp::ContentChunk::new(text.into()),
         )),
@@ -1422,10 +1441,7 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
                 .is_empty()
         );
         fixture.view.update(cx, |view, cx| {
-            view.update(
-                Update::Event {
-                    epoch: view.selected.epoch,
-                    event: Event::new(
+            observe_event(view, Event::new(
                         session.id,
                         Cursor::from_raw(1),
                         EventKind::TurnFinished {
@@ -1434,17 +1450,13 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
                                 bas::acp::StopReason::EndTurn,
                             )),
                         },
-                    )
-                    .into(),
-                },
-                window,
-                cx,
-            );
+                    ), window, cx);
         });
         let command = fixture.commands.try_recv().expect("first queued prompt");
         assert!(matches!(&command, Command::Prompt { submission, .. } if submission::text(submission) == "追加一"));
         let submission = submission::payload(command);
         let accepted = bas::model::TurnReceipt {
+            request_id: None,
             turn: submission.turn,
             cursor: Cursor::from_raw(2),
         };
@@ -1460,25 +1472,15 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
             "receipt must not drain the next prompt using a stale Idle snapshot"
         );
         fixture.view.update(cx, |view, cx| {
-            view.update(
-                Update::Event {
-                    epoch: view.selected.epoch,
-                    event: Event::new(
+            observe_event(view, Event::new(
                         session.id,
                         Cursor::from_raw(2),
                         EventKind::TurnStarted {
+                            request_id: None,
                             turn: accepted.turn,
                         },
-                    )
-                    .into(),
-                },
-                window,
-                cx,
-            );
-            view.update(
-                Update::Event {
-                    epoch: view.selected.epoch,
-                    event: Event::new(
+                    ), window, cx);
+            observe_event(view, Event::new(
                         session.id,
                         Cursor::from_raw(3),
                         EventKind::TurnFinished {
@@ -1487,12 +1489,7 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
                                 bas::acp::StopReason::EndTurn,
                             )),
                         },
-                    )
-                    .into(),
-                },
-                window,
-                cx,
-            );
+                    ), window, cx);
         });
         let command = fixture.commands.try_recv().expect("second queued prompt");
         assert!(matches!(&command, Command::Prompt { submission, .. } if submission::text(submission) == "追加二"));

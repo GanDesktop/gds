@@ -45,6 +45,7 @@ pub(super) fn accepted_at(
         session,
         submission: submission.clone(),
         result: Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+            request_id: None,
             turn: submission.turn,
             cursor: Cursor::from_raw(cursor),
         })),
@@ -161,6 +162,7 @@ fn invalid_acceptance_retains_unknown_immutable_payload(cx: &mut TestAppContext)
                         session: meta.id,
                         submission: original.clone(),
                         result: Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+                            request_id: None,
                             turn: if wrong_turn {
                                 bas::model::TurnId::new()
                             } else {
