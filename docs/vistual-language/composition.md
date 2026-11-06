@@ -141,3 +141,22 @@ clipboard action removes that entry from the platform clipboard while preserving
 the remaining entries and copy/cut mode. Cancellation remains pending until the
 worker finishes cleanup. Completed tasks leave the list and report their outcome
 through notifications.
+
+### Directory pickers
+
+Remote directory selection uses the shared `ui::picker::directory::DirectoryPicker`.
+Its anatomy is `Picker`, `PickerToolbar`, `PickerLocation`, `PickerContent` and
+`PickerStatus`; the host supplies the existing alert dialog and `DialogActions`.
+Only the content region scrolls, so navigation and the decision footer remain visible.
+
+Use Kit `Breadcrumb`, `Input` and `DataTable`, shared `IconButton` and `ListSurface`,
+and `DataListStyle` row, typography and selection tokens. Folder names align left;
+folders are rows, not full-width action buttons. A click selects a folder, a double
+click or Enter enters it, and the primary footer action accepts the selection or
+the current directory. Hidden folders are initially hidden. Ctrl+L edits the path,
+Ctrl+F focuses the filter, Ctrl+H toggles hidden folders, Ctrl+R refreshes,
+Alt+Left/Right traverses history, and Alt+Up opens the parent.
+
+Loading, failure and empty results use Kit feedback components. Pending or failed
+navigation cannot be confirmed. The host cancels outstanding reads when the dialog
+closes; replacing a request discards its late response.
