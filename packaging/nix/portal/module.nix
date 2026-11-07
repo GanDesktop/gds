@@ -20,13 +20,9 @@ in {
 
   config = lib.mkIf cfg.enable {
     xdg.portal.enable = true;
-    xdg.portal.extraPortals = [ cfg.package pkgs.xdg-desktop-portal-gtk ];
-    xdg.portal.config = lib.mkMerge [
-      { common.default = lib.mkDefault [ "gtk" ]; }
-      (lib.genAttrs ([ "common" ] ++ cfg.desktops) (_: {
-        "org.freedesktop.impl.portal.FileChooser" = lib.mkDefault [ "gds" ];
-        "org.freedesktop.impl.portal.AppChooser" = lib.mkDefault [ "gtk" ];
-      }))
-    ];
+    xdg.portal.extraPortals = [ cfg.package ];
+    xdg.portal.config = lib.genAttrs ([ "common" ] ++ cfg.desktops) (_: {
+      "org.freedesktop.impl.portal.FileChooser" = lib.mkDefault [ "gds" ];
+    });
   };
 }

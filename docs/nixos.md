@@ -47,7 +47,8 @@ Enable only the components you need. The individual modules are listed above;
   `programs.gds-files.defaultFileManager = false` to leave directory associations
   unchanged. `fileManager1.enable` is off by default; enable it to handle
   requests such as "Show in Folder" when Files is not running.
-- Portal routes FileChooser to GDS and AppChooser to GTK. It requires Files
+- Portal installs the GDS backend and routes FileChooser to it. Other backends
+  and interface routing belong in your desktop configuration. Files is installed
   separately. `services.gds-portal.desktops` defaults to `[ "niri" ]` alongside
   the common configuration; set it for your desktop when needed.
 - Override packages with `programs.gds-files.package`,

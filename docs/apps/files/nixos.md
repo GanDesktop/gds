@@ -64,7 +64,7 @@ busctl --user introspect org.freedesktop.FileManager1 /org/freedesktop/FileManag
 
 GDS Portal is the independent `xdg-desktop-portal-gds` executable. Its module registers D-Bus activation and selects `gds` for `org.freedesktop.impl.portal.FileChooser`. The package does not depend on Files: its default handler is `gds-files` from PATH. A handler implementing the native protocol can be selected with `--file-chooser /path/to/executable`.
 
-The module also installs GTK for other desktop interfaces and selects it for AppChooser. This supports Files' “Open with…” flow without routing FileChooser through GTK.
+The module installs only the GDS backend and configures only FileChooser. Manage other backends and interface routing in your desktop configuration; Files' “Open with…” flow uses the desktop's AppChooser provider.
 
 | Request | Behavior |
 | --- | --- |
