@@ -1,6 +1,7 @@
 //! One sort menu shared by the toolbar and its keyboard shortcut.
 use super::*;
 use gds::ui::{Shortcut, button::Button};
+use gds_uim::el;
 use gpui_kit::{
     assets::IconName,
     component::{
@@ -88,24 +89,26 @@ impl Browser {
 
     pub(super) fn sort_button(&self, cx: &mut Context<Self>) -> Popover {
         let label = i18n::text("sort", cx);
-        let trigger = Button::icon_button("sort")
-            .control_icon(IconName::ArrowDownWideNarrow)
-            .accessibility_label(label.clone())
-            .tooltip_with_shortcut(label, Shortcut::from(Command::Sort));
+        let trigger = el! { "sort".Button::icon_button {
+            control_icon: IconName::ArrowDownWideNarrow;
+            accessibility_label: $(label.clone());
+            tooltip_with_shortcut: label, $(Shortcut::from(Command::Sort));
+        } };
         let menu = self.menus.sort.as_ref().map(|open| open.menu.clone());
         let on_open =
             cx.listener(|this, open: &bool, window, cx| this.set_sort_menu_open(*open, window, cx));
-        Popover::new("file-sort-popover")
-            .appearance(false)
-            .overlay_closable(false)
-            .open(menu.is_some())
-            .trigger(trigger)
-            .on_open_change(on_open)
-            .content(move |_, _, _| {
+        el! { "file-sort-popover".Popover::new {
+            appearance: false;
+            overlay_closable: false;
+            open: $(menu.is_some());
+            trigger: trigger;
+            on_open_change: on_open;
+            content: $(move |_, _, _| {
                 menu.clone()
                     .map(IntoElement::into_any_element)
-                    .unwrap_or_else(|| div().into_any_element())
-            })
+                    .unwrap_or_else(|| el! { .div }.into_any_element())
+            });
+        } }
     }
 }
 
@@ -124,27 +127,27 @@ pub(super) fn rows(
         (sorting::Key::Modified, "modified"),
     ] {
         let browser = browser.clone();
-        menu = menu.item(
-            PopupMenuItem::new(i18n::text(label, cx))
-                .checked(current.key == key)
-                .on_click(move |_, _, cx| {
-                    let _ = browser.update(cx, |this, cx| {
-                        this.set_sort(
-                            sorting::Sort {
-                                key,
-                                direction: current.direction,
-                            },
-                            cx,
-                        );
-                    });
-                }),
-        );
+        menu = menu.item(el! { $(i18n::text(label, cx)).PopupMenuItem::new {
+            checked: $(current.key == key);
+            on_click: $(move |_, _, cx| {
+                let _ = browser.update(cx, |this, cx| {
+                    this.set_sort(
+                        sorting::Sort {
+                            key,
+                            direction: current.direction,
+                        },
+                        cx,
+                    );
+                });
+            });
+        } });
     }
     menu.separator().item(
-        PopupMenuItem::new(i18n::text("sort-descending", cx))
-            .checked(current.direction == sorting::Direction::Descending)
-            .on_click(move |_, _, cx| {
+        el! { $(i18n::text("sort-descending", cx)).PopupMenuItem::new {
+            checked: $(current.direction == sorting::Direction::Descending);
+            on_click: $(move |_, _, cx| {
                 let _ = browser.update(cx, |this, cx| this.set_sort(current.next(current.key), cx));
-            }),
+            });
+        } },
     )
 }

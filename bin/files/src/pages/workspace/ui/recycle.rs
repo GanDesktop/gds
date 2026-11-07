@@ -580,10 +580,6 @@ impl Browser {
     ) {
         self.refresh_trash(cx);
     }
-
-    pub(super) fn render_trash(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        view::render_trash(self, window, cx)
-    }
 }
 
 /// What one attempted record did to its payload on disk.

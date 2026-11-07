@@ -50,9 +50,10 @@ pub enum Background {
     Transparent,
     Blurred,
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemeSource {
+    Custom(PathBuf),
     #[default]
     Desktop,
     Builtin,

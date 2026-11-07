@@ -127,7 +127,7 @@ directory when using the wildcard.
 sudo dnf remove gds-files
 ```
 
-Removal keeps settings in `~/.config/gds/files/` and state in
+Removal keeps settings in `~/.config/gds/app/files/` and state in
 `~/.local/state/gds/files/`. If you changed the default folder handler, choose a
 replacement with `xdg-mime`.
 

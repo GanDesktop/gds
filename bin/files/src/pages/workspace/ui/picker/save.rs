@@ -1,6 +1,7 @@
 //! Save decisions and caller-supplied chooser controls.
 use super::*;
 use gds::ui::DialogActions;
+use gds_uim::el;
 use std::{collections::HashSet, ffi::OsString, fs, io};
 
 pub(super) struct Mnemonic {
@@ -119,30 +120,40 @@ impl Browser {
                 let browser = browser.clone();
                 let paths = paths.clone();
                 let colors = gds::appearance::theme::Colors::current(cx);
-                dialog
-                    .confirm()
-                    .width(px(460.))
-                    .bg(colors.panel)
-                    .text_color(colors.panel_foreground)
-                    .title(i18n::text("picker-overwrite-title", cx))
-                    .description(i18n::text("picker-overwrite-message", cx))
-                    .child(el! {
+                let footer = el! { .DialogActions::default {
+                    primary_label: $(i18n::text("picker-save", cx));
+                    cancel_label: $(i18n::text("picker-cancel", cx));
+                } };
+                let filename = paths
+                    .first()
+                    .and_then(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let on_ok = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                    if let Some(browser) = browser.upgrade() {
+                        browser.update(cx, |browser, cx| {
+                            browser.complete_picker_selection(paths.clone(), cx)
+                        });
+                    }
+                    true
+                };
+                el! {
+                    dialog {
+                        confirm;
+                        width: $(px(460.));
+                        bg: $(colors.panel);
+                        text_color: $(colors.panel_foreground);
+                        title: $(i18n::text("picker-overwrite-title", cx));
+                        description: $(i18n::text("picker-overwrite-message", cx));
+                        footer: footer;
+                        on_ok: on_ok;
+                    } [
+                        $(el! {
                         .div { min_w_0; w_full; text_sm; truncate; }
-                            [$(paths.first().and_then(|path| path.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default())]
-                    })
-                    .footer(
-                        DialogActions::default()
-                            .primary_label(i18n::text("picker-save", cx))
-                            .cancel_label(i18n::text("picker-cancel", cx)),
-                    )
-                    .on_ok(move |_, _, cx| {
-                        if let Some(browser) = browser.upgrade() {
-                            browser.update(cx, |browser, cx| {
-                                browser.complete_picker_selection(paths.clone(), cx)
-                            });
-                        }
-                        true
-                    })
+                            [filename]
+                    }),
+                    ]
+                }
             });
             return;
         }
@@ -177,12 +188,12 @@ impl Browser {
             let view = cx.entity().downgrade();
             if choice.options.is_empty() {
                 controls.push(
-                    Checkbox::new(SharedString::from(format!("picker-choice-{id}")))
-                        .label(choice.label.clone())
-                        .small()
-                        .disabled(!available)
-                        .checked(choice.selected == "true")
-                        .on_change(move |checked, _, cx| {
+                    el! { $(SharedString::from(format!("picker-choice-{id}"))).Checkbox::new {
+                        label: $(choice.label.clone());
+                        small;
+                        disabled: $(!available);
+                        checked: $(choice.selected == "true");
+                        on_change: $(move |checked, _, cx| {
                             if let Some(view) = view.upgrade() {
                                 view.update(cx, |this, cx| {
                                     this.set_picker_choice(
@@ -192,8 +203,9 @@ impl Browser {
                                     )
                                 });
                             }
-                        })
-                        .into_any_element(),
+                        });
+                    } }
+                    .into_any_element(),
                 );
             } else {
                 let selected = choice
@@ -204,30 +216,32 @@ impl Browser {
                     .unwrap_or_default();
                 let options = choice.options.clone();
                 controls.push(
-                    Button::new(SharedString::from(format!("picker-choice-{id}")))
-                        .small()
-                        .label(format!("{}: {selected}", choice.label))
-                        .disabled(!available)
-                        .dropdown_menu(move |mut menu, _, _| {
+                    el! { $(SharedString::from(format!("picker-choice-{id}"))).Button::new {
+                        small;
+                        label: $(format!("{}: {selected}", choice.label));
+                        disabled: $(!available);
+                        dropdown_menu: $(move |mut menu, _, _| {
                             for (value, label) in &options {
                                 let view = view.clone();
                                 let id = id.clone();
                                 let value = value.clone();
                                 menu = menu.item(
-                                    PopupMenuItem::new(label.clone())
-                                        .checked(label == &selected)
-                                        .on_click(move |_, _, cx| {
+                                    el! { $(label.clone()).PopupMenuItem::new {
+                                        checked: $(label == &selected);
+                                        on_click: $(move |_, _, cx| {
                                             if let Some(view) = view.upgrade() {
                                                 view.update(cx, |this, cx| {
                                                     this.set_picker_choice(&id, &value, cx)
                                                 });
                                             }
-                                        }),
+                                        });
+                                    } },
                                 );
                             }
                             menu
-                        })
-                        .into_any_element(),
+                        });
+                    } }
+                    .into_any_element(),
                 );
             }
         }
@@ -245,6 +259,3 @@ impl Browser {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

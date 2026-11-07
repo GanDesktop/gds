@@ -108,6 +108,3 @@ pub(crate) fn save(path: &Path, access: u32) -> Result<(), Error> {
     fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

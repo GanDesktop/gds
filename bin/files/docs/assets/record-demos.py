@@ -66,7 +66,7 @@ class Capture:
         if not self.wallpapers:
             raise RuntimeError('No wallpapers found; run fetch-wallpapers.py first')
         config = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config'))
-        self.preferences = tomllib.loads((config / 'gds/files/settings.toml').read_text())
+        self.preferences = tomllib.loads((config / 'gds/app/files/settings.toml').read_text())
         self.dbus = Path(shutil.which('dbus-run-session')).resolve()
         self.dbus_config = self.dbus.parent.parent / 'share/dbus-1/session.conf'
         self.proc = self.window = self.recorder = None
@@ -135,7 +135,7 @@ class Capture:
                      if w['output'] == self.monitor and w['active_window_id'] is None)
         action('focus-workspace', empty['idx'])
         root = self.work / name
-        config = root / 'config/gds/files/settings.toml'
+        config = root / 'config/gds/app/files/settings.toml'
         config.parent.mkdir(parents=True)
         config.write_text(self.settings(**overrides))
         if name == 'terminal':

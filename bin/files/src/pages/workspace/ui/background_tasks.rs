@@ -1,5 +1,7 @@
 //! Window-owned running operations shown by the footer and its click popover.
 use super::*;
+use super::{file_icon::FileIcon, file_label::FileLabel, status::*};
+use gds::ui::IconButton;
 use gds_uim::el;
 use gpui_kit::{assets::IconName, prelude::*};
 use tokio_util::sync::CancellationToken;
@@ -61,13 +63,29 @@ impl Render for State {
         let rows = self.items.iter().map(|item| {
             let cancel = item.cancel.clone();
             let cancelled = cancel.is_cancelled();
-            let label = if cancelled { format!("{} — {}", item.label, i18n::text("tasks-cancelling", cx)).into() } else { item.label.clone() };
-            let on_click = cx.listener(move |_, _, _, cx| { cancel.cancel(); cx.notify(); });
-            let action = el! { "cancel-task".ui::IconButton::new { icon: IconName::X; label: $(i18n::text("operation-cancel", cx)); disabled: cancelled; on_click: on_click; } }.into_any_element();
-            status::row(item.key.clone(), file_label::FileLabel::default()
-                .icon(file_icon::FileIcon::plain(IconName::ListTodo)).name(label.clone()), label, action)
-        }).collect();
-        status::list(rows, i18n::text("tasks-empty", cx))
+            let label = if cancelled {
+                format!("{} — {}", item.label, i18n::text("tasks-cancelling", cx)).into()
+            } else {
+                item.label.clone()
+            };
+            let on_click = cx.listener(move |_, _, _, cx| {
+                cancel.cancel();
+                cx.notify();
+            });
+            el! {
+                .StatusRow::default {
+                    # $(item.key.clone()); title: ~label;
+                    content: .FileLabel::default {
+                        icon: $(FileIcon::plain(IconName::ListTodo)); name: label;
+                    };
+                    action: "cancel-task".IconButton::new {
+                        icon: IconName::X; label: $(i18n::text("operation-cancel", cx));
+                        disabled: cancelled; on_click: on_click;
+                    };
+                }
+            }
+        });
+        el! { .StatusList::default { empty: $(i18n::text("tasks-empty", cx)); } [..rows] }
     }
 }
 
@@ -123,15 +141,16 @@ impl Browser {
             1 => state.read(cx).items[0].label.clone(),
             _ => i18n::count("tasks-count", count, cx),
         };
-        status::control(
-            "background-tasks",
-            i18n::text("tasks-title", cx),
-            status::Summary::default()
-                .compact(self.window.layout.compact)
-                .icon(IconName::ListTodo)
-                .label(label)
-                .count(count),
-            state,
-        )
+        el! {
+            .StatusControl::default {
+                # "background-tasks"; title: $(i18n::text("tasks-title", cx));
+                summary: .StatusSummary::default {
+                    compact: $(self.window.layout.compact); icon: IconName::ListTodo;
+                    label: label; count: count;
+                };
+                details: state;
+            }
+        }
+        .into_any_element()
     }
 }

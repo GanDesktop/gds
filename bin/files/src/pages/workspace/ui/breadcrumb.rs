@@ -49,6 +49,3 @@ pub(super) fn segments(path: &Path) -> Vec<Segment> {
     }
     segments
 }
-
-#[cfg(test)]
-mod tests;

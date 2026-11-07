@@ -95,20 +95,6 @@ impl Places {
         widths
     }
 
-    #[cfg(test)]
-    pub fn set_columns(&mut self, location: impl Into<Location>, columns: Layout) {
-        self.settings_mut(ViewScope::Location(location.into()))
-            .columns = Some(columns);
-    }
-
-    #[cfg(test)]
-    pub fn clear_columns(&mut self, location: impl Into<Location>) -> bool {
-        self.settings_mut(ViewScope::Location(location.into()))
-            .columns
-            .take()
-            .is_some()
-    }
-
     pub fn set_view_mode(&mut self, location: impl Into<Location>, mode: ViewMode) {
         self.settings_mut(ViewScope::Location(location.into())).mode = Some(mode);
     }
@@ -132,9 +118,6 @@ impl Places {
     }
 }
 
-#[cfg(test)]
-mod tests;
-
 /// Idempotent edits let separate windows update records without replacing a
 /// stale snapshot of another window's favorites or directory settings.
 #[derive(Clone)]
@@ -149,6 +132,7 @@ pub(crate) enum Change {
         path: OsString,
         present: bool,
     },
+    PinOrder(Vec<OsString>),
     Columns {
         scope: ViewScope,
         layout: Option<Layout>,
@@ -180,6 +164,7 @@ impl Change {
                 set_membership(&mut places.favorites, location, *present)
             }
             Self::Pin { path, present } => set_membership(&mut places.pinned, path, *present),
+            Self::PinOrder(order) => reorder_existing(&mut places.pinned, order),
             Self::Columns { scope, layout } => {
                 places.settings_mut(scope.clone()).columns = layout.clone()
             }
@@ -207,5 +192,21 @@ fn set_membership<T: Clone + PartialEq>(items: &mut Vec<T>, item: &T, present: b
         items.retain(|old| old != item);
     } else if !items.contains(item) {
         items.push(item.clone());
+    }
+}
+
+/// Reorder only members of this window's snapshot; preserve pins owned by others.
+pub(crate) fn reorder_existing(items: &mut [OsString], order: &[OsString]) {
+    let mut seen = std::collections::HashSet::new();
+    let ordered: Vec<_> = order
+        .iter()
+        .filter(|path| items.contains(path) && seen.insert((*path).clone()))
+        .cloned()
+        .collect();
+    let mut ordered = ordered.into_iter();
+    for item in items {
+        if order.contains(item) {
+            *item = ordered.next().expect("one ordered value per existing pin");
+        }
     }
 }

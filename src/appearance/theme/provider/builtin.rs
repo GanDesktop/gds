@@ -75,14 +75,7 @@ impl Theme {
     }
 
     fn palette(self, mode: Mode) -> Palette {
-        let definition = self.definition();
-        let mut palette = match mode {
-            Mode::Light => definition.light,
-            Mode::Dark => definition.dark,
-        }
-        .into_palette(mode);
-        palette.terminal_fallback(mode);
-        palette
+        self.definition().palette(mode)
     }
 }
 
@@ -102,9 +95,21 @@ pub(super) fn palette(mode: Mode) -> Palette {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Definition {
+pub(super) struct Definition {
     light: Scheme,
     dark: Scheme,
+}
+
+impl Definition {
+    pub(super) fn palette(&self, mode: Mode) -> Palette {
+        let mut palette = match mode {
+            Mode::Light => self.light,
+            Mode::Dark => self.dark,
+        }
+        .into_palette(mode);
+        palette.terminal_fallback(mode);
+        palette
+    }
 }
 
 #[derive(Clone, Copy, Deserialize)]

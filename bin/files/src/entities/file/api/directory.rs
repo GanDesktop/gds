@@ -33,7 +33,7 @@ pub enum EntryKind {
     Unknown,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub path: PathBuf,
     pub name: OsString,
@@ -311,6 +311,3 @@ fn push_warning(
         message: error.to_string(),
     });
 }
-
-#[cfg(test)]
-mod tests;

@@ -123,10 +123,11 @@ impl NewFolderDialog {
             let on_ok = Self::confirm(this.clone());
             let on_close = Self::close(this.clone());
             let form = this.form.clone();
-            let footer = DialogActions::default()
-                .primary_label(i18n::text("new-folder-confirm", cx))
-                .primary_icon(IconName::FolderPlus)
-                .cancel_label(i18n::text("operation-cancel", cx));
+            let footer = el! { .DialogActions::default {
+                primary_label: $(i18n::text("new-folder-confirm", cx));
+                primary_icon: IconName::FolderPlus;
+                cancel_label: $(i18n::text("operation-cancel", cx));
+            } };
             let mut arguments = FluentArgs::new();
             arguments.set("folder", this.destination.display().to_string());
             el! {

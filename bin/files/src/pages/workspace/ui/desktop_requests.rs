@@ -1,6 +1,7 @@
 //! Apply desktop requests through the workspace's existing tabs and selection.
 use super::*;
 use gds::service::desktop::file_manager::{Command as DesktopCommand, Operation};
+use gds::ui::window::TitleBar;
 use gpui_kit::component::ActiveTheme;
 
 impl Browser {
@@ -152,7 +153,7 @@ impl Render for Properties {
                 track_focus: $&self.focus; on_action: close;
                 bg: $cx.theme().background; text_color: $cx.theme().foreground;
             } [
-                .ui::window::TitleBar::default { } [title],
+                .TitleBar::default { } [title],
                 view,
             ]
         }

@@ -1,5 +1,7 @@
 use super::*;
 use gds::service::remote::{Address, Protocol};
+use gds::ui::IconButton;
+use gds_uim::el;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{Icon, spinner::Spinner};
 
@@ -51,7 +53,7 @@ impl Browser {
         let on_open = cx.listener(move |this, _, window, cx| {
             this.open_remote_place(open_address.clone(), window, cx)
         });
-        let open = el! { format!("{group}-open-{index}").ui::IconButton::new {
+        let open = el! { format!("{group}-open-{index}").IconButton::new {
             icon: $(if connected { IconName::FolderOpen } else { IconName::Plug });
             label: $i18n::text(if connected { "remote-open" } else { "remote-connect-action" }, cx);
             disabled: connecting; on_click: on_open;
@@ -63,7 +65,7 @@ impl Browser {
             this.save_places(cx);
             cx.notify();
         });
-        let favorite = el! { format!("{group}-save-{index}").ui::IconButton::new {
+        let favorite = el! { format!("{group}-save-{index}").IconButton::new {
             icon: $(if saved { IconName::Trash } else { IconName::Star });
             label: $i18n::text(if saved { "remote-remove-saved" } else { "remote-save-location" }, cx);
             on_click: on_save;
@@ -144,7 +146,7 @@ impl Browser {
                         .div { font_medium; truncate } [$(path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned())],
                         .div { text_xs; text_color: $cx.theme().muted_foreground; truncate } [$(path.display().to_string())],
                     ],
-                    format!("open-network-mount-{index}").ui::IconButton::new { icon: IconName::FolderOpen; label: $i18n::text("remote-open", cx);
+                    format!("open-network-mount-{index}").IconButton::new { icon: IconName::FolderOpen; label: $i18n::text("remote-open", cx);
                         on_click: $(cx.listener(move |this, _, _, cx| this.navigate_tab(this.tabs.active_id, target.clone(), cx)));
                     },
                 ] }.into_any_element()
@@ -153,12 +155,12 @@ impl Browser {
         }
         let empty = sections.is_empty();
         let on_add = cx.listener(|this, _, window, cx| this.add_network_location(window, cx));
-        let add = el! { "add-network-location".ui::IconButton::new {
+        let add = el! { "add-network-location".IconButton::new {
             icon: IconName::Plus; label: $i18n::text("remote-add-location", cx);
             disabled: connecting; on_click: on_add;
         } };
         let on_refresh = cx.listener(|this, _, _, cx| this.refresh_network(cx));
-        let refresh = el! { "refresh-network".ui::IconButton::new {
+        let refresh = el! { "refresh-network".IconButton::new {
             icon: IconName::RefreshCw; label: $i18n::text("refresh", cx);
             disabled: $self.collections.network.discovery.loading; on_click: on_refresh;
         } };
@@ -175,7 +177,7 @@ impl Browser {
                             .div [$i18n::text(if intent == crate::features::connect_server::Intent::Add { "remote-adding" } else { "remote-connecting" }, cx)],
                             .div { text_xs; text_color: $cx.theme().muted_foreground; truncate } [$(address.to_string())],
                         ],
-                        "cancel-network-connection".ui::IconButton::new { icon: IconName::X; label: $i18n::text("operation-cancel", cx);
+                        "cancel-network-connection".IconButton::new { icon: IconName::X; label: $i18n::text("operation-cancel", cx);
                             on_click: $(cx.listener(|this, _, _, cx| this.remote.connector.update(cx, |connector, cx| connector.cancel(cx))));
                         },
                     ],

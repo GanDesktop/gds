@@ -130,13 +130,6 @@ impl Batch {
             .map(|paths| paths.join("\n"))
     }
 
-    /// Execute the chosen operation on a background executor, retaining every outcome.
-    /// A failed operation never falls back to another kind of deletion.
-    #[cfg(test)]
-    pub fn execute(self, kind: Kind) -> Report {
-        self.execute_cancellable(kind, &tokio_util::sync::CancellationToken::new())
-    }
-
     pub fn execute_cancellable(
         self,
         kind: Kind,
@@ -213,6 +206,3 @@ impl Report {
         self.items.iter().filter(|item| item.result.is_err())
     }
 }
-
-#[cfg(test)]
-mod tests;

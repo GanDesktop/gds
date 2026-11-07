@@ -27,7 +27,8 @@ impl View {
             }
         };
         let animations_row = self.setting_row(Field::Animations, animations, cx);
-        let animations_note = SettingNote::new(text("appearance-animations-help", cx));
+        let animations_note =
+            el! { .SettingNote::default { message: $(text("appearance-animations-help", cx)); } };
         let source = self.source.render(
             Field::Source,
             text("theme-custom", cx),

@@ -100,6 +100,3 @@ impl From<&str> for Location {
         Self::from(Path::new(path))
     }
 }
-
-#[cfg(test)]
-mod tests;

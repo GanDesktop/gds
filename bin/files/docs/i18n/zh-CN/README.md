@@ -129,7 +129,7 @@ Linux 下的数据位置如下；设置了 XDG 环境变量时，使用对应的
 
 | 内容 | 默认位置 |
 | --- | --- |
-| 应用设置 | `~/.config/gds/files/settings.toml` |
+| 应用设置 | `~/.config/gds/app/files/settings.toml` |
 | 收藏、最近位置与各位置的视图偏好 | `~/.local/state/gds/files/state.sqlite` |
 | 标准缩略图缓存 | `~/.cache/thumbnails/` |
 

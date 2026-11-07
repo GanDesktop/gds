@@ -1,5 +1,6 @@
-//! The compact page menu keeps its actions and nests the application menu.
+//! Page actions for the compact toolbar.
 use super::*;
+use gds_uim::el;
 
 pub(super) fn rows(
     menu: PopupMenu,
@@ -205,10 +206,10 @@ pub(super) fn rows(
             if browser.picker.is_none() {
                 let opener = view.clone();
                 items.push(
-                    PopupMenuItem::new(i18n::text("remote-add-location", cx))
-                        .icon(IconName::Plus)
-                        .disabled(browser.remote.connector.read(cx).connecting)
-                        .on_click(move |_, window, _| {
+                    el! { $(i18n::text("remote-add-location", cx)).PopupMenuItem::new {
+                        icon: IconName::Plus;
+                        disabled: $(browser.remote.connector.read(cx).connecting);
+                        on_click: $(move |_, window, _| {
                             let opener = opener.clone();
                             window.on_next_frame(move |window, cx| {
                                 let _ = opener.update(cx, |browser, cx| {
@@ -217,7 +218,8 @@ pub(super) fn rows(
                                     browser.add_network_location(window, cx);
                                 });
                             });
-                        }),
+                        });
+                    } },
                 );
             }
         }
@@ -236,10 +238,5 @@ pub(super) fn rows(
             super::super::sort::rows(menu, sort, view.clone(), cx)
         });
     }
-    menu.separator().submenu(
-        i18n::text("app-menu", cx),
-        window,
-        cx,
-        move |menu, _, cx| super::rows(menu, view.clone(), cx),
-    )
+    menu
 }

@@ -25,7 +25,8 @@ pub(super) struct Effective {
 pub(super) fn appearance(preferences: &Preferences) -> theme::Appearance {
     let opacity = gds::appearance::tokens::SurfaceOpacity::default();
     theme::Appearance {
-        source: match preferences.theme_source {
+        source: match &preferences.theme_source {
+            ThemeSource::Custom(path) => theme::Source::Custom(path.clone()),
             ThemeSource::Desktop => theme::Source::System,
             ThemeSource::Builtin => theme::Source::Builtin,
         },

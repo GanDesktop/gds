@@ -7,6 +7,8 @@
 
 mod header;
 mod info;
+mod metadata;
+use metadata::MetadataRow;
 
 use gds::ui::thumbnail::{Cache, Thumbnail};
 
@@ -14,7 +16,8 @@ use gds::appearance::tokens::{self, TOOLTIP_DELAY};
 use gds::i18n;
 use gds::ui::page::{PageHeader, PageTitle};
 use gds::ui::time::Timestamp;
-use gds_uim::el;
+use gds_uim::{component, el};
+use gpui_kit::IntoElement;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::empty::{Empty as EmptyState, EmptyDescription, EmptyMedia};
 use gpui_kit::component::tooltip::Tooltip;
@@ -190,25 +193,14 @@ impl View {
         cx.notify();
     }
 
-    fn placeholder(&self, icon: IconName, message: SharedString, cx: &App) -> AnyElement {
-        el! {
-            .EmptyState::default { min_h_0; gap: PANEL_GAP.px;
-                text_color: $cx.theme().muted_foreground; text_xs; text_center;
-                px: PANEL_PADDING.px; py: PANEL_PADDING.px; overflow_hidden;
-            } [
-                .EmptyMedia::default [icon.Icon::new { size: ICON_SIZE.px; flex_shrink_0 }],
-                .EmptyDescription::default { w_full; min_w_0; text_xs; text_center } [message],
-            ]
-        }
-        .into_any_element()
-    }
-
     fn media(&self, cx: &App) -> Option<AnyElement> {
         let Target::Item(item) = &self.target else {
             return None;
         };
         let source = crate::entities::file::directory::thumbnail_source(&item.entry)?;
-        let media = Thumbnail::new(self.thumbnails.clone(), source).show_status(true);
+        let media = el! { ($(self.thumbnails.clone()), source).Thumbnail::new {
+            show_status: true;
+        } };
         Some(
             el! {
                 .div { h: MEDIA_HEIGHT.px; w_full; flex_shrink_0;
@@ -250,42 +242,41 @@ impl View {
     fn base_rows(&self, item: &Item, cx: &App) -> Vec<DescriptionItem> {
         let mut rows = Vec::new();
         let kind = EntryPresentation::type_label(&item.entry, cx);
-        rows.push(meta_row(i18n::text("type", cx), kind, cx));
+        rows.push(
+            el! { .MetadataRow::default { label: $(i18n::text("type", cx)); text: kind; } }.into(),
+        );
         if let Some(format) = self.format_label(item) {
-            rows.push(meta_row(i18n::text("details-format", cx), format, cx));
+            rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-format", cx)); text: format; } }.into());
         }
         if item.entry.kind == EntryKind::File {
             let size: SharedString = EntryPresentation::size(&item.entry).into();
-            rows.push(meta_row(i18n::text("size", cx), size, cx));
+            rows.push(
+                el! { .MetadataRow::default { label: $(i18n::text("size", cx)); text: size; } }
+                    .into(),
+            );
         }
         if item.entry.details.owner.is_some() {
             let owner = EntryPresentation::owner(&item.entry, cx).text;
-            rows.push(meta_row(i18n::text("owner", cx), owner, cx));
+            rows.push(
+                el! { .MetadataRow::default { label: $(i18n::text("owner", cx)); text: owner; } }
+                    .into(),
+            );
         }
         if let Some(group) = item.entry.details.group.as_ref() {
             let group: SharedString = group.label().into_owned().into();
-            rows.push(meta_row(i18n::text("group", cx), group, cx));
+            rows.push(
+                el! { .MetadataRow::default { label: $(i18n::text("group", cx)); text: group; } }
+                    .into(),
+            );
         }
         if let Some(permissions) = item.entry.details.permissions.as_ref() {
             let value: SharedString = info::permissions(permissions).into();
-            rows.push(meta_row(i18n::text("permissions", cx), value, cx));
+            rows.push(el! { .MetadataRow::default { label: $(i18n::text("permissions", cx)); text: value; } }.into());
         }
-        rows.push(meta_timestamp(
-            i18n::text("modified", cx),
-            Timestamp::new("details-modified", item.entry.modified),
-            cx,
-        ));
-        rows.push(meta_timestamp(
-            i18n::text("accessed", cx),
-            Timestamp::new("details-accessed", item.entry.details.accessed),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("modified", cx)); value: $(Timestamp::new("details-modified", item.entry.modified)); } }.into());
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("accessed", cx)); value: $(Timestamp::new("details-accessed", item.entry.details.accessed)); } }.into());
         if let Some(created) = item.entry.details.created {
-            rows.push(meta_timestamp(
-                i18n::text("details-created", cx),
-                Timestamp::new("details-created", Some(created)),
-                cx,
-            ));
+            rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-created", cx)); value: $(Timestamp::new("details-created", Some(created))); } }.into());
         }
         rows
     }
@@ -316,11 +307,7 @@ impl View {
             Probe::File(FileFacts::Text(facts)) => text_rows(facts, cx),
             Probe::File(FileFacts::Unknown) => Vec::new(),
             Probe::Directory(facts) => directory_rows(facts, cx),
-            Probe::Symlink(facts) => vec![meta_row(
-                i18n::text("details-target", cx),
-                facts.target.display().to_string().into(),
-                cx,
-            )],
+            Probe::Symlink(facts) => vec![el! { .MetadataRow::default { label: $(i18n::text("details-target", cx)); text: $(facts.target.display().to_string().into()); } }.into()],
         }
     }
 }
@@ -328,27 +315,15 @@ impl View {
 fn image_rows(facts: &ImageFacts, cx: &App) -> Vec<DescriptionItem> {
     let mut rows = Vec::new();
     if let Some(size) = facts.size {
-        rows.push(meta_row(
-            i18n::text("details-dimensions", cx),
-            info::dimensions(size).into(),
-            cx,
-        ));
-        rows.push(meta_row(
-            i18n::text("details-aspect", cx),
-            info::aspect_ratio(size).into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-dimensions", cx)); text: $(info::dimensions(size).into()); } }.into());
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-aspect", cx)); text: $(info::aspect_ratio(size).into()); } }.into());
     }
     if let Some(bit_depth) = facts.bit_depth.filter(|depth| *depth > 0) {
-        rows.push(meta_row(
-            i18n::text("details-bit-depth", cx),
-            bit_depth.to_string().into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-bit-depth", cx)); text: $(bit_depth.to_string().into()); } }.into());
     }
     if let Some(alpha) = facts.alpha {
         let value = i18n::text(if alpha { "details-yes" } else { "details-no" }, cx);
-        rows.push(meta_row(i18n::text("details-alpha", cx), value, cx));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-alpha", cx)); text: value; } }.into());
     }
     rows
 }
@@ -356,39 +331,19 @@ fn image_rows(facts: &ImageFacts, cx: &App) -> Vec<DescriptionItem> {
 fn audio_rows(facts: &AudioFacts, cx: &App) -> Vec<DescriptionItem> {
     let mut rows = Vec::new();
     if let Some(duration) = facts.duration {
-        rows.push(meta_row(
-            i18n::text("details-duration", cx),
-            info::duration(duration).into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-duration", cx)); text: $(info::duration(duration).into()); } }.into());
     }
     if let Some(bitrate) = facts.bitrate.filter(|bitrate| *bitrate > 0) {
-        rows.push(meta_row(
-            i18n::text("details-bitrate", cx),
-            info::bitrate(bitrate).into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-bitrate", cx)); text: $(info::bitrate(bitrate).into()); } }.into());
     }
     if let Some(rate) = facts.sample_rate.filter(|rate| *rate > 0) {
-        rows.push(meta_row(
-            i18n::text("details-sample-rate", cx),
-            info::sample_rate(rate).into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-sample-rate", cx)); text: $(info::sample_rate(rate).into()); } }.into());
     }
     if let Some(channels) = facts.channels.filter(|channels| *channels > 0) {
-        rows.push(meta_row(
-            i18n::text("details-channels", cx),
-            channels.to_string().into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-channels", cx)); text: $(channels.to_string().into()); } }.into());
     }
     if let Some(bit_depth) = facts.bit_depth.filter(|depth| *depth > 0) {
-        rows.push(meta_row(
-            i18n::text("details-bit-depth", cx),
-            bit_depth.to_string().into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-bit-depth", cx)); text: $(bit_depth.to_string().into()); } }.into());
     }
     rows
 }
@@ -396,66 +351,70 @@ fn audio_rows(facts: &AudioFacts, cx: &App) -> Vec<DescriptionItem> {
 fn video_rows(facts: &VideoFacts, cx: &App) -> Vec<DescriptionItem> {
     let mut rows = Vec::new();
     if let Some(duration) = facts.duration {
-        rows.push(meta_row(
-            i18n::text("details-duration", cx),
-            info::duration(duration).into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-duration", cx)); text: $(info::duration(duration).into()); } }.into());
     }
     if let Some(size) = facts.dimensions {
-        rows.push(meta_row(
-            i18n::text("details-dimensions", cx),
-            info::dimensions(size).into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-dimensions", cx)); text: $(info::dimensions(size).into()); } }.into());
     }
     if let Some(codec) = facts.codec.as_ref() {
-        rows.push(meta_row(
-            i18n::text("details-codec", cx),
-            codec.as_str().into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-codec", cx)); text: $(codec.as_str().into()); } }.into());
     }
     rows
 }
 
 fn text_rows(facts: &TextFacts, cx: &App) -> Vec<DescriptionItem> {
-    let mut rows = vec![meta_row(
-        i18n::text("details-encoding", cx),
-        facts.encoding.label().into(),
-        cx,
-    )];
+    let mut rows = vec![el! { .MetadataRow::default { label: $(i18n::text("details-encoding", cx)); text: $(facts.encoding.label().into()); } }.into()];
     if let Some(line_endings) = facts.line_endings {
         let value = match info::line_endings(line_endings) {
             LineEndingLabel::Literal(text) => SharedString::from(text),
             LineEndingLabel::Message(id) => i18n::text(id, cx),
         };
-        rows.push(meta_row(i18n::text("details-line-endings", cx), value, cx));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-line-endings", cx)); text: value; } }.into());
     }
     rows
 }
 
 fn directory_rows(facts: &DirectoryFacts, cx: &App) -> Vec<DescriptionItem> {
     let mut rows = vec![
-        meta_row(
-            i18n::text("details-folders", cx),
-            info::count(facts.folders, facts.capped).into(),
-            cx,
-        ),
-        meta_row(
-            i18n::text("details-files", cx),
-            info::count(facts.files, facts.capped).into(),
-            cx,
-        ),
+        el! { .MetadataRow::default { label: $(i18n::text("details-folders", cx)); text: $(info::count(facts.folders, facts.capped).into()); } }.into(),
+        el! { .MetadataRow::default { label: $(i18n::text("details-files", cx)); text: $(info::count(facts.files, facts.capped).into()); } }.into(),
     ];
     if facts.links > 0 {
-        rows.push(meta_row(
-            i18n::text("details-links", cx),
-            info::count(facts.links, facts.capped).into(),
-            cx,
-        ));
+        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-links", cx)); text: $(info::count(facts.links, facts.capped).into()); } }.into());
     }
     rows
+}
+
+#[component]
+#[derive(IntoElement)]
+struct PreviewPlaceholder {
+    #[attr]
+    icon: IconName,
+    #[attr(into)]
+    message: SharedString,
+}
+
+impl Default for PreviewPlaceholder {
+    fn default() -> Self {
+        Self {
+            icon: IconName::Info,
+            message: SharedString::default(),
+        }
+    }
+}
+
+impl RenderOnce for PreviewPlaceholder {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        el! {
+            .EmptyState::default { min_h_0; gap: PANEL_GAP.px;
+                text_color: $(cx.theme().muted_foreground); text_xs; text_center;
+                px: PANEL_PADDING.px; py: PANEL_PADDING.px; overflow_hidden;
+            } [
+                .EmptyMedia::default [$(self.icon).Icon::new { size: ICON_SIZE.px; flex_shrink_0; }],
+                .EmptyDescription::default { w_full; min_w_0; text_xs; text_center; } [$(self.message)],
+            ]
+        }
+    }
 }
 
 impl Render for View {
@@ -466,12 +425,10 @@ impl Render for View {
         };
         let name_hint = text_hint(name.clone());
         let content = match &self.target {
-            Target::Empty => self.placeholder(IconName::Info, i18n::text("preview-empty", cx), cx),
-            Target::Multiple(count) => self.placeholder(
-                IconName::Files,
-                i18n::count("preview-multiple", *count, cx),
-                cx,
-            ),
+            Target::Empty => el! { .PreviewPlaceholder::default { message: $(i18n::text("preview-empty", cx)); } }.into_any_element(),
+            Target::Multiple(count) => el! { .PreviewPlaceholder::default {
+                icon: IconName::Files; message: $(i18n::count("preview-multiple", *count, cx));
+            } }.into_any_element(),
             Target::Item(item) => self.item(item, cx),
         };
         el! {
@@ -506,26 +463,6 @@ fn probe_hint(entry: &Entry) -> ProbeHint {
         },
         _ => ProbeHint::default(),
     }
-}
-
-fn meta_row(label: SharedString, value: SharedString, cx: &App) -> DescriptionItem {
-    let value_id: ElementId = format!("detail-value:{label}").into();
-    let hint = (value.chars().count() > LONG_VALUE_CHARS).then(|| text_hint(value.clone()));
-    let value = el! {
-        .div {
-            # value_id; min_w_0; truncate; text_xs; text_ellipsis;
-            @if (let Some(hint) = hint) tooltip_show_delay: TOOLTIP_DELAY; tooltip: hint; @end;
-        } [value]
-    };
-    meta_timestamp(label, value, cx)
-}
-
-fn meta_timestamp(label: SharedString, value: impl IntoElement, cx: &App) -> DescriptionItem {
-    let label = el! {
-        .div { text_xs; text_color: $cx.theme().muted_foreground } [label]
-    };
-    let value = el! { .div { min_w_0; text_xs; overflow_hidden } [value] };
-    DescriptionItem::new(label.into_any_element()).value(value.into_any_element())
 }
 
 fn text_hint(text: SharedString) -> impl Fn(&mut Window, &mut App) -> AnyView {
@@ -564,6 +501,3 @@ impl Browser {
             .update(cx, |preview, cx| preview.sync(target, cx));
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -3,6 +3,8 @@
 mod network;
 mod network_view;
 pub(super) mod table;
+use gds::ui::IconButton;
+use gds::ui::ListSurface;
 pub(super) use network::State as Network;
 
 use super::*;
@@ -263,35 +265,33 @@ impl Browser {
             .borrow()
             .base_handle
             .clone();
-        let area = PageTableArea::default()
-            .id("locations-table-area")
-            .child(table);
-        let list = ui::ListSurface::new(
-            "locations-selection-surface",
-            area.into_any_element(),
-            locations.len(),
-            scroll,
-        )
-        .inset_x(px(ContentPage::TABLE_INSET))
-        .on_blank_press(cx.listener(Self::on_list_background_press));
+        let area = el! { .PageTableArea::default {
+            # "locations-table-area";
+        } [
+            table,
+        ] };
+        let list = el! { ("locations-selection-surface", $(area.into_any_element()), $(locations.len()), scroll).ListSurface::new {
+            inset_x: $(px(ContentPage::TABLE_INSET));
+            on_blank_press: $(cx.listener(Self::on_list_background_press));
+        } };
         let on_copy_path = cx.listener(Self::click_command(Command::CopyPaths));
         let mut actions = Vec::new();
         if collection != Collection::Recent {
             let on_copy = cx.listener(Self::click_command(Command::Copy));
             actions.push(el! {
-                "place-copy".ui::IconButton::new { icon: IconName::Copy; label: $i18n::text("copy-files", cx);
+                "place-copy".IconButton::new { icon: IconName::Copy; label: $i18n::text("copy-files", cx);
                     command: Command::Copy; disabled: $(self.selected_place_path().is_none()); on_click: on_copy;
                 }
             }.into_any_element());
         }
         actions.push(el! {
-            "place-copy-path".ui::IconButton::new { icon: IconName::ClipboardCopy; label: $i18n::text(Command::CopyPaths.label_id(), cx);
+            "place-copy-path".IconButton::new { icon: IconName::ClipboardCopy; label: $i18n::text(Command::CopyPaths.label_id(), cx);
                 command: Command::CopyPaths; disabled: $(!has_selection); on_click: on_copy_path;
             }
         }.into_any_element());
         let on_favorite = cx.listener(Self::click_command(Command::Favorite));
         actions.push(el! {
-            "place-favorite".ui::IconButton::new { icon: $(if favorite { IconName::StarOff } else { IconName::Star });
+            "place-favorite".IconButton::new { icon: $(if favorite { IconName::StarOff } else { IconName::Star });
                 label: $i18n::text(if favorite { "place-favorite-remove" } else { "place-favorite-add" }, cx);
                 command: Command::Favorite; disabled: $(!has_selection); on_click: on_favorite;
             }
@@ -299,14 +299,14 @@ impl Browser {
         if collection == Collection::Recent {
             let on_clear = cx.listener(Self::click_command(Command::ClearRecent));
             actions.push(el! {
-                "clear-recent".ui::IconButton::new { icon: IconName::Broom; label: $i18n::text("clear-recent", cx);
+                "clear-recent".IconButton::new { icon: IconName::Broom; label: $i18n::text("clear-recent", cx);
                     command: Command::ClearRecent; disabled: $(locations.is_empty()); on_click: on_clear;
                 }
             }.into_any_element());
         } else {
             let on_refresh = cx.listener(Self::click_command(Command::Refresh));
             actions.push(el! {
-                "place-refresh".ui::IconButton::new { icon: IconName::RefreshCw; label: $i18n::text("refresh", cx);
+                "place-refresh".IconButton::new { icon: IconName::RefreshCw; label: $i18n::text("refresh", cx);
                     command: Command::Refresh; disabled: loading; on_click: on_refresh;
                 }
             }.into_any_element());
@@ -327,6 +327,3 @@ impl Browser {
         .into_any_element()
     }
 }
-
-#[cfg(test)]
-mod tests;

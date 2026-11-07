@@ -5,8 +5,17 @@
 //! target category with a small link badge. Only a missing target uses the
 //! broken-chain icon; an uninspectable target keeps a link badge of its own.
 
-use gds_uim::el;
-use gpui_kit::{assets::IconName, component::Icon, prelude::*, *};
+use std::{path::Path, sync::OnceLock};
+
+use directories::UserDirs;
+use gds_uim::{component, el};
+use gpui_kit::IntoElement;
+use gpui_kit::{
+    assets::IconName,
+    component::{ActiveTheme, Icon},
+    prelude::*,
+    *,
+};
 
 use crate::entities::file::directory::{
     ContentCategory, ContentType, Entry, EntryKind, LinkStatus,
@@ -29,11 +38,25 @@ impl FileIcon {
     /// Icon describing `entry`, using its target for symbolic links.
     pub(super) fn for_entry(entry: &Entry) -> Self {
         match entry.kind {
-            EntryKind::Directory => Self::plain(IconName::Folder),
+            EntryKind::Directory => Self::plain(Self::directory_icon(&entry.path)),
             EntryKind::File => Self::for_content(entry.details.content.as_ref()),
             EntryKind::SymbolicLink => Self::for_link(entry),
             EntryKind::Other => Self::plain(IconName::File),
             EntryKind::Unknown => Self::plain(IconName::FileQuestionMark),
+        }
+    }
+
+    /// Color follows the entry's category, independently of its chosen glyph.
+    pub(super) fn color(entry: &Entry, cx: &App) -> Hsla {
+        let directory = entry.kind == EntryKind::Directory
+            || (entry.kind == EntryKind::SymbolicLink
+                && entry.details.target.as_ref().is_some_and(|target| {
+                    target.status == LinkStatus::Resolved && target.kind == EntryKind::Directory
+                }));
+        if directory {
+            cx.theme().primary
+        } else {
+            cx.theme().muted_foreground
         }
     }
 
@@ -52,22 +75,47 @@ impl FileIcon {
         self.badge
     }
 
-    /// Draw the icon at `size`, with the badge in its bottom-right corner.
-    pub(super) fn render(self, size: Pixels, color: Hsla) -> AnyElement {
-        let badge_size = size * BADGE_SIZE_FRACTION;
-        el! {
-            .div { relative; flex_shrink_0; w: $size; h: $size; } [
-                $(self.base).Icon::new { size: $size; text_color: $color },
-                @if (let Some(badge) = self.badge())
-                    .div {
-                        absolute; bottom: $(px(BADGE_INSET)); right: $(px(BADGE_INSET)); flex;
-                    } [
-                        badge.Icon::new { size: $badge_size; text_color: $color },
-                    ],
-                @end,
-            ]
+    fn directory_icon(path: &Path) -> IconName {
+        static DIRECTORIES: OnceLock<Option<UserDirs>> = OnceLock::new();
+        let Some(dirs) = DIRECTORIES.get_or_init(UserDirs::new) else {
+            return IconName::Folder;
+        };
+        Self::user_directory_icon(path, dirs)
+    }
+
+    fn user_directory_icon(path: &Path, dirs: &UserDirs) -> IconName {
+        if path == dirs.home_dir() {
+            return IconName::House;
         }
-        .into_any_element()
+        if path.parent() == Some(dirs.home_dir())
+            && path
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case("Github"))
+        {
+            return IconName::Github;
+        }
+        [
+            (dirs.desktop_dir(), "Desktop", IconName::Monitor),
+            (dirs.document_dir(), "Documents", IconName::FileText),
+            (dirs.download_dir(), "Downloads", IconName::FolderDown),
+            (dirs.picture_dir(), "Pictures", IconName::Images),
+            (dirs.audio_dir(), "Music", IconName::Music),
+            (dirs.video_dir(), "Videos", IconName::Video),
+            (dirs.public_dir(), "Public", IconName::Users),
+            (dirs.template_dir(), "Templates", IconName::LayoutTemplate),
+        ]
+        .into_iter()
+        .find_map(|(directory, name, icon)| {
+            let matches = directory.map_or_else(
+                || {
+                    path.parent() == Some(dirs.home_dir())
+                        && path.file_name().is_some_and(|file| file == name)
+                },
+                |directory| directory == path,
+            );
+            matches.then_some(icon)
+        })
+        .unwrap_or(IconName::Folder)
     }
 
     fn for_content(content: Option<&ContentType>) -> Self {
@@ -86,7 +134,7 @@ impl FileIcon {
             LinkStatus::Unreachable => Self::badged(IconName::FileQuestionMark, IconName::Link),
             LinkStatus::Resolved => {
                 let base = match target.kind {
-                    EntryKind::Directory => IconName::Folder,
+                    EntryKind::Directory => Self::directory_icon(&entry.path),
                     EntryKind::File => {
                         Self::category_icon(target.content.as_ref().map(|content| content.category))
                     }
@@ -122,6 +170,45 @@ impl FileIcon {
         Self {
             base,
             badge: Some(badge),
+        }
+    }
+}
+
+/// The artwork slot used by file rows, tiles and drag previews.
+#[component]
+#[derive(IntoElement)]
+pub(super) struct FileArtwork {
+    #[attr]
+    icon: FileIcon,
+    #[attr]
+    size: Pixels,
+    #[attr(option)]
+    color: Option<Hsla>,
+}
+
+impl Default for FileArtwork {
+    fn default() -> Self {
+        Self {
+            icon: FileIcon::plain(IconName::File),
+            size: px(gds::appearance::tokens::ICON_SIZE),
+            color: None,
+        }
+    }
+}
+
+impl RenderOnce for FileArtwork {
+    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+        let color = self.color.unwrap_or_else(|| window.text_style().color);
+        let badge_size = self.size * BADGE_SIZE_FRACTION;
+        el! {
+            .div { relative; flex_shrink_0; w: $(self.size); h: $(self.size); } [
+                $(self.icon.base()).Icon::new { size: $(self.size); text_color: color; },
+                @if (let Some(badge) = self.icon.badge())
+                    .div { absolute; bottom: BADGE_INSET.px; right: BADGE_INSET.px; flex; } [
+                        badge.Icon::new { size: badge_size; text_color: color; },
+                    ],
+                @end,
+            ]
         }
     }
 }

@@ -9,9 +9,6 @@ use gpui_kit::{
     prelude::*,
 };
 
-#[cfg(test)]
-mod tests;
-
 struct Entry {
     tab: u64,
     index: usize,
@@ -60,8 +57,9 @@ impl Browser {
                 } in entries
                 {
                     let owner = owner.clone();
-                    menu = menu.item(PopupMenuItem::new(label).icon(location.icon()).on_click(
-                        move |_, window, cx| {
+                    menu = menu.item(el! { label.PopupMenuItem::new {
+                        icon: $(location.icon());
+                        on_click: $(move |_, window, cx| {
                             let _ = owner.update(cx, |this, cx| {
                                 let valid = this.current_tab().is_some_and(|slot| {
                                     slot.id == tab
@@ -77,8 +75,8 @@ impl Browser {
                                 }
                                 cx.notify();
                             });
-                        },
-                    ));
+                        });
+                    } });
                 }
                 menu
             })

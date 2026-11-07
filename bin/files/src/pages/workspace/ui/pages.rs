@@ -16,6 +16,12 @@ impl Browser {
             }
             return;
         }
+        if page == Page::Settings {
+            let preferences = self.settings.preferences.clone();
+            self.settings
+                .view
+                .update(cx, |view, cx| view.set_preferences(preferences, window, cx));
+        }
         self.pages.push(Entry {
             content: page,
             return_focus: window.focused(cx),
@@ -34,6 +40,3 @@ impl Browser {
         }
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

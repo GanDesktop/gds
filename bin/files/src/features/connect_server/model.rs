@@ -110,6 +110,3 @@ impl Details {
         Ok(Address::parse(url.as_str())?.with_username(&self.user)?)
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -247,6 +247,10 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
                     }, cx));
                     match opened {
                         Ok((window, browser)) => {
+                            #[cfg(feature = "files-e2e")]
+                            if std::env::var_os("GDS_E2E_ARTIFACTS").is_some() {
+                                workspace::e2e::start(window, browser.clone(), cx);
+                            }
                             #[cfg(target_os = "linux")]
                             if let Some(command) = initial_command {
                                 if let Err(error) = window.update(cx, |_, window, cx| {

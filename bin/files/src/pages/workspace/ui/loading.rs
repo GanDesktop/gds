@@ -1,4 +1,5 @@
 use super::*;
+use gds::ui::button::Button;
 use gds_uim::el;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -15,10 +16,10 @@ impl Browser {
             .div { font_medium } [$i18n::text("remote-not-open", cx)],
             .div { max_w_full; truncate; text_size: tokens::SMALL; text_color: $cx.theme().muted_foreground } [destination],
             .div { flex; gap_2 } [
-                "retry-remote-location".ui::button::Button::new { ghost; icon: IconName::RefreshCw; label: $i18n::text("retry", cx);
+                "retry-remote-location".Button::new { ghost; icon: IconName::RefreshCw; label: $i18n::text("retry", cx);
                     on_click: $(cx.listener(move |this, _, _, cx| this.refresh_tab(tab, cx)));
                 },
-                "return-to-network".ui::button::Button::new { ghost; icon: IconName::ArrowLeft; label: $i18n::text("remote-back-network", cx);
+                "return-to-network".Button::new { ghost; icon: IconName::ArrowLeft; label: $i18n::text("remote-back-network", cx);
                     on_click: $(cx.listener(move |this, _, _, cx| this.navigate_location(tab, Location::Network, cx)));
                 },
             ],
@@ -36,7 +37,11 @@ impl Browser {
             Location::Volume { relative, .. } => {
                 let resolved = self.resolve_location(location, cx);
                 let volume = resolved.device.as_ref().and_then(|device| {
-                    self.devices.service.read(cx).snapshot.volume(&device.volume)
+                    self.devices
+                        .service
+                        .read(cx)
+                        .snapshot
+                        .volume(&device.volume)
                 });
                 if let Some(volume) = volume {
                     let mut args = fluent_bundle::FluentArgs::new();
@@ -63,7 +68,7 @@ impl Browser {
             .Spinner::new,
             .div { font_medium } [$i18n::text(if connecting { "remote-connecting" } else { "loading" }, cx)],
             .div { max_w_full; truncate; text_size: tokens::SMALL; text_color: $cx.theme().muted_foreground } [destination],
-            "cancel-location-load".ui::button::Button::new { ghost; icon: IconName::X; label: $i18n::text("operation-cancel", cx);
+            "cancel-location-load".Button::new { ghost; icon: IconName::X; label: $i18n::text("operation-cancel", cx);
                 on_click: $(cx.listener(|this, _, _, cx| this.cancel_location_load(cx)));
             },
         ] }.into_any_element()

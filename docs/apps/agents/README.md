@@ -43,7 +43,7 @@ Frontend preferences and service configuration have separate ownership. Local pr
 
 | Data | Default location |
 | --- | --- |
-| Frontend settings | `$XDG_CONFIG_HOME/gds/agents/settings.json` |
+| Frontend settings | `$XDG_CONFIG_HOME/gds/app/agents/settings.json` |
 | Connection history cache | `$XDG_CACHE_HOME/gds/agents/history-v1/history.sqlite` |
 | Navigation state | `$XDG_STATE_HOME/gds-agents/<connection-key>.json` |
 
@@ -64,3 +64,6 @@ Project-owned code uses the root Apache-2.0 [license](../../../LICENSE). Depende
 Prompt submission uses the Bas management API independently of observation. Its admission receipt includes the actual Agent ACP request ID. History queries restore existing content; `ObserveAcp` supplies protocol messages for live rendering. The independent `Attach` subscription supplies BAS-owned Session state and service failures, without conversation content or Agent results. Receipt and observation arrival order does not change presentation. Other session commands, interactive subscriptions and authentication use `bas.v1.AcpTransport`; session callback connections skip duplicate content replay. Multiple frontends can subscribe to the same session and answer its pending interactions; the first valid answer resolves the request for all subscribers. Disconnecting a frontend does not cancel an Agent request. See the [multiplexing contract](../../development/agents-acp-multiplexing.md) and [event-stream boundaries](../../development/agents-event-streams.md).
 
 Bas owns background execution. GDS keeps its cursor-based history and acceptance queries on the Bas management API, so reconnecting restores the timeline without resending a prompt. Callback IDs belong to one ACP connection; responses from a disconnected connection are rejected. The frontend requires the pinned Bas protocol; it has no old-protocol fallback or historical-record conversion.
+
+
+User themes are shared with Files in `$XDG_CONFIG_HOME/gds/themes/` (default `~/.config/gds/themes/`). TOML files, including files in subdirectories, appear in Appearance settings. Use `src/appearance/theme/provider/builtin/assets/bamboo.toml` as a complete light/dark palette template. Reopen settings after adding a theme; edits to the selected theme reload automatically and invalid edits retain the last valid colors.

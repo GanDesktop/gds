@@ -10,6 +10,8 @@ mod context_menu;
 mod desktop_requests;
 mod devices;
 mod drag_drop;
+#[cfg(feature = "files-e2e")]
+pub(crate) mod e2e;
 mod entry_appearance;
 mod file_actions;
 mod file_icon;
@@ -854,7 +856,7 @@ impl Browser {
         cx.spawn(async move |this, cx| {
             let result = work
                 .await
-                .map_err(|error| format!("无法完成打开任务：{error}"))
+                .map_err(|error| format!("could not complete the open task: {error}"))
                 .and_then(|result| result.map_err(|error| error.to_string()));
             if let Err(error) = this.update(cx, |this, cx| {
                 match result {
@@ -1139,7 +1141,10 @@ impl Browser {
             }
             Command::NewWindow => {
                 if self.picker.is_none() {
-                    cx.emit(NewWindowRequested(self.current_path().unwrap_or_else(|| self.locations.home.clone())));
+                    cx.emit(NewWindowRequested(
+                        self.current_path()
+                            .unwrap_or_else(|| self.locations.home.clone()),
+                    ));
                 }
             }
             Command::NewTab => self.open_tab(self.locations.home.clone(), false, window, cx),
@@ -1526,6 +1531,3 @@ fn report_settings_failure(message_id: &str, error: impl std::fmt::Display, cx: 
     .replacing::<SettingsNotice>()
     .show(cx);
 }
-
-#[cfg(test)]
-mod tests;

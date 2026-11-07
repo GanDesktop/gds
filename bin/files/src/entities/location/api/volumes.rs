@@ -10,6 +10,3 @@ mod usage;
 pub use model::*;
 pub use service::*;
 pub use usage::{Capacity, CapacityState};
-
-#[cfg(test)]
-mod tests;

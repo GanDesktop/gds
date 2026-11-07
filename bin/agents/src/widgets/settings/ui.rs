@@ -596,6 +596,7 @@ impl Settings {
             .update(cx, |input, cx| input.set_value("", window, cx));
         let target = group.map_or(0, appearance::Group::index);
         self.appearance.update(cx, |page, cx| {
+            page.refresh_themes(window, cx);
             page.scroll_to = Some(target);
             page.query.clear();
             cx.notify();

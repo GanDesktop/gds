@@ -1,5 +1,7 @@
 use super::*;
 use crate::shared::lib::clipboard;
+use gds::ui::DialogActions;
+use gds_uim::el;
 use gpui_kit::component::WindowExt;
 use tokio::sync::watch;
 use tokio_util::task::AbortOnDropHandle;
@@ -29,71 +31,76 @@ impl View {
             let view = view.clone();
             let source = source.clone();
             let current = current.clone();
-            dialog
-                .confirm()
-                .width(px(460.))
-                .title(title.clone())
-                .child(input.clone())
-                .footer(
-                    ui::DialogActions::default()
-                        .primary_label(i18n::text(
-                            if directory {
-                                "new-folder-confirm"
-                            } else {
-                                "rename-confirm"
-                            },
-                            cx,
-                        ))
-                        .primary_icon(if directory {
-                            gpui_kit::assets::IconName::FolderPlus
-                        } else {
-                            gpui_kit::assets::IconName::Pencil
-                        }),
-                )
-                .on_ok(move |_, _, cx| {
-                    let name = input.read(cx).value(cx);
-                    let result = view.update(cx, |view, cx| {
-                        if name == current && !directory {
-                            return true;
-                        }
-                        if let Err(error) = Address::validate_name(&name, view.address().protocol())
-                        {
+            let footer = el! { .DialogActions::default {
+                primary_label: $(i18n::text(
+                    if directory {
+                        "new-folder-confirm"
+                    } else {
+                        "rename-confirm"
+                    },
+                    cx,
+                ));
+                primary_icon: $(if directory {
+                    gpui_kit::assets::IconName::FolderPlus
+                } else {
+                    gpui_kit::assets::IconName::Pencil
+                });
+            } };
+            let content = input.clone();
+            let on_ok = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                let name = input.read(cx).value(cx);
+                let result = view.update(cx, |view, cx| {
+                    if name == current && !directory {
+                        return true;
+                    }
+                    if let Err(error) = Address::validate_name(&name, view.address().protocol()) {
+                        notifications::error(error.to_string(), cx);
+                        return false;
+                    }
+                    let parent = if directory {
+                        Some(view.address().clone())
+                    } else {
+                        source.as_ref().and_then(Address::parent)
+                    };
+                    let Some(parent) = parent else {
+                        return false;
+                    };
+                    let target = match parent.child(&name) {
+                        Ok(target) => target,
+                        Err(error) => {
                             notifications::error(error.to_string(), cx);
                             return false;
                         }
-                        let parent = if directory {
-                            Some(view.address().clone())
-                        } else {
-                            source.as_ref().and_then(Address::parent)
-                        };
-                        let Some(parent) = parent else {
-                            return false;
-                        };
-                        let target = match parent.child(&name) {
-                            Ok(target) => target,
-                            Err(error) => {
-                                notifications::error(error.to_string(), cx);
-                                return false;
+                    };
+                    let session = view.options.session.clone();
+                    let source = source.clone();
+                    view.mutate(
+                        async move {
+                            if directory {
+                                session.mkdir(&target).await
+                            } else {
+                                session
+                                    .rename(&source.expect("single rename source"), &target)
+                                    .await
                             }
-                        };
-                        let session = view.options.session.clone();
-                        let source = source.clone();
-                        view.mutate(
-                            async move {
-                                if directory {
-                                    session.mkdir(&target).await
-                                } else {
-                                    session
-                                        .rename(&source.expect("single rename source"), &target)
-                                        .await
-                                }
-                            },
-                            cx,
-                        );
-                        true
-                    });
-                    result.unwrap_or(true)
-                })
+                        },
+                        cx,
+                    );
+                    true
+                });
+                result.unwrap_or(true)
+            };
+            el! {
+                dialog {
+                    confirm;
+                    width: $(px(460.));
+                    title: $(title.clone());
+                    footer: footer;
+                    on_ok: on_ok;
+                } [
+                    content,
+                ]
+            }
         });
         window.on_next_frame(move |window, cx| {
             focus.update(cx, |form, cx| form.focus(window, cx));
@@ -231,20 +238,27 @@ impl View {
         window.open_alert_dialog(cx, move |dialog, _, cx| {
             let sources = sources.clone();
             let view = view.clone();
-            dialog
-                .confirm()
-                .title(i18n::text("delete-permanently", cx))
-                .description(i18n::text("remote-delete-warning", cx))
-                .footer(ui::DialogActions::default().danger())
-                .on_ok(move |_, _, cx| {
-                    let _ = view.update(cx, |view, cx| {
-                        view.cancel = CancellationToken::new();
-                        let (sender, receiver) = watch::channel(Default::default());
-                        let work = operations::delete(sources.clone(), view.cancel.clone(), sender);
-                        view.run_job(work, receiver, None, cx);
-                    });
-                    true
-                })
+            let footer = el! { .DialogActions::default {
+                danger;
+            } };
+            let on_ok = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                let _ = view.update(cx, |view, cx| {
+                    view.cancel = CancellationToken::new();
+                    let (sender, receiver) = watch::channel(Default::default());
+                    let work = operations::delete(sources.clone(), view.cancel.clone(), sender);
+                    view.run_job(work, receiver, None, cx);
+                });
+                true
+            };
+            el! {
+                dialog {
+                    confirm;
+                    title: $(i18n::text("delete-permanently", cx));
+                    description: $(i18n::text("remote-delete-warning", cx));
+                    footer: footer;
+                    on_ok: on_ok;
+                }
+            }
         });
     }
 

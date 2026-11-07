@@ -145,7 +145,7 @@ On Linux, data lives in the following locations. If you set XDG environment vari
 
 | Data | Default location |
 | --- | --- |
-| Application settings | `~/.config/gds/files/settings.toml` |
+| Application settings | `~/.config/gds/app/files/settings.toml` |
 | Favorites, recent locations, and view preferences for each location | `~/.local/state/gds/files/state.sqlite` |
 | Standard thumbnail cache | `~/.cache/thumbnails/` |
 

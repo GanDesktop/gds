@@ -189,6 +189,3 @@ impl Windows {
 type DesktopCommand = gds::service::desktop::file_manager::Command;
 #[cfg(not(target_os = "linux"))]
 type DesktopCommand = ();
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

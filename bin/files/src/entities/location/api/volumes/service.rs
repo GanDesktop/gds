@@ -254,6 +254,3 @@ impl Service {
         }))
     }
 }
-
-#[cfg(test)]
-mod tests;

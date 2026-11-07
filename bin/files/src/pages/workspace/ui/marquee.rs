@@ -7,6 +7,7 @@
 //! context menus keep their own handlers: only blank space starts a marquee, and
 //! a press that never crosses the threshold keeps its plain blank-click meaning.
 
+use gds_uim::el;
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gds::appearance::tokens::DataListStyle;
@@ -186,22 +187,15 @@ impl Browser {
         )
         .absolute()
         .inset_0();
-        div()
-            .id("marquee-surface")
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .overflow_hidden()
-            .capture_any_mouse_down(cx.listener(Self::marquee_press))
-            .on_mouse_move(cx.listener(Self::marquee_drag))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::marquee_release))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::marquee_release))
-            .child(content)
-            .child(overlay)
-            .into_any_element()
+        el! {
+            .div {
+                # "marquee-surface"; relative; flex; flex_col; flex_1; min_h_0; min_w_0; overflow_hidden;
+                capture_any_mouse_down: $(cx.listener(Self::marquee_press));
+                on_mouse_move: $(cx.listener(Self::marquee_drag));
+                on_mouse_up: MouseButton::Left, $(cx.listener(Self::marquee_release));
+                on_mouse_up_out: MouseButton::Left, $(cx.listener(Self::marquee_release));
+            } [content, overlay]
+        }.into_any_element()
     }
 
     /// Cancel a running marquee and restore the selection it started from.

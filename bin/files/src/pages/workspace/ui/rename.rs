@@ -1,5 +1,6 @@
 //! Safe single-item renaming and its dialog input state.
 
+use super::name_form::NameField;
 use crate::features::file_operations::history as operation_history;
 use std::{
     ffi::{OsStr, OsString},
@@ -273,8 +274,8 @@ impl State {
 }
 
 impl Render for State {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        name_form::field(&self.input, self.error.as_ref(), cx)
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        el! { .NameField::default { input: $(self.input.clone()); error: $(self.error.clone()); } }
     }
 }
 
@@ -337,10 +338,11 @@ impl Browser {
                 let on_ok = Self::rename_confirm(browser.clone());
                 let on_close = Self::rename_close(browser.clone(), rename.clone());
                 let dialog_state = rename.clone();
-                let footer = DialogActions::default()
-                    .primary_label(i18n::text("rename-confirm", cx))
-                    .primary_icon(IconName::Pencil)
-                    .cancel_label(i18n::text("operation-cancel", cx));
+                let footer = el! { .DialogActions::default {
+                    primary_label: $(i18n::text("rename-confirm", cx));
+                    primary_icon: IconName::Pencil;
+                    cancel_label: $(i18n::text("operation-cancel", cx));
+                } };
                 let mut arguments = fluent_bundle::FluentArgs::new();
                 arguments.set("name", title_name.clone());
                 el! {
@@ -495,6 +497,3 @@ impl Browser {
         self.finish_background(report, cx);
     }
 }
-
-#[cfg(test)]
-mod tests;

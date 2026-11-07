@@ -209,6 +209,14 @@ pub(in crate::widgets::settings) struct AppearancePage {
 }
 
 impl AppearancePage {
+    pub(in crate::widgets::settings) fn refresh_themes(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.form.refresh_themes(window, cx);
+    }
+
     pub(in crate::widgets::settings) fn new(
         editor: theme::Editor,
         window: &mut Window,

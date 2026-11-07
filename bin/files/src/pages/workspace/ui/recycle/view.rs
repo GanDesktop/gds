@@ -1,6 +1,7 @@
 //! Trash content view: header actions, table, explicit states and the frozen
 //! confirmation for permanent deletion.
 
+use gds::ui::ListSurface;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::features::file_operations::commands::Command;
@@ -10,7 +11,8 @@ use gds::{
     i18n,
     ui::{ContentPage, DialogActions, IconButton, menu},
 };
-use gds_uim::el;
+use gds_uim::{component, el};
+use gpui_kit::IntoElement;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, WindowExt,
@@ -38,192 +40,199 @@ const NAME_PREVIEW_LIMIT: usize = 5;
 const CONFIRMATION_WIDTH: f32 = 480.;
 const CONFIRMATION_GAP: f32 = 8.;
 
-pub(super) fn render_trash(
-    browser: &Browser,
-    window: &mut Window,
-    cx: &mut Context<Browser>,
-) -> AnyElement {
-    let actions = header_actions(browser, cx);
-    let body = render_body(browser, window, cx);
-    el! {
-        .ContentPage::default { # "trash-content" } [
-            .PageHeader::default { @if (browser.window.layout.compact) hidden; @end } [
-                .PageTitle::default [$i18n::text("trash", cx)],
-                .PageActions::default [..actions],
-            ],
-            .PageContent::default [body],
-        ]
-    }
-    .into_any_element()
-}
-
-fn header_actions(browser: &Browser, cx: &mut Context<Browser>) -> Vec<AnyElement> {
-    let busy = browser.collections.trash.is_busy() || browser.operations.in_progress;
-    let has_selection = browser.collections.trash.selected_count() > 0;
-    let empty = browser.collections.trash.rows().is_empty();
-    let on_restore = cx.listener(Browser::on_trash_restore);
-    let on_purge = cx.listener(Browser::on_trash_purge);
-    let on_empty = cx.listener(Browser::on_trash_empty);
-    let on_refresh = cx.listener(Browser::on_trash_refresh);
-    let restore = el! {
-        "trash-restore".IconButton::new {
-            icon: IconName::Undo2;
-            label: $i18n::text("recycle-restore", cx);
-            command: Command::RestoreSelection;
-            disabled: $(busy || !has_selection);
-            on_click: on_restore;
-        }
-    };
-    let purge = el! {
-        "trash-purge".IconButton::new {
-            icon: IconName::Trash;
-            label: $i18n::text("delete-permanently", cx);
-            command: Command::PurgeSelection;
-            disabled: $(busy || !has_selection);
-            on_click: on_purge;
-        }
-    };
-    let refresh = el! {
-        "trash-refresh".IconButton::new {
-            icon: IconName::RefreshCw;
-            label: $i18n::text("refresh", cx);
-            command: Command::Refresh;
-            disabled: busy;
-            on_click: on_refresh;
-        }
-    };
-    let empty_action = el! {
-        "trash-empty".IconButton::new {
-            icon: $(Intent::EmptyTrash.icon());
-            label: $i18n::text("recycle-empty-action", cx);
-            command: Command::EmptyTrash;
-            disabled: $(busy || empty);
-            on_click: on_empty;
-        }
-    };
-    vec![
-        restore.into_any_element(),
-        purge.into_any_element(),
-        refresh.into_any_element(),
-        empty_action.into_any_element(),
-    ]
-}
-
-fn render_body(browser: &Browser, window: &mut Window, cx: &mut Context<Browser>) -> AnyElement {
-    let state = &browser.collections.trash;
-    if state.rows().is_empty() {
-        if let Some(error) = state.error() {
-            return message_state(
-                i18n::text("recycle-load-failed", cx),
-                Some(error.to_owned().into()),
-                IconName::CircleAlert,
-                state.supported(),
-                cx,
-            );
-        }
-        if state.is_loading() {
-            return message_state(
-                i18n::text("recycle-loading", cx),
-                None,
-                IconName::LoaderCircle,
-                false,
-                cx,
-            );
-        }
-        return message_state(
-            i18n::text("recycle-empty", cx),
-            None,
-            IconName::Trash,
-            false,
-            cx,
-        );
-    }
-    render_table(browser, window, cx)
-}
-
-fn message_state(
-    title: SharedString,
-    detail: Option<SharedString>,
-    icon: IconName,
-    retry: bool,
-    cx: &mut Context<Browser>,
-) -> AnyElement {
-    let on_retry = cx.listener(Browser::on_trash_refresh);
-    let retry = retry.then(|| {
+impl Browser {
+    pub(in crate::pages::workspace::ui) fn render_trash(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let actions = self.trash_header_actions(cx);
+        let body = self.render_trash_body(window, cx);
         el! {
-            "trash-retry".Button::new {
-                small;
-                label: $i18n::text("retry", cx);
-                on_click: on_retry;
-            }
+            .ContentPage::default { # "trash-content" } [
+                .PageHeader::default { @if (self.window.layout.compact) hidden; @end } [
+                    .PageTitle::default [$i18n::text("trash", cx)],
+                    .PageActions::default [..actions],
+                ],
+                .PageContent::default [body],
+            ]
         }
-    });
-    el! {
-        .div {
-            # "trash-state"; flex_1; min_h_0; flex; flex_col;
-        } [
-            .EmptyState::default { p_0; gap: STATE_GAP.px; px: CONTENT_PADDING.px } [
-            .EmptyMedia::default [icon.Icon::new { size: STATE_ICON_SIZE.px; text_color: $(cx.theme().muted_foreground) }],
-            .EmptyTitle::default { text_sm; font_weight: FontWeight::NORMAL } [title],
-            @if (let Some(detail) = detail)
-                .EmptyDescription::default {
-                    text_xs; text_center; max_w: STATE_MAX_WIDTH.px;
-                    text_color: $(cx.theme().muted_foreground);
-                } [detail],
-            @end,
-            @if (let Some(retry) = retry) .EmptyContent::default [retry], @end,
-            ],
+        .into_any_element()
+    }
+
+    fn trash_header_actions(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let busy = self.collections.trash.is_busy() || self.operations.in_progress;
+        let has_selection = self.collections.trash.selected_count() > 0;
+        let empty = self.collections.trash.rows().is_empty();
+        let on_restore = cx.listener(Browser::on_trash_restore);
+        let on_purge = cx.listener(Browser::on_trash_purge);
+        let on_empty = cx.listener(Browser::on_trash_empty);
+        let on_refresh = cx.listener(Browser::on_trash_refresh);
+        let restore = el! {
+            "trash-restore".IconButton::new {
+                icon: IconName::Undo2;
+                label: $i18n::text("recycle-restore", cx);
+                command: Command::RestoreSelection;
+                disabled: $(busy || !has_selection);
+                on_click: on_restore;
+            }
+        };
+        let purge = el! {
+            "trash-purge".IconButton::new {
+                icon: IconName::Trash;
+                label: $i18n::text("delete-permanently", cx);
+                command: Command::PurgeSelection;
+                disabled: $(busy || !has_selection);
+                on_click: on_purge;
+            }
+        };
+        let refresh = el! {
+            "trash-refresh".IconButton::new {
+                icon: IconName::RefreshCw;
+                label: $i18n::text("refresh", cx);
+                command: Command::Refresh;
+                disabled: busy;
+                on_click: on_refresh;
+            }
+        };
+        let empty_action = el! {
+            "trash-empty".IconButton::new {
+                icon: $(Intent::EmptyTrash.icon());
+                label: $i18n::text("recycle-empty-action", cx);
+                command: Command::EmptyTrash;
+                disabled: $(busy || empty);
+                on_click: on_empty;
+            }
+        };
+        vec![
+            restore.into_any_element(),
+            purge.into_any_element(),
+            refresh.into_any_element(),
+            empty_action.into_any_element(),
         ]
     }
+
+    fn render_trash_body(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let state = &self.collections.trash;
+        if state.rows().is_empty() {
+            if let Some(error) = state.error() {
+                let retry = state.supported().then(|| {
+                    el! {
+                        "trash-retry".Button::new {
+                            small; label: $(i18n::text("retry", cx));
+                            on_click: $(cx.listener(Browser::on_trash_refresh));
+                        }
+                    }
+                    .into_any_element()
+                });
+                return el! { .TrashMessage::default {
+                title: $(i18n::text("recycle-load-failed", cx)); detail: $(Some(error.to_owned().into()));
+                icon: IconName::CircleAlert; action: retry;
+            } }.into_any_element();
+            }
+            if state.is_loading() {
+                return el! { .TrashMessage::default {
+                    title: $(i18n::text("recycle-loading", cx)); icon: IconName::LoaderCircle;
+                } }
+                .into_any_element();
+            }
+            return el! { .TrashMessage::default { title: $(i18n::text("recycle-empty", cx)); } }
+                .into_any_element();
+        }
+        self.render_trash_table(window, cx)
+    }
+
+    fn render_trash_table(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let content_width = f32::from(window.bounds().size.width) - self.width() - TABLE_INSET * 2.;
+        let data = table::Data {
+            rows: self.collections.trash.entries.clone(),
+            selected: self.collections.trash.selection(),
+            content_width,
+        };
+        TrashTable::sync_state(&self.collections.trash.table, data, cx);
+        let table = el! {
+            ($&self.collections.trash.table).DataTable::new {
+                bordered: false;
+                with_size: $(gpui_kit::component::Size::Size(px(DataListStyle::ROW_HEIGHT)));
+                header_row_height: DataListStyle::HEADER_HEIGHT.px;
+                into_any_element;
+            }
+        };
+        let menu = area_menu(
+            cx.entity().downgrade(),
+            !self.collections.trash.is_busy()
+                && !self.operations.in_progress
+                && !self.collections.trash.rows().is_empty(),
+        );
+        let area = el! { .PageTableArea::default {
+            # "trash-table-area";
+            context_menu: menu;
+        } [
+            table,
+        ] }
+        .into_any_element();
+        let scroll = self
+            .collections
+            .trash
+            .table
+            .read(cx)
+            .vertical_scroll_handle
+            .0
+            .borrow()
+            .base_handle
+            .clone();
+        el! { ("trash-selection-surface", area, $(self.collections.trash.rows().len()), scroll).ListSurface::new {
+        inset_x: $(px(TABLE_INSET));
+        on_blank_press: $(cx.listener(Browser::on_list_background_press));
+    } }
     .into_any_element()
+    }
 }
 
-fn render_table(browser: &Browser, window: &mut Window, cx: &mut Context<Browser>) -> AnyElement {
-    let content_width = f32::from(window.bounds().size.width) - browser.width() - TABLE_INSET * 2.;
-    let data = table::Data {
-        rows: browser.collections.trash.entries.clone(),
-        selected: browser.collections.trash.selection(),
-        content_width,
-    };
-    TrashTable::sync_state(&browser.collections.trash.table, data, cx);
-    let table = el! {
-        ($&browser.collections.trash.table).DataTable::new {
-            bordered: false;
-            with_size: $(gpui_kit::component::Size::Size(px(DataListStyle::ROW_HEIGHT)));
-            header_row_height: DataListStyle::HEADER_HEIGHT.px;
-            into_any_element;
+#[component]
+#[derive(IntoElement)]
+struct TrashMessage {
+    #[attr(into)]
+    title: SharedString,
+    #[attr]
+    detail: Option<SharedString>,
+    #[attr]
+    icon: IconName,
+    #[attr]
+    action: Option<AnyElement>,
+}
+
+impl Default for TrashMessage {
+    fn default() -> Self {
+        Self {
+            title: SharedString::default(),
+            detail: None,
+            icon: IconName::Trash,
+            action: None,
         }
-    };
-    let menu = area_menu(
-        cx.entity().downgrade(),
-        !browser.collections.trash.is_busy()
-            && !browser.operations.in_progress
-            && !browser.collections.trash.rows().is_empty(),
-    );
-    let area = PageTableArea::default()
-        .id("trash-table-area")
-        .child(table)
-        .context_menu(menu)
-        .into_any_element();
-    let scroll = browser
-        .collections
-        .trash
-        .table
-        .read(cx)
-        .vertical_scroll_handle
-        .0
-        .borrow()
-        .base_handle
-        .clone();
-    gds::ui::ListSurface::new(
-        "trash-selection-surface",
-        area,
-        browser.collections.trash.rows().len(),
-        scroll,
-    )
-    .inset_x(px(TABLE_INSET))
-    .on_blank_press(cx.listener(Browser::on_list_background_press))
-    .into_any_element()
+    }
+}
+
+impl RenderOnce for TrashMessage {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        el! {
+            .div { # "trash-state"; flex_1; min_h_0; flex; flex_col; } [
+                .EmptyState::default { p_0; gap: STATE_GAP.px; px: CONTENT_PADDING.px; } [
+                    .EmptyMedia::default [$(self.icon).Icon::new {
+                        size: STATE_ICON_SIZE.px; text_color: $(cx.theme().muted_foreground);
+                    }],
+                    .EmptyTitle::default { text_sm; font_weight: FontWeight::NORMAL; } [$(self.title)],
+                    @if (let Some(detail) = self.detail)
+                        .EmptyDescription::default {
+                            text_xs; text_center; max_w: STATE_MAX_WIDTH.px;
+                            text_color: $(cx.theme().muted_foreground);
+                        } [detail],
+                    @end,
+                    @if (let Some(action) = self.action) .EmptyContent::default [action], @end,
+                ],
+            ]
+        }
+    }
 }
 
 fn menu_row(
@@ -495,11 +504,12 @@ impl Confirmation {
             let on_close = Self::close_handler(this.clone());
             let names = this.names.iter().cloned().map(Self::name_row);
             let remaining = this.count.saturating_sub(NAME_PREVIEW_LIMIT);
-            let footer = DialogActions::default()
-                .primary_label(i18n::text(this.intent.ok_id(), cx))
-                .primary_icon(this.intent.icon())
-                .cancel_label(i18n::text("operation-cancel", cx))
-                .danger();
+            let footer = el! { .DialogActions::default {
+                primary_label: $(i18n::text(this.intent.ok_id(), cx));
+                primary_icon: $(this.intent.icon());
+                cancel_label: $(i18n::text("operation-cancel", cx));
+                danger;
+            } };
             el! {
                 dialog {
                     confirm; width: CONFIRMATION_WIDTH.px;

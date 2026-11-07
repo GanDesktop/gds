@@ -1,11 +1,13 @@
 use super::super::model::{Authentication, Details, Request};
 use crate::shared::i18n;
+use gds::ui::field::input as input_field;
+use gds::ui::{IconButton, button::Button};
 use gds::{
     appearance::tokens::ICON_SIZE,
     service::remote::{Address, Credentials, Protocol},
-    ui,
 };
-use gds_uim::el;
+use gds_uim::{component, el};
+use gpui_kit::IntoElement;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Selectable as _;
 use gpui_kit::base::StyledExt as _;
@@ -157,10 +159,22 @@ impl Form {
             credentials,
         })
     }
-    fn field(label: &'static str, input: &Entity<InputState>, cx: &App) -> Div {
-        el! { .div { flex; flex_col; gap_1; min_w_0; flex_1 } [
-            .div { text_xs; text_color: $cx.theme().muted_foreground } [$i18n::text(label, cx)],
-            ($input, cx).ui::field::input,
+}
+
+#[component]
+#[derive(Default, IntoElement)]
+struct ConnectionField {
+    #[attr(into)]
+    label: SharedString,
+    #[attr(option)]
+    input: Option<Entity<InputState>>,
+}
+
+impl RenderOnce for ConnectionField {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        el! { .div { flex; flex_col; gap_1; min_w_0; flex_1; } [
+            .div { text_xs; text_color: $(cx.theme().muted_foreground); } [$(self.label)],
+            @if (let Some(input) = self.input) ($&input, cx).input_field, @end,
         ] }
     }
 }
@@ -179,7 +193,7 @@ impl Render for Form {
                     this.choose_protocol(protocol, window, cx)
                 });
                 el! {
-                    $("choose-protocol", index).ui::button::Button::new {
+                    $("choose-protocol", index).Button::new {
                         ghost; accessibility_label: label; w_full; h_auto; p_3; justify_start;
                         on_click: on_choose;
                     } [
@@ -234,7 +248,7 @@ impl Render for Form {
             cx.notify();
             cx.refresh_windows();
         });
-        let change = el! { "change-protocol".ui::IconButton::new {
+        let change = el! { "change-protocol".IconButton::new {
             icon: IconName::ArrowLeft; label: $i18n::text("remote-change-protocol", cx);
             on_click: on_change;
         } };
@@ -242,16 +256,16 @@ impl Render for Form {
         el! { .div { flex; flex_col; gap_3; w_full } [
             .div { flex; items_center; gap_2 } [change, .div { font_semibold } [$(if protocol == Protocol::Sftp { "SFTP" } else { "SMB" })]],
             .div { flex; gap_3; w_full } [
-                $(Self::field("remote-host", &self.host, cx)),
-                .div { w: 100.0.px; flex_shrink_0 } [$(Self::field("remote-port", &self.port, cx))],
+                .ConnectionField::default { label: $(i18n::text("remote-host", cx)); input: $(self.host.clone()); },
+                .div { w: 100.0.px; flex_shrink_0 } [.ConnectionField::default { label: $(i18n::text("remote-port", cx)); input: $(self.port.clone()); }],
             ],
-            $(Self::field(if protocol == Protocol::Sftp { "remote-folder" } else { "remote-share-path" }, &self.path, cx)),
+            .ConnectionField::default { label: $(i18n::text(if protocol == Protocol::Sftp { "remote-folder" } else { "remote-share-path" }, cx)); input: $(self.path.clone()); },
             .div { flex; flex_col; gap_1 } [.div { text_xs; text_color: $cx.theme().muted_foreground } [$i18n::text("remote-authentication", cx)], authentication],
-            @if (show_user) $(Self::field(if protocol == Protocol::Smb { "remote-smb-user" } else { "remote-username" }, &self.user, cx)), @end,
-            @if (self.authentication == Authentication::Password) $(Self::field("remote-password", &self.password, cx)), @end,
+            @if (show_user) .ConnectionField::default { label: $(i18n::text(if protocol == Protocol::Smb { "remote-smb-user" } else { "remote-username" }, cx)); input: $(self.user.clone()); }, @end,
+            @if (self.authentication == Authentication::Password) .ConnectionField::default { label: $(i18n::text("remote-password", cx)); input: $(self.password.clone()); }, @end,
             @if (self.authentication == Authentication::Key)
-                $(Self::field("remote-auth-key", &self.key, cx)),
-                $(Self::field("remote-passphrase", &self.passphrase, cx)),
+                .ConnectionField::default { label: $(i18n::text("remote-auth-key", cx)); input: $(self.key.clone()); },
+                .ConnectionField::default { label: $(i18n::text("remote-passphrase", cx)); input: $(self.passphrase.clone()); },
             @end,
         ] }.into_any_element()
     }

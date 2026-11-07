@@ -2,6 +2,7 @@
 pub mod builtin;
 mod color;
 mod config;
+pub mod custom;
 mod qt;
 mod system;
 
@@ -11,9 +12,11 @@ use std::{fs, path::PathBuf};
 
 use super::{Error, Mode, ModePreference, palette::Palette};
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
+    /// A TOML palette relative to the shared GDS themes directory.
+    Custom(PathBuf),
     /// An embedded palette; System mode follows the native platform appearance.
     Builtin,
     /// Palette selected by the user's Qt6ct configuration.
@@ -34,9 +37,10 @@ pub(super) struct Loaded {
 }
 
 impl Source {
-    pub(super) fn source_paths(self) -> Vec<PathBuf> {
+    pub(super) fn source_paths(&self) -> Vec<PathBuf> {
         match self {
             Self::Builtin => Vec::new(),
+            Self::Custom(path) => custom::resolve(path).into_iter().collect(),
             Self::System => system::source_paths(),
             Self::Qt5ct => config::Qt::V5.source_paths(),
             Self::Qt6ct => config::Qt::V6.source_paths(),
@@ -44,20 +48,21 @@ impl Source {
     }
 
     /// Whether System mode is supplied by the native platform rather than the source.
-    pub(super) fn uses_platform_mode(self) -> bool {
+    pub(super) fn uses_platform_mode(&self) -> bool {
         !matches!(self, Self::System) || system::uses_platform_mode()
     }
 
     /// # Errors
     /// Reports unavailable files or invalid provider data without substituting another source.
     pub(super) fn load(
-        self,
+        &self,
         preference: ModePreference,
         platform: WindowAppearance,
         builtin: builtin::Theme,
     ) -> Result<Loaded, Error> {
         match self {
             Self::Builtin => Ok(builtin::load(builtin, preference, platform)),
+            Self::Custom(path) => custom::load(path, preference.resolve(platform)),
             Self::System => system::load(preference, platform),
             Self::Qt5ct => config::Qt::V5.load(preference, platform),
             Self::Qt6ct => config::Qt::V6.load(preference, platform),

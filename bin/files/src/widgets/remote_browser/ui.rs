@@ -9,14 +9,17 @@ use crate::{
     },
     shared::i18n,
 };
+use gds::ui::IconButton;
+use gds::ui::field::input as input_field;
 use gds::{
     service::{
         desktop,
         remote::{Address, Entry, EntryKind, Listing, Session},
     },
-    ui::{self, notifications},
+    ui::notifications,
 };
 use gds_uim::el;
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::{
     component::{
         ActiveTheme, Sizable,
@@ -332,13 +335,12 @@ impl Render for View {
             .toolbar_actions()
             .into_iter()
             .map(|(id, icon, enabled)| {
-                ui::IconButton::new(id)
-                    .icon(icon)
-                    .label(i18n::text(id, cx))
-                    .disabled(!enabled)
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.toolbar_action(id, window, cx)),
-                    )
+                el! { id.IconButton::new {
+                    icon: icon;
+                    label: $(i18n::text(id, cx));
+                    disabled: $(!enabled);
+                    on_click: $(cx.listener(move |this, _, window, cx| this.toolbar_action(id, window, cx)));
+                } }
                     .into_any_element()
             })
             .collect::<Vec<_>>();
@@ -348,12 +350,12 @@ impl Render for View {
             self.progress.files, self.progress.bytes, self.progress.current
         );
         el! {
-            .ui::ContentPage::default [
+            .ContentPage::default [
                 @if (!self.compact)
                 .PageHeader::default [
                     .PageTitle::default [$(self.address().name())],
                     .PageActions::default { min_w_0; flex_shrink_1; } [
-                        .div { w: 180.0.px; min_w_0 } [($&self.options.filter, cx).ui::field::input { small; cleanable: true }],
+                        .div { w: 180.0.px; min_w_0 } [($&self.options.filter, cx).input_field { small; cleanable: true }],
                         ..actions,
                     ],
                 ],
@@ -363,7 +365,7 @@ impl Render for View {
                         .div { flex; items_center; gap_2; w_full } [
                             .div { flex_1; min_w_0; truncate } [status],
                             @if (self.cancellable)
-                            "remote-cancel".ui::IconButton::new { icon: IconName::X; label: $i18n::text("operation-cancel", cx);
+                            "remote-cancel".IconButton::new { icon: IconName::X; label: $i18n::text("operation-cancel", cx);
                                 on_click: $(cx.listener(|this, _, _, _| this.cancel.cancel()));
                             },
                             @end,
@@ -437,19 +439,15 @@ impl View {
         };
     }
 
-    pub(crate) fn toolbar_menu(
-        &self,
-        view: WeakEntity<Self>,
-        cx: &App,
-    ) -> Vec<gpui_kit::component::menu::PopupMenuItem> {
+    pub(crate) fn toolbar_menu(&self, view: WeakEntity<Self>, cx: &App) -> Vec<PopupMenuItem> {
         self.toolbar_actions()
             .into_iter()
             .map(|(id, icon, enabled)| {
                 let view = view.clone();
-                gpui_kit::component::menu::PopupMenuItem::new(i18n::text(id, cx))
-                    .icon(icon)
-                    .disabled(!enabled)
-                    .on_click(move |_, window, _| {
+                el! { $(i18n::text(id, cx)).PopupMenuItem::new {
+                    icon: icon;
+                    disabled: $(!enabled);
+                    on_click: $(move |_, window, _| {
                         let view = view.clone();
                         window.on_next_frame(move |window, cx| {
                             let _ = view.update(cx, |this, cx| {
@@ -457,7 +455,8 @@ impl View {
                                 this.toolbar_action(id, window, cx);
                             });
                         });
-                    })
+                    });
+                } }
             })
             .collect()
     }

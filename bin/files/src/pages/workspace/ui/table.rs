@@ -27,7 +27,7 @@ use super::{
     columns::sort_key,
     drag_drop::{self, DragPreview, DragSnapshot, FileDrag},
     entry_appearance::EntryAppearance,
-    file_icon::FileIcon,
+    file_icon::{FileArtwork, FileIcon},
 };
 use crate::entities::file::directory::{ChildCount, ContentCategory, Entry, EntryKind, LinkStatus};
 use crate::entities::file::sorting::{Direction, Key, Sort};
@@ -87,12 +87,8 @@ impl NameContent {
             .theme()
             .foreground
             .interpolate(&cx.theme().accent_foreground, selection);
-        let icon_color = (if icon.base() == IconName::Folder {
-            cx.theme().primary
-        } else {
-            cx.theme().muted_foreground
-        })
-        .interpolate(&cx.theme().accent_foreground, selection);
+        let icon_color =
+            FileIcon::color(entry, cx).interpolate(&cx.theme().accent_foreground, selection);
         Self {
             name: entry.display_name.clone().into(),
             icon,
@@ -113,7 +109,7 @@ impl NameContent {
                     flex; items_center; min_w_0; gap: NAME_ICON_GAP.px;
                     opacity: $self.appearance.opacity;
                 } [
-                    $(self.icon.render(px(NAME_ICON_WIDTH), self.icon_color)),
+                    .FileArtwork::default { icon: $(self.icon); size: NAME_ICON_WIDTH.px; color: $(self.icon_color); },
                     .div { min_w_0; truncate } [$(self.name.clone())],
                 ],
                 @if (self.appearance.cut)
@@ -307,6 +303,22 @@ impl FileTable {
         });
     }
 
+    pub(super) fn update_rows(
+        state: &Entity<TableState<Self>>,
+        rows: Arc<[Entry]>,
+        notify: bool,
+        cx: &mut App,
+    ) {
+        state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
+            delegate.drag = DragSnapshot::new(&rows, &delegate.selected);
+            delegate.rows = rows;
+            if notify {
+                cx.notify();
+            }
+        });
+    }
+
     fn columns_for(layout: &Layout, content_width: f32, sort: Sort, cx: &App) -> Vec<Column> {
         let name_width =
             (content_width * NAME_WIDTH_FRACTION).clamp(NAME_MIN_WIDTH, NAME_DEFAULT_MAX_WIDTH);
@@ -438,7 +450,7 @@ impl FileTable {
                 on_any_mouse_down: on_mouse_down; on_hover: on_hover;
                 @if (hint_enabled) tooltip_show_delay: TOOLTIP_DELAY; tooltip: tooltip; @end;
             } [
-                $(content.render().child(measure)),
+                $(content.render()) [measure],
             ]
         }
         .into_any_element()

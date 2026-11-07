@@ -1,5 +1,7 @@
 use super::*;
 use gds::appearance::tokens::{self, DataListStyle};
+use gds::ui::time::Timestamp;
+use gds_uim::el;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     Icon,
@@ -94,9 +96,15 @@ impl TableDelegate for Files {
             _ => String::new(),
         };
         let content = if column == 2 {
-            ui::time::Timestamp::new(("remote-modified", index), entry.modified).into_any_element()
+            Timestamp::new(("remote-modified", index), entry.modified).into_any_element()
         } else {
-            div().min_w_0().truncate().child(content).into_any_element()
+            el! { .div {
+                min_w_0;
+                truncate;
+            } [
+                content,
+            ] }
+            .into_any_element()
         };
         let icon = if entry.kind == EntryKind::Directory {
             IconName::Folder

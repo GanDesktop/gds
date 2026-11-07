@@ -2,6 +2,8 @@
 
 use crate::entities::preferences::{Preferences, PreferencesEditor};
 use crate::features::file_operations::commands::{Command, SETTINGS_CONTEXT};
+use gds::appearance::typography::PreferencesEditor as FontEditor;
+use gds::ui::terminal::PreferencesEditor as TerminalEditor;
 mod controls;
 mod pages;
 
@@ -44,8 +46,8 @@ pub struct View {
     mode: ChoiceControl<theme::ModePreference>,
     content_opacity: NumberControl,
     sidebar_opacity: NumberControl,
-    font: Entity<typography::PreferencesEditor>,
-    terminal: Entity<gds::ui::terminal::PreferencesEditor>,
+    font: Entity<FontEditor>,
+    terminal: Entity<TerminalEditor>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -60,7 +62,7 @@ impl View {
     ) -> Self {
         let general = cx.new(|cx| PreferencesEditor::new(preferences.clone(), window, cx));
         let source = ChoiceControl::new(
-            Choice::<theme::Source>::catalog(cx),
+            Choice::<theme::Source>::catalog(&preferences.appearance.source, cx),
             &preferences.appearance.source,
             false,
             window,
@@ -90,11 +92,8 @@ impl View {
             PERCENTAGE_RANGE,
             cx,
         );
-        let font =
-            cx.new(|cx| typography::PreferencesEditor::new(preferences.font.clone(), window, cx));
-        let terminal = cx.new(|cx| {
-            gds::ui::terminal::PreferencesEditor::new(preferences.terminal.clone(), window, cx)
-        });
+        let font = cx.new(|cx| FontEditor::new(preferences.font.clone(), window, cx));
+        let terminal = cx.new(|cx| TerminalEditor::new(preferences.terminal.clone(), window, cx));
         let mut subscriptions = vec![
             cx.subscribe_in(&terminal, window, Self::on_terminal_edited),
             cx.subscribe_in(&general, window, Self::on_general_edited),
@@ -186,7 +185,7 @@ impl View {
             editor.set_value(self.preferences.clone(), window, cx)
         });
         self.source.sync(
-            Choice::<theme::Source>::catalog(cx),
+            Choice::<theme::Source>::catalog(&self.preferences.appearance.source, cx),
             &self.preferences.appearance.source,
             window,
             cx,
@@ -249,7 +248,7 @@ impl View {
 
     fn on_terminal_edited(
         &mut self,
-        _: &Entity<gds::ui::terminal::PreferencesEditor>,
+        _: &Entity<TerminalEditor>,
         event: &gds::ui::settings::form::Changed<gds::ui::terminal::Preferences>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -261,7 +260,7 @@ impl View {
 
     fn on_font_edited(
         &mut self,
-        _: &Entity<typography::PreferencesEditor>,
+        _: &Entity<FontEditor>,
         event: &gds::ui::settings::form::Changed<typography::Preferences>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -280,7 +279,7 @@ impl View {
     ) {
         if let ChoiceEvent::Confirm(Some(value)) = event {
             self.change(window, cx, |preferences| {
-                Field::replace(&mut preferences.appearance.source, *value)
+                Field::replace(&mut preferences.appearance.source, value.clone())
             });
         }
     }

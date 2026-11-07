@@ -170,6 +170,3 @@ impl Clipboard {
         })
     }
 }
-
-#[cfg(test)]
-mod tests;

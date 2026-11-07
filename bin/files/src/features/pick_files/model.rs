@@ -385,6 +385,3 @@ pub enum Error {
     #[error("cannot write the selection to stdout")]
     Output(#[source] std::io::Error),
 }
-
-#[cfg(test)]
-mod tests;

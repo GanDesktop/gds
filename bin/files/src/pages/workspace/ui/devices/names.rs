@@ -1,6 +1,7 @@
 //! Filesystem label editing uses the shared UDisks2 operation service.
 
 use super::*;
+use gds::ui::DialogActions;
 use gds_uim::el;
 
 impl Browser {
@@ -52,7 +53,11 @@ impl Browser {
                 let id = id.clone();
                 let input = input.clone();
                 let field = gds::ui::field::input(&input, cx).w_full();
-                let footer = ui::DialogActions::default().primary_label(i18n::text("rename-confirm", cx)).primary_icon(IconName::Pencil).cancel_label(i18n::text("operation-cancel", cx));
+                let footer = el! { .DialogActions::default {
+                    primary_label: $(i18n::text("rename-confirm", cx));
+                    primary_icon: IconName::Pencil;
+                    cancel_label: $(i18n::text("operation-cancel", cx));
+                } };
                 el! {
                     dialog {
                         confirm; width: 480.0.px;

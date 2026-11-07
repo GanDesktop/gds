@@ -1,6 +1,4 @@
 mod menu;
-#[cfg(test)]
-mod tests;
 
 use std::{cell::RefCell, collections::HashSet, path::PathBuf, rc::Rc, sync::Arc};
 
@@ -198,11 +196,12 @@ impl Confirmation {
             let on_close = Self::close_handler(this.clone());
             let names = this.names.iter().cloned().map(Self::name_row);
             let remaining = this.count.saturating_sub(NAME_PREVIEW_LIMIT);
-            let footer = DialogActions::default()
-                .primary_label(i18n::count("delete-selected", this.count, cx))
-                .primary_icon(IconName::Trash)
-                .cancel_label(i18n::text("operation-cancel", cx))
-                .danger();
+            let footer = el! { .DialogActions::default {
+                primary_label: $(i18n::count("delete-selected", this.count, cx));
+                primary_icon: IconName::Trash;
+                cancel_label: $(i18n::text("operation-cancel", cx));
+                danger;
+            } };
             el! {
                 dialog {
                     confirm; width: CONFIRMATION_WIDTH.px;

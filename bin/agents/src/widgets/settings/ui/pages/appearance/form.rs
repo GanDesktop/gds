@@ -89,9 +89,10 @@ impl SelectItem for Choice<Language> {
 impl SelectItem for Choice<ThemeSource> {
     type Value = ThemeSource;
     fn title(&self) -> gpui_kit::SharedString {
-        match self.0 {
-            ThemeSource::Desktop => tr!("appearance-desktop"),
-            ThemeSource::Builtin => tr!("appearance-builtin"),
+        match &self.0 {
+            ThemeSource::Custom(path) => path.display().to_string(),
+            ThemeSource::Desktop => tr!("appearance-desktop").to_owned(),
+            ThemeSource::Builtin => tr!("appearance-builtin").to_owned(),
         }
         .into()
     }
@@ -276,8 +277,8 @@ impl Form {
             ui_font: font_choice(p.ui_font_family.clone(), window, cx),
             mono_font: font_choice(p.mono_font_family.clone(), window, cx),
             source: choice(
-                vec![ThemeSource::Desktop, ThemeSource::Builtin],
-                p.theme_source,
+                theme_sources(&p.theme_source),
+                p.theme_source.clone(),
                 window,
                 cx,
             ),
@@ -364,7 +365,7 @@ impl Form {
                 .source
                 .read(cx)
                 .selected_value()
-                .copied()
+                .cloned()
                 .unwrap_or_default(),
             builtin_theme: self
                 .builtin
@@ -483,4 +484,32 @@ fn font_choice(
         .position(|item| *item == selected)
         .map(IndexPath::new);
     cx.new(|cx| SelectState::new(SearchableVec::new(items), index, window, cx).searchable(true))
+}
+
+fn theme_sources(selected: &ThemeSource) -> Vec<ThemeSource> {
+    let mut sources = vec![ThemeSource::Desktop, ThemeSource::Builtin];
+    match gds::appearance::theme::provider::custom::catalog() {
+        Ok(paths) => sources.extend(paths.into_iter().map(ThemeSource::Custom)),
+        Err(error) => tracing::warn!(%error, "cannot list user themes"),
+    }
+    if !sources.contains(selected) {
+        sources.push(selected.clone());
+    }
+    sources
+}
+
+impl Form {
+    pub(super) fn refresh_themes(&self, window: &mut Window, cx: &mut Context<AppearancePage>) {
+        let selected = self
+            .source
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default();
+        let sources = theme_sources(&selected).into_iter().map(Choice).collect();
+        self.source.update(cx, |state, cx| {
+            state.set_items(sources, window, cx);
+            state.set_selected_value(&selected, window, cx);
+        });
+    }
 }

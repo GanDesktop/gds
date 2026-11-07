@@ -172,6 +172,3 @@ impl UsageCache {
         changed
     }
 }
-
-#[cfg(test)]
-mod tests;

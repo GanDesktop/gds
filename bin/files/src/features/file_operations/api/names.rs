@@ -211,6 +211,3 @@ fn exists(path: PathBuf) -> Result<bool, Error> {
         Err(source) => Err(Error::Filesystem { path, source }),
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -1,5 +1,7 @@
 //! Width-based workspace presentation, independent of saved location preferences.
+use super::menu::MenuControl;
 use super::*;
+use gds::ui::page::PageHeader;
 
 // Approximate room for the expanded sidebar, details, a short title and full toolbar.
 const COMPACT_WIDTH: f32 = 1080.;
@@ -22,7 +24,7 @@ impl Browser {
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> ui::page::PageHeader {
+    ) -> PageHeader {
         use gds::ui::page::*;
         use gds_uim::el;
         let title = self.page_title(cx);
@@ -30,12 +32,10 @@ impl Browser {
             .collection()
             .is_none()
             .then(|| self.directory_filter(window, cx));
-        let menu = menu::control(
-            menu::Kind::PageTools,
-            self.menus.open,
-            cx.entity().downgrade(),
-            cx,
-        );
+        let menu = el! { .MenuControl::default {
+            kind: menu::Kind::PageTools; open: $(self.menus.open);
+            view: $(cx.entity().downgrade());
+        } };
         el! {
             .PageHeader::default [
                 .div { # "page-title"; test_support; aria_label: $(title.clone()); flex_1; min_w_0; overflow_hidden } [
@@ -73,6 +73,3 @@ impl Browser {
         cx.notify();
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

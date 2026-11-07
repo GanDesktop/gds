@@ -7,8 +7,15 @@
 mod overflow;
 
 use super::*;
+use gds::ui::about::About;
+use gds::ui::about::Application;
+use gds::ui::dialog::DialogCommand;
+use gds::ui::dialog::DialogDecision;
+use gds::ui::dialog::DialogFooter;
+use gds::ui::logs::OpenLogs;
 use gds::ui::{self, Shortcut, button::Button};
-use gds_uim::el;
+use gds_uim::{component, el};
+use gpui_kit::IntoElement;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     WindowExt,
@@ -27,8 +34,9 @@ pub(super) struct State {
     pub volume_focus: Option<FocusHandle>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum Kind {
+    #[default]
     Application,
     PageTools,
 }
@@ -92,7 +100,7 @@ impl MenuEntry {
     fn render(self) -> impl Fn(&mut Window, &mut App) -> AnyElement {
         move |window, cx| {
             let shortcut = if self == Self::Logs {
-                Some(Shortcut::new(Box::new(gds::ui::logs::OpenLogs), None))
+                Some(Shortcut::new(Box::new(OpenLogs), None))
             } else {
                 self.command().map(Into::into)
             };
@@ -113,7 +121,7 @@ impl MenuEntry {
             Self::About => Browser::show_about(view.clone(), window, cx),
             Self::Logs => {
                 let _ = view.update(cx, |browser, cx| browser.set_menu_open(None, cx));
-                window.dispatch_action(Box::new(gds::ui::logs::OpenLogs), cx);
+                window.dispatch_action(Box::new(OpenLogs), cx);
             }
         }
     }
@@ -134,48 +142,63 @@ struct MenuState {
 /// `open` identifies the workspace popup, so the pointer and the shortcut go through
 /// the same state: a press can only open this popup, and a press while it is up
 /// closes it instead of stacking another menu.
-pub(super) fn control(
+#[component]
+#[derive(Default, IntoElement)]
+pub(super) struct MenuControl {
+    #[attr]
     kind: Kind,
+    #[attr]
     open: Option<Kind>,
-    view: WeakEntity<Browser>,
-    cx: &mut Context<Browser>,
-) -> AnyElement {
-    let application = gds::ui::about::Application::cargo(env!("CARGO_BIN_NAME"));
-    let open = open == Some(kind);
-    let compact = kind == Kind::PageTools;
-    let label = i18n::text(if compact { "page-tools" } else { "app-menu" }, cx);
-    let trigger = if compact {
-        Button::icon_button("page-tools")
-            .control_icon(IconName::Ellipsis)
-            .tooltip(label.clone())
-    } else {
-        Button::application_menu("application-menu", application.icon)
-            .tooltip_with_shortcut(label.clone(), Shortcut::from(Command::Menu))
+    #[attr(option)]
+    view: Option<WeakEntity<Browser>>,
+}
+
+impl RenderOnce for MenuControl {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Some(view) = self.view else {
+            return el! { .div }.into_any_element();
+        };
+        let kind = self.kind;
+        let application = Application::cargo(env!("CARGO_BIN_NAME"));
+        let compact = kind == Kind::PageTools;
+        let label = i18n::text(if compact { "page-tools" } else { "app-menu" }, cx);
+        let trigger = if compact {
+            el! { "page-tools".Button::icon_button {
+                control_icon: IconName::Ellipsis; tooltip: ~label;
+            } }
+        } else {
+            el! { ("application-menu", $(application.icon)).Button::application_menu {
+                tooltip_with_shortcut: ~label, $(Shortcut::from(Command::Menu));
+            } }
+        };
+        let trigger = el! { trigger { accessibility_label: label; } };
+        let opener = view.clone();
+        let on_open_change = move |open: &bool, _: &mut Window, cx: &mut App| {
+            if let Some(view) = opener.upgrade() {
+                view.update(cx, |browser, cx| {
+                    if *open {
+                        browser.set_menu_open(Some(kind), cx);
+                    } else if browser.menus.open == Some(kind) {
+                        browser.set_menu_open(None, cx);
+                    }
+                });
+            }
+        };
+        let content =
+            move |_: &mut PopoverState, window: &mut Window, cx: &mut Context<PopoverState>| {
+                popup(kind, view.clone(), window, cx)
+            };
+        let id = if compact {
+            "compact-menu-popover"
+        } else {
+            "application-menu-popover"
+        };
+        el! { id.Popover::new {
+            appearance: false; overlay_closable: false; open: $(self.open == Some(kind));
+            trigger: trigger; on_open_change: on_open_change; content: content;
+        } }
+        .into_any_element()
     }
-    .accessibility_label(label);
-    let opener = view.clone();
-    Popover::new(if compact {
-        "compact-menu-popover"
-    } else {
-        "application-menu-popover"
-    })
-    .appearance(false)
-    .overlay_closable(false)
-    .open(open)
-    .trigger(trigger)
-    .on_open_change(move |open, _, cx| {
-        if let Some(view) = opener.upgrade() {
-            view.update(cx, |browser, cx| {
-                if *open {
-                    browser.set_menu_open(Some(kind), cx);
-                } else if browser.menus.open == Some(kind) {
-                    browser.set_menu_open(None, cx);
-                }
-            });
-        }
-    })
-    .content(move |_, window, cx| popup(kind, view.clone(), window, cx))
-    .into_any_element()
 }
 
 impl Browser {
@@ -201,16 +224,17 @@ impl Browser {
             let focus = view.read(cx).window.focus.clone();
             focus.focus(window, cx);
             let about = cx.new(|cx| {
-                gds::ui::about::About::new(
-                    gds::ui::about::Application::cargo(env!("CARGO_BIN_NAME")),
+                About::new(
+                    Application::cargo(env!("CARGO_BIN_NAME")),
                     cx,
                 )
             });
             window.open_alert_dialog(cx, move |dialog: AlertDialog, _, cx| {
-                let footer = ui::dialog::DialogFooter::default().px_4().pb_4().child(
-                    ui::dialog::DialogDecision::new(ui::dialog::DialogCommand::Cancel)
-                        .label(i18n::text("close", cx)),
-                );
+                let footer = el! {
+                    .DialogFooter::default { px_4; pb_4; } [
+                        DialogCommand::Cancel.DialogDecision::new { label: $(i18n::text("close", cx)); },
+                    ]
+                };
                 el! {
                     dialog {
                         p_0; footer: footer;
@@ -313,11 +337,10 @@ fn rows(mut menu: PopupMenu, view: WeakEntity<Browser>, cx: &App) -> PopupMenu {
     {
         let render = entry.render();
         let on_click = entry.on_click(view.clone());
-        menu = menu.item(
-            PopupMenuItem::element(render)
-                .icon(entry.icon())
-                .on_click(on_click),
-        );
+        menu = menu.item(el! { render.PopupMenuItem::element {
+            icon: $(entry.icon());
+            on_click: on_click;
+        } });
     }
     menu
 }

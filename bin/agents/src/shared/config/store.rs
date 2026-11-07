@@ -43,7 +43,7 @@ impl Store {
             directories::BaseDirs::new()
                 .map(|dirs| dirs.config_dir().to_owned())
                 .unwrap_or_else(|| PathBuf::from(".config"))
-                .join("gds/agents/settings.json")
+                .join("gds/app/agents/settings.json")
         });
         Self(File::new(path))
     }

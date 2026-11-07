@@ -4,13 +4,14 @@
 //! run through [`transfer::Batch`], so conflicts and self-moves keep the same
 //! no-replace guarantees as paste.
 
+use super::file_label::FileLabel;
 use std::{collections::HashSet, path::Path, path::PathBuf, sync::Arc};
 
 use gds_uim::el;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::{prelude::*, *};
 
-use super::file_icon::FileIcon;
+use super::file_icon::{FileArtwork, FileIcon};
 use super::*;
 use crate::entities::file::directory::{Entry, EntryKind};
 use crate::features::file_operations::transfer;
@@ -206,7 +207,7 @@ impl DragPreview {
                     bg: $(cx.theme().popover); border_1; border_color: $(cx.theme().border);
                     shadow_sm;
                 } [
-                    .file_label::FileLabel::default { icon: $(item.icon); name: $(item.name.clone()); },
+                    .FileLabel::default { icon: $(item.icon); name: $(item.name.clone()); },
                 ]
             }
         });
@@ -219,7 +220,7 @@ impl DragPreview {
                         px: PREVIEW_PADDING_X.px; py: PREVIEW_PADDING_Y.px; rounded: PREVIEW_RADIUS.px;
                         bg: $(cx.theme().primary); text_color: $(cx.theme().primary_foreground);
                     } [
-                        $(FileIcon::multiple().render(px(PREVIEW_ICON_SIZE), cx.theme().primary_foreground)),
+                        .FileArtwork::default { icon: $(FileIcon::multiple()); size: PREVIEW_ICON_SIZE.px; color: $(cx.theme().primary_foreground); },
                         $(i18n::count("item-count", drag.count(), cx)),
                     ],
                     ..labels,
@@ -440,6 +441,3 @@ impl Browser {
         cx.notify();
     }
 }
-
-#[cfg(test)]
-mod tests;

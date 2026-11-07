@@ -272,7 +272,7 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
         };
     });
     Ok(Applied {
-        source: appearance.source,
+        source: appearance.source.clone(),
         mode,
         source_path,
     })

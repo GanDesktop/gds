@@ -64,6 +64,14 @@ check:
 test *args:
     {{ develop }} --command cargo test --workspace --features files,agents,portal,nixes,gpui-kit/test-support "$@"
 
+# 在隔离的 Wayland 会话中运行 Files 原生端到端流程，并保留工件。
+test-files:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{ develop }} --command cargo build --locked --bin gds-files --features files-e2e
+    files_weston=$(nix build --impure --no-link --print-out-paths --expr 'let lock = builtins.fromJSON (builtins.readFile ./flake.lock); source = builtins.fetchTree lock.nodes.nixpkgs.locked; pkgs = import source.outPath {}; in pkgs.weston')
+    {{ develop }} --command python3 bin/files/tests/run.py target/debug/gds-files "$files_weston/bin/weston"
+
 # 格式化项目代码。
 fmt:
     {{ develop }} --command cargo fmt --all

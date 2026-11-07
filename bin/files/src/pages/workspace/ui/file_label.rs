@@ -1,5 +1,5 @@
 //! File identity shared by drag previews and removable status lists.
-use super::file_icon::FileIcon;
+use super::file_icon::{FileArtwork, FileIcon};
 use gds_uim::{component, el};
 use gpui_kit::{IntoElement, assets::IconName, prelude::*, *};
 
@@ -25,10 +25,10 @@ impl Default for FileLabel {
 }
 
 impl RenderOnce for FileLabel {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         el! {
             .div { flex; items_center; gap: GAP.px; min_w_0; line_height: $(relative(1.5)); } [
-                $(self.icon.render(px(ICON_SIZE), window.text_style().color)),
+                .FileArtwork::default { icon: $(self.icon); size: ICON_SIZE.px; },
                 .div { min_w_0; truncate; } [$(self.name)],
             ]
         }

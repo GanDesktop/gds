@@ -33,7 +33,7 @@ fn writable_configuration_below_a_readonly_ancestor_can_be_created_and_replaced(
     fs::create_dir_all(&writable).expect("create writable descendant");
     fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o555))
         .expect("make ancestor readonly");
-    let file = File::new(writable.join(".config/gds/files/settings.toml"));
+    let file = File::new(writable.join(".config/gds/app/files/settings.toml"));
 
     let created = file.write(None, b"first");
     let replaced = write_after_inherited_holders(&file, Some(b"first"), b"second");

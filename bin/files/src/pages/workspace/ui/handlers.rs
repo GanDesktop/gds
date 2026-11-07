@@ -1,4 +1,5 @@
 use super::*;
+use gds_uim::el;
 use gpui_kit::base::actions::{SelectDown, SelectFirst, SelectLast, SelectUp};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 
@@ -54,7 +55,12 @@ impl Browser {
     ) {
         self.dispatch(Command::NewFolder, window, cx);
     }
-    pub(super) fn on_new_window(&mut self, _: &NewWindow, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn on_new_window(
+        &mut self,
+        _: &NewWindow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.dispatch(Command::NewWindow, window, cx);
     }
 
@@ -575,18 +581,18 @@ impl Browser {
             let on_pin = Self::menu_pin(view.clone(), id);
             let on_close = Self::menu_close_tab(view.clone(), id);
             ui::menu::popup(menu)
+                .item(el! { $(i18n::text(
+                    if pinned { "unpin-tab" } else { "pin-tab" },
+                    cx,
+                )).PopupMenuItem::new {
+                    disabled: $(!pinned && !pinnable);
+                    on_click: on_pin;
+                } })
                 .item(
-                    PopupMenuItem::new(i18n::text(
-                        if pinned { "unpin-tab" } else { "pin-tab" },
-                        cx,
-                    ))
-                    .disabled(!pinned && !pinnable)
-                    .on_click(on_pin),
-                )
-                .item(
-                    PopupMenuItem::new(i18n::text("close-this-tab", cx))
-                        .disabled(pinned)
-                        .on_click(on_close),
+                    el! { $(i18n::text("close-this-tab", cx)).PopupMenuItem::new {
+                        disabled: pinned;
+                        on_click: on_close;
+                    } },
                 )
         }
     }

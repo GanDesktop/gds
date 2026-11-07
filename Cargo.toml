@@ -121,6 +121,7 @@ portal = [
     "dep:serde_json", "dep:thiserror", "dep:url", "dep:zbus",
 ]
 gui-tests = ["files", "agents", "gpui-kit/test-support", "zbus?/p2p"]
+files-e2e = ["files", "gpui-kit/test-support", "dep:futures"]
 
 [dependencies]
 # Async runtime, errors and serialization shared by several capabilities.

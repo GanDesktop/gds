@@ -2,6 +2,7 @@
 //! as pointer menus. Their position follows the selected row, not the mouse.
 
 use gds::appearance::tokens;
+use gds_uim::el;
 use std::{collections::HashSet, ffi::OsString};
 
 use super::*;
@@ -332,8 +333,9 @@ impl Browser {
             };
             let shortcut = command != Command::OpenInNewTab || self.picker.is_none();
             let row = ui::menu::row(label, shortcut.then(|| command.into()));
-            menu = menu.item(PopupMenuItem::element(row).icon(icon).on_click(
-                move |_, window, cx| {
+            menu = menu.item(el! { row.PopupMenuItem::element {
+                icon: icon;
+                on_click: $(move |_, window, cx| {
                     let _ = browser.update(cx, |view, cx| {
                         if view.collection() == collection
                             && view.selected_place().as_ref() == Some(&target)
@@ -341,8 +343,8 @@ impl Browser {
                             view.dispatch(command, window, cx);
                         }
                     });
-                },
-            ));
+                });
+            } });
         }
         menu
     }

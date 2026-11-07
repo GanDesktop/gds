@@ -188,7 +188,7 @@ impl State {
         let name = original_name.as_ref().map(|name| {
             cx.new(|cx| {
                 let mut input =
-                    InputState::new(window, cx).placeholder(i18n::text("picker-name", cx));
+                    InputState::new(window, cx).placeholder(i18n::text("picker-file-name", cx));
                 input.set_value(name.to_string_lossy().into_owned(), window, cx);
                 input
             })
@@ -696,26 +696,27 @@ impl Browser {
 
         let next_filter_shortcut = Shortcut::new(Box::new(PickerNextFilter), Some(PICKER_CONTEXT));
         let filter_view = view.clone();
-        let filter = Button::new("picker-filter")
-            .small()
-            .label(picker.filter_label(active_filter, cx))
-            .when(picker.filters().len() > 1, |button| {
+        let filter = el! { "picker-filter".Button::new {
+            small;
+            label: $(picker.filter_label(active_filter, cx));
+            when: $(picker.filters().len() > 1), $(|button| {
                 button.tooltip_with_action(
                     i18n::text("picker-next-filter", cx),
                     &PickerNextFilter,
                     Some(PICKER_CONTEXT),
                 )
-            })
-            .when(picker.filters().len() <= 1, |button| {
-                button.tooltip(i18n::text("picker-filter", cx))
-            })
-            .when(available && picker.filters().len() > 1, |button| {
+            });
+            when: $(picker.filters().len() <= 1), $(|button| {
+                button.tooltip(i18n::text("picker-file-type", cx))
+            });
+            when: $(available && picker.filters().len() > 1), $(|button| {
                 button.shortcut(next_filter_shortcut)
-            })
-            .dropdown_caret(true)
-            .dropdown_menu(move |menu, _, _| {
+            });
+            dropdown_caret: true;
+            dropdown_menu: $(move |menu, _, _| {
                 filter_menu(menu, labels.clone(), active_filter, filter_view.clone())
             });
+        } };
         let menu_view = view.clone();
         let filter = filter.on_open_change(move |open, _, cx| {
             if let Some(view) = menu_view.upgrade() {
@@ -728,11 +729,12 @@ impl Browser {
             }
         });
 
-        let read_only_button = Checkbox::new("picker-read-only")
-            .small()
-            .label(i18n::text("picker-read-only", cx))
-            .disabled(!available)
-            .checked(read_only);
+        let read_only_button = el! { "picker-read-only".Checkbox::new {
+            small;
+            label: $(i18n::text("picker-read-only", cx));
+            disabled: $(!available);
+            checked: read_only;
+        } };
         let read_view = view.clone();
         let read_only_button = read_only_button.on_change(move |checked, _, cx| {
             if let Some(view) = read_view.upgrade() {
@@ -750,27 +752,23 @@ impl Browser {
         } else {
             el! { .div { size_0 } }.into_any_element()
         };
-        let read_only_button = div()
-            .id("picker-read-only-control")
-            .flex()
-            .items_center()
-            .tooltip(ui::shortcut_tooltip(
-                i18n::text("picker-read-only", cx),
-                read_only_shortcut,
-            ))
-            .child(read_only_button)
-            .child(read_only_hint);
+        let read_only_button = el! {
+            .div { # "picker-read-only-control"; flex; items_center;
+                tooltip: $(ui::shortcut_tooltip(i18n::text("picker-read-only", cx), read_only_shortcut));
+            } [read_only_button, read_only_hint]
+        };
 
         let on_cancel = cx.listener(Self::on_picker_cancel_click);
         let cancel_shortcut = cancel_shortcut();
         let cancel_label = i18n::text("picker-cancel", cx);
-        let cancel = Button::new("picker-cancel")
-            .small()
-            .icon(Icon::new(IconName::X))
-            .label(cancel_label.clone())
-            .disabled(!available)
-            .shortcut(cancel_shortcut.clone())
-            .on_click(on_cancel);
+        let cancel = el! { "picker-cancel".Button::new {
+            small;
+            icon: $(Icon::new(IconName::X));
+            label: $(cancel_label.clone());
+            disabled: $(!available);
+            shortcut: $(cancel_shortcut.clone());
+            on_click: on_cancel;
+        } };
         let cancel = el! {
             .div {
                 # "picker-cancel-button"; flex_shrink_0;
@@ -815,14 +813,15 @@ impl Browser {
         } else {
             el! { .div { size_0 } }.into_any_element()
         };
-        let confirm = Button::new("picker-confirm")
-            .primary()
-            .small()
-            .icon(Icon::new(IconName::Check))
-            .label(confirm_label.clone())
-            .disabled(!enabled)
-            .shortcut(confirm_shortcut.clone())
-            .on_click(on_confirm);
+        let confirm = el! { "picker-confirm".Button::new {
+            primary;
+            small;
+            icon: $(Icon::new(IconName::Check));
+            label: $(confirm_label.clone());
+            disabled: $(!enabled);
+            shortcut: $(confirm_shortcut.clone());
+            on_click: on_confirm;
+        } };
         let confirm = el! {
             .div {
                 # "picker-confirm-button"; relative; flex_shrink_0;
@@ -831,23 +830,17 @@ impl Browser {
             } [confirm, control_hint]
         };
 
-        let optional_controls = if directory {
-            Vec::new()
-        } else {
-            vec![filter.into_any_element()]
-        };
         el! {
             .div {
                 # "picker-controls"; flex; items_center; gap: CONTROL_GAP.px;
                 flex_shrink_0; min_w_0;
-            }
+            } [
+                @if (!directory) filter, @end,
+                @if (!saving && !directory) read_only_button, @end,
+                cancel,
+                confirm,
+            ]
         }
-        .children(optional_controls)
-        .when(!saving && !directory, |control| {
-            control.child(read_only_button)
-        })
-        .child(cancel)
-        .child(confirm)
         .into_any_element()
     }
 }
@@ -864,14 +857,13 @@ fn filter_menu(
         .enumerate()
         .fold(menu, |menu, (index, label)| {
             let target = view.clone();
-            menu.item(
-                PopupMenuItem::new(label)
-                    .checked(index == active_filter)
-                    .on_click(move |_, _, cx| {
-                        if let Some(view) = target.upgrade() {
-                            view.update(cx, |this, cx| this.set_picker_filter(index, cx));
-                        }
-                    }),
-            )
+            menu.item(el! { label.PopupMenuItem::new {
+                checked: $(index == active_filter);
+                on_click: $(move |_, _, cx| {
+                    if let Some(view) = target.upgrade() {
+                        view.update(cx, |this, cx| this.set_picker_filter(index, cx));
+                    }
+                });
+            } })
         })
 }

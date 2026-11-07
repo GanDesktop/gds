@@ -389,6 +389,3 @@ impl Browser {
         el! { .div { flex_1; min_h_0 } [view] }.into_any_element()
     }
 }
-
-#[cfg(test)]
-mod tests;

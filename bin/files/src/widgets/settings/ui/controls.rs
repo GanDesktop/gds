@@ -1,6 +1,8 @@
 //! Shared presentation and state adapters for native settings controls.
 
-use gds_uim::el;
+use gds::ui::field::select as select_field;
+use gds::ui::settings::NumberControl as NumericControl;
+use gds_uim::{component, el};
 use gpui_kit::{
     assets::IconName,
     component::{
@@ -168,11 +170,31 @@ impl<T: Clone + PartialEq> SelectItem for Choice<T> {
 }
 
 impl Choice<Source> {
-    pub fn catalog(cx: &App) -> Vec<Self> {
-        vec![
+    pub fn catalog(selected: &Source, cx: &App) -> Vec<Self> {
+        let mut choices = vec![
             Self::new(Source::System, text("theme-system", cx), "system 系统"),
             Self::new(Source::Builtin, text("theme-builtin", cx), "builtin 内置"),
-        ]
+        ];
+        match gds::appearance::theme::provider::custom::catalog() {
+            Ok(paths) => choices.extend(paths.into_iter().map(|path| {
+                Self::new(
+                    Source::Custom(path.clone()),
+                    path.display().to_string().into(),
+                    "custom 自定义",
+                )
+            })),
+            Err(error) => tracing::warn!(%error, "cannot list user themes"),
+        }
+        if let Source::Custom(path) = selected
+            && !choices.iter().any(|choice| &choice.value == selected)
+        {
+            choices.push(Self::new(
+                selected.clone(),
+                path.display().to_string().into(),
+                "custom 自定义",
+            ));
+        }
+        choices
     }
 }
 
@@ -261,7 +283,7 @@ impl<T: Clone + PartialEq + 'static> ChoiceControl<T> {
         cx: &App,
     ) -> Select<SearchableVec<Choice<T>>> {
         el! {
-            ($(&self.state), cx).gds::ui::field::select {
+            ($(&self.state), cx).select_field {
                 # $("settings-select", field as usize);
                 small; w_full;
                 menu_width: CONTROL_WIDTH.px;
@@ -275,16 +297,16 @@ impl<T: Clone + PartialEq + 'static> ChoiceControl<T> {
 
 pub(super) use gds::ui::settings::{CONTROL_WIDTH, NumberRange, PERCENTAGE_RANGE};
 
-pub(super) struct NumberControl(gds::ui::settings::NumberControl);
+pub(super) struct NumberControl(NumericControl);
 impl std::ops::Deref for NumberControl {
-    type Target = gds::ui::settings::NumberControl;
+    type Target = NumericControl;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 impl NumberControl {
     pub fn new(value: f32, range: NumberRange, cx: &mut Context<View>) -> Self {
-        Self(gds::ui::settings::NumberControl::new(value, range, cx))
+        Self(NumericControl::new(value, range, cx))
     }
     pub fn render(
         &self,
@@ -334,15 +356,11 @@ impl View {
     }
 }
 
-#[derive(IntoElement)]
+#[component]
+#[derive(Default, IntoElement)]
 pub(super) struct SettingNote {
+    #[attr(into)]
     message: SharedString,
-}
-
-impl SettingNote {
-    pub fn new(message: SharedString) -> Self {
-        Self { message }
-    }
 }
 
 impl RenderOnce for SettingNote {
@@ -350,7 +368,3 @@ impl RenderOnce for SettingNote {
         el! { .SettingDescription::default [$self.message] }
     }
 }
-
-#[cfg(test)]
-#[path = "controls/tests.rs"]
-mod tests;

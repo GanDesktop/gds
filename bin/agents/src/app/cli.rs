@@ -22,7 +22,7 @@ pub(crate) struct Args {
     /// Open the workspace and thread window (the default).
     #[arg(long)]
     pub(crate) window: bool,
-    /// Agents frontend settings (default: gds/agents/settings.json in the user config directory).
+    /// Agents frontend settings (default: gds/app/agents/settings.json in the user config directory).
     #[arg(long, env = "GDS_AGENTS_SETTINGS_FILE")]
     pub(crate) settings_file: Option<PathBuf>,
 }

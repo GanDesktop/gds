@@ -195,7 +195,7 @@ impl Batch {
     pub fn execute(self) -> Report {
         #[cfg(target_os = "linux")]
         {
-            self.execute_with_rename(Prepared::rename_no_replace)
+            self.execute_local()
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -225,10 +225,7 @@ impl Batch {
     }
 
     #[cfg(target_os = "linux")]
-    fn execute_with_rename(
-        self,
-        mut initial_rename: impl FnMut(&Path, &Path) -> Result<(), Errno>,
-    ) -> Report {
+    fn execute_local(self) -> Report {
         let Batch {
             request,
             names,
@@ -251,7 +248,7 @@ impl Batch {
                 item.result = if cancel.is_cancelled() {
                     Err(Error::Cancelled)
                 } else {
-                    item.transfer(mode, &mut initial_rename, &cancel)
+                    item.transfer(mode, &cancel)
                 };
                 item
             })
@@ -411,12 +408,11 @@ impl Item {
     fn transfer(
         &mut self,
         mode: Mode,
-        initial_rename: &mut impl FnMut(&Path, &Path) -> Result<(), Errno>,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<(), Error> {
         let prepared = Prepared::new(self)?;
         if mode == Mode::Move {
-            match initial_rename(&prepared.source, &prepared.destination) {
+            match Prepared::rename_no_replace(&prepared.source, &prepared.destination) {
                 Ok(()) => {
                     self.destination_committed = true;
                     return Ok(());

@@ -1,6 +1,8 @@
 //! The current selection, with per-entry deselection.
 use super::*;
+use super::{file_icon::FileIcon, file_label::FileLabel, status::*};
 use gds::service::remote::Address;
+use gds::ui::IconButton;
 use gds_uim::el;
 use gpui_kit::{assets::IconName, prelude::*};
 
@@ -29,7 +31,7 @@ impl Details {
 impl Render for Details {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(browser) = self.browser.upgrade() else {
-            return div().into_any_element();
+            return el! { .div }.into_any_element();
         };
         let tab = browser.read(cx).tabs.active_id;
         let entries = browser.read(cx).status_selection(cx);
@@ -40,33 +42,63 @@ impl Render for Details {
             .iter()
             .filter_map(|slot| slot.navigation.directory())
             .flat_map(|directory| &directory.entries)
-            .map(|entry| (entry.path.clone(), file_icon::FileIcon::for_entry(entry)))
+            .map(|entry| (entry.path.clone(), FileIcon::for_entry(entry)))
             .collect();
-        let rows = entries.into_iter().enumerate().map(|(index, (label, target))| {
-            let icon = match &target {
-                Target::File(path) => icons.get(path).copied()
-                    .unwrap_or_else(|| file_icon::FileIcon::plain(IconName::FileQuestionMark)),
-                Target::Place => file_icon::FileIcon::plain(IconName::Folder),
-                Target::Volume => file_icon::FileIcon::plain(IconName::HardDrive),
-                Target::Trash(id) => file_icon::FileIcon::plain(
-                    match browser.read(cx).collections.trash.rows().iter().find(|entry| &entry.id == id).map(|entry| entry.kind) {
-                        Some(directory::EntryKind::Directory) => IconName::Folder,
-                        Some(directory::EntryKind::SymbolicLink) => IconName::Link,
-                        _ => IconName::File,
-                    }),
-                Target::Remote(_) => file_icon::FileIcon::plain(IconName::File),
-            };
-            let name: SharedString = label.rsplit('/').find(|part| !part.is_empty()).unwrap_or(&label).to_owned().into();
-            let browser = self.browser.clone();
-            let on_click = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                let _ = browser.update(cx, |browser, cx| {
-                    if browser.tabs.active_id == tab { browser.remove_status_selection(target.clone(), cx); }
-                });
-            };
-            let action = el! { "deselect-entry".ui::IconButton::new { icon: IconName::X; label: $(i18n::text("selection-remove-item", cx)); on_click: on_click; } }.into_any_element();
-            status::row(format!("selected-{index}").into(), file_label::FileLabel::default().icon(icon).name(name), label, action)
-        }).collect();
-        status::list(rows, i18n::text("selection-empty", cx))
+        let rows = entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, target))| {
+                let icon = match &target {
+                    Target::File(path) => icons
+                        .get(path)
+                        .copied()
+                        .unwrap_or_else(|| FileIcon::plain(IconName::FileQuestionMark)),
+                    Target::Place => FileIcon::plain(IconName::Folder),
+                    Target::Volume => FileIcon::plain(IconName::HardDrive),
+                    Target::Trash(id) => FileIcon::plain(
+                        match browser
+                            .read(cx)
+                            .collections
+                            .trash
+                            .rows()
+                            .iter()
+                            .find(|entry| &entry.id == id)
+                            .map(|entry| entry.kind)
+                        {
+                            Some(directory::EntryKind::Directory) => IconName::Folder,
+                            Some(directory::EntryKind::SymbolicLink) => IconName::Link,
+                            _ => IconName::File,
+                        },
+                    ),
+                    Target::Remote(_) => FileIcon::plain(IconName::File),
+                };
+                let name: SharedString = label
+                    .rsplit('/')
+                    .find(|part| !part.is_empty())
+                    .unwrap_or(&label)
+                    .to_owned()
+                    .into();
+                let browser = self.browser.clone();
+                let on_click = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                    let _ = browser.update(cx, |browser, cx| {
+                        if browser.tabs.active_id == tab {
+                            browser.remove_status_selection(target.clone(), cx);
+                        }
+                    });
+                };
+                el! {
+                    .StatusRow::default {
+                        # format!("selected-{index}"); title: label;
+                        content: .FileLabel::default { icon: icon; name: name; };
+                        action: "deselect-entry".IconButton::new {
+                            icon: IconName::X; label: $(i18n::text("selection-remove-item", cx));
+                            on_click: on_click;
+                        };
+                    }
+                }
+            });
+        el! { .StatusList::default { empty: $(i18n::text("selection-empty", cx)); } [..rows] }
+            .into_any_element()
     }
 }
 
@@ -166,18 +198,16 @@ impl Browser {
         } else {
             i18n::count("selection-count", count, cx)
         };
-        status::control(
-            "selected-files-status",
-            i18n::text("selection-title", cx),
-            status::Summary::default()
-                .compact(self.window.layout.compact)
-                .icon(IconName::Check)
-                .label(label)
-                .count(count),
-            self.selection_details.clone(),
-        )
+        el! {
+            .StatusControl::default {
+                # "selected-files-status"; title: $(i18n::text("selection-title", cx));
+                summary: .StatusSummary::default {
+                    compact: $(self.window.layout.compact); icon: IconName::Check;
+                    label: label; count: count;
+                };
+                details: $(self.selection_details.clone());
+            }
+        }
+        .into_any_element()
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

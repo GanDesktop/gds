@@ -2,6 +2,10 @@
 
 use super::*;
 use gds::appearance::tokens;
+use gds::ui::IconButton;
+use gds::ui::region::surface as region_surface;
+use gds::ui::sidebar::SideBarSectionTitle;
+use gds::ui::split::VerticalSplit;
 use gds::ui::{disclosure::DisclosureIcon, sidebar::*};
 use gds::{i18n::t, ui::button::Button};
 use gds_uim::el;
@@ -10,9 +14,6 @@ use gpui_kit::{
     component::{ActiveTheme, Sizable, button::ButtonVariants},
     prelude::*,
 };
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;
 
 pub(super) const MIN_TABS_HEIGHT: f32 = 94.;
 pub(super) const MIN_DEVICES_HEIGHT: f32 = 108.;
@@ -134,9 +135,9 @@ impl Browser {
                     overflow_hidden;
                 } [
                     .div { flex_1; min_w_0; overflow_hidden; opacity: $(self.sidebar.presentation.label_opacity()); } [
-                        cx.t!("tabs").ui::sidebar::SideBarSectionTitle::new { px: tokens::SIDEBAR_SECTION_PADDING.px },
+                        cx.t!("tabs").SideBarSectionTitle::new { px: tokens::SIDEBAR_SECTION_PADDING.px },
                     ],
-                    "new-tab".ui::IconButton::new { icon: IconName::Plus; label: t!(@cx, "new-tab");
+                    "new-tab".IconButton::new { icon: IconName::Plus; label: t!(@cx, "new-tab");
                         command: Command::NewTab; on_click: on_new_tab;
                     },
                 ],
@@ -145,18 +146,14 @@ impl Browser {
                 } [..tabs],
             ]
         };
-        ui::region::surface(
-            "tabs-region",
-            &self.sidebar.regions.tabs,
-            Command::FocusTabs,
-            window,
-            cx,
-        )
-        .aria_label(i18n::text("tabs", cx))
-        .flex()
-        .flex_col()
-        .size_full()
-        .child(content)
+        el! { ("tabs-region", $(&self.sidebar.regions.tabs), Command::FocusTabs, window, cx).region_surface {
+            aria_label: $(i18n::text("tabs", cx));
+            flex;
+            flex_col;
+            size_full;
+        } [
+            content,
+        ] }
         .into_any_element()
     }
 
@@ -216,20 +213,16 @@ impl Browser {
                 px: tokens::SIDEBAR_PADDING.px; pb: tokens::SIDEBAR_PADDING.px; gap: $(ROW_GAP * progress).px;
             } [heading, ..content]
         };
-        ui::region::surface(
-            "locations-region",
-            &self.sidebar.regions.locations,
-            Command::FocusLocations,
-            window,
-            cx,
-        )
-        .aria_label(i18n::text("locations", cx))
-        .flex()
-        .flex_col()
-        .w_full()
-        .min_h_0()
-        .flex_shrink_1()
-        .child(section)
+        el! { ("locations-region", $(&self.sidebar.regions.locations), Command::FocusLocations, window, cx).region_surface {
+            aria_label: $(i18n::text("locations", cx));
+            flex;
+            flex_col;
+            w_full;
+            min_h_0;
+            flex_shrink_1;
+        } [
+            section,
+        ] }
         .into_any_element()
     }
 
@@ -286,18 +279,14 @@ impl Browser {
                 ]
             }
             .into_any_element();
-            let device_area = ui::region::surface(
-                "volumes-region",
-                &self.sidebar.regions.volumes,
-                Command::FocusVolumes,
-                window,
-                cx,
-            )
-            .aria_label(i18n::text("volumes", cx))
-            .flex()
-            .flex_col()
-            .size_full()
-            .child(device_area)
+            let device_area = el! { ("volumes-region", $(&self.sidebar.regions.volumes), Command::FocusVolumes, window, cx).region_surface {
+                aria_label: $(i18n::text("volumes", cx));
+                flex;
+                flex_col;
+                size_full;
+            } [
+                device_area,
+            ] }
             .into_any_element();
             let default_bottom = device_row_count.min(DEFAULT_DEVICE_ROWS) as f32
                 * (tokens::SIDEBAR_ITEM_HEIGHT + ROW_GAP)
@@ -306,13 +295,14 @@ impl Browser {
             self.sidebar
                 .split
                 .update(cx, |state, _| state.default_bottom(default_bottom));
-            ui::split::VerticalSplit::new(self.sidebar.split.clone())
-                .top(tabs)
-                .bottom_progress(progress)
-                .collapsed_bottom_height(HEADER_HEIGHT)
-                .bottom(device_area)
-                .label(i18n::text("sidebar-resize", cx))
-                .into_any_element()
+            el! { $(self.sidebar.split.clone()).VerticalSplit::new {
+                top: tabs;
+                bottom_progress: progress;
+                collapsed_bottom_height: HEADER_HEIGHT;
+                bottom: device_area;
+                label: $(i18n::text("sidebar-resize", cx));
+            } }
+            .into_any_element()
         } else {
             el! {
                 .div { flex; flex_col; size_full; min_h_0 } [

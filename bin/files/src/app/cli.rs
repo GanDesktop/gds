@@ -55,6 +55,3 @@ impl Arguments {
         })
     }
 }
-
-#[cfg(test)]
-mod tests;

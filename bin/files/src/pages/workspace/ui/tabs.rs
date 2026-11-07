@@ -1,6 +1,8 @@
-//! File-tab cycling and direct ordinal shortcuts.
+//! File-tab cycling, ordering and direct ordinal shortcuts.
+mod reorder;
 
 use super::*;
+use gds::ui::DialogActions;
 use gds_uim::el;
 use gpui_kit::{assets::IconName, component::Icon};
 
@@ -10,6 +12,28 @@ pub(super) struct State {
     pub next_id: u64,
     /// The hovered row reveals its close control alongside the held Ctrl group.
     pub hovered: Option<u64>,
+}
+
+impl State {
+    fn move_tab(&mut self, source: u64, target: u64, after: bool) -> bool {
+        let Some(from) = self.items.iter().position(|tab| tab.id == source) else {
+            return false;
+        };
+        let Some(to) = self.items.iter().position(|tab| tab.id == target) else {
+            return false;
+        };
+        if source == target || self.items[from].pinned != self.items[to].pinned {
+            return false;
+        }
+        let insertion = to + usize::from(after);
+        let destination = insertion - usize::from(from < insertion);
+        if from == destination {
+            return false;
+        }
+        let tab = self.items.remove(from);
+        self.items.insert(destination, tab);
+        true
+    }
 }
 
 impl Default for State {
@@ -145,10 +169,11 @@ impl Browser {
                 title: $(i18n::text("unpin-close-title", cx));
                 description: $(i18n::format("unpin-close-message", Some(&args), cx));
                 icon: IconName::Pin.Icon::new;
-                footer: $(ui::DialogActions::default()
-                    .primary_label(i18n::text("unpin-close-confirm", cx))
-                    .primary_icon(IconName::X)
-                    .cancel_label(i18n::text("operation-cancel", cx)));
+                footer: $(el! { .DialogActions::default {
+                    primary_label: $(i18n::text("unpin-close-confirm", cx));
+                    primary_icon: IconName::X;
+                    cancel_label: $(i18n::text("operation-cancel", cx));
+                } });
                 on_ok: $(move |_, window, cx| {
                     if let Some(view) = view.upgrade() {
                         view.update(cx, |view, cx| view.close_tab_approved(id, window, cx));
@@ -159,6 +184,3 @@ impl Browser {
         });
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

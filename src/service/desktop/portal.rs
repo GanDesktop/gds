@@ -6,21 +6,23 @@ use super::{OpenMode, OpenOutcome};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("无法连接桌面 Portal 会话总线：{0}")]
+    #[error("cannot connect to the desktop portal session bus: {0}")]
     Connection(#[source] zbus::Error),
-    #[error("无法读取文件 {path}：{source}")]
+    #[error("cannot read file {path}: {source}")]
     Read {
         path: std::path::PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("无法通过桌面 Portal 打开文件 {path}：{source}")]
+    #[error("cannot open file {path} through the desktop portal: {source}")]
     Request {
         path: std::path::PathBuf,
         #[source]
         source: ashpd::Error,
     },
-    #[error("默认应用打开失败：{default}；选择其他应用也未能完成：{chooser}")]
+    #[error(
+        "opening with the default application failed: {default}; choosing another application also failed: {chooser}"
+    )]
     DefaultAndChooser {
         default: Box<Error>,
         #[source]

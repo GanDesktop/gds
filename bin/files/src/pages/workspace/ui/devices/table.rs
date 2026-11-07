@@ -177,21 +177,22 @@ impl VolumeTable {
             }
             .into_any_element();
         }
-        Button::new(format!("volume-default-{}", row.volume.object))
-            .ghost()
-            .xsmall()
-            .w_full()
-            .min_w_0()
-            .justify_start()
-            .label(label)
-            .accessibility_label(i18n::text("volume-default-mount", cx))
-            .tooltip(tooltip)
-            .dropdown_caret(true)
-            .dropdown_menu(Browser::default_mount_menu(
+        el! { $(format!("volume-default-{}", row.volume.object)).Button::new {
+            ghost;
+            xsmall;
+            w_full;
+            min_w_0;
+            justify_start;
+            label: label;
+            accessibility_label: $(i18n::text("volume-default-mount", cx));
+            tooltip: tooltip;
+            dropdown_caret: true;
+            dropdown_menu: $(Browser::default_mount_menu(
                 self.browser.clone(),
                 row.volume.id.clone(),
-            ))
-            .into_any_element()
+            ));
+        } }
+        .into_any_element()
     }
 }
 
@@ -288,7 +289,10 @@ impl TableDelegate for VolumeTable {
             }
             1 => el! { .div { text_xs; truncate } [$(if volume.filesystem.is_empty() { "—".to_owned() } else { volume.filesystem.clone() })] }.into_any_element(),
             2 if volume.mount_points.is_empty() => el! { .div { text_xs; text_color: $(if selected { foreground } else { cx.theme().muted_foreground }) } [$i18n::text("device-not-mounted", cx)] }.into_any_element(),
-            2 => Browser::capacity_bar(format!("volume-table-capacity-{}", volume.object), row.capacity.as_ref(), false, cx).selected(selected).embedded().into_any_element(),
+            2 => el! { .DeviceCapacity::default {
+                # format!("volume-table-capacity-{}", volume.object); state: $(row.capacity.clone());
+                selected: selected; embedded: true;
+            } }.into_any_element(),
             _ => self.root_selector(row, cx),
         };
         el! { .div { size_full; min_w_0; flex; items_center; text_color: foreground } [content] }

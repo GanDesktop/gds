@@ -114,6 +114,23 @@ impl<'tx, 'db> Accessor<'tx, 'db> {
                     .await?;
             }
             Change::Pin { path, present } => self.membership(Kind::Pin, path, *present).await?,
+            Change::PinOrder(order) => {
+                let records = Location::filter(Location::fields().kind().eq(Kind::Pin))
+                    .order_by(Location::fields().position().asc())
+                    .exec(self.tx)
+                    .await?;
+                let mut paths = Vec::new();
+                for row in records {
+                    paths.push(serde_json::from_slice(&row.path)?);
+                }
+                crate::entities::location::model::places::reorder_existing(&mut paths, order);
+                for (position, path) in paths.iter().enumerate() {
+                    Location::upsert_by_kind_and_path(Kind::Pin, path_key(path)?)
+                        .position(position as i64)
+                        .exec(self.tx)
+                        .await?;
+                }
+            }
             Change::ClearRecent => {
                 SavedLocation::filter(SavedLocation::fields().kind().eq(Kind::Recent))
                     .delete()

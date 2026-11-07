@@ -219,7 +219,7 @@ columns-apply = 应用
 columns-restore = 恢复使用本应用默认列
 columns-save-failed = 列设置已生效但未能保存：{ $error }
 columns-state-unavailable = 无法读取已保存的状态，列设置未保存。
-picker-filter = 文件类型
+picker-file-type = 文件类型
 picker-next-filter = 切换到下一个文件类型
 picker-all-files = 所有文件
 picker-read-only = 只读打开
@@ -251,7 +251,7 @@ view-toggle = 切换网格／列表视图
 video-play = 播放视频
 
 picker-save = 保存
-picker-name = 文件名
+picker-file-name = 文件名
 picker-overwrite-title = 替换已有文件？
 picker-overwrite-message = 此位置已有同名文件。确认后，应用可以替换该文件。
 

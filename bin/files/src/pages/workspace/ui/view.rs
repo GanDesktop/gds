@@ -1,5 +1,14 @@
+use super::menu::MenuControl;
 use super::*;
+use crate::widgets::help::FilesHelp;
 use gds::appearance::tokens;
+use gds::ui::ListSurface;
+use gds::ui::Shortcut;
+use gds::ui::corner_button;
+use gds::ui::field::input as input_field;
+use gds::ui::sidebar::SideBar;
+use gds::ui::sidebar::SidebarState;
+use gds::ui::window::WindowControls;
 
 use gds::ui::page::*;
 use gds::{
@@ -66,14 +75,14 @@ impl Render for Browser {
             self.menus.sort = None;
         }
         let state = if self.sidebar_collapsed() {
-            ui::sidebar::SidebarState::Collapsed
+            SidebarState::Collapsed
         } else {
-            ui::sidebar::SidebarState::Expanded
+            SidebarState::Expanded
         };
-        self.sidebar.presentation =
-            ui::sidebar::SideBar::default()
-                .state(state)
-                .sample("files-sidebar-motion", window, cx);
+        self.sidebar.presentation = el! { .SideBar::default {
+            state: state;
+        } }
+        .sample("files-sidebar-motion", window, cx);
         let width = self.width();
         self.settings.view.update(cx, |view, cx| {
             view.set_sidebar_presentation(self.sidebar.presentation, cx)
@@ -85,8 +94,7 @@ impl Render for Browser {
         };
         let toolbar = self.render_toolbar(&frame, window, cx);
         let body = if self.pages.current() == Some(&pages::Page::Help) {
-            el! { .div { flex_1; min_h_0; } [$(crate::widgets::help::render(cx))] }
-                .into_any_element()
+            el! { .div { flex_1; min_h_0; } [.FilesHelp::default] }.into_any_element()
         } else if !self.pages.is_empty() {
             el! { .div { flex_1; min_h_0 } [$(self.settings.view.clone())] }.into_any_element()
         } else {
@@ -97,21 +105,18 @@ impl Render for Browser {
                 .layout
                 .compact
                 .then(|| self.compact_page_header(window, cx));
-            let content = ui::region::surface(
+            let surface = ui::region::surface(
                 "content-region",
                 &self.window.focus,
                 Command::FocusContent,
                 window,
                 cx,
-            )
-            .opacity(opacity)
-            .aria_label(self.current_location().label(cx))
-            .flex()
-            .flex_col()
-            .flex_1()
-            .h_full()
-            .children(header)
-            .child(content)
+            );
+            let content = el! {
+                surface { opacity: opacity; aria_label: $(self.current_location().label(cx));
+                    flex; flex_col; flex_1; h_full;
+                } [..header, content]
+            }
             .into_any_element();
             let workspace = frame
                 .workspace(self.render_sidebar(window, cx), content, cx)
@@ -124,14 +129,7 @@ impl Render for Browser {
             self.render_picker_extras(self.picker_actions_available(window, cx), cx)
         };
         let extras = (!extras.is_empty()).then(|| {
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_2()
-                .px_4()
-                .py_2()
-                .children(extras)
+            el! { .div { flex; flex_wrap; items_center; gap_2; px_4; py_2; } [..extras] }
         });
         let footer_status = self
             .render_picker_name(self.picker_actions_available(window, cx))
@@ -166,7 +164,7 @@ impl Render for Browser {
         let selection_menu = self.render_selection_menu(window);
         el! {
             .div {
-                # "gds-files"; key_context: $context; track_focus: $&self.window.root_focus;
+                # "gds-files"; key_context: context; track_focus: $&self.window.root_focus;
                 size_full; flex; flex_col; overflow_hidden;
                 text_color: $cx.theme().foreground; text_size: tokens::SMALL;
                 on_action: (cx, Self::on_application_menu).Context::listener;
@@ -290,12 +288,11 @@ impl Browser {
             }
             .into_any_element()
         } else {
-            menu::control(
-                menu::Kind::Application,
-                self.menus.open,
-                cx.entity().downgrade(),
-                cx,
-            )
+            el! { .MenuControl::default {
+                kind: menu::Kind::Application; open: $(self.menus.open);
+                view: $(cx.entity().downgrade());
+            } }
+            .into_any_element()
         };
         let sidebar = self.command_button("sidebar", IconName::PanelLeft, Command::Sidebar, cx);
         let content = if !self.pages.is_empty() {
@@ -307,8 +304,9 @@ impl Browser {
         let controls = el! {
             .div { flex; items_center; gap: SMALL_GAP.px; w_full; min_w_0 } [@if (self.pages.current() != Some(&pages::Page::Help) && !self.window.layout.compact) sidebar, @end, content]
         };
-        let window_controls = ui::window::WindowControls::default()
-            .on_close_window(cx.listener(Self::on_close_window));
+        let window_controls = el! { .WindowControls::default {
+            on_close_window: $(cx.listener(Self::on_close_window));
+        } };
         frame.toolbar_with_window_controls(menu, controls.into_any_element(), window_controls, cx)
     }
 
@@ -345,13 +343,10 @@ impl Browser {
         .test_support()
         .block_mouse_except_scroll();
         if editing {
-            return shell
-                .child(
-                    ui::field::input(&self.toolbar.path.input, cx)
-                        .appearance(false)
-                        .h_full(),
-                )
-                .into_any_element();
+            return el! {
+                shell [($&self.toolbar.path.input, cx).input_field { appearance: false; h_full; }]
+            }
+            .into_any_element();
         }
         if let Some(location) = self
             .current_tab()
@@ -362,10 +357,12 @@ impl Browser {
                 Location::Directory(p) => Path::new(p).display().to_string(),
                 _ => location.label(cx).to_string(),
             };
-            return shell
-                .on_click(on_click)
-                .child(el! { .div { flex_1; min_w_0; px: CAPTION_PADDING.px; truncate } [destination] })
-                .into_any_element();
+            return el! {
+                shell { on_click: on_click; } [
+                    .div { flex_1; min_w_0; px: CAPTION_PADDING.px; truncate; } [destination],
+                ]
+            }
+            .into_any_element();
         }
         let content = if let Location::Remote(address) = self.current_location() {
             el! { .div { flex_1; min_w_0; px: CAPTION_PADDING.px; truncate } [$(address.to_string())] }
@@ -404,11 +401,7 @@ impl Browser {
             }.into_any_element()
         };
         let edit = self.command_button("edit-path", IconName::Pencil, Command::EditLocation, cx);
-        shell
-            .on_click(on_click)
-            .child(content)
-            .child(edit)
-            .into_any_element()
+        el! { shell { on_click: on_click; } [content, edit] }.into_any_element()
     }
 
     pub(super) fn render_tab(
@@ -434,7 +427,9 @@ impl Browser {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| slot.location().label(cx))
             .into();
-        let icon = Icon::new(slot.navigation.location().icon()).size(px(tokens::SIDEBAR_ICON_SIZE));
+        let icon = el! { $(slot.navigation.location().icon()).Icon::new {
+            size: $(px(tokens::SIDEBAR_ICON_SIZE));
+        } };
         let on_click = cx.listener(Self::click_tab(id));
         let on_hover = cx.listener(Self::hover_tab(id));
         let menu = Self::tab_menu(cx.entity().downgrade(), id, slot.pinned);
@@ -498,7 +493,7 @@ impl Browser {
                             # $(action_id, id); absolute; top: 1.0.px; right: 1.0.px;
                             on_mouse_down: MouseButton::Left, on_close_down;
                         } [
-                            ($(corner_id, id), action_icon, action_label).ui::corner_button {
+                            ($(corner_id, id), action_icon, action_label).corner_button {
                                 on_click: on_close;
                             },
                         ]
@@ -549,6 +544,7 @@ impl Browser {
         } else {
             tab
         };
+        let tab = self.draggable_tab(tab, slot, cx);
         el! { tab { test_support; context_menu: menu; into_any_element } }
     }
 
@@ -600,7 +596,7 @@ impl Browser {
             let key: ElementId = (key, id).into();
             hints.push(Self::stage_tab_hint(
                 key,
-                ui::Shortcut::from(command),
+                Shortcut::from(command),
                 compact,
                 show_action,
                 window,
@@ -641,7 +637,7 @@ impl Browser {
     /// rather than being dropped with the space it would have used.
     fn stage_tab_hint(
         key: ElementId,
-        shortcut: ui::Shortcut,
+        shortcut: Shortcut,
         compact: bool,
         show_action: bool,
         window: &mut Window,
@@ -728,11 +724,11 @@ impl Browser {
             window,
             cx,
             "filter-hint".into(),
-            ui::Shortcut::from(Command::Filter),
+            Shortcut::from(Command::Filter),
         );
         el! {
             .div { # "directory-filter"; test_support; relative; w: FILTER_WIDTH.px; min_w: 96.0.px; flex_shrink_1 } [
-                ($&self.toolbar.filter.input, cx).ui::field::input { small; cleanable: true; prefix: IconName::Search.Icon::new },
+                ($&self.toolbar.filter.input, cx).input_field { small; cleanable: true; prefix: IconName::Search.Icon::new },
                 filter_hint,
             ]
         }.into_any_element()
@@ -872,11 +868,13 @@ impl Browser {
             return el! { .div }.into_any_element();
         };
         let menu = Self::directory_menu_builder(cx.entity().downgrade(), path);
-        let list_area = PageTableArea::default()
-            .id("file-list-area")
-            .child(list)
-            .context_menu(menu)
-            .into_any_element();
+        let list_area = el! { .PageTableArea::default {
+            # "file-list-area";
+            context_menu: menu;
+        } [
+            list,
+        ] }
+        .into_any_element();
         let rows = self.active().map_or(0, |slot| slot.table_rows.len());
         let scroll = self
             .active()
@@ -885,15 +883,16 @@ impl Browser {
         let list_area = if self.grid_mode() {
             self.grid_surface(list_area, cx)
         } else {
-            ui::ListSurface::new("directory-selection-surface", list_area, rows, scroll)
-                .inset_x(px(TABLE_INSET))
-                .header_height(px(if rows == 0 {
+            el! { ("directory-selection-surface", list_area, rows, scroll).ListSurface::new {
+                inset_x: $(px(TABLE_INSET));
+                header_height: $(px(if rows == 0 {
                     0.
                 } else {
                     DataListStyle::HEADER_HEIGHT
-                }))
-                .on_blank_press(cx.listener(Self::on_list_background_press))
-                .into_any_element()
+                }));
+                on_blank_press: $(cx.listener(Self::on_list_background_press));
+            } }
+            .into_any_element()
         };
         // A picker holds one path at a time, so its list has no rubber-band
         // surface: a batch selection could neither be reported nor kept.
@@ -1140,7 +1139,7 @@ impl Browser {
                 } [
                     $(self.render_background_tasks(cx)),
                     $(self.render_selection_status(cx)),
-                    $(clipboard_status::render(self.clipboard_details.clone(), self.window.layout.compact, cx)),
+                    $(self.render_clipboard_status(cx)),
                 ],
             ]
         }.into_any_element()

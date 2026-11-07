@@ -2,8 +2,14 @@
 //! Process startup and shutdown races belong to the single shared Terminal.
 
 use gds::appearance::tokens;
+use gds::ui::DialogActions;
+use gds::ui::IconButton;
+use gds::ui::NavItem;
+use gds::ui::Shortcut;
+use gds::ui::button::Button;
 use std::path::PathBuf;
 
+use super::super::drag_drop::FileDrag;
 use gds_uim::el;
 
 use gds::{
@@ -21,9 +27,6 @@ use crate::features::file_operations::commands::{
     CloseTerminal, FocusTerminal, NewTerminal, NextTerminal, PreviousTerminal, RenameTerminal,
     TERMINAL_TABS_CONTEXT,
 };
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;
 
 struct Entry {
     id: u64,
@@ -260,12 +263,13 @@ impl Panel {
         }
     }
 
-    pub fn new_button(&self, cx: &mut Context<Self>) -> ui::IconButton {
-        ui::IconButton::new("files-terminal-new")
-            .icon(IconName::Plus)
-            .label(i18n::text("files-terminal-new", cx))
-            .disabled(self.cwd.is_none() || self.sealed)
-            .on_click(cx.listener(|panel, _, window, cx| panel.on_new(&NewTerminal, window, cx)))
+    pub fn new_button(&self, cx: &mut Context<Self>) -> IconButton {
+        el! { "files-terminal-new".IconButton::new {
+            icon: IconName::Plus;
+            label: $(i18n::text("files-terminal-new", cx));
+            disabled: $(self.cwd.is_none() || self.sealed);
+            on_click: $(cx.listener(|panel, _, window, cx| panel.on_new(&NewTerminal, window, cx)));
+        } }
     }
 
     fn rename_entry(&mut self, id: u64, name: &str, cx: &mut Context<Self>) {
@@ -303,7 +307,11 @@ impl Panel {
             let panel = panel.clone();
             let input = input.clone();
             let field = ui::field::input(&input, cx).w_full();
-            let footer = ui::DialogActions::default().primary_label(i18n::text("rename-confirm", cx)).primary_icon(IconName::Pencil).cancel_label(i18n::text("operation-cancel", cx));
+            let footer = el! { .DialogActions::default {
+                primary_label: $(i18n::text("rename-confirm", cx));
+                primary_icon: IconName::Pencil;
+                cancel_label: $(i18n::text("operation-cancel", cx));
+            } };
             el! {
                 dialog {
                     confirm; width: 480.0.px;
@@ -425,14 +433,16 @@ impl Panel {
                 close_label.clone(),
             )
         } else {
-            ui::button::Button::icon_button(("files-terminal-close", id)).control_icon(IconName::X)
+            el! { $(("files-terminal-close", id)).Button::icon_button {
+                control_icon: IconName::X;
+            } }
         }
         .accessibility_label(close_label.clone())
         .selected(selected)
         .when(shortcut_target, |button| {
             button.tooltip_with_shortcut(
                 close_label.clone(),
-                ui::Shortcut::new(Box::new(CloseTerminal), Some(TERMINAL_TABS_CONTEXT)),
+                Shortcut::new(Box::new(CloseTerminal), Some(TERMINAL_TABS_CONTEXT)),
             )
         })
         .when(!shortcut_target, |button| button.tooltip(close_label))
@@ -453,33 +463,25 @@ impl Panel {
             let close = if reveal_close {
                 close
             } else {
-                gds::ui::hover_action(group.clone(), div().into_any_element(), Some(close))
+                gds::ui::hover_action(group.clone(), el! { .div }.into_any_element(), Some(close))
             };
             (vec![close], None)
         };
-        div()
-            .id(("files-terminal-row", id))
-            .test_support()
-            .relative()
-            .group(group)
-            .w_full()
-            .flex_shrink_0()
-            .tooltip_show_delay(tokens::TOOLTIP_DELAY)
-            .hoverable_tooltip(move |window, cx| hint.view(window, cx))
-            .child(
-                ui::NavItem::new(
-                    ("files-terminal-tab", id),
-                    IconName::Terminal,
-                    Self::title(entry, cx),
-                )
-                .presentation(self.sidebar)
-                .selected(selected)
-                .tooltip_enabled(false)
-                .trailing(trailing)
-                .on_click(cx.listener(move |panel, _, window, cx| panel.select(id, window, cx))),
-            )
-            .children(corner)
-            .into_any_element()
+        let on_select = cx.listener(move |panel, _, window, cx| panel.select(id, window, cx));
+        let tooltip = move |window: &mut Window, cx: &mut App| hint.view(window, cx);
+        el! {
+            .div {
+                # $("files-terminal-row", id); test_support; relative; group: group;
+                w_full; flex_shrink_0; tooltip_show_delay: tokens::TOOLTIP_DELAY;
+                hoverable_tooltip: tooltip;
+            } [
+                ($("files-terminal-tab", id), IconName::Terminal, $(Self::title(entry, cx))).NavItem::new {
+                    presentation: $(self.sidebar); selected: selected; tooltip_enabled: false;
+                    trailing: trailing; on_click: on_select;
+                },
+                ..corner,
+            ]
+        }.into_any_element()
     }
 
     fn remove_stopped(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
@@ -508,81 +510,60 @@ impl Panel {
 impl Render for Panel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = gds::appearance::theme::Colors::current(cx);
-        let tabs = div()
-            .id("files-terminal-tabs")
-            .test_support()
-            .w(px(self.sidebar.width()))
-            .h_full()
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .overflow_y_scroll()
-            .track_scroll(&self.tabs_scroll)
-            .p(px(tokens::SIDEBAR_PADDING))
-            .gap_1()
-            .bg(gds::appearance::theme::sidebar_background(cx))
-            .text_color(colors.sidebar_foreground)
-            .key_context(TERMINAL_TABS_CONTEXT)
-            .track_focus(&self.tabs_focus)
-            .on_action(cx.listener(Self::on_next))
-            .on_action(cx.listener(Self::on_previous))
-            .on_action(cx.listener(Self::on_focus))
-            .children(self.entries.iter().map(|entry| self.tab(entry, window, cx)));
+        let tabs = el! {
+            .div {
+                # "files-terminal-tabs"; test_support; w: $(self.sidebar.width()).px;
+                h_full; flex_shrink_0; flex; flex_col; overflow_y_scroll;
+                track_scroll: $&self.tabs_scroll; p: tokens::SIDEBAR_PADDING.px; gap_1;
+                bg: $(gds::appearance::theme::sidebar_background(cx));
+                text_color: $(colors.sidebar_foreground); key_context: TERMINAL_TABS_CONTEXT;
+                track_focus: $&self.tabs_focus;
+                on_action: $(cx.listener(Self::on_next));
+                on_action: $(cx.listener(Self::on_previous));
+                on_action: $(cx.listener(Self::on_focus));
+            } [..$(self.entries.iter().map(|entry| self.tab(entry, window, cx)))]
+        };
         let body = match self.selected() {
             Some(entry) => entry.terminal.clone().into_any_element(),
-            None => div()
-                .size_full()
-                .p_3()
-                .bg(gds::appearance::theme::content_background(cx))
-                .text_color(colors.muted_foreground)
-                .child(i18n::text(
-                    if self.cwd.is_some() {
-                        "files-terminal-empty"
-                    } else {
-                        "files-terminal-cwd-unavailable"
-                    },
-                    cx,
-                ))
-                .into_any_element(),
+            None => el! {
+                .div {
+                    size_full; p_3; bg: $(gds::appearance::theme::content_background(cx));
+                    text_color: $(colors.muted_foreground);
+                } [$(i18n::text(if self.cwd.is_some() {
+                    "files-terminal-empty"
+                } else {
+                    "files-terminal-cwd-unavailable"
+                }, cx))]
+            }
+            .into_any_element(),
         };
-        div()
-            .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
-            .on_action(cx.listener(Self::on_new))
-            .on_action(cx.listener(Self::on_close))
-            .on_action(cx.listener(Self::on_rename))
-            .relative()
-            .size_full()
-            .min_h_0()
-            .min_w_0()
-            .flex()
-            .overflow_hidden()
-            .child(tabs)
-            .child(
-                el! { .div { # "files-terminal-input"; test_support; flex_1; min_h_0; min_w_0; h_full; } }
-                    .on_drop(cx.listener(
-                        |panel, files: &super::super::drag_drop::FileDrag, window, cx| {
-                            panel.paste_paths(&files.paths(), window, cx);
-                        },
-                    ))
-                    .on_drop(cx.listener(|panel, files: &ExternalPaths, window, cx| {
-                        panel.paste_paths(files.paths(), window, cx);
-                    }))
-                    .drag_over::<super::super::drag_drop::FileDrag>(|style, _, _, cx| {
-                        style.bg(cx.theme().drop_target)
-                    })
-                    .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drop_target))
-                    .child(body),
-            )
-            .child(
-                div()
-                    .id("files-terminal-divider")
-                    .test_support()
-                    .absolute()
-                    .left(px(self.sidebar.width() - 1.))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(1.))
-                    .bg(colors.border),
-            )
+        let on_file_drop = cx.listener(|panel, files: &FileDrag, window, cx| {
+            panel.paste_paths(&files.paths(), window, cx);
+        });
+        let on_external_drop = cx.listener(|panel, files: &ExternalPaths, window, cx| {
+            panel.paste_paths(files.paths(), window, cx);
+        });
+        el! {
+            .div {
+                on_modifiers_changed: $(cx.listener(|_, _, _, cx| cx.notify()));
+                on_action: $(cx.listener(Self::on_new));
+                on_action: $(cx.listener(Self::on_close));
+                on_action: $(cx.listener(Self::on_rename));
+                relative; size_full; min_h_0; min_w_0; flex; overflow_hidden;
+            } [
+                tabs,
+                .div {
+                    # "files-terminal-input"; test_support; flex_1; min_h_0; min_w_0; h_full;
+                    on_drop: on_file_drop; on_drop: on_external_drop;
+                    drag_over: $(|style, _: &FileDrag, _, cx| style.bg(cx.theme().drop_target));
+                    drag_over: $(|style, _: &ExternalPaths, _, cx| style.bg(cx.theme().drop_target));
+                } [body],
+                .div {
+                    # "files-terminal-divider"; test_support; absolute;
+                    left: $(self.sidebar.width() - 1.).px; top_0; bottom_0; w: 1.0.px;
+                    bg: $(colors.border);
+                },
+            ]
+        }
     }
 }

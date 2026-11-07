@@ -104,6 +104,7 @@ cargo build --bins --features files,agents,portal
 | `files` / `agents` | 对应图形应用使用的完整组合 |
 | `portal` | 无界面 Portal 后端与共享桌面协议 |
 | `gui-tests` | 两个应用与 GPUI 测试支持 |
+| `files-e2e` | Files 原生窗口端到端场景，仅在隔离 runner 显式启用时运行 |
 
 `bin/portal/src` 与 Files、Agents 一样，是根 package 中声明的 binary target，没有单独的 manifest。`portal` feature 只启用共享协议及其自身的 I/O 依赖，独立构建不会带入 GPUI、SQLite、终端或远程文件后端：
 
@@ -360,7 +361,7 @@ gds::ui::notifications::error("操作失败的原因", cx);
 
 ## 设置与状态
 
-- 应用配置（Files）：`$XDG_CONFIG_HOME/gds/files/settings.toml`，默认 `~/.config/gds/files/settings.toml`，与 `state/files` 同层。设置真实变化时立即请求应用并自动保存；重复选择同值不写入，程序回写不再发起应用请求。应用失败恢复上一次有效偏好并报错；持久化失败保留已生效的运行态，明确提示“已生效但未保存”。声明式符号链接或只读目标允许读取，但不被替换。应用与保存失败通过共享右上角通知气泡反馈，不插入设置页内容，也不另设全宽保存底栏。
+- 应用配置（Files）：`$XDG_CONFIG_HOME/gds/app/files/settings.toml`，默认 `~/.config/gds/app/files/settings.toml`。设置真实变化时立即请求应用并自动保存；重复选择同值不写入，程序回写不再发起应用请求。应用失败恢复上一次有效偏好并报错；持久化失败保留已生效的运行态，明确提示“已生效但未保存”。声明式符号链接或只读目标允许读取，但不被替换。应用与保存失败通过共享右上角通知气泡反馈，不插入设置页内容，也不另设全宽保存底栏。
 - Files 状态：`$XDG_STATE_HOME/gds/files/state.sqlite`，默认 `~/.local/state/gds/files/state.sqlite`。`locations` 保存收藏、最近访问和固定位置，远程 URI 使用独立记录；`view_settings` 保存应用默认值与各位置的列布局、列宽、排序、详情栏开关和列表／网格模式。列编辑器默认只作用于当前位置；“本应用默认”在同一 Toasty 事务中更新数据库默认列并清除当前位置的列覆盖，其它视图字段保留。`settings.toml` 保存主题、字体、语言、隐藏文件、侧栏等应用偏好，列与视图状态统一由 SQLite 管理。
 - Agents 的连接历史缓存继续位于 `$XDG_CACHE_HOME/gds/agents/history-v1/history.sqlite`（默认 `~/.cache/gds/agents/history-v1/history.sqlite`）。数据库执行接入公共 `service::storage`，窗口边界、连接命名空间和 512 MiB 淘汰策略仍由 Agents 管理；缓存可删除重建，不与 Files 的持久状态共库。
 - GNOME 系统来源通过隔离的 Python/PyGObject 进程读取 GTK 3 实际解析出的主题角色，监听 dconf 与用户 GTK 配置；不维护硬编码 Adwaita 色板。详见 [主题来源](vistual-language/theme.md#gnome)。
@@ -394,4 +395,8 @@ GDS_TERMINAL=alacritty cargo run --bin gds-files --features files
 
 日常检查使用 `just fmt-check`、`just check` 和 `just test`；只检查某个应用时显式传入其 feature 和 binary target。需要 GPUI 测试支持的回归使用 `gui-tests`。编译、单元测试与无显示服务器的 GPUI 测试不能代替目标桌面的输入、IME、父窗口和材质验收。
 
+Files 的关键流程使用 `just test-files` 在独立 Wayland 会话中验证，保留截图、日志、实际文件及源码快照。测试范围、运行方式和保留单元测试的理由见 [Files testing](apps/files/testing.md)。
+
 文件操作和配置写入的验证使用独立临时目录与 XDG 环境。一次性验证脚本、日志、截图和逐轮结果不纳入项目文档。文档描述当前行为、接口与限制；数据库和配置的运行时迁移机制仍按其兼容契约维护。
+
+Files 的目录 watcher 合并带路径的事件批次，忽略访问事件，普通变化只 inspect 涉及的条目；溢出、未知事件和目录自身变化才重新枚举。后台结果用导航 revision 校验，不能覆盖后来的导航。应用批次不进入加载状态，不重置滚动、选择、历史或展开状态；按可见范围与列的格式化值判断是否需要通知，列表元数据变化只通知表格。未显示的数据仍更新模型，滚动时读取最新行。

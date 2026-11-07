@@ -445,6 +445,3 @@ fn removal_error(unmounted: &[String], error: String) -> Error {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

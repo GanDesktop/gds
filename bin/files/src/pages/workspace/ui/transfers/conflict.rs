@@ -75,10 +75,11 @@ impl ConflictDialog {
             let on_ok = Self::confirm(this.clone());
             let on_close = Self::close(this.clone());
             let form = this.form.clone();
-            let footer = DialogActions::default()
-                .primary_label(i18n::text("paste-files", cx))
-                .primary_icon(IconName::ClipboardPaste)
-                .cancel_label(i18n::text("operation-cancel", cx));
+            let footer = el! { .DialogActions::default {
+                primary_label: $(i18n::text("paste-files", cx));
+                primary_icon: IconName::ClipboardPaste;
+                cancel_label: $(i18n::text("operation-cancel", cx));
+            } };
             let mut arguments = FluentArgs::new();
             arguments.set("name", this.conflict.target_label());
             el! {

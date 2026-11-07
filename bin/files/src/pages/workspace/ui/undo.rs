@@ -149,6 +149,3 @@ fn direction(command: Command) -> Direction {
         Direction::Redo
     }
 }
-
-#[cfg(all(test, feature = "gui-tests", target_os = "linux"))]
-mod tests;

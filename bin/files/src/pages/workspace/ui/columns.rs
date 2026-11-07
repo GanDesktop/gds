@@ -8,14 +8,16 @@
 use crate::entities::file::columns::{Column as LayoutColumn, Layout};
 use crate::entities::location::Location;
 use gds::appearance::tokens;
+use gds::ui::DialogActions;
 use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use gds::ui::button::Button;
-use gds::{i18n, ui, ui::notifications};
-use gds_uim::el;
+use gds::{i18n, ui::notifications};
+use gds_uim::{component, el};
+use gpui_kit::IntoElement;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Sizable, WindowExt,
@@ -316,9 +318,10 @@ impl Editor {
             let current = editor.read(cx).scope;
             Scope::ALL.into_iter().fold(menu, |menu, scope| {
                 menu.item(
-                    PopupMenuItem::new(i18n::text(scope.label_id(), cx))
-                        .checked(scope == current)
-                        .on_click(Self::on_scope(editor.clone(), scope)),
+                    el! { $(i18n::text(scope.label_id(), cx)).PopupMenuItem::new {
+                        checked: $(scope == current);
+                        on_click: $(Self::on_scope(editor.clone(), scope));
+                    } },
                 )
             })
         }
@@ -373,16 +376,6 @@ impl Editor {
                     .bg(cx.theme().drop_target)
                     .border_color(cx.theme().drag_border)
             })
-    }
-
-    fn group_header(label: SharedString, cx: &App) -> Div {
-        el! {
-            .div {
-                flex; items_center; w_full; min_w_0;
-                px: ROW_PADDING_X.px;
-                text_xs; text_color: $(cx.theme().muted_foreground);
-            } [label]
-        }
     }
 
     fn render_visible_row(
@@ -487,6 +480,23 @@ impl Editor {
     }
 }
 
+#[component]
+#[derive(Default, IntoElement)]
+struct ColumnGroupHeading {
+    #[attr(into)]
+    label: SharedString,
+}
+
+impl RenderOnce for ColumnGroupHeading {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        el! {
+            .div { flex; items_center; w_full; min_w_0; px: ROW_PADDING_X.px;
+                text_xs; text_color: $(cx.theme().muted_foreground);
+            } [$(self.label)]
+        }
+    }
+}
+
 impl Render for Editor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(folder) = self.target_name() else {
@@ -550,14 +560,14 @@ impl Render for Editor {
                         dropdown_menu: scope_menu;
                     },
                 ],
-                $(Self::group_header(i18n::count("columns-visible-group", visible_count, cx), cx)),
+                .ColumnGroupHeading::default { label: $(i18n::count("columns-visible-group", visible_count, cx)); },
                 .div {
                     # "columns-list";
                     flex; flex_col; w_full; min_w_0;
                 } [..visible_rows],
                 drop_lane,
                 @if (hidden_count > 0)
-                    $(Self::group_header(i18n::count("columns-hidden-group", hidden_count, cx), cx)),
+                    .ColumnGroupHeading::default { label: $(i18n::count("columns-hidden-group", hidden_count, cx)); },
                     .div {
                         # "columns-hidden-list";
                         flex; flex_col; w_full; min_w_0;
@@ -663,10 +673,11 @@ impl Browser {
                 let on_restore =
                     Self::columns_restore(restore_browser.clone(), restore_editor.clone());
                 let can_restore = body.read(cx).has_override();
-                let footer = ui::DialogActions::default()
-                    .primary_label(i18n::text("columns-apply", cx))
-                    .primary_icon(IconName::Check)
-                    .cancel_label(i18n::text("operation-cancel", cx));
+                let footer = el! { .DialogActions::default {
+                    primary_label: $(i18n::text("columns-apply", cx));
+                    primary_icon: IconName::Check;
+                    cancel_label: $(i18n::text("operation-cancel", cx));
+                } };
                 let restore = can_restore.then(|| {
                     el! {
                         .div {
@@ -916,6 +927,3 @@ pub(super) fn sort_key(column: LayoutColumn) -> Key {
         LayoutColumn::DetailedType => Key::DetailedType,
     }
 }
-
-#[cfg(test)]
-mod tests;

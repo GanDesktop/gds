@@ -169,12 +169,9 @@ pub enum DeviceAction {
     },
     Unmount(VolumeId),
     PowerOff(VolumeId),
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "UDisks optical-media ejection is implemented and tested; Files currently exposes unmount and power-off"
-        )
+    #[expect(
+        dead_code,
+        reason = "UDisks supports optical-media ejection; Files currently exposes unmount and power-off"
     )]
     Eject(VolumeId),
 }

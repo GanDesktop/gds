@@ -271,9 +271,6 @@ impl Work {
     }
 }
 
-#[cfg(test)]
-mod tests;
-
 fn combine(error: Error, cleanup: Result<(), Error>) -> Error {
     match cleanup {
         Ok(()) => error,

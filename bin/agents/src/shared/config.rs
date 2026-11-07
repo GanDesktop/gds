@@ -18,7 +18,7 @@ pub(crate) fn init(settings_file: Option<PathBuf>, cx: &mut App) {
         directories::BaseDirs::new()
             .map(|dirs| dirs.config_dir().to_owned())
             .unwrap_or_else(|| PathBuf::from(".config"))
-            .join("gds/agents/settings.json")
+            .join("gds/app/agents/settings.json")
     });
     cx.set_global(Configuration(Store::new(Some(settings_file))));
 }

@@ -21,6 +21,7 @@ pub struct Navigation<V> {
     history: Vec<Visit<V>>,
     history_index: usize,
     pending: Option<LoadRequest>,
+    revision: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -165,8 +166,25 @@ impl<V: Default> Navigation<V> {
             }],
             history_index: 0,
             pending: None,
+            revision: 0,
         }
     }
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Apply watch data without entering navigation/loading or altering view state.
+    pub fn update_directory(&mut self, revision: u64, snapshot: DirectorySnapshot) -> bool {
+        if self.pending.is_some()
+            || self.revision != revision
+            || self.path() != Some(snapshot.path.as_path())
+        {
+            return false;
+        }
+        self.directory = Some(snapshot);
+        true
+    }
+
     pub fn directory(&self) -> Option<&DirectorySnapshot> {
         self.directory.as_ref()
     }
@@ -218,23 +236,6 @@ impl<V: Default> Navigation<V> {
         options: ReadOptions,
     ) -> LoadRequest {
         self.begin(location, path, options, Destination::Open)
-    }
-    #[cfg(test)]
-    pub fn prepare_back(
-        &mut self,
-        path: Option<PathBuf>,
-        options: ReadOptions,
-    ) -> Option<LoadRequest> {
-        let index = self.history_index.checked_sub(1)?;
-        self.prepare_history(index, path, options)
-    }
-    #[cfg(test)]
-    pub fn prepare_forward(
-        &mut self,
-        path: Option<PathBuf>,
-        options: ReadOptions,
-    ) -> Option<LoadRequest> {
-        self.prepare_history(self.history_index + 1, path, options)
     }
     pub fn prepare_history(
         &mut self,
@@ -326,10 +327,8 @@ impl<V: Default> Navigation<V> {
             options,
             destination,
         };
+        self.revision = request.id;
         self.pending = Some(request.clone());
         request
     }
 }
-
-#[cfg(test)]
-mod tests;

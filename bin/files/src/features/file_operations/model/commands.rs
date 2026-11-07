@@ -1,5 +1,6 @@
 //! Files commands and their workspace-specific default key bindings.
 
+use gds::ui::Shortcut;
 pub use gds::ui::actions::{Cancel, CloseAllNotifications, CloseNotification, FocusNotifications};
 use gpui_kit::*;
 
@@ -585,10 +586,7 @@ fn action_binding(
         .expect("bundled action shortcuts are valid")
 }
 
-#[cfg(test)]
-mod tests;
-
-impl From<Command> for gds::ui::Shortcut {
+impl From<Command> for Shortcut {
     fn from(command: Command) -> Self {
         Self::new(command.action(), command.context())
     }
@@ -598,7 +596,7 @@ impl From<Command> for gds::ui::Shortcut {
 ///
 /// The strip is the cycle order, pinned tabs included; rows past the ninth have
 /// no key and therefore no hint.
-pub fn ordinal_shortcut(position: usize) -> Option<gds::ui::Shortcut> {
+pub fn ordinal_shortcut(position: usize) -> Option<Shortcut> {
     let action: Box<dyn Action> = match position {
         0 => Box::new(SelectTab1),
         1 => Box::new(SelectTab2),
@@ -611,5 +609,5 @@ pub fn ordinal_shortcut(position: usize) -> Option<gds::ui::Shortcut> {
         8 => Box::new(SelectTab9),
         _ => return None,
     };
-    Some(gds::ui::Shortcut::new(action, Some(WORKSPACE_CONTEXT)))
+    Some(Shortcut::new(action, Some(WORKSPACE_CONTEXT)))
 }

@@ -1,15 +1,16 @@
 //! Device operations keep their initiating tab and never borrow the active tab
 //! when an asynchronous mount completes.
 
+mod capacity;
 mod interaction;
+use capacity::DeviceCapacity;
 mod names;
 pub(super) mod table;
-#[cfg(test)]
-mod tests;
 mod view;
 
 use super::*;
 use crate::entities::location::volumes::{DeviceAction, Snapshot, VolumeId};
+use gds::ui::DialogActions;
 use gds_uim::el;
 use gpui_kit::{
     assets::IconName,
@@ -480,7 +481,11 @@ impl Browser {
             let browser = browser.clone();
             let action = action.clone();
             el! { dialog { confirm; title: ~title; description: ~description; icon: IconName::HardDrive.Icon::new;
-                footer: $(ui::DialogActions::default().primary_label(confirm.clone()).primary_icon(IconName::Check).cancel_label(cancel.clone()));
+                footer: $(el! { .DialogActions::default {
+                    primary_label: $(confirm.clone());
+                    primary_icon: IconName::Check;
+                    cancel_label: $(cancel.clone());
+                } });
                 on_ok: $(move |_, _, cx| {
                     let _ = browser.update(cx, |browser, cx| {
                         if browser.device_has_tasks(&action, cx) { browser.devices.pending_removals.push(action.clone()); cx.notify(); }

@@ -46,8 +46,13 @@ Archive files use external applications through the usual open/open-with flow. B
 
 ## Settings and diagnostics
 
-Open settings from the application menu or Ctrl+,. Changes apply immediately and save automatically; each field has its own default. Preferences apply only to Files. Settings are stored in `$XDG_CONFIG_HOME/gds/files/settings.toml`; location and view state are in `$XDG_STATE_HOME/gds/files/state.sqlite`. Managed symlinks and read-only settings are protected from replacement; save failures are reported separately from changes already applied in memory.
+Open settings from the application menu or Ctrl+,. Changes apply immediately and save automatically; each field has its own default. Preferences apply only to Files. Settings are stored in `$XDG_CONFIG_HOME/gds/app/files/settings.toml`; location and view state are in `$XDG_STATE_HOME/gds/files/state.sqlite`. Managed symlinks and read-only settings are protected from replacement; save failures are reported separately from changes already applied in memory.
 
 Pass `--enable-logs` to enable the in-memory log viewer, available from the menu or Ctrl+Shift+L. Logs stay within the process and are not written to disk. Ordinary error notifications remain available without this flag.
 
 Developer architecture and commands are in [development](../../development.md). Visual and focus rules are defined by the shared [visual language](../../vistual-language/README.md) and [shortcuts](../../vistual-language/shortcuts.md).
+
+
+Custom themes are shared with Agents under `$XDG_CONFIG_HOME/gds/themes/` (default `~/.config/gds/themes/`). Copy the repository's `src/appearance/theme/provider/builtin/assets/bamboo.toml` there, edit its `[light]` and `[dark]` colors, then reopen Appearance settings and select the file from the theme source list. Subdirectories are supported. Changes to the selected theme reload automatically; invalid edits keep the last valid palette. Each application keeps its own theme selection and opacity settings.
+
+Directory monitoring reconciles changed paths in the background without restarting navigation. Writes that do not change visible labels, icons, previews, selection information, or ordering do not redraw the workspace. Changed metadata can update the table alone; entry additions, removals, and reordering preserve selection and scroll position by path.

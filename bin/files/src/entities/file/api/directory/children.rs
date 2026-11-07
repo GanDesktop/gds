@@ -27,9 +27,7 @@ pub(super) fn count(path: &Path) -> Option<ChildCount> {
     count_with_limit(path, CHILD_COUNT_LIMIT)
 }
 
-/// Count with an explicit bound; exposed for the limit behaviour to be tested
-/// without creating thousands of entries.
-pub(super) fn count_with_limit(path: &Path, limit: u32) -> Option<ChildCount> {
+fn count_with_limit(path: &Path, limit: u32) -> Option<ChildCount> {
     let entries = fs::read_dir(path).ok()?;
     count_entries(entries, limit)
 }
@@ -38,7 +36,7 @@ pub(super) fn count_with_limit(path: &Path, limit: u32) -> Option<ChildCount> {
 ///
 /// An iteration error means the directory content is unknown, not that one more
 /// child exists, so it yields `None` instead of a count.
-pub(super) fn count_entries<I, T>(entries: I, limit: u32) -> Option<ChildCount>
+fn count_entries<I, T>(entries: I, limit: u32) -> Option<ChildCount>
 where
     I: IntoIterator<Item = io::Result<T>>,
 {

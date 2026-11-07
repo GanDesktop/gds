@@ -255,9 +255,10 @@ impl Browser {
                 let save = editor.clone();
                 let cancel = editor.clone();
                 let close = editor.clone();
-                let footer = DialogActions::default()
-                    .primary_label(i18n::text("permissions-save", cx))
-                    .cancel_label(i18n::text("operation-cancel", cx));
+                let footer = el! { .DialogActions::default {
+                    primary_label: $(i18n::text("permissions-save", cx));
+                    cancel_label: $(i18n::text("operation-cancel", cx));
+                } };
                 let on_ok = move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                     save.update(cx, |editor, cx| editor.save(window, cx));
                     false

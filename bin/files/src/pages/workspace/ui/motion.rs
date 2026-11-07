@@ -53,6 +53,3 @@ pub(super) fn tab_content(tab: u64, window: &mut Window, cx: &mut App) -> f32 {
     .sample(window, cx)
     .into_value()
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

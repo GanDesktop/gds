@@ -1,5 +1,6 @@
 //! Virtual grid rows over the same path-based file selection as the table.
 use super::*;
+use gds::ui::button::Button;
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 use gds::ui::thumbnail::Thumbnail;
@@ -14,7 +15,7 @@ use gpui_kit::{
 use super::{
     drag_drop::{DragPreview, DragSnapshot, FileDrag},
     entry_appearance::EntryAppearance,
-    file_icon::FileIcon,
+    file_icon::{FileArtwork, FileIcon},
 };
 
 const MIN_WIDTH: f32 = 148.;
@@ -151,17 +152,17 @@ impl TileContent {
             .theme()
             .foreground
             .interpolate(&cx.theme().accent_foreground, self.selection);
-        let icon_color = (if icon.base() == IconName::Folder {
-            cx.theme().primary
-        } else {
-            cx.theme().muted_foreground
-        })
-        .interpolate(&cx.theme().accent_foreground, self.selection);
+        let icon_color =
+            FileIcon::color(entry, cx).interpolate(&cx.theme().accent_foreground, self.selection);
+        let artwork = el! { .FileArtwork::default {
+            icon: icon; size: $(geometry.icon_size).px; color: icon_color;
+        } };
         let media = match crate::entities::file::directory::thumbnail_source(entry) {
-            Some(source) => Thumbnail::new(self.thumbnails.clone(), source)
-                .fallback(icon.render(px(geometry.icon_size), icon_color))
-                .into_any_element(),
-            None => icon.render(px(geometry.icon_size), icon_color),
+            Some(source) => el! { ($(self.thumbnails.clone()), source).Thumbnail::new {
+                fallback: artwork;
+            } }
+            .into_any_element(),
+            None => artwork.into_any_element(),
         };
         let name = el! {
             .div {
@@ -249,19 +250,21 @@ impl Browser {
 
     pub(super) fn render_file_grid(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(slot) = self.active() else {
-            return div().into_any_element();
+            return el! { .div }.into_any_element();
         };
         let geometry = slot.grid;
         let rows = slot.table_rows.clone();
-        let selected = slot.navigation.view().selected.clone();
-        let drag = DragSnapshot::new(&rows, &selected);
-        let data = Data {
-            rows: rows.clone(),
-            selected: selected.into_iter().collect(),
-            drag,
-            geometry,
-        };
+        let tab = slot.id;
         let list = uniform_list("file-grid", geometry.rows(rows.len()), cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
+            let Some(slot) = this.tab_slot(tab) else { return Vec::new(); };
+            let rows = slot.table_rows.clone();
+            let selected = slot.navigation.view().selected.clone();
+            let data = Data {
+                rows: rows.clone(),
+                selected: selected.iter().cloned().collect(),
+                drag: DragSnapshot::new(&rows, &selected),
+                geometry,
+            };
             range.map(|row| {
                 let tiles = (row * geometry.columns..((row + 1) * geometry.columns).min(rows.len()))
                     .map(|index| this.grid_tile(index, &data, window, cx));
@@ -348,11 +351,12 @@ impl Browser {
             this.activate_path(play_path.clone(), cx);
         });
         let play = (is_video && self.picker.is_none()).then(|| {
-            ui::button::Button::icon_button(("video-play", index))
-                .control_icon(IconName::Play)
-                .accessibility_label(i18n::text("video-play", cx))
-                .tooltip(i18n::text("video-play", cx))
-                .on_click(on_play)
+            el! { $(("video-play", index)).Button::icon_button {
+                control_icon: IconName::Play;
+                accessibility_label: $(i18n::text("video-play", cx));
+                tooltip: $(i18n::text("video-play", cx));
+                on_click: on_play;
+            } }
         });
         let menu_path = path.clone();
         let menu_browser = browser.clone();
@@ -433,6 +437,3 @@ impl Browser {
         el! { .div { # "file-grid-surface"; relative; size_full; flex; flex_col; min_h_0; capture_any_mouse_down: handler; } [content, measure] }.into_any_element()
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -148,7 +148,7 @@ mode = "system"
 
 ## 6. 持久化与托管配置
 
-Files 保存到 `$XDG_CONFIG_HOME/gds/files/settings.toml`，Agents 保存到自己的前端配置；不存在套件全局外观同步。应用真实变化后自动保存，失败通过共享通知报告。
+Files 保存到 `$XDG_CONFIG_HOME/gds/app/files/settings.toml`，Agents 保存到自己的前端配置；不存在套件全局外观同步。应用真实变化后自动保存，失败通过共享通知报告。
 
 声明式符号链接与只读文件允许读取，但不会被替换或覆盖。运行态修改已成功、写入失败时明确报告“已生效但未保存”。外部主题文件始终只读；GDS 不替用户安装 DMS、Qt 插件或修改会话环境。
 
@@ -177,3 +177,24 @@ Both appearance pages offer **Rounded window corners**, disabled by default.
 immediately. Linux client-side frames use the shared 10 px radius, including their
 content clip and input region. Maximized/fullscreen windows and corners touching a
 tiled edge stay square; server-side decorations remain desktop-owned.
+
+
+## 用户主题与配置目录
+
+共享用户主题位于 `$XDG_CONFIG_HOME/gds/themes/`（默认 `~/.config/gds/themes/`），Files 与 Agents 的配置分别位于 `gds/app/files/settings.toml` 和 `gds/app/agents/settings.json`。运行时只读写新配置路径，不查找或迁移历史路径。应用的 XDG state/cache 路径不受此调整影响。
+
+用户主题复用内置主题的 TOML 格式，包含完整的 `[light]` 与 `[dark]` 配色角色，颜色为 `#RRGGBB`；可复制 `src/appearance/theme/provider/builtin/assets/bamboo.toml` 开始编辑。两款应用的外观来源列表展示主题目录内的 TOML 文件（包括子目录），用户选择保存的是相对主题目录的路径。新增文件后重新打开设置；编辑已选中的文件会触发热加载，非法配色保留最后有效主题并报告错误。用户主题的亮暗选择与表面透明度继续由各应用独立设置。
+
+Files 配置示例：
+
+```toml
+[appearance]
+source = { custom = "personal/my-theme.toml" }
+mode = "system"
+```
+
+Agents 配置中的对应字段：
+
+```json
+{"appearance": {"theme_source": {"custom": "personal/my-theme.toml"}}}
+```

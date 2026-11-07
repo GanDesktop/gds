@@ -1,9 +1,11 @@
 use super::*;
 use crate::entities::location::volumes::{DeviceKind, Volume};
 use gds::appearance::tokens;
+use gds::ui::ListSurface;
 use gds::ui::page::*;
-use gds::ui::{ContentPage, IconButton, NavItem, capacity::CapacityBar};
+use gds::ui::{ContentPage, IconButton, NavItem};
 use gds_uim::el;
+use gpui_kit::component::table::DataTable;
 use gpui_kit::component::{
     Sizable,
     button::{Button, ButtonVariants},
@@ -85,24 +87,6 @@ impl Browser {
         i18n::format("device-capacity", Some(&args), cx)
     }
 
-    pub(super) fn capacity_bar(
-        id: String,
-        state: Option<&storage::CapacityState>,
-        compact: bool,
-        cx: &App,
-    ) -> CapacityBar {
-        match state {
-            Some(storage::CapacityState::Ready(capacity)) => CapacityBar::new(id)
-                .label(Self::capacity_label(*capacity, cx))
-                .value(capacity.unavailable_fraction()),
-            Some(storage::CapacityState::Unavailable(_)) => CapacityBar::new(id)
-                .label(i18n::text("device-capacity-unavailable", cx))
-                .unavailable(),
-            _ => CapacityBar::new(id).label(i18n::text("device-capacity-loading", cx)),
-        }
-        .compact(compact)
-    }
-
     fn render_sidebar_volume(
         &self,
         volume: &Volume,
@@ -125,41 +109,32 @@ impl Browser {
                 } [$i18n::text("device-not-mounted", cx)]
             }.into_any_element())
         } else {
-            let bar = Self::capacity_bar(
-                format!("{id}-capacity"),
-                self.devices.service.read(cx).capacity(&volume.id),
-                presentation.width() < 120.,
-                cx,
-            )
-            .selected(selected);
+            let bar = el! { .DeviceCapacity::default {
+                # format!("{id}-capacity");
+                state: $(self.devices.service.read(cx).capacity(&volume.id).cloned());
+                compact: $(presentation.width() < 120.); selected: selected;
+            } };
             Some(
                 el! { .div { px: GAP.px; w_full; min_w_0; overflow_hidden; } [bar] }
                     .into_any_element(),
             )
         };
-        let nav = NavItem::new(
-            id.clone(),
-            device_icon(volume, snapshot),
-            volume.name.clone(),
-        )
-        .tooltip_text(self.volume_details(volume, cx))
-        .tooltip_enabled(
-            self.menus.context.is_none()
+        let nav = el! { ($(id.clone()), $(device_icon(volume, snapshot)), $(volume.name.clone())).NavItem::new {
+            tooltip_text: $(self.volume_details(volume, cx));
+            tooltip_enabled: $(self.menus.context.is_none()
                 && self
                     .menus
                     .volume_focus
                     .as_ref()
-                    .is_none_or(|focus| !focus.contains_focused(window, cx)),
-        )
-        .presentation(presentation)
-        .selected(selected)
-        .on_click(cx.listener(Self::click_volume(volume.id.clone())))
-        .when_some(details, |nav, details| nav.details(details))
-        .trailing(
-            busy.then(|| Spinner::new().small().into_any_element())
+                    .is_none_or(|focus| !focus.contains_focused(window, cx)));
+            presentation: presentation;
+            selected: selected;
+            on_click: $(cx.listener(Self::click_volume(volume.id.clone())));
+            when_some: details, $(|nav, details| nav.details(details));
+            trailing: $(busy.then(|| Spinner::new().small().into_any_element())
                 .into_iter()
-                .collect(),
-        );
+                .collect());
+        } };
         let cursor = ui::region::is_focus_visible(&self.sidebar.regions.volumes, window)
             && self.sidebar.regions.volume.as_ref() == Some(&volume.id);
         el! { .div { # id; relative; w_full; flex_shrink_0 } [nav,
@@ -224,18 +199,17 @@ impl Browser {
             let target = browser.clone();
             let open_id = id.clone();
             let render = menu_row(i18n::text("open", cx), Some(Command::Open));
-            menu = menu.item(
-                PopupMenuItem::element(render)
-                    .icon(IconName::Folder)
-                    .disabled(!available)
-                    .on_click(move |_, window, cx| {
-                        let _ = target.update(cx, |view, cx| {
-                            if view.volume_can_open(&open_id, cx) {
-                                view.show_volume(open_id.clone(), window, cx);
-                            }
-                        });
-                    }),
-            );
+            menu = menu.item(el! { render.PopupMenuItem::element {
+                icon: IconName::Folder;
+                disabled: $(!available);
+                on_click: $(move |_, window, cx| {
+                    let _ = target.update(cx, |view, cx| {
+                        if view.volume_can_open(&open_id, cx) {
+                            view.show_volume(open_id.clone(), window, cx);
+                        }
+                    });
+                });
+            } });
         }
         if self.volume_can_rename(id, cx) {
             let target = browser.clone();
@@ -244,15 +218,14 @@ impl Browser {
                 i18n::text("rename", cx),
                 target_matches.then_some(Command::Rename),
             );
-            menu = menu.item(
-                PopupMenuItem::element(render)
-                    .icon(IconName::TextCursor)
-                    .on_click(move |_, window, cx| {
-                        let _ = target.update(cx, |view, cx| {
-                            view.request_volume_rename(rename_id.clone(), window, cx);
-                        });
-                    }),
-            );
+            menu = menu.item(el! { render.PopupMenuItem::element {
+                icon: IconName::TextCursor;
+                on_click: $(move |_, window, cx| {
+                    let _ = target.update(cx, |view, cx| {
+                        view.request_volume_rename(rename_id.clone(), window, cx);
+                    });
+                });
+            } });
         }
         let command = if volume.mount_points.is_empty() {
             Command::MountVolume
@@ -267,20 +240,19 @@ impl Browser {
             target_matches.then_some(command),
         );
         let id = id.clone();
-        menu.item(
-            PopupMenuItem::element(render)
-                .icon(if command == Command::MountVolume {
-                    IconName::Plug
-                } else {
-                    IconName::Unplug
-                })
-                .disabled(!enabled)
-                .on_click(move |_, window, cx| {
-                    let _ = browser.update(cx, |view, cx| {
-                        view.execute_volume_command(id.clone(), command, window, cx)
-                    });
-                }),
-        )
+        menu.item(el! { render.PopupMenuItem::element {
+            icon: $(if command == Command::MountVolume {
+                IconName::Plug
+            } else {
+                IconName::Unplug
+            });
+            disabled: $(!enabled);
+            on_click: $(move |_, window, cx| {
+                let _ = browser.update(cx, |view, cx| {
+                    view.execute_volume_command(id.clone(), command, window, cx)
+                });
+            });
+        } })
     }
 
     pub(super) fn prepare_volume_open(menu: &PopupMenu, window: &mut Window, cx: &App) {
@@ -317,15 +289,14 @@ impl Browser {
                 let target = browser.clone();
                 let id = id.clone();
                 let checked = selected.as_ref() == Some(&root);
-                menu = menu.item(
-                    PopupMenuItem::new(root.display().to_string())
-                        .checked(checked)
-                        .on_click(move |_, _, cx| {
-                            let _ = target.update(cx, |view, cx| {
-                                view.set_default_volume_root(&id, root.clone(), cx)
-                            });
-                        }),
-                );
+                menu = menu.item(el! { $(root.display().to_string()).PopupMenuItem::new {
+                    checked: checked;
+                    on_click: $(move |_, _, cx| {
+                        let _ = target.update(cx, |view, cx| {
+                            view.set_default_volume_root(&id, root.clone(), cx)
+                        });
+                    });
+                } });
             }
             menu
         }
@@ -376,7 +347,7 @@ impl Browser {
         let on_unmount = cx.listener(Self::click_command(Command::UnmountVolume));
         let on_refresh = cx.listener(Self::click_command(Command::Refresh));
         let table = el! {
-            ($&self.devices.table).gpui_kit::component::table::DataTable::new {
+            ($&self.devices.table).DataTable::new {
                 bordered: false; with_size: $(gpui_kit::component::Size::Size(px(tokens::DataListStyle::ROW_HEIGHT)));
                 header_row_height: tokens::DataListStyle::HEADER_HEIGHT.px;
                 into_any_element;
@@ -391,17 +362,15 @@ impl Browser {
             .borrow()
             .base_handle
             .clone();
-        let area = PageTableArea::default()
-            .id("volume-table-area")
-            .child(table);
-        let list = ui::ListSurface::new(
-            "volume-selection-surface",
-            area.into_any_element(),
-            row_count,
-            scroll,
-        )
-        .inset_x(px(ContentPage::TABLE_INSET))
-        .on_blank_press(cx.listener(Self::on_list_background_press));
+        let area = el! { .PageTableArea::default {
+            # "volume-table-area";
+        } [
+            table,
+        ] };
+        let list = el! { ("volume-selection-surface", $(area.into_any_element()), row_count, scroll).ListSurface::new {
+            inset_x: $(px(ContentPage::TABLE_INSET));
+            on_blank_press: $(cx.listener(Self::on_list_background_press));
+        } };
         let actions = vec![
             el! { "rename-volume".IconButton::new { icon: IconName::TextCursor; label: $i18n::text("rename", cx); command: Command::Rename; disabled: $(!can_rename); on_click: on_rename } }.into_any_element(),
             el! { "mount-volume".IconButton::new { icon: IconName::Plug; label: $i18n::text("device-mount", cx); command: Command::MountVolume; disabled: $(!can_mount); on_click: on_mount } }.into_any_element(),

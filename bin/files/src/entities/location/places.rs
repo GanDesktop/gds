@@ -135,6 +135,10 @@ impl Places {
     pub(crate) fn set_favorite(&mut self, location: Location, present: bool) {
         self.change(Change::Favorite { location, present });
     }
+    pub(crate) fn reorder_pinned(&mut self, paths: Vec<std::ffi::OsString>) {
+        self.change(Change::PinOrder(paths));
+    }
+
     pub(crate) fn set_pinned(&mut self, path: &Path, present: bool) {
         self.change(Change::Pin {
             path: path.into(),

@@ -228,7 +228,7 @@ columns-apply = Apply
 columns-restore = Use this application's default columns
 columns-save-failed = Column settings are active but could not be saved: { $error }
 columns-state-unavailable = Saved state could not be read, so column settings were not saved.
-picker-filter = File type
+picker-file-type = File type
 picker-next-filter = Switch to the next file type
 picker-all-files = All files
 picker-read-only = Open read-only
@@ -260,7 +260,7 @@ view-toggle = Switch grid/list view
 video-play = Play video
 
 picker-save = Save
-picker-name = File name
+picker-file-name = File name
 picker-overwrite-title = Replace existing file?
 picker-overwrite-message = This location already contains this file. The application will be allowed to replace it.
 

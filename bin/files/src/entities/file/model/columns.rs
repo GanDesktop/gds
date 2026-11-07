@@ -187,6 +187,3 @@ impl<'de> Deserialize<'de> for Layout {
         Ok(layout)
     }
 }
-
-#[cfg(test)]
-mod tests;

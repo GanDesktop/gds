@@ -8,7 +8,9 @@
 use std::ffi::OsString;
 
 use gds::i18n;
-use gds_uim::el;
+use gds::ui::field::input as input_field;
+use gds_uim::{component, el};
+use gpui_kit::IntoElement;
 use gpui_kit::{
     component::{
         ActiveTheme,
@@ -105,8 +107,8 @@ impl NameForm {
 }
 
 impl Render for NameForm {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        field(&self.input, self.error.as_ref(), cx)
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        el! { .NameField::default { input: $(self.input.clone()); error: $(self.error.clone()); } }
     }
 }
 
@@ -118,19 +120,26 @@ pub(super) fn focus(input: &Entity<InputState>, window: &mut Window, cx: &mut Ap
 }
 
 /// One name field with its validation message underneath.
-pub(super) fn field(
-    input: &Entity<InputState>,
-    error: Option<&SharedString>,
-    cx: &App,
-) -> impl IntoElement {
-    let input = input.clone();
-    let error = error.cloned();
-    el! {
-        .div { flex; flex_col; w_full; min_w_0; gap: DIALOG_GAP.px } [
-            .div { w_full; min_w_0 } [($&input, cx).gds::ui::field::input { w_full }],
-            @if (let Some(error) = error)
-                .div { text_xs; text_color: $cx.theme().danger } [error],
-            @end,
-        ]
+#[component]
+#[derive(Default, IntoElement)]
+pub(super) struct NameField {
+    #[attr(option)]
+    input: Option<Entity<InputState>>,
+    #[attr]
+    error: Option<SharedString>,
+}
+
+impl RenderOnce for NameField {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        el! {
+            .div { flex; flex_col; w_full; min_w_0; gap: DIALOG_GAP.px } [
+                @if (let Some(input) = self.input)
+                    .div { w_full; min_w_0 } [($&input, cx).input_field { w_full }],
+                @end,
+                @if (let Some(error) = self.error)
+                    .div { text_xs; text_color: $cx.theme().danger } [error],
+                @end,
+            ]
+        }
     }
 }

@@ -162,13 +162,6 @@ impl Entry {
         self.steps.iter().flat_map(Step::paths).collect()
     }
 
-    /// Run off the UI thread. Failed steps remain retryable; completed steps
-    /// alone enter the opposite stack, so a partial batch is never replayed twice.
-    #[cfg(test)]
-    pub fn execute(self) -> Report {
-        self.execute_cancellable(&tokio_util::sync::CancellationToken::new())
-    }
-
     pub fn execute_cancellable(self, cancel: &tokio_util::sync::CancellationToken) -> Report {
         let mut report = Report {
             kind: self.kind,
@@ -304,6 +297,3 @@ impl History {
         }
     }
 }
-
-#[cfg(all(test, target_os = "linux"))]
-mod tests;

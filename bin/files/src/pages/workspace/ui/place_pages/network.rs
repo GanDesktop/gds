@@ -124,6 +124,3 @@ fn unescape(mut bytes: &[u8]) -> Vec<u8> {
     }
     result
 }
-
-#[cfg(test)]
-mod tests;

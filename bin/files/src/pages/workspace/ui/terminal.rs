@@ -1,14 +1,17 @@
 //! The Files window owns terminal sessions independently of file locations.
 
 use gds::appearance::tokens;
+use gds::ui::IconButton;
+use gds::ui::sidebar::SideBarSectionTitle;
+use gds::ui::split::VerticalSplit;
 mod panel;
 
 use super::*;
+use gds::i18n::t;
+use gds::ui::Frame;
+use gds_uim::el;
 use gpui_kit::{assets::IconName, component::ActiveTheme, prelude::*};
 use panel::Panel;
-
-#[cfg(test)]
-mod tests;
 
 // Keep a tab, the optional volume group, and at least one location reachable.
 pub(super) const MIN_CONTENT_HEIGHT: f32 = sidebar::MIN_TABS_HEIGHT
@@ -285,141 +288,105 @@ impl Browser {
             cx,
         );
         let Some(dock) = self.terminal.dock.as_ref() else {
-            return ui::split::VerticalSplit::new(self.terminal.split.clone())
-                .top(workspace)
-                .bottom_progress(0.)
-                .into_any_element();
+            return el! { $(self.terminal.split.clone()).VerticalSplit::new {
+                top: workspace;
+                bottom_progress: 0.;
+            } }
+            .into_any_element();
         };
         let panel = dock.panel.clone();
         let maximized = self.terminal.maximized;
-        let maximize = ui::IconButton::new("files-terminal-maximize")
-            .icon(if maximized {
+        let maximize = el! { "files-terminal-maximize".IconButton::new {
+            icon: $(if maximized {
                 IconName::Minimize2
             } else {
                 IconName::Maximize2
-            })
-            .label(i18n::text(
+            });
+            label: $(i18n::text(
                 if maximized && self.terminal_visible() {
                     "files-terminal-restore"
                 } else {
                     "files-terminal-maximize"
                 },
                 cx,
-            ))
-            .on_click(cx.listener(Self::maximize_terminal));
+            ));
+            on_click: $(cx.listener(Self::maximize_terminal));
+        } };
         let width = self.width();
         panel.update(cx, |panel, cx| {
             panel.set_sidebar_presentation(self.sidebar.presentation, cx)
         });
-        let frame = ui::Frame::default().sidebar_width(width);
-        let title = gds::i18n::t!(@cx, "settings-terminal");
-        let heading = div()
-            .id("files-terminal-title")
-            .flex()
-            .items_center()
-            .h_full()
-            .min_w_0()
-            .px(px(tokens::SIDEBAR_PADDING))
-            .text_color(cx.theme().muted_foreground)
-            .pr(px(tokens::SIDEBAR_PADDING
-                + self
-                    .sidebar
-                    .presentation
-                    .interpolate(0., COLLAPSED_ACTION_INSET)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .opacity(self.sidebar.presentation.label_opacity())
-                    .child(
-                        ui::sidebar::SideBarSectionTitle::new(title)
-                            .px(px(tokens::SIDEBAR_SECTION_PADDING)),
-                    ),
-            )
-            .child(panel.update(cx, |panel, cx| panel.new_button(cx)));
+        let frame = el! { .Frame::default { sidebar_width: width; } };
+        let title = t!(@cx, "settings-terminal");
+        let new_button = panel.update(cx, |panel, cx| panel.new_button(cx));
+        let heading = el! {
+            .div {
+                # "files-terminal-title"; flex; items_center; h_full; min_w_0;
+                px: tokens::SIDEBAR_PADDING.px; text_color: $(cx.theme().muted_foreground);
+                pr: $(tokens::SIDEBAR_PADDING + self.sidebar.presentation.interpolate(0., COLLAPSED_ACTION_INSET)).px;
+            } [
+                .div { flex_1; min_w_0; overflow_hidden; opacity: $(self.sidebar.presentation.label_opacity()); } [
+                    title.SideBarSectionTitle::new { px: tokens::SIDEBAR_SECTION_PADDING.px; },
+                ],
+                new_button,
+            ]
+        };
         let active_title = panel.read(cx).active_title(cx);
         let title_hint = panel
             .read(cx)
             .active_hint(cx)
             .unwrap_or_else(|| ui::tooltip::Details::new(active_title.clone()));
-        let controls = div()
-            .flex()
-            .items_center()
-            .h_full()
-            .min_w_0()
-            .px(px(tokens::TERMINAL_CONTENT_INSET))
-            .gap_1()
-            .child(
-                div()
-                    .id("files-active-terminal-title")
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(tokens::SMALL)
-                    .hoverable_tooltip(move |window, cx| title_hint.view(window, cx))
-                    .child(active_title),
-            )
-            .child(
-                ui::IconButton::new("files-terminal-switch-directory")
-                    .icon(IconName::FolderInput)
-                    .label(i18n::text("files-terminal-switch-directory", cx))
-                    .disabled(
-                        self.collection().is_some()
-                            || self.terminal_cwd(cx).is_none()
-                            || !panel.read(cx).can_change_directory(cx),
-                    )
-                    .on_click(cx.listener(Self::switch_terminal_directory)),
-            )
-            .child(maximize);
-        let header = frame
-            .workspace(heading.into_any_element(), controls.into_any_element(), cx)
-            .flex_none()
-            .h(px(tokens::TERMINAL_HEADER_HEIGHT));
-        let dock = div()
-            .id("files-terminal-dock")
-            .key_context(TERMINAL_CONTEXT)
-            .track_focus(&self.terminal.focus)
-            .on_action(window.listener_for(&panel, Panel::on_new))
-            .on_action(window.listener_for(&panel, Panel::on_close))
-            .test_support()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .overflow_hidden()
-            .child(header)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(panel),
-            );
-        let divider = frame
-            .workspace(div().into_any_element(), div().into_any_element(), cx)
-            .flex_none()
-            .size_full();
-        ui::split::VerticalSplit::new(self.terminal.split.clone())
-            .top(if progress == 1. && maximized_progress == 1. {
-                div().into_any_element()
-            } else {
-                workspace
-            })
-            .bottom_progress(progress)
-            .bottom_maximized_progress(maximized_progress)
-            .bottom(if progress > 0. {
-                dock.into_any_element()
-            } else {
-                div().into_any_element()
-            })
-            .label(i18n::text("files-terminal-resize", cx))
-            .divider_background(divider)
-            .into_any_element()
+        let tooltip = move |window: &mut Window, cx: &mut App| title_hint.view(window, cx);
+        let controls = el! {
+            .div { flex; items_center; h_full; min_w_0; px: tokens::TERMINAL_CONTENT_INSET.px; gap_1; } [
+                .div {
+                    # "files-active-terminal-title"; flex_1; min_w_0; truncate;
+                    text_size: tokens::SMALL; hoverable_tooltip: tooltip;
+                } [active_title],
+                "files-terminal-switch-directory".IconButton::new {
+                    icon: IconName::FolderInput; label: $(i18n::text("files-terminal-switch-directory", cx));
+                    disabled: $(self.collection().is_some() || self.terminal_cwd(cx).is_none()
+                        || !panel.read(cx).can_change_directory(cx));
+                    on_click: $(cx.listener(Self::switch_terminal_directory));
+                },
+                maximize,
+            ]
+        };
+        let header = el! {
+            $(frame.workspace(heading.into_any_element(), controls.into_any_element(), cx)) {
+                flex_none; h: tokens::TERMINAL_HEADER_HEIGHT.px;
+            }
+        };
+        let dock = el! {
+            .div {
+                # "files-terminal-dock"; key_context: TERMINAL_CONTEXT; track_focus: $&self.terminal.focus;
+                on_action: $(window.listener_for(&panel, Panel::on_new));
+                on_action: $(window.listener_for(&panel, Panel::on_close));
+                test_support; flex; flex_col; flex_1; min_h_0; min_w_0; overflow_hidden;
+            } [
+                header,
+                .div { flex; flex_col; flex_1; min_h_0; min_w_0; overflow_hidden; } [panel],
+            ]
+        };
+        let divider = el! {
+            $(frame.workspace(el! { .div }.into_any_element(), el! { .div }.into_any_element(), cx)) {
+                flex_none; size_full;
+            }
+        };
+        let top = if progress == 1. && maximized_progress == 1. {
+            el! { .div }.into_any_element()
+        } else {
+            workspace
+        };
+        let bottom = if progress > 0. {
+            dock.into_any_element()
+        } else {
+            el! { .div }.into_any_element()
+        };
+        el! { $(self.terminal.split.clone()).VerticalSplit::new {
+            top: top; bottom_progress: progress; bottom_maximized_progress: maximized_progress;
+            bottom: bottom; label: $(i18n::text("files-terminal-resize", cx)); divider_background: divider;
+        } }.into_any_element()
     }
 
     pub(super) fn on_terminal_split(
