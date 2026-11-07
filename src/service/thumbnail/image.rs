@@ -35,8 +35,8 @@ pub(super) fn load(path: &Path) -> Result<RgbaImage, Error> {
     limits.max_alloc = Some(MAX_DECODE_BYTES);
     reader.limits(limits);
     let mut decoder = reader.into_decoder()?;
-    let (width, height) = decoder.dimensions();
-    if u64::from(width) * u64::from(height) * 4 > MAX_DECODE_BYTES {
+    // Decode in the source pixel format; RGBA conversion happens after resizing.
+    if decoder.total_bytes() > MAX_DECODE_BYTES {
         return Err(Error::TooLarge);
     }
     let orientation = decoder.orientation()?;

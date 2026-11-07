@@ -103,13 +103,12 @@ pub(super) fn load(source: &Source, cache: Option<&Cache>) -> Result<Thumbnail, 
         }
         Err(error) => {
             // Missing tools, timeouts and I/O failures can resolve without the
-            // document changing. Persist only content/format/size failures.
-            if matches!(
-                error,
-                Error::Image(_) | Error::Svg(_) | Error::Video(_) | Error::TooLarge
-            ) && let (Some(cache), Some(identity)) = (cache, identity.as_ref())
+            // document changing. Size limits are policy, not corrupt content.
+            // Persist only content/format failures.
+            if matches!(error, Error::Image(_) | Error::Svg(_) | Error::Video(_))
+                && let (Some(cache), Some(identity)) = (cache, identity.as_ref())
                 && identity.unchanged(&source.path)
-                && let Err(cache_error) = cache.store_failure(identity, &error)
+                && let Err(cache_error) = cache.store_failure(identity)
             {
                 tracing::warn!(%cache_error, "cannot save thumbnail failure marker");
             }
@@ -188,18 +187,12 @@ impl Cache {
         }
         if let Some(png) = self.read(&self.failure_path(identity), 1)
             && identity.matches(&png.attributes)
+            && png
+                .attributes
+                .get("X-GDS::Failure")
+                .is_none_or(|value| value != "too-large")
         {
-            return Lookup::Failed(
-                if png
-                    .attributes
-                    .get("X-GDS::Failure")
-                    .is_some_and(|value| value == "too-large")
-                {
-                    Error::TooLarge
-                } else {
-                    Error::CachedFailure
-                },
-            );
+            return Lookup::Failed(Error::CachedFailure);
         }
         Lookup::Miss
     }
@@ -228,13 +221,8 @@ impl Cache {
 
     /// # Errors
     /// Reports marker encoding and atomic write failures.
-    fn store_failure(&self, identity: &Identity, error: &Error) -> Result<(), CacheError> {
-        let reason = if matches!(error, Error::TooLarge) {
-            "too-large"
-        } else {
-            "decode"
-        };
-        let bytes = encode(&RgbaImage::new(1, 1), Some(identity), Some(reason))?;
+    fn store_failure(&self, identity: &Identity) -> Result<(), CacheError> {
+        let bytes = encode(&RgbaImage::new(1, 1), Some(identity), Some("decode"))?;
         private_directory(&self.root)?;
         private_directory(&self.root.join("fail"))?;
         self.write(

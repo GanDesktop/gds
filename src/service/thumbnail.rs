@@ -34,7 +34,7 @@ pub enum Error {
     #[error("cannot read media: {0}")]
     Io(#[from] std::io::Error),
     #[error("cannot decode image: {0}")]
-    Image(#[from] ::image::ImageError),
+    Image(#[source] ::image::ImageError),
     #[error("cannot render SVG: {0}")]
     Svg(#[from] resvg::usvg::Error),
     #[error("cannot encode thumbnail PNG: {0}")]
@@ -51,6 +51,15 @@ pub enum Error {
     VideoTimeout,
     #[error("cannot extract video frame: {0}")]
     Video(String),
+}
+
+impl From<::image::ImageError> for Error {
+    fn from(error: ::image::ImageError) -> Self {
+        match error {
+            ::image::ImageError::Limits(_) => Self::TooLarge,
+            error => Self::Image(error),
+        }
+    }
 }
 
 impl Source {
