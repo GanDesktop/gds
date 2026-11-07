@@ -1,7 +1,7 @@
 # Maintainer: GDS contributors <https://github.com/GanDesktop/gds>
 pkgbase=gds-files-git
 pkgname=(gds-files-git xdg-desktop-portal-gds-git)
-pkgver=0.0.1.r132.gb59c372
+pkgver=0.0.2
 pkgrel=1
 pkgdesc='Native file manager and optional FileChooser portal for Linux desktops'
 arch=(x86_64)
