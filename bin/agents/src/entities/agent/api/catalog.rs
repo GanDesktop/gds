@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use bas::{
     config::AgentSpec,
-    management::Catalog,
+    management::{Catalog, Phase},
     service::{Client, pb},
 };
 use futures::{StreamExt, channel::mpsc};
@@ -30,7 +30,7 @@ pub(in crate::entities::agent) fn init(server: Target, runtime: Handle, cx: &mut
 }
 
 pub(crate) struct Progress {
-    pub message: String,
+    pub phase: Phase,
     pub complete: bool,
     pub spec: Option<AgentSpec>,
 }
@@ -42,7 +42,7 @@ fn decode(operation: pb::AgentOperation) -> Progress {
         None
     };
     Progress {
-        message: operation.message,
+        phase: operation.phase(),
         complete: operation.complete,
         spec,
     }

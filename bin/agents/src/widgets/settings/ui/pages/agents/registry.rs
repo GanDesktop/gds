@@ -4,7 +4,7 @@ use super::{Agents, item};
 use crate::entities::agent::catalog::Updates;
 use crate::shared::i18n::tr;
 use crate::shared::ui::Button;
-use bas::management::{Catalog, Entry, Source, Status};
+use bas::management::{Catalog, Entry, Phase, Source, Status};
 use gds_uim::el;
 use gpui_kit::{
     App, Context, Hsla, IntoElement, ParentElement, Styled, Task, TestSupportExt, div, prelude::*,
@@ -247,7 +247,17 @@ impl Agents {
                 let _ = page.update(cx, |page, cx| {
                     let message = match &update {
                         Ok(operation) if operation.complete => String::new(),
-                        Ok(operation) => operation.message.clone(),
+                        Ok(operation) => match operation.phase {
+                            Phase::Unspecified => tr!("agent-install-preparing"),
+                            Phase::Resolving => tr!("agent-install-resolving"),
+                            Phase::Downloading => tr!("agent-install-downloading"),
+                            Phase::Extracting => tr!("agent-install-extracting"),
+                            Phase::Runtime => tr!("agent-install-runtime"),
+                            Phase::Installing => tr!("agent-install-installing"),
+                            Phase::Registering => tr!("agent-install-registering"),
+                            Phase::Complete => tr!("agent-install-done"),
+                        }
+                        .into(),
                         Err(error) => {
                             tr!("agent-install-error", error = (error).to_string())
                         }

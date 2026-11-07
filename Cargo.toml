@@ -227,11 +227,11 @@ unicode-width = { version = "0.2", optional = true }
 globset = { version = "0.4", optional = true }
 mime_guess = { version = "2", optional = true }
 xdg-mime = { version = "0.4", optional = true }
-trash = { version = "5.2.9", optional = true }
+trash = { version = "5.3.0", optional = true }
 
 # Agents application.
 agent-client-protocol = { version = "=3.3.0", features = ["unstable", "unstable_protocol_v2"], optional = true }
-bas = { package = "bas-client", git = "https://github.com/GanDesktop/bas", branch = "feat/workspace-providers", features = ["workspace-schema"], optional = true }
+bas = { package = "bas-client", git = "https://github.com/GanDesktop/bas", branch = "main", features = ["workspace-schema"], optional = true }
 dirs = { version = "6", optional = true }
 reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.11", optional = true }
 rodio = { version = "=0.21.1", optional = true, default-features = false, features = ["playback", "flac", "mp3", "mp4", "vorbis", "wav", "tracing"] }
@@ -267,8 +267,8 @@ toml = { version = "0.9" }
 futures-lite = "2"
 regex = "1"
 tempfile = "3"
-bas = { package = "bas-client", git = "https://github.com/GanDesktop/bas", branch = "feat/workspace-providers" }
-bas-server = { git = "https://github.com/GanDesktop/bas", branch = "feat/workspace-providers" }
+bas = { package = "bas-client", git = "https://github.com/GanDesktop/bas", branch = "main" }
+bas-server = { git = "https://github.com/GanDesktop/bas", branch = "main" }
 # Runtime-generated TLS fixtures for the imported connection tests.
 rcgen = "=0.13.2"
 tonic-prost = "0.14"
@@ -292,6 +292,5 @@ incremental = false
 
 [patch.crates-io]
 gpui-component = { git = "https://github.com/GanDesktop/gpui-kit", branch = "gds-0.9.0" }
-trash = { git = "https://github.com/GanDesktop/trash-rs", branch = "fix/freedesktop-trashinfo-reviewed" }
 gpui-fast = { git = "https://github.com/GanDesktop/gpui-fast", branch = "gds-0.1.13" }
 gpui-fast-linux = { git = "https://github.com/GanDesktop/gpui-fast-linux", branch = "gds-0.1.13" }

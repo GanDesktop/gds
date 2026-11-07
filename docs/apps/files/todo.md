@@ -74,7 +74,7 @@ P1 表示已有功能的正确性问题；P2 表示互操作能力与覆盖范�
 
 ## 本轮实现与验证记录
 
-- FM-01：`trash` 5.2.9 使用 [GanDesktop/trash-rs 的已审阅分支](https://github.com/GanDesktop/trash-rs/tree/fix/freedesktop-trashinfo-reviewed)，修复 freedesktop 记录与路径解析；不再内置 vendor 源码。
+- FM-01：使用 crates.io 的 `trash` 5.3.0，已包含[上游合并的 freedesktop 记录与路径解析修复](https://github.com/Byron/trash-rs/pull/157)。
   实际 `info/*.trashinfo` / `files/*` 工作流覆盖重复键、空行、扩展行、相对路径、
   等号与非 UTF-8 名称、非法父路径、混合无效记录、还原及同名不覆盖。
 - FM-02：`src/service/desktop/protocol` 提供轻量共享请求，stdin JSON 跨进程保留原生字节；

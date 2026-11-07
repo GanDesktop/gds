@@ -24,8 +24,7 @@ fn local_file_authority_requires_ipc_even_for_loopback_tcp() {
 
 fn operation(complete: bool, spec_json: Vec<u8>) -> pb::AgentOperation {
     pb::AgentOperation {
-        phase: "ignored transport phase".into(),
-        message: "installation progress".into(),
+        phase: Phase::Complete.into(),
         complete,
         spec_json,
     }
@@ -39,6 +38,6 @@ fn completed_progress_carries_the_decoded_spec() {
         serde_json::to_vec(&spec).expect("fixture spec"),
     ));
     assert!(progress.complete);
-    assert_eq!(progress.message, "installation progress");
+    assert_eq!(progress.phase, Phase::Complete);
     assert_eq!(progress.spec, Some(spec));
 }

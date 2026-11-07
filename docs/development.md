@@ -125,7 +125,6 @@ cargo tree --no-default-features --features portal --edges normal,build
 - [gpui-kit / gds-0.9.0](https://github.com/GanDesktop/gpui-kit/tree/gds-0.9.0)：仅替换 `gpui-component`，基于 0.9.0 发布提交，增加可配置 Linux 窗口圆角并同步内容裁切与平台命中区域；默认直角，其余 Kit crate 保持发布版本。
 - [gpui-fast / gds-0.1.13](https://github.com/GanDesktop/gpui-fast/tree/gds-0.1.13)：外部父窗口与调用方激活 token 的公共接口；外部文件拖入恢复鼠标输入模式，修复键盘操作后放下事件无法命中目标的问题。
 - [gpui-fast-linux / gds-0.1.13](https://github.com/GanDesktop/gpui-fast-linux/tree/gds-0.1.13)：对应 Wayland / X11 实现。
-- [trash-rs / fix/freedesktop-trashinfo-reviewed](https://github.com/GanDesktop/trash-rs/tree/fix/freedesktop-trashinfo-reviewed)：回收站记录解析与路径解析修复，保留 `trash` 包名及 `5.2.9` 版本。
 
 Fast 补丁从原 `gpui-pre` / `gpui-pre-linux` 的 `gds-0.3.11` 分支迁移。应用的 `gpui` 宏依赖也指向 `gpui-fast`；HTTP 客户端沿用 Fast 共用的 `gpui-pre-http-client` 协议类型。Kit 的 feature 为叠加启用，依赖图中仍可出现未被应用选用的 `gpui-pre`，这不表示运行时混用了两套 GPUI。
 

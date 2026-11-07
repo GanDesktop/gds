@@ -55,7 +55,7 @@ In-memory diagnostic logs and the log viewer require `--enable-logs`; Ctrl+Shift
 
 Application code is in [`bin/agents/src`](../../../bin/agents/src), organized as `app → pages → widgets → features → entities → shared`. Session and backend entities own protocol state and history; widgets own settings, history and help views; features own navigation, authentication and session deletion. Frontend configuration lives in `shared/config`.
 
-The root manifest uses the `gds-client-multiplex` branch of `GanDesktop/bas`; `Cargo.lock` pins the BAS revision. `bas-client` depends on `bas-protocol` for shared models and wire types; test services depend explicitly on `bas-server`. The frontend does not embed the Bas daemon or CLI. Agent protocol, authentication, installation and session models remain application code. Shared appearance, typography, Frame, navigation, notifications, shortcuts, clipboard access, timestamps and terminal rendering come from `gds`.
+The root manifest uses the `main` branch of `GanDesktop/bas`; `Cargo.lock` pins the BAS revision. `bas-client` depends on `bas-protocol` for shared models and wire types; test services depend explicitly on `bas-server`. The frontend does not embed the Bas daemon or CLI. Agent protocol, authentication, installation and session models remain application code. Shared appearance, typography, Frame, navigation, notifications, shortcuts, clipboard access, timestamps and terminal rendering come from `gds`.
 
 Bas runs as a headless service. GDS Agents owns message assembly, rich-content conversion and window visibility; it does not send foreground-presence RPCs or rely on daemon desktop notifications.
 
