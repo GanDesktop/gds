@@ -45,6 +45,16 @@
         };
       };
 
+      homeManagerModules = nixpkgs.lib.genAttrs applicationNames (name:
+        import (./packaging/nix/apps + "/${nixpkgs.lib.removePrefix "gds-" name}/home-manager.nix") self
+      ) // {
+        gds-portal = import ./packaging/nix/portal/module.nix self;
+        default = {
+          imports = map (name: self.homeManagerModules.${name}) applicationNames
+            ++ [ self.homeManagerModules.gds-portal ];
+        };
+      };
+
       checks = forEachSystem (system:
         {
           portal = self.packages.${system}.xdg-desktop-portal-gds;

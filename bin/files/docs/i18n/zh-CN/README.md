@@ -48,6 +48,44 @@ GDS Files 是基于GPUI开发的原生文件管理器。专注于为Wayland用�
 nix profile add github:GanDesktop/gds#gds-files
 ```
 
+**Home Manager 安装**：在 `flake.nix` 添加输入，并将 `gds` 加入 `outputs` 参数：
+
+```nix
+inputs.gds.url = "github:GanDesktop/gds";
+```
+
+将以下条目加入 Home Manager 的 `modules` 列表；如果通过 NixOS 集成 Home Manager，
+则加入 `home-manager.sharedModules`：
+
+```nix
+gds.homeManagerModules.gds-files
+{
+  programs.gds-files.enable = true;
+  programs.gds-files.fileManager1.enable = true;
+}
+```
+
+Files 默认作为文件夹打开程序；`fileManager1.enable` 用于处理其他应用的“在文件夹中显示”等请求。
+
+**可选：GDS Portal。** 让使用桌面 Portal 的应用通过 Files 打开“打开文件”和“保存文件”对话框，
+在同一个模块列表中追加：
+
+```nix
+gds.homeManagerModules.gds-portal
+{
+  services.gds-portal.enable = true;
+}
+```
+
+保留上面的 Files 配置。启用后，文件选择交给 GDS，应用选择交给 GTK。
+
+如果通过 NixOS 集成 Home Manager，且设置了 `home-manager.useUserPackages = true`，
+还需在 **NixOS 配置**中加入以下内容，让 Portal 能找到后端：
+
+```nix
+environment.pathsToLink = [ "/share/applications" "/share/xdg-desktop-portal" ];
+```
+
 **NixOS 系统安装**：在 `flake.nix` 添加输入，并将 `gds` 加入 `outputs` 参数：
 
 ```nix

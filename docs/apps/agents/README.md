@@ -21,7 +21,7 @@ nix build .#gds-agents
 nix run .#gds-agents
 ```
 
-The `gds.nixosModules.gds-agents` module installs the frontend through `programs.gds-agents.enable`. It does not start or configure Bas. See [NixOS installation](../../nixos.md).
+The `gds.nixosModules.gds-agents` and `gds.homeManagerModules.gds-agents` modules install the frontend through `programs.gds-agents.enable` at the system or user level. Neither module starts or configures Bas. See [Nix and Home Manager installation](../../nixos.md).
 
 ## Workspace and settings
 

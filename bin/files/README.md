@@ -59,6 +59,47 @@ Install this file manager for me: https://github.com/GanDesktop/gds/blob/main/bi
 nix profile add github:GanDesktop/gds#gds-files
 ```
 
+**Home Manager:** Add this input to `flake.nix` and include `gds` in your
+`outputs` arguments:
+
+```nix
+inputs.gds.url = "github:GanDesktop/gds";
+```
+
+Add these entries to your Home Manager `modules` list (or
+`home-manager.sharedModules` on NixOS):
+
+```nix
+gds.homeManagerModules.gds-files
+{
+  programs.gds-files.enable = true;
+  programs.gds-files.fileManager1.enable = true;
+}
+```
+
+Files becomes the default folder application; `fileManager1.enable` handles
+requests such as "Show in Folder" from other apps.
+
+**Optional: GDS Portal.** To use Files for open/save dialogs in applications that
+use desktop portals, also add these entries to the same module list:
+
+```nix
+gds.homeManagerModules.gds-portal
+{
+  services.gds-portal.enable = true;
+}
+```
+
+Keep Files enabled alongside Portal. This selects GDS for file dialogs and GTK
+for application selection.
+
+With NixOS-integrated Home Manager and `home-manager.useUserPackages = true`,
+also add this to your **NixOS configuration** so Portal can discover the backends:
+
+```nix
+environment.pathsToLink = [ "/share/applications" "/share/xdg-desktop-portal" ];
+```
+
 **Install on NixOS:** Add this input to `flake.nix` and include `gds` in your `outputs` arguments:
 
 ```nix
