@@ -21,6 +21,7 @@ pub mod logs;
 pub mod menu;
 pub mod navigation;
 pub mod page;
+pub mod picker;
 pub mod sidebar;
 pub mod split;
 pub mod surface;

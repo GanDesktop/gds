@@ -8,6 +8,7 @@ fn saved_names_match_all_credentials_and_prefer_the_selected_profile(cx: &mut Te
         let profiles = cx.new(|_| Profiles::new(Store::at(directory.path().join("settings.json"))));
         profiles.update(cx, |profiles, cx| {
             let mut first = ConnectionProfile {
+                local: false,
                 id: "first".into(),
                 name: "Production".into(),
                 note: None,
@@ -84,6 +85,7 @@ fn deleting_profile_preserves_a_valid_default_and_never_deletes_the_last_one(
             profiles
                 .put(
                     ConnectionProfile {
+                        local: false,
                         id: "other".into(),
                         name: "Other".into(),
                         note: None,

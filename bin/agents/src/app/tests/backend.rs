@@ -26,6 +26,7 @@ fn profiles_persist_selection_without_overwriting_cli_override_or_other_sections
             let target = profiles
                 .put(
                     ConnectionProfile {
+                        local: false,
                         id: "remote".into(),
                         name: "Remote".into(),
                         note: None,

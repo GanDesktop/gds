@@ -220,7 +220,7 @@ fn title_and_background_catalog_wait_for_receipt_correlated_tracking(cx: &mut Te
                     cx,
                 );
                 assert!(fixture.commands.try_recv().is_err());
-                bas::model::TurnReceipt {
+                bas::model::TurnReceipt { request_id: None,
                     turn: submission.turn,
                     cursor: Cursor::from_raw(3),
                 }
@@ -1260,7 +1260,10 @@ fn folded_reply_stays_unread_until_opened_and_survives_replay(cx: &mut TestAppCo
 fn completed_events(session: SessionId, text: &str) -> Vec<Event> {
     let turn = bas::model::TurnId::new();
     [
-        EventKind::TurnStarted { turn },
+        EventKind::TurnStarted {
+            request_id: None,
+            turn,
+        },
         EventKind::Acp(bas::acp::SessionUpdate::AgentMessageChunk(
             bas::acp::ContentChunk::new(text.into()),
         )),
@@ -1444,7 +1447,7 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
         let command = fixture.commands.try_recv().expect("first queued prompt");
         assert!(matches!(&command, Command::Prompt { submission, .. } if submission::text(submission) == "追加一"));
         let submission = submission::payload(command);
-        let accepted = bas::model::TurnReceipt {
+        let accepted = bas::model::TurnReceipt { request_id: None,
             turn: submission.turn,
             cursor: Cursor::from_raw(2),
         };
@@ -1466,7 +1469,7 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
                     event: Event::new(
                         session.id,
                         Cursor::from_raw(2),
-                        EventKind::TurnStarted {
+                        EventKind::TurnStarted { request_id: None,
                             turn: accepted.turn,
                         },
                     )

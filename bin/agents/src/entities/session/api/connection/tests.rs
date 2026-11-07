@@ -108,6 +108,31 @@ struct Service {
 
 #[tonic::async_trait]
 impl Bas for Service {
+    async fn list_workspace_providers(
+        &self,
+        _: Request<pb::ListWorkspaceProvidersRequest>,
+    ) -> Result<Response<pb::ListWorkspaceProvidersResponse>, Status> {
+        Err(Status::unimplemented("fixture"))
+    }
+    async fn open_workspace(
+        &self,
+        _: Request<pb::OpenWorkspaceRequest>,
+    ) -> Result<Response<pb::Workspace>, Status> {
+        Err(Status::unimplemented("fixture"))
+    }
+    async fn query_workspace_choices(
+        &self,
+        _: Request<pb::QueryWorkspaceChoicesRequest>,
+    ) -> Result<Response<pb::QueryWorkspaceChoicesResponse>, Status> {
+        Err(Status::unimplemented("fixture"))
+    }
+    async fn browse_server_directories(
+        &self,
+        _: Request<pb::BrowseServerDirectoriesRequest>,
+    ) -> Result<Response<pb::BrowseServerDirectoriesResponse>, Status> {
+        Err(Status::unimplemented("fixture"))
+    }
+
     async fn list_workspaces(
         &self,
         _: Request<pb::ListWorkspacesRequest>,

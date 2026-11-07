@@ -190,6 +190,7 @@ impl DirectoryDrafts {
 
 #[derive(Default)]
 pub(super) struct FolderPicker {
+    pub(super) launch: Option<gpui_kit::Entity<crate::features::workspace_launch::Launch>>,
     pub(super) pending: bool,
     pub(super) waiting_activation: bool,
     pub(super) session: Option<(SessionId, u64)>,

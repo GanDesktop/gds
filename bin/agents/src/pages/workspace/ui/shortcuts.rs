@@ -240,7 +240,7 @@ impl Workspace {
             cx.propagate();
             return;
         }
-        self.choose_local_workspace(window, cx);
+        self.open_workspace_add_menu(window, cx);
     }
 }
 

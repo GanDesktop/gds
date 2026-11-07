@@ -159,7 +159,7 @@ fn immediate_queue_send_waits_for_cancel_and_completion_and_keeps_other_drafts_p
         };
         assert_eq!(submission::text(submission), "B");
         let submission = submission::payload(command);
-        let accepted = bas::model::TurnReceipt { turn: submission.turn, cursor: Cursor::from_raw(2) };
+        let accepted = bas::model::TurnReceipt { request_id: None, turn: submission.turn, cursor: Cursor::from_raw(2) };
         fixture.view.update(cx, |view, cx| {
             view.update(submission::accepted_at(meta.id, &submission, 2), window, cx);
             view.update(Update::Event {

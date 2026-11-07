@@ -123,7 +123,10 @@ fn catalog_removal_invalidates_selection_and_late_watch_updates(cx: &mut TestApp
                             vec![Event::new(
                                 removed.id,
                                 Cursor::from_raw(1),
-                                EventKind::TurnStarted { turn },
+                                EventKind::TurnStarted {
+                                    request_id: None,
+                                    turn,
+                                },
                             )],
                         ),
                         window,
@@ -135,7 +138,10 @@ fn catalog_removal_invalidates_selection_and_late_watch_updates(cx: &mut TestApp
                             event: Event::new(
                                 removed.id,
                                 Cursor::from_raw(2),
-                                EventKind::TurnStarted { turn },
+                                EventKind::TurnStarted {
+                                    request_id: None,
+                                    turn,
+                                },
                             )
                             .into(),
                         },

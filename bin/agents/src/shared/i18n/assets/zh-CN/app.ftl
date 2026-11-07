@@ -870,3 +870,18 @@ workspace-delete = 删除工作区
 workspace-archive-confirm = 归档工作区“{ $path }”及其所有会话？正在运行的会话将停止，历史记录保留。
 workspace-delete-confirm = 删除空工作区“{ $path }”？磁盘上的项目文件会保留。
 workspace-delete-cascade-confirm = 工作区“{ $path }”包含 { $count } 个会话（含已归档）。是否一并永久删除这些会话和 Bas 历史记录？磁盘上的项目文件会保留。
+
+connections-local-filesystem = 与本机共享文件系统
+workspace-provider-empty = 没有可用的工作区提供方。
+workspace-path-encoding = 路径必须是有效的 UTF-8。
+workspace-browse = 浏览
+workspace-select = 选择
+workspace-directory-parent = 上级目录
+workspace-directory-use = 使用此目录
+workspace-load-more = 加载更多
+workspace-search = 搜索
+workspace-loading = 加载中…
+workspace-open = 打开工作区
+workspace-provider-upgrade = 请升级并重启 BAS，以使用工作区提供方。
+
+workspace-directory = 文件夹

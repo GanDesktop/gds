@@ -32,6 +32,7 @@ fn footer_switches_backends_in_place_and_restores_drafts(cx: &mut TestAppContext
                 profiles
                     .put(
                         ConnectionProfile {
+                            local: false,
                             id: id.into(),
                             name: name.into(),
                             target: options.target.clone(),

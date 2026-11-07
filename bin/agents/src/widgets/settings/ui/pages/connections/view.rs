@@ -343,6 +343,14 @@ impl Page {
                     flex_col;
                 } [
                     ..fields,
+                    ("connection-local").ui::checkbox {
+                        label: tr!("connections-local-filesystem");
+                        checked: $(self.local);
+                        on_click: $(cx.listener(|this, checked: &bool, _, cx| {
+                            this.local = *checked;
+                            cx.notify();
+                        }));
+                    },
                     ..address,
                     ..tls,
                     $(Self::field("connection-note", tr!("connections-note"),

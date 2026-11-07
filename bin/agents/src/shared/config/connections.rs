@@ -16,6 +16,9 @@ pub struct Frontend {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionProfile {
+    /// This connection shares the frontend filesystem namespace. Never inferred from its address.
+    #[serde(default)]
+    pub local: bool,
     pub id: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -39,6 +42,7 @@ impl Default for Frontend {
     fn default() -> Self {
         Self {
             connections: vec![ConnectionProfile {
+                local: true,
                 id: "local".into(),
                 name: "Local".into(),
                 note: None,

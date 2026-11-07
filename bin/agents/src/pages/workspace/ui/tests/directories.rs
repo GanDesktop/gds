@@ -56,6 +56,7 @@ fn directories_reject_busy_unsupported_and_stale_targets_without_optimistic_chan
                         meta.id,
                         Cursor::from_raw(2),
                         EventKind::TurnStarted {
+                            request_id: None,
                             turn: bas::model::TurnId::new(),
                         },
                     )

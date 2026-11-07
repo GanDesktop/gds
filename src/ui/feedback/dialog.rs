@@ -36,6 +36,8 @@ pub struct DialogActions {
     primary_icon: IconName,
     #[attr(into, option)]
     cancel_label: Option<SharedString>,
+    #[attr]
+    primary_disabled: bool,
     danger: bool,
     style: StyleRefinement,
 }
@@ -46,6 +48,7 @@ impl Default for DialogActions {
             primary_label: None,
             primary_icon: IconName::Check,
             cancel_label: None,
+            primary_disabled: false,
             danger: false,
             style: StyleRefinement::default(),
         }
@@ -69,6 +72,7 @@ impl RenderOnce for DialogActions {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let mut primary = DialogDecision::new(DialogCommand::Confirm)
             .icon(self.primary_icon)
+            .disabled(self.primary_disabled)
             .variant(if self.danger {
                 ButtonVariant::Danger
             } else {
