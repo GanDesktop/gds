@@ -77,8 +77,6 @@ gds.homeManagerModules.gds-portal
 }
 ```
 
-保留上面的 Files 配置。
-
 如果通过 NixOS 集成 Home Manager，且设置了 `home-manager.useUserPackages = true`，
 还需在 **NixOS 配置**中加入以下内容，让 Portal 能找到后端：
 

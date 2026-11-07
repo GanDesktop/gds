@@ -90,8 +90,6 @@ gds.homeManagerModules.gds-portal
 }
 ```
 
-Keep Files enabled alongside Portal.
-
 With NixOS-integrated Home Manager and `home-manager.useUserPackages = true`,
 also add this to your **NixOS configuration** so Portal can discover the backends:
 
