@@ -215,7 +215,7 @@ impl Browser {
         window.prevent_default();
     }
 
-    fn move_file_cursor(
+    pub(super) fn move_file_cursor(
         &mut self,
         motion: Motion,
         extend: bool,

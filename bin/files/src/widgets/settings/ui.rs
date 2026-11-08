@@ -365,6 +365,17 @@ impl View {
         });
     }
 
+    fn on_auto_focus_search_changed(
+        &mut self,
+        checked: &bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.change(window, cx, |preferences| {
+            Field::replace(&mut preferences.files.auto_focus_search, *checked)
+        });
+    }
+
     fn on_sidebar_volumes_changed(
         &mut self,
         checked: &bool,

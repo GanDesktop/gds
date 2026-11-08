@@ -726,10 +726,15 @@ impl Browser {
             "filter-hint".into(),
             Shortcut::from(Command::Filter),
         );
+        let search_input = self.search_input_handler(cx);
         el! {
-            .div { # "directory-filter"; test_support; relative; w: FILTER_WIDTH.px; min_w: 96.0.px; flex_shrink_1 } [
+            .div { # "directory-filter"; test_support; relative; w: FILTER_WIDTH.px; min_w: 96.0.px; flex_shrink_1;
+                capture_action: (cx, Self::on_search_down).Context::listener;
+                capture_action: (cx, Self::on_search_up).Context::listener;
+            } [
                 ($&self.toolbar.filter.input, cx).input_field { small; cleanable: true; prefix: IconName::Search.Icon::new },
                 filter_hint,
+                search_input,
             ]
         }.into_any_element()
     }

@@ -60,6 +60,7 @@ place-favorite-add = Bookmark selected location
 place-favorite-remove = Remove bookmark
 settings-dialogs = Dialog actions
 settings-dialogs-note = Apply only while a dialog is open; Enter and Esc keep their existing confirm and cancel behavior.
+auto-focus-search = Auto-focus search
 show-hidden = Show hidden files
 sidebar-show-volumes = Show volumes in the sidebar
 hide-hidden = Hide hidden files

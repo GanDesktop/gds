@@ -32,6 +32,7 @@ pub(super) enum Field {
     ContentOpacity,
     SidebarOpacity,
     ShowHidden,
+    AutoFocusSearch,
     SidebarVolumes,
     Animations,
     RoundedCorners,
@@ -48,6 +49,7 @@ impl Field {
             Self::ContentOpacity => "theme-opacity",
             Self::SidebarOpacity => "sidebar-opacity",
             Self::ShowHidden => "show-hidden",
+            Self::AutoFocusSearch => "auto-focus-search",
             Self::SidebarVolumes => "sidebar-show-volumes",
         }
     }
@@ -69,6 +71,9 @@ impl Field {
                 defaults.appearance.sidebar_opacity * 100.0,
             ),
             Self::ShowHidden => preferences.files.show_hidden != defaults.files.show_hidden,
+            Self::AutoFocusSearch => {
+                preferences.files.auto_focus_search != defaults.files.auto_focus_search
+            }
             Self::SidebarVolumes => {
                 preferences.files.sidebar.show_volumes != defaults.files.sidebar.show_volumes
             }
@@ -93,6 +98,9 @@ impl Field {
                 preferences.appearance.sidebar_opacity = defaults.appearance.sidebar_opacity
             }
             Self::ShowHidden => preferences.files.show_hidden = defaults.files.show_hidden,
+            Self::AutoFocusSearch => {
+                preferences.files.auto_focus_search = defaults.files.auto_focus_search
+            }
             Self::SidebarVolumes => {
                 preferences.files.sidebar.show_volumes = defaults.files.sidebar.show_volumes
             }

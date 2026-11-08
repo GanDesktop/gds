@@ -60,6 +60,7 @@ place-favorite-add = 收藏所选位置
 place-favorite-remove = 取消收藏
 settings-dialogs = 弹窗操作
 settings-dialogs-note = 仅在对话框打开时生效；Enter 与 Esc 保持原有确认、取消行为。
+auto-focus-search = 自动聚焦检索
 show-hidden = 显示隐藏文件
 sidebar-show-volumes = 在侧边栏显示卷列表
 hide-hidden = 隐藏隐藏文件

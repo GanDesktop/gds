@@ -1,5 +1,7 @@
 //! Address editing and the active tab's name filter.
 
+mod search_input;
+
 use super::*;
 
 pub(super) struct State {

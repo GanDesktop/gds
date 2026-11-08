@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct FilesPreferences {
     pub show_hidden: bool,
+    pub auto_focus_search: bool,
     pub sidebar: SidebarPreferences,
     /// Preferred content height above the terminal dock; shared by this window.
     #[serde(skip_serializing_if = "Option::is_none")]
