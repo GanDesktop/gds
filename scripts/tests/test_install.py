@@ -10,8 +10,8 @@ import unittest
 
 INSTALLER = Path(__file__).resolve().parents[1] / 'install.sh'
 PACKAGES = [
-    'gds-files-git-1.2.3.r1.gabcd-1-x86_64.pkg.tar.zst',
-    'xdg-desktop-portal-gds-git-1.2.3.r1.gabcd-1-x86_64.pkg.tar.zst',
+    'gds-files-1.2.3-1-x86_64.pkg.tar.zst',
+    'xdg-desktop-portal-gds-1.2.3-1-x86_64.pkg.tar.zst',
     'gds-files_1.2.3-1_amd64.deb',
     'xdg-desktop-portal-gds_1.2.3-1_amd64.deb',
     'gds-files-1.2.3-1.fc43.x86_64.rpm',

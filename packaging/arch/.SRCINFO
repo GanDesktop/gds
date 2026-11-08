@@ -1,6 +1,6 @@
-pkgbase = gds-files-git
+pkgbase = gds-files
 	pkgdesc = Native file manager and optional FileChooser portal for Linux desktops
-	pkgver = 0.0.1.r132.gb59c372
+	pkgver = 0.0.2
 	pkgrel = 1
 	url = https://github.com/GanDesktop/gds
 	arch = x86_64
@@ -29,10 +29,10 @@ pkgbase = gds-files-git
 	makedepends = desktop-file-utils
 	options = !debug
 	options = !lto
-	source = gds::git+https://github.com/GanDesktop/gds.git#branch=main
-	sha256sums = SKIP
+	source = gds-0.0.2.tar.gz::https://github.com/GanDesktop/gds/archive/refs/tags/v0.0.2.tar.gz
+	sha256sums = 6f541b3839d2b162c2e748d52de58b6b8fccf2bcf12dbd9560b2be092234da6d
 
-pkgname = gds-files-git
+pkgname = gds-files
 	pkgdesc = Native GPUI file manager with embedded terminals
 	depends = gcc-libs
 	depends = glibc
@@ -54,17 +54,19 @@ pkgname = gds-files-git
 	depends = xdg-terminal-exec
 	depends = xdg-desktop-portal
 	depends = udisks2
+	depends = python-gobject
+	depends = gtk3
 	optdepends = ffmpeg: video thumbnails
 	optdepends = vulkan-driver: GPU rendering
 	optdepends = xdg-desktop-portal-gds: use Files as the system file picker
-	provides = gds-files=0.0.1.r132.gb59c372
-	conflicts = gds-files
+	conflicts = gds-files-git
+	conflicts = gds-files-bin
 
-pkgname = xdg-desktop-portal-gds-git
+pkgname = xdg-desktop-portal-gds
 	pkgdesc = GDS FileChooser desktop portal backend
 	depends = gcc-libs
 	depends = glibc
 	depends = xdg-desktop-portal
 	optdepends = gds-files: native file picker interface
-	provides = xdg-desktop-portal-gds=0.0.1.r132.gb59c372
-	conflicts = xdg-desktop-portal-gds
+	conflicts = xdg-desktop-portal-gds-git
+	conflicts = xdg-desktop-portal-gds-bin

@@ -15,17 +15,9 @@
       packages = forEachSystem (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          packages = nixpkgs.lib.genAttrs applicationNames (name:
-            pkgs.callPackage (./packaging/nix/apps + "/${nixpkgs.lib.removePrefix "gds-" name}/package.nix") { inherit buildTag; });
-          suite = pkgs.buildEnv {
-            name = "gds";
-            paths = builtins.attrValues packages;
-            meta.description = "GDS native desktop application suite";
-          };
+          packages = import ./packaging/nix/nur.nix { inherit pkgs buildTag; };
         in packages // {
-          gds = suite;
-          xdg-desktop-portal-gds = pkgs.callPackage ./packaging/nix/portal/package.nix { inherit buildTag; };
-          default = suite;
+          default = packages.gds;
         });
 
       apps = forEachSystem (system:

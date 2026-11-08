@@ -1,0 +1,10 @@
+{
+  "repos": {
+    "gandesktop": {
+      "url": "https://github.com/GanDesktop/gds",
+      "branch": "nur",
+      "file": "packaging/nix/nur.nix",
+      "github-contact": "4t145"
+    }
+  }
+}

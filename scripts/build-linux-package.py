@@ -2,6 +2,7 @@
 """Build Arch packages or Debian/Ubuntu DEBs in a native cached container."""
 
 import argparse
+import hashlib
 from datetime import datetime, timezone
 from email.utils import format_datetime
 import os
@@ -18,6 +19,7 @@ def main():
     parser.add_argument('--release', help='Debian/Ubuntu container release (default: trixie/noble)')
     parser.add_argument('--profile', choices=['dev', 'release'], default='dev')
     parser.add_argument('--package-release', type=int, help='Package revision for releases (default: timestamp)')
+    parser.add_argument('--release-tag', help='Arch: build the published tag from its downloaded source archive')
     parser.add_argument('--engine', choices=['docker', 'podman'],
                         default='docker' if shutil.which('docker') else 'podman')
     args = parser.parse_args()
@@ -27,6 +29,8 @@ def main():
         parser.error(f'{args.engine} is required')
     if args.target == 'arch' and args.release:
         parser.error('Arch is rolling; omit --release')
+    if args.release_tag and (args.target != 'arch' or args.profile != 'release'):
+        parser.error('--release-tag requires arch --profile release')
     release = args.release or {'arch': 'latest', 'debian': 'trixie', 'ubuntu': 'noble'}[args.target]
     if not release.replace('.', '').replace('-', '').isalnum():
         parser.error('release must be a container tag such as trixie or noble')
@@ -42,6 +46,14 @@ def main():
     stamp = now.strftime('%Y%m%d%H%M%S')
     version = tomllib.loads((project / 'Cargo.toml').read_text())['package']['version']
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=project, text=True).strip()
+    if args.release_tag:
+        if args.release_tag != f'v{version}':
+            parser.error('--release-tag must be v<Cargo.toml version>')
+        tag_revision = subprocess.check_output(
+            ['git', 'rev-parse', '--verify', f'refs/tags/{args.release_tag}^{{commit}}'],
+            cwd=project, text=True).strip()
+        if tag_revision != revision:
+            parser.error('HEAD must match --release-tag')
     image = f'gds-{packaging}-builder:{label}'
     build = [args.engine, 'build', '-t', image, '-f',
              str(project / 'packaging' / packaging / 'Containerfile')]
@@ -52,18 +64,33 @@ def main():
 
     if packaging == 'arch':
         shutil.copy2(project / 'packaging/arch/PKGBUILD', work / 'PKGBUILD')
-        count = subprocess.check_output(['git', 'rev-list', '--count', 'HEAD'], cwd=project, text=True).strip()
-        short = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=project, text=True).strip()
         recipe = (work / 'PKGBUILD').read_text()
-        recipe = re.sub(r'^pkgver=.*$', f'pkgver={version}.r{count}.g{short}', recipe, flags=re.M)
-        recipe = recipe.replace('pkgrel=1\n', f'pkgrel={args.package_release or stamp}\n')
-        recipe = recipe.replace('#branch=main', f'#commit={revision}')
+        recipe = re.sub(r'^pkgver=.*$', f'pkgver={version}', recipe, flags=re.M)
+        package_release = args.package_release or (1 if args.release_tag else stamp)
+        recipe = recipe.replace('pkgrel=1\n', f'pkgrel={package_release}\n')
+        if args.release_tag:
+            archive = work / f'gds-{version}.tar.gz'
+            subprocess.run(['curl', '--fail', '--location', '--retry', '3',
+                            f'https://github.com/GanDesktop/gds/archive/refs/tags/{args.release_tag}.tar.gz',
+                            '--output', str(archive)], check=True)
+            with archive.open('rb') as source:
+                checksum = hashlib.file_digest(source, 'sha256').hexdigest()
+            recipe = re.sub(r'^sha256sums=.*$', f"sha256sums=('{checksum}')", recipe, flags=re.M)
         (work / 'PKGBUILD').write_text(recipe)
-        (work / 'src').mkdir(exist_ok=True)
-        source = work / 'src/gds'
-        if not source.is_symlink():
-            source.symlink_to('/source', target_is_directory=True)
-        entry = ['bash', '-c', 'makepkg --noextract --nodeps --force && makepkg --printsrcinfo > /output/.SRCINFO']
+        if args.release_tag:
+            entry = ['bash', '-ec', 'makepkg --cleanbuild --force; '
+                     'namcap /output/*.pkg.tar.zst; '
+                     'mkdir -p /output/aur; cp PKGBUILD /output/aur/; '
+                     'makepkg --printsrcinfo > /output/aur/.SRCINFO']
+        else:
+            (work / 'src').mkdir(exist_ok=True)
+            source = work / f'src/gds-{version}'
+            if source.exists() and not source.is_symlink():
+                shutil.rmtree(source)
+            if not source.is_symlink():
+                source.symlink_to('/source', target_is_directory=True)
+            entry = ['bash', '-ec', 'makepkg --noextract --nodeps --force; '
+                     'makepkg --printsrcinfo > /output/.SRCINFO']
     else:
         shutil.copytree(project / 'packaging/debian', work / 'debian', dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns('Containerfile'))

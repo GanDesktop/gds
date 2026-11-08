@@ -59,7 +59,7 @@ just vm ubuntu ssh
 just vm cachyos ssh
 just vm ubuntu ssh 'cat /etc/os-release'
 just vm ubuntu copy target/deb/ubuntu-noble/gds-files_*.deb
-just vm cachyos copy target/arch/arch-latest/gds-files-git-*.pkg.tar.zst
+just vm cachyos copy target/arch/arch-latest/gds-files-*.pkg.tar.zst
 just vm ubuntu stop
 just vm cachyos start
 ```
@@ -82,7 +82,7 @@ official x86-64-v3 repositories and `linux-cachyos` kernel.
 sudo apt install ./Downloads/gds-files_*.deb
 
 # CachyOS guest
-sudo pacman -U ./Downloads/gds-files-git-*.pkg.tar.zst
+sudo pacman -U ./Downloads/gds-files-*.pkg.tar.zst
 
 # Run from a terminal in the guest desktop session
 gds-files --enable-logs

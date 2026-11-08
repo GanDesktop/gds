@@ -63,8 +63,8 @@ main() {
         local files_pattern portal_pattern manager
         case "$ID:$VERSION_ID" in
             arch:*)
-                files_pattern='gds-files-git-*-x86_64.pkg.tar.zst'
-                portal_pattern='xdg-desktop-portal-gds-git-*-x86_64.pkg.tar.zst'
+                files_pattern='gds-files-?(git-)[0-9]*-x86_64.pkg.tar.zst'
+                portal_pattern='xdg-desktop-portal-gds-?(git-)[0-9]*-x86_64.pkg.tar.zst'
                 manager=pacman ;;
             debian:13)
                 files_pattern='gds-files_*_amd64.deb'

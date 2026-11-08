@@ -107,3 +107,59 @@ For a local checkout, use `git+file:///absolute/path/to/gds`. Git flakes include
 - Portal uses `gds-files` from PATH for FileChooser requests. Install Files separately or supply another handler with `--file-chooser`.
 
 Graphical packages, NixOS modules (`module.nix`) and Home Manager modules (`home-manager.nix`) live in `packaging/nix/apps/<application>/`, sharing `packaging/nix/package.nix`. The flake discovers those applications and reads target features from Cargo.toml. Portal definitions live in `packaging/nix/portal/`; its module uses the shared `xdg.portal` interface for both NixOS and Home Manager and does not depend on a graphical application package.
+
+## NUR releases
+
+`packaging/nix/nur.nix` exports `gds`, `gds-files`, `gds-agents` and
+`xdg-desktop-portal-gds`, using the caller's `pkgs`. The flake shares this package
+set, while retaining its pinned nixpkgs and module exports. NUR does not provide
+a binary cache; users may need to compile these packages.
+
+NUR registration is a separate, one-time step. The presence of this entry point
+does not mean that GDS has already been accepted into NUR. After registration
+under `gandesktop`, users with the NUR overlay configured can install:
+
+```nix
+environment.systemPackages = [ pkgs.nur.repos.gandesktop.gds-files ];
+```
+
+Modules remain available through the GDS flake. To use a NUR-built package with
+an imported module, set `programs.gds-files.package` (or the equivalent Agents
+or Portal package option) to the corresponding NUR package.
+
+### Publication and first registration
+
+The release workflow checks NUR's restricted evaluation and builds the entire
+suite plus Portal on `x86_64-linux` against `nixpkgs-unstable`. After those checks
+and native release uploads succeed, it advances the `nur` branch to the release
+tag's commit. This push uses the workflow's built-in `GITHUB_TOKEN` with
+`contents: write`; repository rules must permit that branch update. It never
+force-pushes, and an older release cannot rewind the branch.
+
+NUR must track `nur`, not `main`, so development commits and prereleases do not
+become NUR releases. The existing flake also exports `aarch64-linux`; the release
+workflow's NUR build currently covers x86_64 only.
+
+For first registration:
+
+1. Publish a stable GitHub Release containing the NUR entry point and workflow,
+   and wait for the `Publish stable revision for NUR` job to create `nur`.
+2. Merge the entry in `packaging/nix/nur-registration.json` into the upstream
+   [NUR `repos.json`](https://github.com/nix-community/NUR/blob/main/repos.json).
+   Confirm the `gandesktop` name and the `4t145` maintainer contact, run NUR's
+   manifest checks, and submit the registration PR. Do not replace the upstream
+   manifest or commit its generated lock file.
+3. After acceptance, set the GitHub repository Actions variable
+   `NUR_REPOSITORY=gandesktop`. The release job will then notify NUR's update
+   service after advancing the branch. Before that variable is set, publication
+   still updates the branch but skips notification.
+
+NUR indexes updates asynchronously; a successful notification does not mean the
+new version is already indexed. See the
+[NUR contribution instructions](https://github.com/nix-community/NUR#how-to-add-your-own-repository).
+
+To build the same package set locally with your selected nixpkgs:
+
+```sh
+nix-build packaging/nix/nur.nix -A gds -A xdg-desktop-portal-gds --no-out-link
+```
