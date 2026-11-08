@@ -6,7 +6,7 @@ use crate::shared::lib::appearance::{
         Background, ComposerEnterBehavior, Language, Preferences, ThemeMode, ThemeSource,
     },
 };
-use gds::appearance::theme::BuiltinTheme;
+use gds::appearance::theme::{BuiltinTheme, SourceKind, provider::custom};
 use gds::ui::settings::{FONT_SIZE_RANGE, NumberControl, NumberRange, PERCENTAGE_RANGE};
 use gpui_kit::{
     App, AppContext, Context, Entity, Window,
@@ -29,7 +29,8 @@ pub(super) struct Form {
     pub line_height: Numeric,
     pub opacity: Numeric,
     pub sidebar_opacity: Numeric,
-    pub source: Entity<SelectState<Vec<Choice<ThemeSource>>>>,
+    pub source: Entity<SelectState<Vec<Choice<SourceKind>>>>,
+    pub custom: Entity<SelectState<Vec<CustomChoice>>>,
     pub builtin: Entity<SelectState<Vec<Choice<BuiltinTheme>>>>,
     pub mode: Entity<SelectState<Vec<Choice<ThemeMode>>>>,
     pub background: Entity<SelectState<Vec<Choice<Background>>>>,
@@ -86,18 +87,42 @@ impl SelectItem for Choice<Language> {
     }
 }
 
-impl SelectItem for Choice<ThemeSource> {
-    type Value = ThemeSource;
+impl SelectItem for Choice<SourceKind> {
+    type Value = SourceKind;
     fn title(&self) -> gpui_kit::SharedString {
-        match &self.0 {
-            ThemeSource::Custom(path) => path.display().to_string(),
-            ThemeSource::Desktop => tr!("appearance-desktop").to_owned(),
-            ThemeSource::Builtin => tr!("appearance-builtin").to_owned(),
+        match self.0 {
+            SourceKind::Custom => tr!("appearance-custom"),
+            SourceKind::System => tr!("appearance-system"),
+            SourceKind::Builtin => tr!("appearance-builtin"),
         }
         .into()
     }
-    fn value(&self) -> &ThemeSource {
+    fn value(&self) -> &SourceKind {
         &self.0
+    }
+}
+
+pub(super) fn source_kind(source: &ThemeSource) -> SourceKind {
+    match source {
+        ThemeSource::Custom(_) => SourceKind::Custom,
+        ThemeSource::Desktop => SourceKind::System,
+        ThemeSource::Builtin => SourceKind::Builtin,
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct CustomChoice(custom::Entry);
+impl SelectItem for CustomChoice {
+    type Value = std::path::PathBuf;
+    fn title(&self) -> gpui_kit::SharedString {
+        self.0
+            .metadata
+            .display_name(crate::shared::i18n::language().locale())
+            .to_owned()
+            .into()
+    }
+    fn value(&self) -> &Self::Value {
+        &self.0.path
     }
 }
 
@@ -277,11 +302,22 @@ impl Form {
             ui_font: font_choice(p.ui_font_family.clone(), window, cx),
             mono_font: font_choice(p.mono_font_family.clone(), window, cx),
             source: choice(
-                theme_sources(&p.theme_source),
-                p.theme_source.clone(),
+                vec![SourceKind::System, SourceKind::Builtin, SourceKind::Custom],
+                source_kind(&p.theme_source),
                 window,
                 cx,
             ),
+            custom: {
+                let items = custom_themes();
+                let selected = match &p.theme_source {
+                    ThemeSource::Custom(path) => items
+                        .iter()
+                        .position(|item| item.value() == path)
+                        .map(IndexPath::new),
+                    _ => None,
+                };
+                cx.new(|cx| SelectState::new(items, selected, window, cx))
+            },
             builtin: choice(BuiltinTheme::ALL.to_vec(), p.builtin_theme, window, cx),
             mode: choice(
                 vec![
@@ -361,12 +397,23 @@ impl Form {
             content_opacity: self.opacity.value,
             sidebar_opacity: self.sidebar_opacity.value,
             theme_file: None,
-            theme_source: self
+            theme_source: match self
                 .source
                 .read(cx)
                 .selected_value()
-                .cloned()
-                .unwrap_or_default(),
+                .copied()
+                .unwrap_or_default()
+            {
+                SourceKind::System => ThemeSource::Desktop,
+                SourceKind::Builtin => ThemeSource::Builtin,
+                SourceKind::Custom => ThemeSource::Custom(
+                    self.custom
+                        .read(cx)
+                        .selected_value()
+                        .cloned()
+                        .ok_or(theme::preferences::ValidationError::ThemeFile)?,
+                ),
+            },
             builtin_theme: self
                 .builtin
                 .read(cx)
@@ -486,30 +533,25 @@ fn font_choice(
     cx.new(|cx| SelectState::new(SearchableVec::new(items), index, window, cx).searchable(true))
 }
 
-fn theme_sources(selected: &ThemeSource) -> Vec<ThemeSource> {
-    let mut sources = vec![ThemeSource::Desktop, ThemeSource::Builtin];
-    match gds::appearance::theme::provider::custom::catalog() {
-        Ok(paths) => sources.extend(paths.into_iter().map(ThemeSource::Custom)),
-        Err(error) => tracing::warn!(%error, "cannot list user themes"),
+fn custom_themes() -> Vec<CustomChoice> {
+    match custom::catalog() {
+        Ok(entries) => entries.into_iter().map(CustomChoice).collect(),
+        Err(error) => {
+            tracing::warn!(%error, "cannot list user themes");
+            Vec::new()
+        }
     }
-    if !sources.contains(selected) {
-        sources.push(selected.clone());
-    }
-    sources
 }
 
 impl Form {
     pub(super) fn refresh_themes(&self, window: &mut Window, cx: &mut Context<AppearancePage>) {
-        let selected = self
-            .source
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .unwrap_or_default();
-        let sources = theme_sources(&selected).into_iter().map(Choice).collect();
-        self.source.update(cx, |state, cx| {
-            state.set_items(sources, window, cx);
-            state.set_selected_value(&selected, window, cx);
+        let selected = self.custom.read(cx).selected_value().cloned();
+        let items = custom_themes();
+        self.custom.update(cx, |state, cx| {
+            state.set_items(items, window, cx);
+            if let Some(selected) = selected {
+                state.set_selected_value(&selected, window, cx);
+            }
         });
     }
 }

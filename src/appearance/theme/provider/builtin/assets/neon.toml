@@ -1,3 +1,10 @@
+[metadata]
+schema_version = 1
+name = "Neon"
+
+[metadata.i18n]
+zh-CN = "霓虹"
+
 # 霓虹 · Neon — synthwave pink, violet and cyan
 # Opaque #RRGGBB roles; surface opacity is controlled by application preferences.
 

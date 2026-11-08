@@ -1,3 +1,10 @@
+[metadata]
+schema_version = 1
+name = "Retro"
+
+[metadata.i18n]
+zh-CN = "怀旧"
+
 # 怀旧 · Retro — classic gray, navy and teal
 # Opaque #RRGGBB roles; surface opacity is controlled by application preferences.
 

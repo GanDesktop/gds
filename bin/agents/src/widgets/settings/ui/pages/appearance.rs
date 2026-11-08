@@ -70,6 +70,7 @@ enum Field {
     Language,
     Source,
     Builtin,
+    Custom,
     Mode,
     Background,
     UiFont,
@@ -83,12 +84,13 @@ enum Field {
     ComposerEnter,
 }
 impl Field {
-    const ALL: [Self; 15] = [
+    const ALL: [Self; 16] = [
         Self::Language,
         Self::Animations,
         Self::RoundedCorners,
         Self::Source,
         Self::Builtin,
+        Self::Custom,
         Self::Mode,
         Self::Background,
         Self::Opacity,
@@ -107,6 +109,7 @@ impl Field {
             Self::Language => "appearance-language",
             Self::Source => "appearance-source",
             Self::Builtin => "appearance-builtin-theme",
+            Self::Custom => "appearance-custom-theme",
             Self::Mode => "appearance-mode",
             Self::Background => "appearance-background",
             Self::UiFont => "appearance-ui-font",
@@ -127,6 +130,7 @@ impl Field {
             Self::Language => tr!("appearance-language"),
             Self::Source => tr!("appearance-source"),
             Self::Builtin => tr!("appearance-builtin-theme"),
+            Self::Custom => tr!("appearance-custom-theme"),
             Self::Mode => tr!("appearance-mode"),
             Self::Background => tr!("appearance-background"),
             Self::UiFont => tr!("appearance-ui-font"),
@@ -147,6 +151,7 @@ impl Field {
             Self::Language => tr!("appearance-language-help"),
             Self::Source => tr!("appearance-source-help"),
             Self::Builtin => tr!("appearance-builtin-theme-help"),
+            Self::Custom => tr!("appearance-custom-theme-help"),
             Self::Mode => tr!("appearance-mode-help"),
             Self::Background => tr!("appearance-background-help"),
             Self::UiFont => tr!("appearance-ui-font-help"),
@@ -166,6 +171,7 @@ impl Field {
         match self {
             Self::Animations | Self::Language | Self::RoundedCorners => Group::Theme,
             Self::Source
+            | Self::Custom
             | Self::Builtin
             | Self::Mode
             | Self::Background
@@ -323,7 +329,23 @@ impl AppearancePage {
                 ));
             };
         }
-        select!(source);
+        self.subscriptions.push(cx.subscribe_in(
+            &self.form.source,
+            window,
+            |this, _, event, window, cx| {
+                if matches!(event, SelectEvent::Confirm(_)) {
+                    cx.notify();
+                    if this.form.source.read(cx).selected_value()
+                        == Some(&gds::appearance::theme::SourceKind::Custom)
+                        && this.form.custom.read(cx).selected_value().is_none()
+                    {
+                        return;
+                    }
+                    this.flush_pending(window, cx);
+                }
+            },
+        ));
+        select!(custom);
         select!(builtin);
         select!(language);
         select!(mode);
@@ -456,6 +478,13 @@ impl AppearancePage {
                 ($(&self.form.source), cx).gds::ui::field::select {
                     small;
                     cursor_pointer;
+                }
+            }
+            .into_any_element(),
+            Field::Custom => el! {
+                ($(&self.form.custom), cx).gds::ui::field::select {
+                    small; cursor_pointer;
+                    placeholder: $(tr!("appearance-custom-theme"));
                 }
             }
             .into_any_element(),
@@ -610,10 +639,16 @@ impl AppearancePage {
                 let fields: Vec<_> = Field::ALL
                     .into_iter()
                     .filter(|field| field.group() == group)
-                    .filter(|field| {
-                        !matches!(field, Field::Builtin)
-                            || self.form.source.read(cx).selected_value()
-                                == Some(&theme::preferences::ThemeSource::Builtin)
+                    .filter(|field| match field {
+                        Field::Builtin => {
+                            self.form.source.read(cx).selected_value()
+                                == Some(&gds::appearance::theme::SourceKind::Builtin)
+                        }
+                        Field::Custom => {
+                            self.form.source.read(cx).selected_value()
+                                == Some(&gds::appearance::theme::SourceKind::Custom)
+                        }
+                        _ => true,
                     })
                     .filter(|field| query.is_empty() || field.matches(&query))
                     .collect();

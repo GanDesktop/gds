@@ -1131,7 +1131,8 @@ impl Browser {
                 self.show_page(pages::Page::Settings, window, cx);
                 self.toolbar.path.editing = false;
                 self.settings.view.update(cx, |view, cx| {
-                    view.set_preferences(self.settings.preferences.clone(), window, cx)
+                    view.set_preferences(self.settings.preferences.clone(), window, cx);
+                    view.refresh_themes(window, cx);
                 });
             }
             Command::NewFolder => {

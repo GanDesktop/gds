@@ -153,12 +153,13 @@ impl AppearancePage {
             | Field::Opacity
             | Field::SidebarOpacity => self.setting_number(field).value.is_some(),
             Field::Fallbacks => !self.form.fallbacks.read(cx).value().is_empty(),
+            Field::Custom => false,
             Field::Source => self
                 .form
                 .source
                 .read(cx)
                 .selected_value()
-                .is_some_and(|value| *value != defaults.theme_source),
+                .is_some_and(|value| *value != form::source_kind(&defaults.theme_source)),
             Field::Builtin => self
                 .form
                 .builtin
@@ -215,8 +216,9 @@ impl AppearancePage {
                 .form
                 .fallbacks
                 .update(cx, |input, cx| input.set_value("", window, cx)),
+            Field::Custom => return,
             Field::Source => self.form.source.update(cx, |select, cx| {
-                select.set_selected_value(&defaults.theme_source, window, cx)
+                select.set_selected_value(&form::source_kind(&defaults.theme_source), window, cx)
             }),
             Field::Builtin => self.form.builtin.update(cx, |select, cx| {
                 select.set_selected_value(&defaults.builtin_theme, window, cx)

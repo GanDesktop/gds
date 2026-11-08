@@ -179,13 +179,13 @@ appearance-sidebar-opacity = Sidebar background opacity
 appearance-sidebar-opacity-help = Adjust the sidebar background independently; text and icons stay opaque.
 appearance-opacity-range = { $field }: opacity must be between 0% and 100%.
 appearance-opaque = Solid
-appearance-path-required = Enter a theme file path.
+appearance-path-required = Choose a custom theme.
 appearance-positive = { $field }: enter a number greater than 0.
 appearance-reset-all = Reset appearance
 appearance-search-font = Search fonts
 appearance-size-help = Pixels. Leave blank for automatic.
 appearance-source = Theme source
-appearance-source-help = Use your desktop theme or a built-in Agents theme.
+appearance-source-help = Follow the system, or choose a built-in or custom theme.
 appearance-system = Follow system
 appearance-animations = Interface animations
 appearance-animations-help = Applies to all Agents windows. When enabled, follows the system’s reduced-motion preference.
@@ -921,3 +921,7 @@ workspace-open = Open workspace
 workspace-provider-upgrade = Update and restart BAS to create workspaces with providers.
 
 workspace-directory = Folder
+
+appearance-custom = Custom
+appearance-custom-theme = Custom theme
+appearance-custom-theme-help = Choose a theme from your theme directory.

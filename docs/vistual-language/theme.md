@@ -183,7 +183,7 @@ tiled edge stay square; server-side decorations remain desktop-owned.
 
 共享用户主题位于 `$XDG_CONFIG_HOME/gds/themes/`（默认 `~/.config/gds/themes/`），Files 与 Agents 的配置分别位于 `gds/app/files/settings.toml` 和 `gds/app/agents/settings.json`。运行时只读写新配置路径，不查找或迁移历史路径。应用的 XDG state/cache 路径不受此调整影响。
 
-用户主题复用内置主题的 TOML 格式，包含完整的 `[light]` 与 `[dark]` 配色角色，颜色为 `#RRGGBB`；可复制 `src/appearance/theme/provider/builtin/assets/bamboo.toml` 开始编辑。两款应用的外观来源列表展示主题目录内的 TOML 文件（包括子目录），用户选择保存的是相对主题目录的路径。新增文件后重新打开设置；编辑已选中的文件会触发热加载，非法配色保留最后有效主题并报告错误。用户主题的亮暗选择与表面透明度继续由各应用独立设置。
+用户主题复用内置主题的 TOML 格式，包含完整的 `[light]` 与 `[dark]` 配色角色，颜色为 `#RRGGBB`；可复制 `src/appearance/theme/provider/builtin/assets/bamboo.toml` 开始编辑。两款应用的主题来源为「跟随系统 / 内置 / 自定义」；选择自定义后，下方的独立菜单展示主题目录内的有效 TOML 主题（包括子目录）。菜单优先显示当前应用语言对应的译名，缺失或为空时回退到默认名称；用户选择保存的是相对主题目录的路径。新增文件后重新打开设置；编辑已选中的文件会触发热加载，非法配色保留最后有效主题并报告错误。用户主题的亮暗选择与表面透明度继续由各应用独立设置。
 
 Files 配置示例：
 
@@ -198,3 +198,23 @@ Agents 配置中的对应字段：
 ```json
 {"appearance": {"theme_source": {"custom": "personal/my-theme.toml"}}}
 ```
+
+
+### 自定义主题元信息
+
+主题文件在 `[metadata]` 中声明默认名称；`name` 为唯一必填的元信息，不能为空或只含空白。`schema_version` 可省略（按当前版本 1 解释），显式指定未知版本会报错；`author` 与 `i18n` 均可省略。旧的无名称主题需补充 `[metadata]` 后使用。内置 TOML 示例已包含元信息，可直接复制。
+
+```toml
+[metadata]
+name = "Forest"
+schema_version = 1
+author = "Theme Author"
+
+[metadata.i18n]
+zh-CN = "森林"
+en-US = "Forest"
+
+# Follow with the complete [light] and [dark] palettes.
+```
+
+`i18n` 是语言标记到主题名称的映射；按当前应用语言标记（`zh-CN`、`en-US`，忽略大小写）匹配，无匹配时直接回退到 `name`。不会借用其它语言的译名。无效文件不会进入选单；正在使用的主题变为无效时，热加载继续保留最后有效配色并报告错误。

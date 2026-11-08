@@ -26,7 +26,7 @@ theme-source = Theme source
 theme-builtin = Built-in
 theme-dms = DMS colors
 theme-system = Follow system
-theme-custom = Custom theme
+theme-custom = Custom
 settings-reset-default = Reset to default
 language-search = Search languages…
 theme-qt6ct = Qt6ct palette
@@ -292,3 +292,6 @@ appearance-rounded-corners = Rounded window corners
 loading-volume = Volume { $name }
 
 new-window = New window
+
+theme-search = Search themes…
+theme-custom-selection = Custom theme

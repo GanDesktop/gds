@@ -24,6 +24,25 @@ use thiserror::Error;
 
 use provider::Loaded;
 
+/// Source category shown separately from the selected palette.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SourceKind {
+    #[default]
+    System,
+    Builtin,
+    Custom,
+}
+
+impl From<&Source> for SourceKind {
+    fn from(source: &Source) -> Self {
+        match source {
+            Source::Builtin => Self::Builtin,
+            Source::Custom(_) => Self::Custom,
+            _ => Self::System,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {

@@ -26,7 +26,7 @@ theme-source = 主题来源
 theme-builtin = 内置
 theme-dms = DMS 配色
 theme-system = 跟随系统
-theme-custom = 自定义主题
+theme-custom = 自定义
 settings-reset-default = 恢复默认值
 language-search = 搜索语言…
 theme-qt6ct = Qt6ct 调色板
@@ -283,3 +283,6 @@ appearance-rounded-corners = 窗口圆角
 loading-volume = 卷 { $name }
 
 new-window = 新建窗口
+
+theme-search = 搜索主题…
+theme-custom-selection = 自定义主题

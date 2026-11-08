@@ -178,13 +178,13 @@ appearance-sidebar-opacity = 侧边栏背景不透明度
 appearance-sidebar-opacity-help = 单独调整侧边栏背景，文字与图标保持不透明。
 appearance-opacity-range = { $field }：不透明度须在 0% 到 100% 之间。
 appearance-opaque = 实色
-appearance-path-required = 请填写主题文件路径。
+appearance-path-required = 请选择自定义主题。
 appearance-positive = { $field }：请输入大于 0 的数值。
 appearance-reset-all = 重置外观设置
 appearance-search-font = 搜索字体
 appearance-size-help = 单位：像素。留空自动选择。
 appearance-source = 主题来源
-appearance-source-help = 使用桌面主题或 Agents 内置主题。
+appearance-source-help = 跟随系统，或选择内置、自定义主题。
 appearance-system = 跟随系统
 appearance-animations = 界面动画
 appearance-animations-help = 应用于全部 Agents 窗口；开启时仍遵循系统减少动效设置。
@@ -891,3 +891,7 @@ workspace-open = 打开工作区
 workspace-provider-upgrade = 请升级并重启 BAS，以使用工作区提供方。
 
 workspace-directory = 文件夹
+
+appearance-custom = 自定义
+appearance-custom-theme = 自定义主题
+appearance-custom-theme-help = 选择主题目录中的主题。

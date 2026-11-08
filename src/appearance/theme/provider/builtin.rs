@@ -96,6 +96,7 @@ pub(super) fn palette(mode: Mode) -> Palette {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Definition {
+    pub(super) metadata: Option<super::custom::Metadata>,
     light: Scheme,
     dark: Scheme,
 }

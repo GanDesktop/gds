@@ -9,7 +9,49 @@ fn user_theme_catalog_and_palette_validation() {
     std::fs::write(&path, text).expect("theme");
     assert_eq!(
         catalog_at(root.path()).expect("catalog"),
-        vec![PathBuf::from("personal/bamboo.toml")]
+        vec![Entry {
+            path: PathBuf::from("personal/bamboo.toml"),
+            metadata: definition(text, &path)
+                .expect("definition")
+                .metadata
+                .expect("metadata"),
+        }]
+    );
+    let catalog = catalog_at(root.path()).expect("catalog");
+    let metadata = &catalog[0].metadata;
+    assert_eq!(metadata.display_name("zh-CN"), "竹林");
+    assert_eq!(metadata.display_name("fr-FR"), "Bamboo");
+    assert!(
+        parse(
+            &text.replace("name = \"Bamboo\"", "name = \"\""),
+            path.clone(),
+            Mode::Dark
+        )
+        .is_err()
+    );
+    assert!(
+        parse(
+            &text.replace("schema_version = 1", "schema_version = 999"),
+            path.clone(),
+            Mode::Dark
+        )
+        .is_err()
+    );
+    assert!(
+        parse(
+            &text.replace("name = \"Bamboo\"", ""),
+            path.clone(),
+            Mode::Dark
+        )
+        .is_err()
+    );
+    assert!(
+        parse(
+            &text.replace("schema_version = 1", ""),
+            path.clone(),
+            Mode::Dark
+        )
+        .is_ok()
     );
     let light = parse(text, path.clone(), Mode::Light).expect("light variant");
     let dark = parse(text, path.clone(), Mode::Dark).expect("dark variant");

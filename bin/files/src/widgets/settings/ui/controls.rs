@@ -20,7 +20,7 @@ use gds::ui::settings::{
     SettingActions, SettingControl, SettingDescription, SettingLabel, SettingReset, SettingRow,
 };
 use gds::{
-    appearance::theme::{BuiltinTheme, ModePreference, Source},
+    appearance::theme::{BuiltinTheme, ModePreference, SourceKind},
     i18n::text,
 };
 
@@ -28,6 +28,7 @@ use gds::{
 pub(super) enum Field {
     Source,
     Builtin,
+    Custom,
     Mode,
     ContentOpacity,
     SidebarOpacity,
@@ -45,6 +46,7 @@ impl Field {
             Self::Animations => "appearance-animations",
             Self::Source => "theme-source",
             Self::Builtin => "theme-builtin-selection",
+            Self::Custom => "theme-custom-selection",
             Self::Mode => "theme-mode",
             Self::ContentOpacity => "theme-opacity",
             Self::SidebarOpacity => "sidebar-opacity",
@@ -60,6 +62,7 @@ impl Field {
             Self::RoundedCorners => preferences.appearance.rounded_corners,
             Self::Animations => !preferences.animations_enabled.unwrap_or(true),
             Self::Source => preferences.appearance.source != defaults.appearance.source,
+            Self::Custom => false,
             Self::Builtin => preferences.appearance.builtin != defaults.appearance.builtin,
             Self::Mode => preferences.appearance.mode != defaults.appearance.mode,
             Self::ContentOpacity => !PERCENTAGE_RANGE.equivalent(
@@ -89,6 +92,7 @@ impl Field {
             Self::RoundedCorners => preferences.appearance.rounded_corners = false,
             Self::Animations => preferences.animations_enabled = defaults.animations_enabled,
             Self::Source => preferences.appearance.source = defaults.appearance.source,
+            Self::Custom => return false,
             Self::Builtin => preferences.appearance.builtin = defaults.appearance.builtin,
             Self::Mode => preferences.appearance.mode = defaults.appearance.mode,
             Self::ContentOpacity => {
@@ -177,32 +181,40 @@ impl<T: Clone + PartialEq> SelectItem for Choice<T> {
     }
 }
 
-impl Choice<Source> {
-    pub fn catalog(selected: &Source, cx: &App) -> Vec<Self> {
-        let mut choices = vec![
-            Self::new(Source::System, text("theme-system", cx), "system 系统"),
-            Self::new(Source::Builtin, text("theme-builtin", cx), "builtin 内置"),
-        ];
-        match gds::appearance::theme::provider::custom::catalog() {
-            Ok(paths) => choices.extend(paths.into_iter().map(|path| {
-                Self::new(
-                    Source::Custom(path.clone()),
-                    path.display().to_string().into(),
-                    "custom 自定义",
-                )
-            })),
-            Err(error) => tracing::warn!(%error, "cannot list user themes"),
-        }
-        if let Source::Custom(path) = selected
-            && !choices.iter().any(|choice| &choice.value == selected)
-        {
-            choices.push(Self::new(
-                selected.clone(),
-                path.display().to_string().into(),
+impl Choice<SourceKind> {
+    pub fn catalog(cx: &App) -> Vec<Self> {
+        vec![
+            Self::new(SourceKind::System, text("theme-system", cx), "system 系统"),
+            Self::new(
+                SourceKind::Builtin,
+                text("theme-builtin", cx),
+                "builtin 内置",
+            ),
+            Self::new(
+                SourceKind::Custom,
+                text("theme-custom", cx),
                 "custom 自定义",
-            ));
-        }
-        choices
+            ),
+        ]
+    }
+}
+
+impl Choice<std::path::PathBuf> {
+    pub fn catalog(
+        entries: &[gds::appearance::theme::provider::custom::Entry],
+        cx: &App,
+    ) -> Vec<Self> {
+        let locale = gds::i18n::language(cx).locale();
+        entries
+            .iter()
+            .map(|entry| {
+                Self::new(
+                    entry.path.clone(),
+                    entry.metadata.display_name(locale).to_owned().into(),
+                    "",
+                )
+            })
+            .collect()
     }
 }
 

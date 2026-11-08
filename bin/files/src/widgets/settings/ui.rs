@@ -41,7 +41,9 @@ pub struct View {
     /// inside the visible page and blurs controls on the page being left.
     page_focus: [FocusHandle; 4],
     general: Entity<PreferencesEditor>,
-    source: ChoiceControl<theme::Source>,
+    source: ChoiceControl<theme::SourceKind>,
+    custom: ChoiceControl<std::path::PathBuf>,
+    themes: Vec<theme::provider::custom::Entry>,
     builtin: ChoiceControl<theme::BuiltinTheme>,
     mode: ChoiceControl<theme::ModePreference>,
     content_opacity: NumberControl,
@@ -61,9 +63,24 @@ impl View {
         cx: &mut Context<Self>,
     ) -> Self {
         let general = cx.new(|cx| PreferencesEditor::new(preferences.clone(), window, cx));
+        let themes = theme::provider::custom::catalog().unwrap_or_else(|error| {
+            tracing::warn!(%error, "cannot list user themes");
+            Vec::new()
+        });
+        let custom_path = match &preferences.appearance.source {
+            theme::Source::Custom(path) => path.clone(),
+            _ => std::path::PathBuf::new(),
+        };
+        let custom = ChoiceControl::new(
+            Choice::<std::path::PathBuf>::catalog(&themes, cx),
+            &custom_path,
+            true,
+            window,
+            cx,
+        );
         let source = ChoiceControl::new(
-            Choice::<theme::Source>::catalog(&preferences.appearance.source, cx),
-            &preferences.appearance.source,
+            Choice::<theme::SourceKind>::catalog(cx),
+            &theme::SourceKind::from(&preferences.appearance.source),
             false,
             window,
             cx,
@@ -98,6 +115,7 @@ impl View {
             cx.subscribe_in(&terminal, window, Self::on_terminal_edited),
             cx.subscribe_in(&general, window, Self::on_general_edited),
             cx.subscribe_in(&source.state, window, Self::on_source_confirm),
+            cx.subscribe_in(&custom.state, window, Self::on_custom_confirm),
             cx.subscribe_in(&mode.state, window, Self::on_mode_confirm),
             cx.subscribe_in(&builtin.state, window, Self::on_builtin_confirm),
             cx.subscribe_in(&font, window, Self::on_font_edited),
@@ -117,6 +135,8 @@ impl View {
             page_focus: std::array::from_fn(|_| cx.focus_handle()),
             general,
             source,
+            custom,
+            themes,
             builtin,
             mode,
             content_opacity,
@@ -125,6 +145,15 @@ impl View {
             terminal,
             _subscriptions: subscriptions,
         }
+    }
+
+    pub fn refresh_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match theme::provider::custom::catalog() {
+            Ok(themes) => self.themes = themes,
+            Err(error) => tracing::warn!(%error, "cannot list user themes"),
+        }
+        self.sync_controls(window, cx);
+        cx.notify();
     }
 
     pub fn set_sidebar_presentation(
@@ -185,8 +214,24 @@ impl View {
             editor.set_value(self.preferences.clone(), window, cx)
         });
         self.source.sync(
-            Choice::<theme::Source>::catalog(&self.preferences.appearance.source, cx),
-            &self.preferences.appearance.source,
+            Choice::<theme::SourceKind>::catalog(cx),
+            &theme::SourceKind::from(&self.preferences.appearance.source),
+            window,
+            cx,
+        );
+        let custom_path = match &self.preferences.appearance.source {
+            theme::Source::Custom(path) => path.clone(),
+            _ => self
+                .custom
+                .state
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default(),
+        };
+        self.custom.sync(
+            Choice::<std::path::PathBuf>::catalog(&self.themes, cx),
+            &custom_path,
             window,
             cx,
         );
@@ -272,14 +317,42 @@ impl View {
 
     fn on_source_confirm(
         &mut self,
-        _: &Entity<ChoiceState<theme::Source>>,
-        event: &ChoiceEvent<theme::Source>,
+        _: &Entity<ChoiceState<theme::SourceKind>>,
+        event: &ChoiceEvent<theme::SourceKind>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let ChoiceEvent::Confirm(Some(value)) = event {
+            let source = match value {
+                theme::SourceKind::System => theme::Source::System,
+                theme::SourceKind::Builtin => theme::Source::Builtin,
+                theme::SourceKind::Custom => {
+                    cx.notify();
+                    let Some(path) = self.custom.state.read(cx).selected_value().cloned() else {
+                        return;
+                    };
+                    theme::Source::Custom(path)
+                }
+            };
             self.change(window, cx, |preferences| {
-                Field::replace(&mut preferences.appearance.source, value.clone())
+                Field::replace(&mut preferences.appearance.source, source)
+            });
+        }
+    }
+
+    fn on_custom_confirm(
+        &mut self,
+        _: &Entity<ChoiceState<std::path::PathBuf>>,
+        event: &ChoiceEvent<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let ChoiceEvent::Confirm(Some(path)) = event {
+            self.change(window, cx, |preferences| {
+                Field::replace(
+                    &mut preferences.appearance.source,
+                    theme::Source::Custom(path.clone()),
+                )
             });
         }
     }

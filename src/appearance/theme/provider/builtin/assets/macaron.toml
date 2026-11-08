@@ -1,3 +1,10 @@
+[metadata]
+schema_version = 1
+name = "Macaron"
+
+[metadata.i18n]
+zh-CN = "马卡龙"
+
 # 马卡龙 · Macaron — cream, rose, mint and lavender
 # Opaque #RRGGBB roles; surface opacity is controlled by application preferences.
 

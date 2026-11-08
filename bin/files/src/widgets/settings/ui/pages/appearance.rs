@@ -32,25 +32,39 @@ impl View {
         let source = self.source.render(
             Field::Source,
             text("theme-custom", cx),
-            text("language-search", cx),
+            text("theme-search", cx),
             cx,
         );
-        let builtin_row =
-            if self.preferences.appearance.source == gds::appearance::theme::Source::Builtin {
-                let builtin = self.builtin.render(
-                    Field::Builtin,
-                    text("theme-builtin-selection", cx),
-                    text("language-search", cx),
-                    cx,
-                );
-                Some(self.setting_row(Field::Builtin, builtin, cx))
-            } else {
-                None
-            };
+        let builtin_row = if self.source.state.read(cx).selected_value()
+            == Some(&gds::appearance::theme::SourceKind::Builtin)
+        {
+            let builtin = self.builtin.render(
+                Field::Builtin,
+                text("theme-builtin-selection", cx),
+                text("theme-search", cx),
+                cx,
+            );
+            Some(self.setting_row(Field::Builtin, builtin, cx))
+        } else {
+            None
+        };
+        let custom_row = if self.source.state.read(cx).selected_value()
+            == Some(&gds::appearance::theme::SourceKind::Custom)
+        {
+            let custom = self.custom.render(
+                Field::Custom,
+                text("theme-custom-selection", cx),
+                text("theme-search", cx),
+                cx,
+            );
+            Some(self.setting_row(Field::Custom, custom, cx))
+        } else {
+            None
+        };
         let mode = self.mode.render(
             Field::Mode,
             text("theme-mode", cx),
-            text("language-search", cx),
+            text("theme-search", cx),
             cx,
         );
         let source_row = self.setting_row(Field::Source, source, cx);
@@ -69,6 +83,7 @@ impl View {
             .div { flex; flex_col } [
                 source_row,
                 ..builtin_row,
+                ..custom_row,
                 mode_row,
                 corners_row,
                 animations_row,
