@@ -1,16 +1,17 @@
 //! Optional right-hand preview of the single selected entry.
 //!
-//! The panel carries the entry's name, shared metadata and a bounded,
-//! header-only probe of its content. It deliberately shows no location bar:
+//! The panel carries the entry's name, shared metadata and content properties.
+//! Content metadata and thumbnails share a background cache. There is no location bar:
 //! the file's own path is not repeated here. A symlink's target is different
 //! information and is shown as its own row.
 
-mod header;
 mod info;
 mod metadata;
 use metadata::MetadataRow;
 
-use gds::ui::thumbnail::{Cache, Thumbnail};
+use gds::ui::file_inspection::{Cache, State};
+use gds::ui::thumbnail::Thumbnail;
+use std::sync::Arc;
 
 use gds::appearance::tokens::{self, TOOLTIP_DELAY};
 use gds::i18n;
@@ -30,9 +31,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::{Browser, table::EntryPresentation};
-use crate::entities::file::directory::{ContentCategory, Entry, EntryKind};
-use header::{
-    AudioFacts, DirectoryFacts, FileFacts, ImageFacts, Probe, ProbeHint, TextFacts, VideoFacts,
+use crate::entities::file::directory::{Entry, EntryKind, inspection_source};
+use gds::service::file_inspection::{
+    AudioFacts, DirectoryFacts, FileFacts, ImageFacts, Metadata, Request, TextFacts, VideoFacts,
 };
 use info::LineEndingLabel;
 
@@ -82,34 +83,17 @@ impl PartialEq for Item {
 
 impl Eq for Item {}
 
-/// Header facts, loaded on the background executor.
-enum Facts {
-    None,
-    Loading,
-    Ready(Probe),
-}
-
-/// What one background read produced.
-enum LoadOutcome {
-    Probe(Probe),
-    Failed(String),
-}
-
 pub(super) struct View {
     target: Target,
-    thumbnails: Entity<Cache>,
-    facts: Facts,
-    generation: u64,
+    inspections: Entity<Cache>,
 }
 
 impl View {
-    pub(super) fn new(thumbnails: Entity<Cache>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&thumbnails, |_, _, cx| cx.notify()).detach();
+    pub(super) fn new(inspections: Entity<Cache>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&inspections, |_, _, cx| cx.notify()).detach();
         Self {
             target: Target::Empty,
-            thumbnails,
-            facts: Facts::None,
-            generation: 0,
+            inspections,
         }
     }
 
@@ -117,79 +101,47 @@ impl View {
         self.sync(Target::Item(Item::from_entry(&entry)), cx);
     }
 
-    /// Point the preview at a new selection. Reading happens on the background
-    /// executor; stale completions are ignored by generation.
+    /// Point the preview at a selection; the shared cache owns background work.
     pub(super) fn sync(&mut self, target: Target, cx: &mut Context<Self>) {
         if self.target == target {
             return;
         }
-        let same_source = matches!(
-            (&self.target, &target),
-            (Target::Item(previous), Target::Item(next)) if previous.same_source(next)
-        );
         self.target = target;
-        if same_source {
-            cx.notify();
-            return;
-        }
-        self.generation += 1;
-        self.facts = Facts::None;
-        self.load(cx);
+        self.request(cx);
         cx.notify();
     }
 
-    fn load(&mut self, cx: &mut Context<Self>) {
+    fn request(&self, cx: &mut Context<Self>) {
         let Target::Item(item) = &self.target else {
             return;
         };
-        self.facts = Facts::Loading;
-        let generation = self.generation;
-        let entry = item.entry.clone();
-        let hint = probe_hint(&entry);
-        let work = cx.background_executor().spawn(async move {
-            match entry.kind {
-                EntryKind::Directory => LoadOutcome::Probe(header::probe_directory(&entry.path)),
-                EntryKind::SymbolicLink => match header::probe_symlink(&entry.path) {
-                    Some(probe) => LoadOutcome::Probe(probe),
-                    None => LoadOutcome::Failed(format!(
-                        "Could not read the link target of {}",
-                        entry.path.display()
-                    )),
-                },
-                _ => match header::read_prefix(&entry.path, header::PREFIX_BYTES) {
-                    Ok(bytes) => LoadOutcome::Probe(header::probe_file(entry.size, hint, &bytes)),
-                    Err(error) => LoadOutcome::Failed(format!(
-                        "Header read failed for {}: {error}",
-                        entry.path.display()
-                    )),
-                },
-            }
+        let source = inspection_source(&item.entry);
+        let request = if source.kind.supports_thumbnail() {
+            Request::Both
+        } else {
+            Request::Metadata
+        };
+        self.inspections.update(cx, |cache, cx| {
+            cache.request(source, request, cx);
         });
-        cx.spawn(async move |this, cx| {
-            let outcome = work.await;
-            if let Err(error) = this.update(cx, |this, cx| {
-                if this.generation != generation {
-                    return;
-                }
-                match outcome {
-                    LoadOutcome::Probe(probe) => this.facts = Facts::Ready(probe),
-                    LoadOutcome::Failed(message) => {
-                        tracing::warn!("{message}");
-                        this.facts = Facts::None;
-                    }
-                }
-                cx.notify();
-            }) {
-                tracing::debug!(%error, "preview closed before metadata completed");
-            }
-        })
-        .detach();
+    }
+
+    fn metadata(&self, cx: &App) -> Option<Arc<Metadata>> {
+        let Target::Item(item) = &self.target else {
+            return None;
+        };
+        let snapshot = self
+            .inspections
+            .read(cx)
+            .get(&inspection_source(&item.entry))?;
+        match snapshot.metadata {
+            State::Ready(metadata) => Some(metadata),
+            _ => None,
+        }
     }
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
         self.target = Target::Empty;
-        self.generation += 1;
-        self.facts = Facts::None;
         cx.notify();
     }
 
@@ -198,7 +150,7 @@ impl View {
             return None;
         };
         let source = crate::entities::file::directory::thumbnail_source(&item.entry)?;
-        let media = el! { ($(self.thumbnails.clone()), source).Thumbnail::new {
+        let media = el! { ($(self.inspections.clone()), source).Thumbnail::new {
             show_status: true;
         } };
         Some(
@@ -215,8 +167,8 @@ impl View {
 
     fn item(&self, item: &Item, cx: &App) -> AnyElement {
         let mut rows = self.base_rows(item, cx);
-        if let Facts::Ready(probe) = &self.facts {
-            rows.extend(self.probe_rows(probe, cx));
+        if let Some(metadata) = self.metadata(cx) {
+            rows.extend(self.probe_rows(&metadata, cx));
         }
         el! {
             .div { flex; flex_col; flex_1; min_h_0; min_w_0; w_full; overflow_hidden } [
@@ -245,7 +197,7 @@ impl View {
         rows.push(
             el! { .MetadataRow::default { label: $(i18n::text("type", cx)); text: kind; } }.into(),
         );
-        if let Some(format) = self.format_label(item) {
+        if let Some(format) = self.format_label(item, cx) {
             rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-format", cx)); text: format; } }.into());
         }
         if item.entry.kind == EntryKind::File {
@@ -282,14 +234,14 @@ impl View {
     }
 
     /// Concrete format from the probe, falling back to the listing's content.
-    fn format_label(&self, item: &Item) -> Option<SharedString> {
-        if let Facts::Ready(Probe::File(FileFacts::Image(facts))) = &self.facts {
+    fn format_label(&self, item: &Item, cx: &App) -> Option<SharedString> {
+        if let Some(Metadata::File(FileFacts::Image(facts))) = self.metadata(cx).as_deref() {
             return Some(facts.format.label().into());
         }
-        if let Facts::Ready(Probe::File(FileFacts::Audio(facts))) = &self.facts {
+        if let Some(Metadata::File(FileFacts::Audio(facts))) = self.metadata(cx).as_deref() {
             return Some(facts.format.label().into());
         }
-        if let Facts::Ready(Probe::File(FileFacts::Video(facts))) = &self.facts {
+        if let Some(Metadata::File(FileFacts::Video(facts))) = self.metadata(cx).as_deref() {
             return Some(facts.format.label().into());
         }
         item.entry
@@ -299,15 +251,15 @@ impl View {
             .map(SharedString::from)
     }
 
-    fn probe_rows(&self, probe: &Probe, cx: &App) -> Vec<DescriptionItem> {
+    fn probe_rows(&self, probe: &Metadata, cx: &App) -> Vec<DescriptionItem> {
         match probe {
-            Probe::File(FileFacts::Image(facts)) => image_rows(facts, cx),
-            Probe::File(FileFacts::Audio(facts)) => audio_rows(facts, cx),
-            Probe::File(FileFacts::Video(facts)) => video_rows(facts, cx),
-            Probe::File(FileFacts::Text(facts)) => text_rows(facts, cx),
-            Probe::File(FileFacts::Unknown) => Vec::new(),
-            Probe::Directory(facts) => directory_rows(facts, cx),
-            Probe::Symlink(facts) => vec![el! { .MetadataRow::default { label: $(i18n::text("details-target", cx)); text: $(facts.target.display().to_string().into()); } }.into()],
+            Metadata::File(FileFacts::Image(facts)) => image_rows(facts, cx),
+            Metadata::File(FileFacts::Audio(facts)) => audio_rows(facts, cx),
+            Metadata::File(FileFacts::Video(facts)) => video_rows(facts, cx),
+            Metadata::File(FileFacts::Text(facts)) => text_rows(facts, cx),
+            Metadata::File(FileFacts::Unknown) => Vec::new(),
+            Metadata::Directory(facts) => directory_rows(facts, cx),
+            Metadata::Symlink(facts) => vec![el! { .MetadataRow::default { label: $(i18n::text("details-target", cx)); text: $(facts.target.display().to_string().into()); } }.into()],
         }
     }
 }
@@ -330,6 +282,24 @@ fn image_rows(facts: &ImageFacts, cx: &App) -> Vec<DescriptionItem> {
 
 fn audio_rows(facts: &AudioFacts, cx: &App) -> Vec<DescriptionItem> {
     let mut rows = Vec::new();
+    for (label, value) in [
+        ("details-title", facts.tags.title.clone()),
+        ("details-artist", facts.tags.artist.clone()),
+        ("details-album", facts.tags.album.clone()),
+        ("details-genre", facts.tags.genre.clone()),
+        (
+            "details-year",
+            facts.tags.year.map(|value| value.to_string()),
+        ),
+        (
+            "details-track",
+            facts.tags.track.map(|value| value.to_string()),
+        ),
+    ] {
+        if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+            rows.push(el! { .MetadataRow::default { label: $(i18n::text(label, cx)); text: $(value.into()); } }.into());
+        }
+    }
     if let Some(duration) = facts.duration {
         rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-duration", cx)); text: $(info::duration(duration).into()); } }.into());
     }
@@ -419,6 +389,7 @@ impl RenderOnce for PreviewPlaceholder {
 
 impl Render for View {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.request(cx);
         let name: SharedString = match &self.target {
             Target::Item(item) => item.entry.display_name.clone().into(),
             _ => SharedString::default(),
@@ -441,27 +412,6 @@ impl Render for View {
                 content,
             ]
         }
-    }
-}
-
-/// Content-category hints for the weak signatures inside the probe.
-fn probe_hint(entry: &Entry) -> ProbeHint {
-    match entry
-        .details
-        .display_content()
-        .map(|content| content.category)
-    {
-        Some(ContentCategory::Text | ContentCategory::Code | ContentCategory::Document) => {
-            ProbeHint {
-                text: true,
-                audio: false,
-            }
-        }
-        Some(ContentCategory::Audio) => ProbeHint {
-            text: false,
-            audio: true,
-        },
-        _ => ProbeHint::default(),
     }
 }
 

@@ -82,7 +82,7 @@ impl Browser {
                             continue;
                         }
                     };
-                    let thumbnails = this.files.thumbnails.clone();
+                    let inspections = this.files.inspections.clone();
                     let title = entry.display_name.clone();
                     let options = WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -96,7 +96,7 @@ impl Browser {
                     };
                     if let Err(error) = gpui_kit::open_window(options, cx, move |window, cx| {
                         window.set_window_title(&title);
-                        cx.new(|cx| Properties::new(entry, thumbnails, window, cx))
+                        cx.new(|cx| Properties::new(entry, inspections, window, cx))
                     }) {
                         notifications::error(error.to_string(), cx);
                     }
@@ -120,12 +120,12 @@ struct Properties {
 impl Properties {
     fn new(
         entry: directory::Entry,
-        thumbnails: Entity<ui::thumbnail::Cache>,
+        inspections: Entity<ui::file_inspection::Cache>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let title = entry.display_name.clone().into();
-        let view = cx.new(|cx| preview::View::new(thumbnails, cx));
+        let view = cx.new(|cx| preview::View::new(inspections, cx));
         view.update(cx, |view, cx| view.show_entry(entry, cx));
         let focus = cx.focus_handle();
         focus.focus(window, cx);

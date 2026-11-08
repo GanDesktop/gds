@@ -14,6 +14,7 @@ pub mod button;
 pub mod capacity;
 mod container;
 pub mod disclosure;
+pub mod file_inspection;
 pub mod frame;
 pub mod help;
 pub mod list;

@@ -137,7 +137,7 @@ struct Data {
 struct TileContent {
     entry: directory::Entry,
     geometry: Geometry,
-    thumbnails: Entity<ui::thumbnail::Cache>,
+    inspections: Entity<ui::file_inspection::Cache>,
     selection: f32,
     appearance: EntryAppearance,
 }
@@ -158,7 +158,7 @@ impl TileContent {
             icon: icon; size: $(geometry.icon_size).px; color: icon_color;
         } };
         let media = match crate::entities::file::directory::thumbnail_source(entry) {
-            Some(source) => el! { ($(self.thumbnails.clone()), source).Thumbnail::new {
+            Some(source) => el! { ($(self.inspections.clone()), source).Thumbnail::new {
                 fallback: artwork;
             } }
             .into_any_element(),
@@ -310,14 +310,14 @@ impl Browser {
         let content = TileContent {
             entry: entry.clone(),
             geometry,
-            thumbnails: self.files.thumbnails.clone(),
+            inspections: self.files.inspections.clone(),
             selection,
             appearance: EntryAppearance::of(entry, cx),
         };
         let source = crate::entities::file::directory::thumbnail_source(entry);
         let is_video = source
             .as_ref()
-            .is_some_and(|source| source.kind == ui::thumbnail::Kind::Video);
+            .is_some_and(|source| source.kind == gds::service::file_inspection::Kind::Video);
         let path = entry.path.clone();
         let target = path.clone();
         let browser = cx.entity().downgrade();

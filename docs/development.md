@@ -96,7 +96,7 @@ cargo build --bins --features files,agents,portal
 | `storage` | Toasty / SQLite 存储 |
 | `logs` | 本进程日志服务 |
 | `terminal` | PTY 与终端模型 |
-| `thumbnail` | 缩略图缓存与生成 |
+| `file-inspection` | 按需读取文件内容元信息、生成缩略图与标准磁盘缓存 |
 | `remote` | SFTP / SMB 文件服务 |
 | `appearance` | 主题、字体、视觉 tokens 与 GPUI 外观安装 |
 | `i18n` | Fluent 翻译与 GPUI 文本适配 |
@@ -117,6 +117,18 @@ cargo tree --no-default-features --features portal --edges normal,build
 ```
 
 应用 I/O 和 Portal 统一使用 Tokio；GPUI 执行器负责界面任务。Portal 的 zbus 连接、子进程、信号和超时均在其 Tokio 运行时中执行。
+
+## 文件内容检查
+
+`service::file_inspection` 通过 `Source::load(Request::Metadata | Request::Thumbnail | Request::Both)`
+按需检查现有图片、音视频和文本内容，也提供目录计数和符号链接目标。
+`Inspection` 的两个字段分别返回 `NotRequested`、`Available`、`Unavailable` 或 `Failed`；
+没有封面不等于读取失败，一项失败不抹掉另一项的结果。音频同时请求两项且磁盘缓存未命中时复用一次 Lofty 解析。
+
+`ui::file_inspection::Cache` 按路径、类型、大小和修改时间共享后台任务与内存结果；
+执行期间追加的字段请求会在当前任务结束后补齐。`ui::thumbnail::Thumbnail` 只负责呈现。
+缩略图继续使用 freedesktop 磁盘缓存，内容元信息只缓存在内存中。
+文件系统属性随目录扫描读取；PDF、字体等未来内容类型应在此服务中增加实现，而不是放进详情栏。
 
 ## 第三方补丁
 
@@ -207,8 +219,9 @@ src/
 │   ├── logs.rs + logs/             # 本进程日志、tracing 采集与保留队列
 │   ├── storage.rs + storage/       # Toasty SQLite 初始化与原生迁移接入
 │   ├── terminal.rs + terminal/      # 终端进程、会话、状态、协议编码
-│   └── thumbnail.rs + thumbnail/    # 图片／视频预览与标准磁盘缩略图
+│   └── file_inspection.rs + file_inspection/ # 文件内容元信息、缩略图与磁盘缓存
 ├── ui.rs + ui/
+│   ├── file_inspection.rs          # 元信息／缩略图共享后台队列与内存缓存
 │   ├── feedback/                  # 通知、对话框、tooltip
 │   ├── forms/                     # 字段、设置行与 ConfigEditor
 │   ├── interaction/               # 快捷键提示、KeyTips、焦点区域及组件动作

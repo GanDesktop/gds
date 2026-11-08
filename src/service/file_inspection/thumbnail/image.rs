@@ -24,11 +24,22 @@ pub(super) fn load(path: &Path) -> Result<RgbaImage, Error> {
     if bytes.len() as u64 > MAX_SOURCE_BYTES {
         return Err(Error::TooLarge);
     }
-    if is_svg(&bytes) {
-        return render_svg(&bytes);
+    load_bytes(&bytes, Some(path))
+}
+
+/// # Errors
+/// Reports unsupported, malformed or oversized embedded images.
+pub(super) fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<RgbaImage, Error> {
+    if bytes.len() as u64 > MAX_SOURCE_BYTES {
+        return Err(Error::TooLarge);
+    }
+    if is_svg(bytes) {
+        return render_svg(bytes);
     }
     let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
-    if reader.format().is_none() {
+    if reader.format().is_none()
+        && let Some(path) = path
+    {
         reader.set_format(ImageFormat::from_path(path)?);
     }
     let mut limits = Limits::default();

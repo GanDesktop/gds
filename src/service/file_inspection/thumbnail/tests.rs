@@ -1,5 +1,5 @@
 use super::*;
-use std::{fs, process::Command};
+use std::{fs, path::PathBuf, process::Command};
 
 fn source(path: PathBuf, kind: Kind) -> Source {
     let metadata = fs::metadata(&path).expect("fixture metadata");
@@ -18,7 +18,9 @@ fn images_use_their_bytes_and_preserve_aspect_ratio_in_a_bounded_frame() {
     ::image::RgbImage::from_pixel(1200, 600, ::image::Rgb([20, 80, 140]))
         .save_with_format(&path, ::image::ImageFormat::Png)
         .expect("PNG fixture with misleading extension");
-    let thumbnail = source(path, Kind::Image).load().expect("image preview");
+    let thumbnail = source(path, Kind::Image)
+        .thumbnail()
+        .expect("image preview");
     let decoded = ::image::load_from_memory(&thumbnail.bytes).expect("encoded preview");
     assert_eq!((decoded.width(), decoded.height()), (EDGE, EDGE / 2));
 }
@@ -31,7 +33,7 @@ fn svg_content_is_supported_without_an_svg_extension_and_large_images_are_reject
         br##"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#4080c0" fill-opacity="0.5"/></svg>"##;
     fs::write(&path, svg).expect("SVG fixture");
     let thumbnail = source(path.clone(), Kind::Image)
-        .load()
+        .thumbnail()
         .expect("SVG preview");
     let decoded = ::image::load_from_memory(&thumbnail.bytes).expect("SVG raster PNG");
     assert_eq!((decoded.width(), decoded.height()), (32, 32));
@@ -47,7 +49,7 @@ fn svg_content_is_supported_without_an_svg_extension_and_large_images_are_reject
         .set_len(MAX_SOURCE_BYTES + 1)
         .expect("sparse fixture");
     assert!(matches!(
-        source(path, Kind::Image).load(),
+        source(path, Kind::Image).thumbnail(),
         Err(Error::TooLarge)
     ));
 }
@@ -80,14 +82,14 @@ fn videos_extract_one_frame_and_corrupt_media_reports_failure() {
         String::from_utf8_lossy(&output.stderr)
     );
     let thumbnail = source(path.clone(), Kind::Video)
-        .load()
+        .thumbnail()
         .expect("short video preview");
     let decoded = ::image::load_from_memory(&thumbnail.bytes).expect("video frame PNG");
     assert!(decoded.width() <= EDGE && decoded.height() <= EDGE);
     assert_eq!(decoded.width() * 3, decoded.height() * 4);
     fs::write(&path, b"not a video").expect("corrupt video");
     assert!(matches!(
-        source(path, Kind::Video).load(),
+        source(path, Kind::Video).thumbnail(),
         Err(Error::Video(_))
     ));
 }

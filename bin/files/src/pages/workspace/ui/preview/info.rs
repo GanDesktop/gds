@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::entities::file::directory::Permissions;
 
-use super::header::{LineEndings, PixelSize};
+use gds::service::file_inspection::{LineEndings, PixelSize};
 
 const SECONDS_PER_MINUTE: u64 = 60;
 const SECONDS_PER_HOUR: u64 = 60 * 60;

@@ -69,6 +69,16 @@ enum CacheError {
 /// Reports unreadable sources and thumbnail generation failures. Cache failures
 /// are diagnosed separately and never prevent displaying a generated thumbnail.
 pub(super) fn load(source: &Source, cache: Option<&Cache>) -> Result<Thumbnail, Error> {
+    load_with(source, cache, || source.generate())
+}
+
+/// # Errors
+/// Reports source access and generation failures; cache I/O is diagnosed separately.
+pub(super) fn load_with(
+    source: &Source,
+    cache: Option<&Cache>,
+    generate: impl FnOnce() -> Result<RgbaImage, Error>,
+) -> Result<Thumbnail, Error> {
     // A cached preview must not bypass the original file's read permissions.
     let file = File::open(&source.path)?;
     let metadata = file.metadata()?;
@@ -90,7 +100,7 @@ pub(super) fn load(source: &Source, cache: Option<&Cache>) -> Result<Thumbnail, 
             Lookup::Miss => {}
         }
     }
-    match source.generate() {
+    match generate() {
         Ok(image) => {
             let bytes = encode(&image, identity.as_ref(), None)?;
             if let (Some(cache), Some(identity)) = (cache, identity.as_ref())
@@ -105,10 +115,19 @@ pub(super) fn load(source: &Source, cache: Option<&Cache>) -> Result<Thumbnail, 
             // Missing tools, timeouts and I/O failures can resolve without the
             // document changing. Size limits are policy, not corrupt content.
             // Persist only content/format failures.
-            if matches!(error, Error::Image(_) | Error::Svg(_) | Error::Video(_))
-                && let (Some(cache), Some(identity)) = (cache, identity.as_ref())
+            if matches!(
+                error,
+                Error::Image(_) | Error::Svg(_) | Error::Video(_) | Error::NoCover
+            ) && let (Some(cache), Some(identity)) = (cache, identity.as_ref())
                 && identity.unchanged(&source.path)
-                && let Err(cache_error) = cache.store_failure(identity)
+                && let Err(cache_error) = cache.store_failure_kind(
+                    identity,
+                    if matches!(error, Error::NoCover) {
+                        "no-cover"
+                    } else {
+                        "decode"
+                    },
+                )
             {
                 tracing::warn!(%cache_error, "cannot save thumbnail failure marker");
             }
@@ -192,7 +211,17 @@ impl Cache {
                 .get("X-GDS::Failure")
                 .is_none_or(|value| value != "too-large")
         {
-            return Lookup::Failed(Error::CachedFailure);
+            return Lookup::Failed(
+                if png
+                    .attributes
+                    .get("X-GDS::Failure")
+                    .is_some_and(|kind| kind == "no-cover")
+                {
+                    Error::NoCover
+                } else {
+                    Error::CachedFailure
+                },
+            );
         }
         Lookup::Miss
     }
@@ -221,8 +250,8 @@ impl Cache {
 
     /// # Errors
     /// Reports marker encoding and atomic write failures.
-    fn store_failure(&self, identity: &Identity) -> Result<(), CacheError> {
-        let bytes = encode(&RgbaImage::new(1, 1), Some(identity), Some("decode"))?;
+    fn store_failure_kind(&self, identity: &Identity, kind: &str) -> Result<(), CacheError> {
+        let bytes = encode(&RgbaImage::new(1, 1), Some(identity), Some(kind))?;
         private_directory(&self.root)?;
         private_directory(&self.root.join("fail"))?;
         self.write(

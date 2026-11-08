@@ -8,19 +8,19 @@ pub(super) struct State {
     pub columns: Entity<columns::Editor>,
     pub marquee: marquee::State,
     pub preview: Entity<preview::View>,
-    pub thumbnails: Entity<ui::thumbnail::Cache>,
+    pub inspections: Entity<ui::file_inspection::Cache>,
 }
 
 impl State {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Browser>) -> Self {
-        let thumbnails = cx.new(|_| ui::thumbnail::Cache::default());
-        cx.observe(&thumbnails, |_, _, cx| cx.notify()).detach();
+        let inspections = cx.new(|_| ui::file_inspection::Cache::default());
+        cx.observe(&inspections, |_, _, cx| cx.notify()).detach();
         Self {
             table: table::FileTable::make_state(cx.entity().downgrade(), window, cx),
             columns: cx.new(|_| columns::Editor::new()),
             marquee: marquee::State::default(),
-            preview: cx.new(|cx| preview::View::new(thumbnails.clone(), cx)),
-            thumbnails,
+            preview: cx.new(|cx| preview::View::new(inspections.clone(), cx)),
+            inspections,
         }
     }
 }

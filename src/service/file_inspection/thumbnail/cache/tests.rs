@@ -1,5 +1,5 @@
 use super::*;
-use crate::service::thumbnail::Kind;
+use crate::service::file_inspection::Kind;
 use image::{Rgb, RgbImage, Rgba};
 use std::time::Duration;
 

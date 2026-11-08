@@ -2,11 +2,11 @@ mod children;
 mod content;
 mod details;
 mod identity;
-mod thumbnail;
+mod inspection;
 
 pub use self::children::ChildCount;
 pub use self::details::*;
-pub use self::thumbnail::*;
+pub use self::inspection::*;
 
 use std::{
     ffi::OsString,

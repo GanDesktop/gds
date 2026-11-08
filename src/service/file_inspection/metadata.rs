@@ -1,4 +1,4 @@
-//! Bounded, header-only metadata probes for the preview panel.
+//! Typed content metadata and bounded header probes.
 //!
 //! Every probe reads at most [`PREFIX_BYTES`] from the start of a regular file.
 //! Thumbnail decoding runs independently in the shared thumbnail service.
@@ -24,17 +24,17 @@ pub(super) const PREFIX_BYTES: usize = 256 * 1024;
 /// Direct children inspected for a folder; counting stops at this bound.
 const DIRECTORY_CHILD_LIMIT: usize = 256;
 
-/// One probe result for the selected entry.
+/// Content information from a file, directory or symbolic link.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Probe {
+pub enum Metadata {
     File(FileFacts),
     Directory(DirectoryFacts),
     Symlink(SymlinkFacts),
 }
 
-/// Facts learned from the first bytes of a regular file.
+/// Type-specific content information from a regular file.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum FileFacts {
+pub enum FileFacts {
     Image(ImageFacts),
     Audio(AudioFacts),
     Video(VideoFacts),
@@ -44,7 +44,7 @@ pub(super) enum FileFacts {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ImageFacts {
+pub struct ImageFacts {
     pub format: ImageKind,
     pub size: Option<PixelSize>,
     pub bit_depth: Option<u8>,
@@ -53,7 +53,7 @@ pub(super) struct ImageFacts {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PixelSize {
+pub struct PixelSize {
     pub width: u32,
     pub height: u32,
 }
@@ -65,7 +65,7 @@ impl PixelSize {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ImageKind {
+pub enum ImageKind {
     Png,
     Jpeg,
     Gif,
@@ -105,7 +105,7 @@ impl ImageKind {
         })
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Png => "PNG",
             Self::Jpeg => "JPEG",
@@ -127,8 +127,9 @@ impl ImageKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct AudioFacts {
+pub struct AudioFacts {
     pub format: AudioKind,
+    pub tags: super::audio::Tags,
     pub duration: Option<Duration>,
     pub sample_rate: Option<u32>,
     pub channels: Option<u16>,
@@ -136,18 +137,33 @@ pub(super) struct AudioFacts {
     pub bitrate: Option<u64>,
 }
 
+impl From<super::audio::Metadata> for AudioFacts {
+    fn from(metadata: super::audio::Metadata) -> Self {
+        Self {
+            format: AudioKind::Tagged(metadata.format),
+            tags: metadata.tags,
+            duration: metadata.duration,
+            sample_rate: metadata.sample_rate,
+            channels: metadata.channels,
+            bit_depth: metadata.bit_depth,
+            bitrate: metadata.bitrate,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum AudioKind {
+pub enum AudioKind {
     Wav,
     Flac,
     OggVorbis,
     Opus,
     Mp3,
     M4a,
+    Tagged(&'static str),
 }
 
 impl AudioKind {
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Wav => "WAV",
             Self::Flac => "FLAC",
@@ -155,12 +171,13 @@ impl AudioKind {
             Self::Opus => "Opus",
             Self::Mp3 => "MP3",
             Self::M4a => "M4A",
+            Self::Tagged(format) => format,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct VideoFacts {
+pub struct VideoFacts {
     pub format: VideoKind,
     pub duration: Option<Duration>,
     pub dimensions: Option<PixelSize>,
@@ -168,7 +185,7 @@ pub(super) struct VideoFacts {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum VideoKind {
+pub enum VideoKind {
     Mp4,
     QuickTime,
     ThreeGpp,
@@ -178,7 +195,7 @@ pub(super) enum VideoKind {
 }
 
 impl VideoKind {
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Mp4 => "MPEG-4",
             Self::QuickTime => "QuickTime",
@@ -191,13 +208,13 @@ impl VideoKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct TextFacts {
+pub struct TextFacts {
     pub encoding: TextEncoding,
     pub line_endings: Option<LineEndings>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TextEncoding {
+pub enum TextEncoding {
     Utf8,
     Utf8Bom,
     Utf16Le,
@@ -207,7 +224,7 @@ pub(super) enum TextEncoding {
 }
 
 impl TextEncoding {
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Utf8 => "UTF-8",
             Self::Utf8Bom => "UTF-8 BOM",
@@ -224,7 +241,7 @@ impl TextEncoding {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LineEndings {
+pub enum LineEndings {
     Lf,
     Crlf,
     Cr,
@@ -232,7 +249,7 @@ pub(super) enum LineEndings {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct DirectoryFacts {
+pub struct DirectoryFacts {
     pub folders: u32,
     pub files: u32,
     pub links: u32,
@@ -241,7 +258,7 @@ pub(super) struct DirectoryFacts {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct SymlinkFacts {
+pub struct SymlinkFacts {
     pub target: PathBuf,
 }
 
@@ -280,53 +297,47 @@ pub(super) struct ProbeHint {
 ///
 /// `hint` comes from the directory listing's content category and keeps
 /// arbitrary binaries from being presented as text or MP3.
-pub(super) fn probe_file(size: Option<u64>, hint: ProbeHint, bytes: &[u8]) -> Probe {
+pub(super) fn probe_file(size: Option<u64>, hint: ProbeHint, bytes: &[u8]) -> Metadata {
     if bytes.is_empty() {
-        return Probe::File(FileFacts::Unknown);
+        return Metadata::File(FileFacts::Unknown);
     }
     if let Ok(format) = image::guess_format(bytes)
         && let Some(image) = image_facts(format, bytes)
     {
-        return Probe::File(FileFacts::Image(image));
+        return Metadata::File(FileFacts::Image(image));
     }
     if let Some(audio) = audio_facts(bytes, size, hint.audio) {
-        return Probe::File(FileFacts::Audio(audio));
+        return Metadata::File(FileFacts::Audio(audio));
     }
     if let Some(video) = video_facts(bytes, size) {
-        return Probe::File(FileFacts::Video(video));
+        return Metadata::File(FileFacts::Video(video));
     }
     if hint.text
         && let Some(text) = text_facts(bytes, bytes.len() == PREFIX_BYTES)
     {
-        return Probe::File(FileFacts::Text(text));
+        return Metadata::File(FileFacts::Text(text));
     }
-    Probe::File(FileFacts::Unknown)
+    Metadata::File(FileFacts::Unknown)
 }
 
 /// Count one level of direct children, never recursing.
-pub(super) fn probe_directory(path: &Path) -> Probe {
+/// # Errors
+/// Reports inaccessible directories or entries whose type cannot be read.
+pub(super) fn probe_directory(path: &Path) -> io::Result<Metadata> {
     let mut facts = DirectoryFacts::default();
-    let Ok(entries) = fs::read_dir(path) else {
-        return Probe::Directory(facts);
-    };
-    let mut entries = entries.flatten();
+    let mut entries = fs::read_dir(path)?;
     for entry in entries.by_ref().take(DIRECTORY_CHILD_LIMIT) {
-        match entry.file_type() {
-            Ok(file_type) if file_type.is_dir() => facts.folders += 1,
-            Ok(file_type) if file_type.is_symlink() => facts.links += 1,
-            Ok(_) => facts.files += 1,
-            Err(_) => {}
+        let file_type = entry?.file_type()?;
+        if file_type.is_dir() {
+            facts.folders += 1;
+        } else if file_type.is_symlink() {
+            facts.links += 1;
+        } else {
+            facts.files += 1;
         }
     }
-    facts.capped = entries.next().is_some();
-    Probe::Directory(facts)
-}
-
-/// Read the stored link text; the target's state comes from the listing.
-pub(super) fn probe_symlink(path: &Path) -> Option<Probe> {
-    fs::read_link(path)
-        .ok()
-        .map(|target| Probe::Symlink(SymlinkFacts { target }))
+    facts.capped = entries.next().transpose()?.is_some();
+    Ok(Metadata::Directory(facts))
 }
 
 fn image_facts(format: image::ImageFormat, bytes: &[u8]) -> Option<ImageFacts> {
@@ -461,6 +472,7 @@ fn wav_facts(bytes: &[u8]) -> Option<AudioFacts> {
     }
     let mut facts = AudioFacts {
         format: AudioKind::Wav,
+        tags: Default::default(),
         duration: None,
         sample_rate: None,
         channels: None,
@@ -510,6 +522,7 @@ fn flac_facts(bytes: &[u8], size: Option<u64>) -> Option<AudioFacts> {
     if block_type != 0 || length < 34 {
         return Some(AudioFacts {
             format: AudioKind::Flac,
+            tags: Default::default(),
             duration: None,
             sample_rate: None,
             channels: None,
@@ -527,6 +540,7 @@ fn flac_facts(bytes: &[u8], size: Option<u64>) -> Option<AudioFacts> {
         .then(|| Duration::from_secs_f64(total_samples as f64 / f64::from(sample_rate)));
     Some(AudioFacts {
         format: AudioKind::Flac,
+        tags: Default::default(),
         duration,
         sample_rate: (sample_rate > 0).then_some(sample_rate),
         channels: Some(channels),
@@ -540,6 +554,7 @@ fn ogg_facts(bytes: &[u8]) -> Option<AudioFacts> {
     if packet.starts_with(b"OpusHead") {
         return Some(AudioFacts {
             format: AudioKind::Opus,
+            tags: Default::default(),
             duration: None,
             sample_rate: Some(48_000),
             channels: packet.get(9).map(|&channels| u16::from(channels)),
@@ -555,6 +570,7 @@ fn ogg_facts(bytes: &[u8]) -> Option<AudioFacts> {
     let nominal = i32_le(packet, 20).filter(|rate| *rate > 0);
     Some(AudioFacts {
         format: AudioKind::OggVorbis,
+        tags: Default::default(),
         duration: None,
         sample_rate: sample_rate.filter(|rate| *rate > 0),
         channels: packet.get(11).map(|&channels| u16::from(channels)),
@@ -590,6 +606,7 @@ fn mp3_facts(bytes: &[u8], size: Option<u64>) -> Option<AudioFacts> {
     let bitrate = average_bitrate(size, duration).or(frame.bitrate);
     Some(AudioFacts {
         format: AudioKind::Mp3,
+        tags: Default::default(),
         duration,
         sample_rate: Some(frame.sample_rate),
         channels: Some(frame.channels),
@@ -965,6 +982,7 @@ fn audio_from_iso(info: &IsoInfo, size: Option<u64>) -> AudioFacts {
         .or_else(|| duration_of(info.movie_timescale, info.movie_duration));
     AudioFacts {
         format: AudioKind::M4a,
+        tags: Default::default(),
         duration,
         sample_rate: track
             .and_then(|track| track.sample_rate)
