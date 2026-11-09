@@ -1,4 +1,4 @@
-mod uri;
+pub(crate) mod uri;
 
 use std::{
     ffi::OsString,
@@ -8,6 +8,7 @@ use std::{
 /// A content location, independent of the tab or sidebar entry presenting it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Location {
+    Tags(crate::entities::scheme::TagAddress),
     Directory(OsString),
     Remote(gds::service::remote::Address),
     Recent,
@@ -31,6 +32,7 @@ impl Location {
     pub(crate) fn display_address(&self) -> String {
         match self {
             Self::Directory(path) => Path::new(path).display().to_string(),
+            Self::Tags(address) => address.display_uri(),
             _ => self
                 .uri()
                 .expect("non-filesystem locations always have a URI"),
@@ -46,22 +48,22 @@ impl Location {
 
     pub(crate) fn virtual_uri(&self) -> Option<&'static str> {
         match self {
-            Self::Recent => Some("location://recent"),
-            Self::Favorites => Some("location://favorites"),
-            Self::Network => Some("location://network"),
-            Self::Trash => Some("location://trash"),
-            Self::Volumes => Some("location://volumes"),
+            Self::Recent => Some("location:/recent"),
+            Self::Favorites => Some("location:/favorites"),
+            Self::Network => Some("location:/network"),
+            Self::Trash => Some("location:/trash"),
+            Self::Volumes => Some("location:/volumes"),
             _ => None,
         }
     }
 
     pub(crate) fn from_virtual_uri(input: &str) -> Option<Self> {
         match input.strip_suffix('/').unwrap_or(input) {
-            "location://recent" => Some(Self::Recent),
-            "location://favorites" => Some(Self::Favorites),
-            "location://network" => Some(Self::Network),
-            "location://trash" => Some(Self::Trash),
-            "location://volumes" => Some(Self::Volumes),
+            "location:/recent" => Some(Self::Recent),
+            "location:/favorites" => Some(Self::Favorites),
+            "location:/network" => Some(Self::Network),
+            "location:/trash" => Some(Self::Trash),
+            "location:/volumes" => Some(Self::Volumes),
             _ => None,
         }
     }

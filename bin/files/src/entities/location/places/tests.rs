@@ -115,3 +115,19 @@ async fn save_drains_edits_made_while_waiting_even_after_the_window_state_is_dro
     );
     assert!(snapshot.is_favorite(Path::new("/documents")));
 }
+
+#[tokio::test]
+async fn tag_locations_persist_as_uris_without_local_paths() {
+    use crate::entities::scheme::TagAddress;
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::new(root.path().join("state.sqlite"));
+    let mut places = storage.load().await.unwrap();
+    let location = Location::Tags(TagAddress::new("工作/设计 #1").unwrap());
+    places.record(location.clone());
+    places.set_favorite(location.clone(), true);
+    places.take_save().unwrap().run().await.unwrap();
+    let reopened = storage.load().await.unwrap();
+    assert!(reopened.is_favorite(&location));
+    assert!(reopened.recent.contains(&location));
+    assert!(location.local_path().is_none());
+}

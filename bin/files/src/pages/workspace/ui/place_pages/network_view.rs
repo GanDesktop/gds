@@ -2,6 +2,7 @@ use super::*;
 use gds::service::remote::{Address, Protocol};
 use gds::ui::IconButton;
 use gds_uim::el;
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{Icon, spinner::Spinner};
 

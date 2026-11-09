@@ -200,6 +200,7 @@ impl Browser {
         self.remote.requests.remove(&tab);
         if let Some(slot) = self.tab_slot_mut(tab) {
             slot.remote_load = None;
+            slot.tags_load = None;
             slot.navigation.cancel_pending();
         }
         if self

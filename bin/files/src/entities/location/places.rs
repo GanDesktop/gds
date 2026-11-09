@@ -1,8 +1,11 @@
 //! Optimistic place state with record-level persistence and pending-edit rebasing.
 
+#[cfg(test)]
+use std::path::Path;
+
 use std::{
     ops::Deref,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex, Weak},
 };
 
@@ -153,13 +156,13 @@ impl Places {
     pub(crate) fn set_favorite(&mut self, location: Location, present: bool) {
         self.change(Change::Favorite { location, present });
     }
-    pub(crate) fn reorder_pinned(&mut self, paths: Vec<std::ffi::OsString>) {
-        self.change(Change::PinOrder(paths));
+    pub(crate) fn reorder_pinned(&mut self, locations: Vec<Location>) {
+        self.change(Change::PinOrder(locations));
     }
 
-    pub(crate) fn set_pinned(&mut self, path: &Path, present: bool) {
+    pub(crate) fn set_pinned(&mut self, location: &Location, present: bool) {
         self.change(Change::Pin {
-            path: path.into(),
+            location: location.clone(),
             present,
         });
     }

@@ -47,6 +47,8 @@ mod sort;
 mod status;
 mod table;
 mod tabs;
+mod tag_editor;
+mod tags;
 mod terminal;
 mod toolbar;
 mod transfers;
@@ -78,6 +80,7 @@ use crate::shared::lib::clipboard as file_clipboard;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Collection {
+    Tags,
     Recent,
     Favorites,
     Network,
@@ -87,6 +90,7 @@ enum Collection {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LocationTarget {
+    Tags,
     Home,
     Recent,
     Favorites,
@@ -113,6 +117,7 @@ pub struct LaunchOptions {
 impl Collection {
     fn from_location(location: &Location) -> Option<Self> {
         match location {
+            Location::Tags(_) => Some(Self::Tags),
             Location::Recent => Some(Self::Recent),
             Location::Favorites => Some(Self::Favorites),
             Location::Network => Some(Self::Network),
@@ -145,6 +150,8 @@ struct ViewState {
 }
 
 struct OpenTab {
+    tags: Option<Result<tags::Contents, String>>,
+    tags_load: Option<Task<()>>,
     watch: Option<watching::Watch>,
     remote: Option<remote::Directory>,
     remote_load: Option<Task<()>>,
@@ -174,6 +181,8 @@ struct OpenTab {
 impl OpenTab {
     fn new(id: u64, location: Location, path: Option<PathBuf>, pinned: bool) -> Self {
         Self {
+            tags: None,
+            tags_load: None,
             watch: None,
             remote: None,
             remote_load: None,
@@ -370,8 +379,8 @@ impl Browser {
         // Root plugins are captured when this window's root is created, which
         // happens after the view is built, so the hint layer is installed here.
         ui::keytips::install(cx);
-        let host = window::State::new(runtime, window, cx);
-        let settings = settings::State::new(preferences, window, cx);
+        let host = window::State::new(runtime.clone(), window, cx);
+        let settings = settings::State::new(preferences, runtime.clone(), window, cx);
         let mut this = Self {
             locations: locations::State::new(home, places, &host.runtime, cx),
             tabs: tabs::State::default(),
@@ -406,15 +415,8 @@ impl Browser {
             // is never overwritten with empty state.
             notifications::error(error, cx);
         }
-        let pinned: Vec<_> = this
-            .locations
-            .places
-            .pinned
-            .iter()
-            .map(PathBuf::from)
-            .collect();
-        for path in pinned {
-            this.open_tab(path, true, window, cx);
+        for location in this.locations.places.pinned.clone() {
+            this.open_location_tab(location, true, Some(window), cx);
         }
         if let Some(tab) = this
             .tabs
@@ -469,8 +471,18 @@ impl Browser {
             .unwrap_or_else(|| self.current_location())
     }
 
+    fn details_available(&self) -> bool {
+        self.collection() != Some(Collection::Tags)
+            || self
+                .current_tab()
+                .and_then(|slot| slot.tags.as_ref())
+                .and_then(|result| result.as_ref().ok())
+                .is_some_and(|contents| !contents.entries.is_empty())
+    }
+
     fn details_visible(&self) -> bool {
-        !self.window.layout.compact
+        self.details_available()
+            && !self.window.layout.compact
             && self
                 .locations
                 .places
@@ -538,10 +550,18 @@ impl Browser {
         self.watch_directory(id, request.path(), cx);
         if let Some(slot) = self.tab_slot_mut(id) {
             slot.remote_load = None;
+            slot.tags_load = None;
         }
-        if let Location::Remote(address) = request.location() {
-            self.load_remote(id, request.clone(), address.clone(), cx);
-            return;
+        match crate::entities::scheme::browse(request.location()) {
+            crate::entities::scheme::Browse::Tags(address) => {
+                self.load_tags(id, request.clone(), address.clone(), cx);
+                return;
+            }
+            crate::entities::scheme::Browse::Remote(address) => {
+                self.load_remote(id, request.clone(), address.clone(), cx);
+                return;
+            }
+            crate::entities::scheme::Browse::Location => (),
         }
         self.remote.requests.remove(&id);
         let expected = self.resolve_location(request.location(), cx).device;
@@ -584,9 +604,13 @@ impl Browser {
             }
             return;
         }
+        let pin_changed = slot.pinned && slot.location() != *request.location();
         match slot.navigation.finish_load(request, result) {
             Ok(LoadOutcome::Stale) => return,
             Ok(LoadOutcome::Applied) => {
+                if !matches!(request.location(), Location::Tags(_)) {
+                    slot.tags = None;
+                }
                 if !matches!(request.location(), Location::Remote(_)) {
                     slot.remote = None;
                 }
@@ -604,6 +628,9 @@ impl Browser {
                     .map(Location::from)
                     .unwrap_or_else(|| slot.location());
                 self.locations.places.record(location);
+                if pin_changed {
+                    self.sync_pinned();
+                }
                 self.save_places(cx);
             }
             Err(error) => report_load_failure(error.to_string(), cx),
@@ -906,7 +933,10 @@ impl Browser {
     }
 
     fn refresh_current(&mut self, cx: &mut Context<Self>) {
-        if self.collection().is_some() {
+        if self
+            .collection()
+            .is_some_and(|collection| collection != Collection::Tags)
+        {
             return;
         }
         self.refresh_tab(self.tabs.active_id, cx);
@@ -1206,7 +1236,9 @@ impl Browser {
                 }
             }
             Command::Filter => {
-                if self.pages.is_empty() && self.collection().is_none() {
+                if self.pages.is_empty()
+                    && (self.collection().is_none() || self.place_collection().is_some())
+                {
                     self.toolbar.filter.input.update(cx, |input, cx| {
                         input.focus(window, cx);
                         input.select_all(window, cx);
@@ -1222,7 +1254,7 @@ impl Browser {
                 if command == Command::Copy
                     && matches!(
                         self.collection(),
-                        Some(Collection::Favorites | Collection::Network)
+                        Some(Collection::Favorites | Collection::Network | Collection::Tags)
                     )
                     && self.list_keys_available(window, cx)
                     && let Some(path) = self.selected_place_path()
@@ -1285,9 +1317,10 @@ impl Browser {
                 }
             }
             Command::Details => {
-                if !self.window.layout.compact
+                if self.details_available()
+                    && !self.window.layout.compact
                     && self.pages.is_empty()
-                    && self.collection().is_none()
+                    && (self.collection().is_none() || self.place_collection().is_some())
                     && !window.has_active_dialog(cx)
                 {
                     let visible = !self.details_visible();
@@ -1322,7 +1355,12 @@ impl Browser {
             Command::Favorite => {
                 if matches!(
                     self.collection(),
-                    Some(Collection::Recent | Collection::Favorites | Collection::Network)
+                    Some(
+                        Collection::Recent
+                            | Collection::Favorites
+                            | Collection::Network
+                            | Collection::Tags
+                    )
                 ) && self.list_keys_available(window, cx)
                     && self.selected_place().is_some()
                 {
@@ -1332,7 +1370,11 @@ impl Browser {
                 }
             }
             Command::Trash => {
-                if self.collection() == Some(Collection::Favorites)
+                if self.collection() == Some(Collection::Tags)
+                    && self.list_keys_available(window, cx)
+                {
+                    self.request_delete_tag(window, cx);
+                } else if self.collection() == Some(Collection::Favorites)
                     && self.list_keys_available(window, cx)
                 {
                     self.favorite_selected_place(true, cx);
@@ -1345,7 +1387,11 @@ impl Browser {
                 }
             }
             Command::DeletePermanent => {
-                if self.collection() == Some(Collection::Trash) {
+                if self.collection() == Some(Collection::Tags)
+                    && self.list_keys_available(window, cx)
+                {
+                    self.request_delete_tag(window, cx);
+                } else if self.collection() == Some(Collection::Trash) {
                     self.request_trash_purge(window, cx);
                 } else if self.file_selection_focused(window, cx) {
                     self.request_delete_selection(window, cx);
@@ -1390,7 +1436,12 @@ impl Browser {
                     }
                 } else if matches!(
                     self.collection(),
-                    Some(Collection::Recent | Collection::Favorites | Collection::Network)
+                    Some(
+                        Collection::Recent
+                            | Collection::Favorites
+                            | Collection::Network
+                            | Collection::Tags
+                    )
                 ) {
                     // A places page opens its keyboard selection; the mouse
                     // keeps opening a row directly.

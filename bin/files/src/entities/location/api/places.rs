@@ -31,6 +31,11 @@ const MIGRATIONS: MigrationSet = MigrationSet::new(&[
         "004-unified-places.sql",
         include_str!("places/assets/004-unified-places.sql"),
     ),
+    MigrationFile::new(
+        5,
+        "005-location-pins.sql",
+        include_str!("places/assets/005-location-pins.sql"),
+    ),
 ]);
 
 #[derive(Debug, thiserror::Error)]
@@ -113,3 +118,6 @@ impl Store {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

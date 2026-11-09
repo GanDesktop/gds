@@ -627,6 +627,13 @@ impl Browser {
             })
     }
 
+    pub(super) fn browse_settled(&self) -> bool {
+        self.folder_settled()
+            || (self.pages.is_empty()
+                && self.place_collection().is_some()
+                && self.current_tab().is_some_and(|slot| !slot.is_loading()))
+    }
+
     pub(super) fn columns_available(&self) -> bool {
         self.folder_settled() && !self.operations.in_progress
     }

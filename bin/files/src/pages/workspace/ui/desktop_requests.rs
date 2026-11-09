@@ -84,6 +84,7 @@ impl Browser {
                     };
                     let inspections = this.files.inspections.clone();
                     let title = entry.display_name.clone();
+                    let tags_enabled = this.settings.preferences.tags.enabled;
                     let options = WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                             None,
@@ -96,7 +97,7 @@ impl Browser {
                     };
                     if let Err(error) = gpui_kit::open_window(options, cx, move |window, cx| {
                         window.set_window_title(&title);
-                        cx.new(|cx| Properties::new(entry, inspections, window, cx))
+                        cx.new(|cx| Properties::new(entry, inspections, tags_enabled, window, cx))
                     }) {
                         notifications::error(error.to_string(), cx);
                     }
@@ -121,12 +122,16 @@ impl Properties {
     fn new(
         entry: directory::Entry,
         inspections: Entity<ui::file_inspection::Cache>,
+        tags_enabled: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let title = entry.display_name.clone().into();
         let view = cx.new(|cx| preview::View::new(inspections, cx));
-        view.update(cx, |view, cx| view.show_entry(entry, cx));
+        view.update(cx, |view, cx| {
+            view.set_tags_enabled(tags_enabled, cx);
+            view.show_entry(entry, cx);
+        });
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         cx.bind_keys([

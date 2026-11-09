@@ -194,17 +194,18 @@ impl Browser {
             }
         };
         let content = (progress > 0.).then(|| {
-            let locations = LocationTarget::ALL
+            let locations = self.visible_location_targets()
                 .into_iter()
                 .map(|target| {
                     let location = self.render_location(target, window, cx);
                     el! { .div { flex_shrink_0; w_full; } [location] }
                 })
                 .collect::<Vec<_>>();
+            let location_count = locations.len();
             el! {
                 .SideBarSectionContent::default { # "locations-list"; min_h_0; overflow_y_scroll;
                     track_scroll: $&self.sidebar.regions.locations_scroll; gap: ROW_GAP.px;
-                    h: $((LocationTarget::ALL.len() as f32 * (tokens::SIDEBAR_ITEM_HEIGHT + ROW_GAP) - ROW_GAP) * progress).px;
+                    h: $((location_count as f32 * (tokens::SIDEBAR_ITEM_HEIGHT + ROW_GAP) - ROW_GAP) * progress).px;
                 } [..locations]
             }
         });

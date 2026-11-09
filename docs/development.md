@@ -93,6 +93,7 @@ cargo build --bins --features files,agents,portal
 | `persistence` | 原子文件存储与路径管理 |
 | `watch` | 文件变化通知，独立于 GUI |
 | `desktop` | 桌面打开方式、FileManager1 与 Portal 客户端 |
+| `file-tags` | `desktop` 的可选标签能力：`user.xdg.tags` 读写与复制保留；`files` 显式启用 |
 | `storage` | Toasty / SQLite 存储 |
 | `logs` | 本进程日志服务 |
 | `terminal` | PTY 与终端模型 |

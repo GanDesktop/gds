@@ -31,7 +31,7 @@ impl Browser {
     ) {
         let input = self.toolbar.filter.input.clone();
         if !self.pages.is_empty()
-            || self.collection().is_some()
+            || (self.collection().is_some() && self.place_collection().is_none())
             || window.has_active_dialog(cx)
             || !input.read(cx).focus_handle(cx).is_focused(window)
             || input.update(cx, |input, cx| {
@@ -41,13 +41,18 @@ impl Browser {
             cx.propagate();
             return;
         }
-        self.move_file_cursor(motion, false, window, cx);
+        if let Some(collection) = self.place_collection() {
+            self.move_place_cursor(collection, motion, cx);
+            self.window.focus.focus(window, cx);
+        } else {
+            self.move_file_cursor(motion, false, window, cx);
+        }
         cx.stop_propagation();
     }
 
     fn accepts_search_input(&self, window: &mut Window, cx: &mut App) -> bool {
         self.settings.preferences.files.auto_focus_search
-            && self.file_selection_focused(window, cx)
+            && (self.file_selection_focused(window, cx) || self.place_collection().is_some())
             && self.list_keys_available(window, cx)
     }
 

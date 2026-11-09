@@ -22,6 +22,7 @@ impl Location {
             return Ok(uri.to_owned());
         }
         match self {
+            Self::Tags(tag) => Ok(tag.uri()),
             Self::Directory(path) => Self::file_uri(Path::new(path)),
             Self::Remote(address) => Ok(address.uri().to_owned()),
             Self::Volume { identity, relative } => {
@@ -30,7 +31,7 @@ impl Location {
                     VolumeIdentity::Attachment(id) => ("attachment", id),
                 };
                 Ok(format!(
-                    "location://volume/{kind}/{}?path={}",
+                    "location:/volume/{kind}/{}?path={}",
                     percent_encode(id.as_bytes(), NON_ALPHANUMERIC),
                     percent_encode(relative.as_encoded_bytes(), NON_ALPHANUMERIC),
                 ))
@@ -67,6 +68,10 @@ impl Location {
     /// # Errors
     /// Rejects unsupported schemes, malformed addresses and invalid volume-relative paths.
     pub(crate) fn from_uri(input: &str) -> Result<Self, Error> {
+        crate::entities::scheme::parse(input)
+    }
+
+    pub(crate) fn from_builtin_uri(input: &str) -> Result<Self, Error> {
         if let Some(location) = Self::from_virtual_uri(input) {
             return Ok(location);
         }
@@ -77,7 +82,14 @@ impl Location {
                 .map(|path| Self::from(&path))
                 .map_err(|_| Error::Invalid(input.to_owned())),
             "sftp" | "smb" => Ok(Self::Remote(gds::service::remote::Address::parse(input)?)),
-            "location" if url.host_str() == Some("volume") => Self::volume_uri(&url),
+            "location"
+                if url.host_str().is_none()
+                    && input
+                        .split_once(':')
+                        .is_some_and(|(_, path)| path.starts_with("/volume/")) =>
+            {
+                Self::volume_uri(&url)
+            }
             _ => Err(Error::Invalid(input.to_owned())),
         }
     }
@@ -92,6 +104,9 @@ impl Location {
             return Err(invalid());
         }
         let mut segments = url.path_segments().ok_or_else(invalid)?;
+        if segments.next() != Some("volume") {
+            return Err(invalid());
+        }
         let kind = segments.next().ok_or_else(invalid)?;
         let id = percent_decode_str(segments.next().ok_or_else(invalid)?)
             .decode_utf8()
@@ -134,3 +149,6 @@ impl Location {
         Ok(Self::Volume { identity, relative })
     }
 }
+
+#[cfg(test)]
+mod tests;

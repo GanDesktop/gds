@@ -3,7 +3,7 @@ use super::{LONG_VALUE_CHARS, TOOLTIP_DELAY, text_hint};
 use gds_uim::{component, el};
 use gpui_kit::{
     IntoElement,
-    component::{ActiveTheme, description_list::DescriptionItem},
+    component::{ActiveTheme, description_list::DescriptionItem, tag::Tag},
     prelude::*,
     *,
 };
@@ -31,6 +31,32 @@ impl From<MetadataRow> for DescriptionItem {
                 value: $(el! { .div { min_w_0; text_xs; overflow_hidden; } [value] }.into_any_element());
             }
         }
+    }
+}
+
+#[component]
+#[derive(Default, IntoElement)]
+pub(super) struct MetadataTags {
+    #[attr]
+    tags: Vec<String>,
+}
+
+impl RenderOnce for MetadataTags {
+    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+        // Match the surrounding property text instead of the Tag's padded default.
+        let line_height = window.text_style().line_height;
+        let chips = self.tags.into_iter().enumerate().map(|(index, tag)| {
+            let label: SharedString = tag.into();
+            el! { .Tag::secondary {
+                text_xs; line_height: line_height;
+                py_0; px_1p5; border_0; rounded: 3.0.px; max_w_full;
+            } [
+                .div { # $("detail-tag", index); min_w_0; truncate;
+                    tooltip_show_delay: TOOLTIP_DELAY; tooltip: $(text_hint(label.clone()));
+                } [label],
+            ] }
+        });
+        el! { .div { flex; flex_wrap; gap_1; min_w_0; } [..chips] }
     }
 }
 

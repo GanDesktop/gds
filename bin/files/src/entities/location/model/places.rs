@@ -3,8 +3,6 @@
 //! Location overrides inherit database defaults. Clearing a column layout
 //! preserves widths, ordering, details visibility and grid/list mode.
 
-use std::ffi::OsString;
-
 use super::{
     address::{Location, ViewScope},
     view::{ColumnWidths, LocationView, ViewSettings},
@@ -19,7 +17,7 @@ pub(crate) const RECENT_LIMIT: usize = 100;
 pub struct Places {
     pub favorites: Vec<Location>,
     pub recent: Vec<Location>,
-    pub pinned: Vec<OsString>,
+    pub pinned: Vec<Location>,
     pub defaults: ViewSettings,
     pub views: Vec<LocationView>,
 }
@@ -129,10 +127,10 @@ pub(crate) enum Change {
         present: bool,
     },
     Pin {
-        path: OsString,
+        location: Location,
         present: bool,
     },
-    PinOrder(Vec<OsString>),
+    PinOrder(Vec<Location>),
     Columns {
         scope: ViewScope,
         layout: Option<Layout>,
@@ -163,7 +161,9 @@ impl Change {
             Self::Favorite { location, present } => {
                 set_membership(&mut places.favorites, location, *present)
             }
-            Self::Pin { path, present } => set_membership(&mut places.pinned, path, *present),
+            Self::Pin { location, present } => {
+                set_membership(&mut places.pinned, location, *present)
+            }
             Self::PinOrder(order) => reorder_existing(&mut places.pinned, order),
             Self::Columns { scope, layout } => {
                 places.settings_mut(scope.clone()).columns = layout.clone()
@@ -196,7 +196,7 @@ fn set_membership<T: Clone + PartialEq>(items: &mut Vec<T>, item: &T, present: b
 }
 
 /// Reorder only members of this window's snapshot; preserve pins owned by others.
-pub(crate) fn reorder_existing(items: &mut [OsString], order: &[OsString]) {
+pub(crate) fn reorder_existing(items: &mut [Location], order: &[Location]) {
     let mut seen = std::collections::HashSet::new();
     let ordered: Vec<_> = order
         .iter()

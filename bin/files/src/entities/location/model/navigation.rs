@@ -332,3 +332,6 @@ impl<V: Default> Navigation<V> {
         request
     }
 }
+
+#[cfg(test)]
+mod tests;

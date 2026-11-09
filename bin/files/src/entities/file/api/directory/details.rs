@@ -11,6 +11,8 @@ use super::{ChildCount, EntryKind, identity::IdentityCache};
 /// Everything the table and details panel need beyond the entry name and size.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EntryDetails {
+    /// Metadata revision, including xattr changes; distinct from file modification time.
+    pub changed: Option<(i64, i64)>,
     /// Last access time, sampled before any content probe reads the entry.
     pub accessed: Option<SystemTime>,
     /// Birth time, only when the platform and filesystem report one. A change
@@ -42,6 +44,7 @@ impl EntryDetails {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
+            details.changed = Some((metadata.ctime(), metadata.ctime_nsec()));
 
             let uid = metadata.uid();
             let gid = metadata.gid();

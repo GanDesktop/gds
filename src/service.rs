@@ -3,6 +3,8 @@
 pub mod desktop;
 #[cfg(feature = "file-inspection")]
 pub mod file_inspection;
+#[cfg(feature = "file-tags")]
+pub mod file_tags;
 #[cfg(feature = "logs")]
 pub mod logs;
 #[cfg(feature = "remote")]

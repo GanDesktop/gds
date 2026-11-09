@@ -50,7 +50,9 @@ impl Browser {
         match self.collection() {
             Some(Collection::Volumes) => self.set_selected_volume(None),
             Some(Collection::Trash) => self.collections.trash.clear_selection(),
-            Some(Collection::Recent | Collection::Favorites | Collection::Network) => {
+            Some(
+                Collection::Recent | Collection::Favorites | Collection::Network | Collection::Tags,
+            ) => {
                 if let Some(slot) = self.current_tab_mut() {
                     slot.navigation.view_mut().place = None;
                 }
@@ -249,12 +251,12 @@ impl Browser {
         cx.notify();
     }
 
-    /// The Recent/Favorites page whose rows the plain arrows move, if visible.
-    fn place_collection(&self) -> Option<Collection> {
+    /// The visible collection whose location rows support keyboard navigation.
+    pub(super) fn place_collection(&self) -> Option<Collection> {
         self.collection().filter(|collection| {
             matches!(
                 collection,
-                Collection::Recent | Collection::Favorites | Collection::Network
+                Collection::Recent | Collection::Favorites | Collection::Network | Collection::Tags
             )
         })
     }
@@ -273,6 +275,29 @@ impl Browser {
         }
         let modifiers = event.keystroke.modifiers;
         if modifiers.control || modifiers.alt || modifiers.platform {
+            return;
+        }
+        if self.grid_mode() && matches!(event.keystroke.key.as_str(), "left" | "right") {
+            let locations = self.place_locations(collection).unwrap_or_default();
+            let Some(slot) = self.current_tab_mut() else {
+                return;
+            };
+            let current = slot
+                .navigation
+                .view()
+                .place
+                .as_ref()
+                .and_then(|location| locations.iter().position(|entry| entry == location));
+            if let Some(index) = slot
+                .grid
+                .navigate(&event.keystroke.key, current, locations.len())
+            {
+                slot.navigation.view_mut().place = Some(locations[index].clone());
+                slot.scroll_to_entry(index);
+                cx.notify();
+                cx.stop_propagation();
+                window.prevent_default();
+            }
             return;
         }
         let Some(motion) = Motion::for_key(&event.keystroke.key) else {
@@ -304,13 +329,28 @@ impl Browser {
             .current_tab()
             .and_then(|slot| slot.navigation.view().place.as_ref())
             .and_then(|location| locations.iter().position(|entry| entry == location));
-        let Some(index) = motion.target(current, locations.len()) else {
+        let target = if self.grid_mode() {
+            let key = match motion {
+                Motion::Previous => "up",
+                Motion::Next => "down",
+                Motion::First => "home",
+                Motion::Last => "end",
+            };
+            self.current_tab()
+                .and_then(|slot| slot.grid.navigate(key, current, locations.len()))
+        } else {
+            motion.target(current, locations.len())
+        };
+        let Some(index) = target else {
             return false;
         };
         if let Some(slot) = self.current_tab_mut() {
             slot.navigation.view_mut().place = Some(locations[index].clone());
+            slot.scroll_to_entry(index);
         }
-        if let Some(table) = self.place_table(collection) {
+        if !self.grid_mode()
+            && let Some(table) = self.place_table(collection)
+        {
             table
                 .read(cx)
                 .vertical_scroll_handle

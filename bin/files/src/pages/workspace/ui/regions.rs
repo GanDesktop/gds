@@ -108,7 +108,8 @@ impl Browser {
     }
 
     fn scroll_region_location(&self) {
-        if let Some(index) = LocationTarget::ALL
+        if let Some(index) = self
+            .visible_location_targets()
             .iter()
             .position(|target| *target == self.sidebar.regions.location)
         {
@@ -148,11 +149,12 @@ impl Browser {
             return;
         };
         if self.sidebar.regions.locations.contains_focused(window, cx) {
-            let current = LocationTarget::ALL
+            let targets = self.visible_location_targets();
+            let current = targets
                 .iter()
                 .position(|target| *target == self.sidebar.regions.location);
-            if let Some(index) = motion.target(current, LocationTarget::ALL.len()) {
-                self.sidebar.regions.location = LocationTarget::ALL[index];
+            if let Some(index) = motion.target(current, targets.len()) {
+                self.sidebar.regions.location = targets[index];
                 self.scroll_region_location();
                 self.sidebar.regions.locations.focus(window, cx);
             }

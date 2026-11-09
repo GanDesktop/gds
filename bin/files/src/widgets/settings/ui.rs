@@ -6,6 +6,7 @@ use gds::appearance::typography::PreferencesEditor as FontEditor;
 use gds::ui::terminal::PreferencesEditor as TerminalEditor;
 mod controls;
 mod pages;
+mod tags;
 
 pub use pages::Page;
 
@@ -34,6 +35,7 @@ pub enum Event {
 }
 
 pub struct View {
+    tags: tags::Controls,
     preferences: Preferences,
     sidebar: SidebarPresentation,
     page: Page,
@@ -59,6 +61,7 @@ impl View {
     pub fn new(
         preferences: Preferences,
         sidebar: SidebarPresentation,
+        runtime: tokio::runtime::Handle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -111,7 +114,15 @@ impl View {
         );
         let font = cx.new(|cx| FontEditor::new(preferences.font.clone(), window, cx));
         let terminal = cx.new(|cx| TerminalEditor::new(preferences.terminal.clone(), window, cx));
+        let tag_editor = cx.new(|cx| {
+            crate::entities::tags::CommandsEditor::new(
+                preferences.tags.commands.clone(),
+                window,
+                cx,
+            )
+        });
         let mut subscriptions = vec![
+            cx.subscribe_in(&tag_editor, window, Self::on_tags_edited),
             cx.subscribe_in(&terminal, window, Self::on_terminal_edited),
             cx.subscribe_in(&general, window, Self::on_general_edited),
             cx.subscribe_in(&source.state, window, Self::on_source_confirm),
@@ -128,7 +139,15 @@ impl View {
             // Kit accessibility increments notify the state without a Change event.
             subscriptions.push(cx.observe_in(&state, window, Self::on_slider_notify(field)));
         }
-        Self {
+        let mut view = Self {
+            tags: tags::Controls {
+                editor: tag_editor,
+                runtime,
+                checked: None,
+                error: None,
+                pending: false,
+                task: None,
+            },
             preferences,
             sidebar,
             page: Page::General,
@@ -144,7 +163,9 @@ impl View {
             font,
             terminal,
             _subscriptions: subscriptions,
-        }
+        };
+        view.probe_tags(cx);
+        view
     }
 
     pub fn refresh_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -204,12 +225,19 @@ impl View {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let tags_changed = self.preferences.tags.commands != preferences.tags.commands;
         self.preferences = preferences;
         self.sync_controls(window, cx);
+        if tags_changed {
+            self.probe_tags(cx);
+        }
         cx.notify();
     }
 
     fn sync_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tags.editor.update(cx, |editor, cx| {
+            editor.set_value(self.preferences.tags.commands.clone(), window, cx)
+        });
         self.general.update(cx, |editor, cx| {
             editor.set_value(self.preferences.clone(), window, cx)
         });

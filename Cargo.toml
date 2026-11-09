@@ -66,6 +66,7 @@ desktop = [
     "dep:open", "dep:thiserror", "dep:url", "dep:ashpd", "dep:zbus",
     "dep:rustix",
 ]
+file-tags = ["desktop", "dep:rustix"]
 storage = [
     "dep:toasty", "dep:toasty-driver-sqlite", "dep:toasty-core",
     "dep:tokio", "dep:thiserror", "dep:nix",
@@ -98,7 +99,7 @@ ui = [
     "dep:rust-embed",
 ]
 files = [
-    "ui", "desktop", "storage", "remote", "dep:clap", "dep:globset",
+    "ui", "desktop", "file-tags", "storage", "remote", "dep:clap", "dep:globset",
     "dep:mime_guess", "dep:xdg-mime", "dep:trash", "dep:tokio-util", "dep:walkdir",
 ]
 agents = [

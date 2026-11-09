@@ -326,7 +326,10 @@ impl Browser {
             Some(Collection::Volumes) => self.move_volume_cursor(motion, cx),
             Some(Collection::Trash) => self.move_trash_cursor(motion, false, cx),
             Some(
-                collection @ (Collection::Recent | Collection::Favorites | Collection::Network),
+                collection @ (Collection::Recent
+                | Collection::Favorites
+                | Collection::Network
+                | Collection::Tags),
             ) => self.move_place_cursor(collection, motion, cx),
             _ => false,
         };
@@ -456,14 +459,9 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let command = if !self.pages.is_empty() || self.collection().is_some() {
-            Command::Cancel
-        } else {
-            Command::Back
-        };
         cx.stop_propagation();
         window.prevent_default();
-        self.dispatch(command, window, cx);
+        self.dispatch(Command::Back, window, cx);
     }
 
     pub(super) fn on_mouse_forward(
@@ -472,9 +470,6 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.pages.is_empty() || self.collection().is_some() {
-            return;
-        }
         cx.stop_propagation();
         window.prevent_default();
         self.dispatch(Command::Forward, window, cx);
@@ -573,11 +568,6 @@ impl Browser {
         pinned: bool,
     ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu {
         move |menu, _, cx| {
-            let pinnable = view.upgrade().is_some_and(|view| {
-                view.read(cx)
-                    .tab_slot(id)
-                    .is_some_and(|tab| tab.path().is_some())
-            });
             let on_pin = Self::menu_pin(view.clone(), id);
             let on_close = Self::menu_close_tab(view.clone(), id);
             ui::menu::popup(menu)
@@ -585,7 +575,6 @@ impl Browser {
                     if pinned { "unpin-tab" } else { "pin-tab" },
                     cx,
                 )).PopupMenuItem::new {
-                    disabled: $(!pinned && !pinnable);
                     on_click: on_pin;
                 } })
                 .item(

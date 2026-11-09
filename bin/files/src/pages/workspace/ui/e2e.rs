@@ -1,7 +1,7 @@
 //! Native-window scenarios, compiled only for the isolated E2E runner.
 use super::*;
 use futures::{StreamExt, channel::mpsc, future};
-use gpui_kit::test::TestWindowExt;
+use gpui_kit::test::{ClickOptions, TestWindowExt};
 use std::fs;
 
 pub(crate) fn start(window: AnyWindowHandle, browser: Entity<Browser>, cx: &mut App) {
@@ -147,7 +147,8 @@ impl Session {
         self.capture("06-reordered-tabs").await;
         self.search_on_typing().await;
         self.search_result_navigation().await;
-        fs::write(self.artifacts.join("passed.txt"), "PASS: rename, undo, redo, create folder, trash, restore, filesystem watch, grid, tab reorder, search on typing, IME protocol, search result navigation\n").expect("result artifact");
+        self.location_history().await;
+        fs::write(self.artifacts.join("passed.txt"), "PASS: rename, undo, redo, create folder, trash, restore, filesystem watch, grid, tab reorder, search on typing, IME protocol, search result navigation, mouse navigation across locations\n").expect("result artifact");
     }
 
     async fn search_on_typing(&mut self) {
@@ -359,6 +360,60 @@ impl Session {
         })
         .await;
         self.capture("09-search-open-folder").await;
+    }
+
+    async fn location_history(&mut self) {
+        // Disabled tags still expose navigation, without needing an index service.
+        self.open_address("tags:/").await;
+        self.open_address("tags:/工作").await;
+        self.open_address("tags:/工作/设计").await;
+        self.mouse_history(NavigationDirection::Back, "tags:/工作")
+            .await;
+        self.mouse_history(NavigationDirection::Back, "tags:/")
+            .await;
+        self.mouse_history(NavigationDirection::Forward, "tags:/工作")
+            .await;
+        self.mouse_history(NavigationDirection::Forward, "tags:/工作/设计")
+            .await;
+        self.open_address("location:/recent").await;
+        self.mouse_history(NavigationDirection::Back, "tags:/工作/设计")
+            .await;
+        self.mouse_history(NavigationDirection::Forward, "location:/recent")
+            .await;
+        self.capture("10-location-mouse-history").await;
+    }
+
+    async fn open_address(&mut self, address: &str) {
+        self.step(|window, cx| {
+            window.press("ctrl-l", cx);
+            window.input(address, cx);
+            window.press("enter", cx);
+        })
+        .await;
+        self.wait_for_address(address).await;
+    }
+
+    async fn mouse_history(&mut self, direction: NavigationDirection, address: &str) {
+        self.step(|window, cx| {
+            window.click_with_options(
+                "page-title",
+                ClickOptions::new().with_button(MouseButton::Navigate(direction)),
+                cx,
+            );
+        })
+        .await;
+        self.wait_for_address(address).await;
+    }
+
+    async fn wait_for_address(&mut self, address: &str) {
+        let expected = Location::from_uri(address).expect("scenario address");
+        self.wait_for(|browser, _, _| {
+            browser.current_location() == expected
+                && browser
+                    .current_tab()
+                    .is_some_and(|tab| !tab.navigation.is_loading())
+        })
+        .await;
     }
 
     fn has_file(browser: &Browser, name: &str) -> bool {

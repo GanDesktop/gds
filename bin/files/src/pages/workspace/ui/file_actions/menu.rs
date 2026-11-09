@@ -11,6 +11,7 @@ use super::{Browser, DirectoryTarget, Selection};
 
 #[derive(Clone, Copy)]
 enum MenuAction {
+    Tags,
     Open,
     OpenWith,
     OpenDirectories,
@@ -40,6 +41,12 @@ impl MenuAction {
             && !browser.collections.trash.is_busy()
             && browser.active().is_some_and(|slot| !slot.is_loading());
         match self {
+            Self::Tags => {
+                available
+                    && idle
+                    && selection.paths.len() == 1
+                    && browser.settings.preferences.tags.enabled
+            }
             Self::CopyPaths => selection.paths.iter().all(|path| path.to_str().is_some()),
             Self::Copy | Self::Cut | Self::Trash | Self::DeletePermanent => available && idle,
             Self::Paste => {
@@ -69,6 +76,7 @@ impl MenuAction {
 
     fn command(self) -> Option<Command> {
         match self {
+            Self::Tags => None,
             Self::Open => Some(Command::Open),
             Self::OpenWith => None,
             #[cfg(unix)]
@@ -87,6 +95,7 @@ impl MenuAction {
 
     fn icon(self) -> Option<IconName> {
         match self {
+            Self::Tags => Some(IconName::Tag),
             Self::Open | Self::OpenWith => Some(IconName::ExternalLink),
             Self::OpenDirectories => Some(IconName::Folder),
             Self::Copy => Some(IconName::Copy),
@@ -240,6 +249,12 @@ impl Browser {
         let paste = items.item(MenuAction::Paste, i18n::text("paste-files", cx), cx);
         let copy_path = items.item(MenuAction::CopyPaths, i18n::text("copy-path", cx), cx);
         let rename = items.item(MenuAction::Rename, i18n::text("rename", cx), cx);
+        let tags = self
+            .settings
+            .preferences
+            .tags
+            .enabled
+            .then(|| items.item(MenuAction::Tags, i18n::text("tags-edit", cx), cx));
         #[cfg(unix)]
         let permissions = Some(items.item(
             MenuAction::Permissions,
@@ -279,6 +294,7 @@ impl Browser {
                 item: copy_path;
                 separator;
                 item: rename;
+                @if (let Some(item) = tags) item: item; @end;
                 @if (let Some(item) = permissions) item: item; @end;
                 separator;
                 item: trash; item: delete;
@@ -422,6 +438,7 @@ impl Browser {
                 }
                 match action {
                     MenuAction::Open => this.activate_path(selection.paths[0].clone(), cx),
+                    MenuAction::Tags => this.edit_tags(selection.paths[0].clone(), window, cx),
                     MenuAction::OpenWith => {
                         let path = selection.paths[0].clone();
                         if this.device_path_available(&path, cx) {

@@ -78,6 +78,7 @@ pub(super) struct ViewSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Embed)]
 #[column(type = text, rename_all = "snake_case")]
 pub(super) enum ViewKind {
+    Tags,
     Defaults,
     Directory,
     Remote,
@@ -110,6 +111,10 @@ impl ViewKey {
         key.kind = match scope {
             ViewScope::Defaults => ViewKind::Defaults,
             ViewScope::Location(location) => match location {
+                Location::Tags(tag) => {
+                    key.identity = tag.uri();
+                    ViewKind::Tags
+                }
                 Location::Directory(path) => {
                     key.path = serde_json::to_vec(path)?;
                     ViewKind::Directory
@@ -146,6 +151,8 @@ impl ViewKey {
     pub(super) fn into_scope(self) -> Result<crate::entities::location::ViewScope, super::Error> {
         use crate::entities::location::{Location, ViewScope, VolumeIdentity};
         let location = match self.kind {
+            ViewKind::Tags => Location::from_uri(&self.identity)
+                .map_err(|error| super::Error::Remote(error.to_string()))?,
             ViewKind::Defaults => return Ok(ViewScope::Defaults),
             ViewKind::Directory => Location::Directory(serde_json::from_slice(&self.path)?),
             ViewKind::Remote => Location::Remote(

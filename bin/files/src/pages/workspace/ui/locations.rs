@@ -5,7 +5,7 @@ use super::*;
 pub(super) struct State {
     pub home: PathBuf,
     pub places: Places,
-    pub pinned_paths: Vec<PathBuf>,
+    pub pinned_locations: Vec<Location>,
     pub load_error: Option<String>,
     pub saving: bool,
 }
@@ -41,7 +41,7 @@ impl State {
         }
         Self {
             home,
-            pinned_paths: places.pinned.iter().map(PathBuf::from).collect(),
+            pinned_locations: places.pinned.clone(),
             places,
             load_error,
             saving: false,
@@ -56,21 +56,24 @@ impl Browser {
             .items
             .iter()
             .filter(|tab| tab.pinned)
-            .filter_map(|tab| tab.path().map(Path::to_path_buf))
+            .map(OpenTab::location)
             .collect();
         // Compare this window's tabs rather than the latest database snapshot,
         // which can contain pins added by another window.
-        for path in &self.locations.pinned_paths {
+        for path in &self.locations.pinned_locations {
             if !current.contains(path) {
                 self.locations.places.set_pinned(path, false);
             }
         }
         for path in &current {
-            if !self.locations.pinned_paths.contains(path) {
+            if !self.locations.pinned_locations.contains(path) {
                 self.locations.places.set_pinned(path, true);
             }
         }
-        self.locations.pinned_paths = current;
+        if current != self.locations.pinned_locations {
+            self.locations.places.reorder_pinned(current.clone());
+        }
+        self.locations.pinned_locations = current;
     }
 
     pub(super) fn save_places(&mut self, cx: &mut Context<Self>) {

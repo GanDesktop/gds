@@ -225,7 +225,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.folder_settled() || self.editing_path(window, cx) || window.has_active_dialog(cx) {
+        if !self.browse_settled() || self.editing_path(window, cx) || window.has_active_dialog(cx) {
             return;
         }
         if self.view_mode() == mode {
@@ -237,7 +237,7 @@ impl Browser {
             .places
             .set_view_mode(self.current_location(), mode);
         self.save_places(cx);
-        if let Some(slot) = self.active_mut() {
+        if let Some(slot) = self.current_tab_mut() {
             slot.scroll
                 .0
                 .borrow()
@@ -410,9 +410,13 @@ impl Browser {
         .absolute()
         .inset_0();
         let handler = cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-            let Some(slot) = this.active() else {
+            let Some(slot) = this.current_tab() else {
                 return;
             };
+            let count = this
+                .place_collection()
+                .and_then(|collection| this.place_locations(collection))
+                .map_or(slot.table_rows.len(), |rows| rows.len());
             let bounds = *bounds.borrow();
             if !bounds.contains(&event.position)
                 || event.position.x > bounds.right() - px(view::TABLE_INSET + view::SCROLLBAR_LANE)
@@ -427,7 +431,7 @@ impl Browser {
                         bounds,
                         event.position,
                         slot.scroll.0.borrow().base_handle.offset().y,
-                        slot.table_rows.len(),
+                        count,
                     )
                     .is_none()
             {
@@ -435,5 +439,68 @@ impl Browser {
             }
         });
         el! { .div { # "file-grid-surface"; relative; size_full; flex; flex_col; min_h_0; capture_any_mouse_down: handler; } [content, measure] }.into_any_element()
+    }
+}
+
+impl Browser {
+    pub(super) fn render_location_grid(
+        &self,
+        collection: Collection,
+        rows: Vec<Location>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(slot) = self.current_tab() else {
+            return div().into_any_element();
+        };
+        let geometry = slot.grid;
+        let list = uniform_list("location-grid", geometry.rows(rows.len()), cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+            let selected = this.selected_place();
+            range.map(|row| {
+                let tiles = (row * geometry.columns..((row + 1) * geometry.columns).min(rows.len())).map(|index| {
+                    let location = rows[index].clone();
+                    let selection = if selected.as_ref() == Some(&location) { 1. } else { 0. };
+                    let body = if let Some(entry) = this.tag_entry(&location) {
+                        TileContent { entry: entry.clone(), geometry, inspections: this.files.inspections.clone(), selection, appearance: EntryAppearance::of(entry, cx) }.render(Some(index), None, cx)
+                    } else {
+                        el! { .div { flex; flex_col; flex_shrink_0; items_center;
+                            w: $(geometry.width).px; h: $(geometry.tile_height).px; p: PADDING.px; gap: CONTENT_GAP.px;
+                            rounded_lg; border_1; border_color: $(cx.theme().primary.opacity(selection));
+                            bg: $(cx.theme().selection.opacity(selection)); overflow_hidden;
+                        } [
+                            .div { w_full; h: $(geometry.thumbnail_height).px; flex_shrink_0; flex; items_center; justify_center; } [
+                                $(location.icon()).Icon::new { size: $(geometry.icon_size).px; text_color: $(cx.theme().primary.interpolate(&cx.theme().accent_foreground, selection)); },
+                            ],
+                            .div { w_full; min_w_0; h: $(geometry.name_height).px; text_size: $(geometry.name_size).px;
+                                line_height: $(geometry.line_height).px; py: NAME_INSET.px; text_center; whitespace_normal; text_ellipsis; line_clamp: NAME_LINES;
+                            } [$(location.label(cx))],
+                        ] }
+                    };
+                    let target = location.clone();
+                    let browser = cx.entity().downgrade();
+                    let menu_target = location.clone();
+                    body.id(("location-tile", index)).cursor_pointer()
+                        .tooltip(table::EntryPresentation::name_hint(location.display_address().into()))
+                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                            if event.is_right_click() { return; }
+                            this.select_place(collection, target.clone(), window, cx);
+                            if event.click_count() == 2 { this.open_place_cursor(cx); }
+                        }))
+                        .context_menu(move |menu, window, cx| {
+                            let Some(browser) = browser.upgrade() else { return menu; };
+                            browser.update(cx, |this, cx| {
+                                this.select_place(collection, menu_target.clone(), window, cx);
+                                this.place_selection_menu(menu, cx)
+                            })
+                        }).into_any_element()
+                }).collect::<Vec<_>>();
+                el! { .div { h: $(geometry.row_height).px; w_full; flex; items_center; gap: GAP.px; px: PADDING.px; } [..tiles] }.into_any_element()
+            }).collect()
+        })).track_scroll(&slot.scroll).size_full();
+        let scrollbar = gpui_kit::base::Scrollbar::vertical(&slot.scroll).viewport_from_layout();
+        el! { .div { # "location-grid-area"; relative; size_full; min_h_0; } [
+            list,
+            .div { absolute; top_0; bottom_0; right_0; w: view::SCROLLBAR_LANE.px; } [scrollbar],
+        ] }
+        .into_any_element()
     }
 }

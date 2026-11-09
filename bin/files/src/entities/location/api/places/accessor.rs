@@ -1,5 +1,3 @@
-use std::ffi::OsStr;
-
 use gds::service::storage::Transaction;
 use toasty::Json;
 
@@ -7,7 +5,7 @@ use super::super::super::model::places::{Change, Places, RECENT_LIMIT};
 use super::super::super::model::view::LocationView;
 use super::{
     Error,
-    record::{self, Kind, Location, SavedLocation, ViewKey, ViewSettings as ViewRecord},
+    record::{self, Kind, SavedLocation, ViewKey, ViewSettings as ViewRecord},
 };
 use crate::entities::location::{ViewScope, ViewSettings};
 
@@ -65,19 +63,12 @@ impl<'tx, 'db> Accessor<'tx, 'db> {
                 match row.kind {
                     Kind::Favorite => places.favorites.push(location),
                     Kind::Recent => places.recent.push(location),
-                    Kind::Pin => unreachable!("pins use filesystem records"),
+                    Kind::Pin => places.pinned.push(location),
                 }
             }
         }
         places.recent.reverse();
         places.recent.truncate(RECENT_LIMIT);
-        for row in Location::filter(Location::fields().kind().eq(Kind::Pin))
-            .order_by(Location::fields().position().asc())
-            .exec(self.tx)
-            .await?
-        {
-            places.pinned.push(serde_json::from_slice(&row.path)?);
-        }
         for row in ViewRecord::all()
             .order_by(ViewRecord::fields().identity().asc())
             .order_by(ViewRecord::fields().path().asc())
@@ -113,22 +104,23 @@ impl<'tx, 'db> Accessor<'tx, 'db> {
                 self.save_location(Kind::Favorite, location, *present)
                     .await?;
             }
-            Change::Pin { path, present } => self.membership(Kind::Pin, path, *present).await?,
+            Change::Pin { location, present } => {
+                self.save_location(Kind::Pin, location, *present).await?
+            }
             Change::PinOrder(order) => {
-                let records = Location::filter(Location::fields().kind().eq(Kind::Pin))
-                    .order_by(Location::fields().position().asc())
+                let mut locations = self.snapshot().await?.pinned;
+                crate::entities::location::model::places::reorder_existing(&mut locations, order);
+                for (position, location) in locations.iter().enumerate() {
+                    let key = ViewKey::new(&ViewScope::Location(location.clone()))?;
+                    SavedLocation::upsert_by_kind_and_location_kind_and_identity_and_path(
+                        Kind::Pin,
+                        key.kind,
+                        key.identity,
+                        key.path,
+                    )
+                    .position(position as i64)
                     .exec(self.tx)
                     .await?;
-                let mut paths = Vec::new();
-                for row in records {
-                    paths.push(serde_json::from_slice(&row.path)?);
-                }
-                crate::entities::location::model::places::reorder_existing(&mut paths, order);
-                for (position, path) in paths.iter().enumerate() {
-                    Location::upsert_by_kind_and_path(Kind::Pin, path_key(path)?)
-                        .position(position as i64)
-                        .exec(self.tx)
-                        .await?;
                 }
             }
             Change::ClearRecent => {
@@ -242,43 +234,11 @@ impl<'tx, 'db> Accessor<'tx, 'db> {
             key.path,
         )
         .position(position);
-        if kind == Kind::Favorite {
+        if kind != Kind::Recent {
             insert.or_ignore().exec(self.tx).await?;
         } else {
             insert.exec(self.tx).await?;
         }
         Ok(())
     }
-
-    async fn membership(&mut self, kind: Kind, path: &OsStr, present: bool) -> Result<(), Error> {
-        let key = path_key(path)?;
-        if present {
-            let position = self.next_position(kind).await?;
-            Location::upsert_by_kind_and_path(kind, key)
-                .position(position)
-                .or_ignore()
-                .exec(self.tx)
-                .await?;
-        } else {
-            Location::filter_by_kind_and_path(kind, key)
-                .delete()
-                .exec(self.tx)
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn next_position(&mut self, kind: Kind) -> Result<i64, Error> {
-        let last = Location::filter(Location::fields().kind().eq(kind))
-            .order_by(Location::fields().position().desc())
-            .select(Location::fields().position())
-            .first()
-            .exec(self.tx)
-            .await?;
-        Ok(last.map_or(1, |position| position + 1))
-    }
-}
-
-fn path_key(path: &OsStr) -> Result<Vec<u8>, Error> {
-    Ok(serde_json::to_vec(path)?)
 }

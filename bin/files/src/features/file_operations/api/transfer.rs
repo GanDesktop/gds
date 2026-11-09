@@ -552,6 +552,8 @@ impl Node {
                 .write_all(&buffer[..count])
                 .map_err(|error| Error::filesystem("copy file", &self.destination, error))?;
         }
+        gds::service::file_tags::copy_from(&source, &self.destination)
+            .map_err(|error| Error::filesystem("preserve file tags", &self.destination, error))?;
         let after = rustix::fs::fstat(&source)
             .map_err(|error| Error::filesystem("recheck open file", &self.source, error))?;
         Copied::check(expected, &after, &self.source)?;
@@ -605,6 +607,9 @@ impl Node {
             children.push((name.to_owned(), copied));
         }
         // Apply readonly source modes only after every child has been written.
+        gds::service::file_tags::copy_from(&source, &self.destination).map_err(|error| {
+            Error::filesystem("preserve directory tags", &self.destination, error)
+        })?;
         fs::set_permissions(&self.destination, permissions).map_err(|error| {
             Error::filesystem("set directory permissions", &self.destination, error)
         })?;

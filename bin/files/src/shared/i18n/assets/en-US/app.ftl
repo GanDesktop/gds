@@ -295,3 +295,32 @@ new-window = New window
 
 theme-search = Search themes…
 theme-custom-selection = Custom theme
+
+tags-title = Tags
+tags-enabled = Enable tags
+tags-backend = Tags backend
+tags-backend-baloo = Baloo
+tags-control-command = Baloo control executable
+tags-kio-command = KIO client executable
+tags-command-hint = Leave unset to discover from PATH. Custom values must point to an executable file.
+tags-checking = Checking Baloo commands and the tags plugin…
+tags-ready = Baloo is available
+tags-unavailable = Tags backend unavailable
+tags-detect = Check backend again
+tags-disabled = Tags are disabled. Enable them in Settings → Files.
+tags-show-parent = Show in containing folder
+tags-edit = Edit tags…
+tags-loading = Reading tags…
+tags-saving = Saving tags…
+tags-saved = Tags saved.
+tags-none = No tags
+
+tags-add = Add tag
+tags-remove = Remove tag
+
+tags-editor-title = Edit tags
+tags-add-placeholder = Add a tag…
+tags-delete = Delete tag
+tags-delete-title = Delete tag?
+tags-delete-message = Remove this tag and its subtags from associated files. The files will be kept. This cannot be undone.
+tags-deleted = Tag deleted.

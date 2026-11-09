@@ -34,7 +34,7 @@ impl LocationTable {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<TableState<Self>> {
-        let columns = Self::columns(0., cx);
+        let columns = Self::columns(0., collection, false, cx);
         let state = cx.new(|cx| {
             TableState::new(
                 Self {
@@ -78,31 +78,43 @@ impl LocationTable {
         }
     }
 
-    fn columns(width: f32, cx: &App) -> Vec<Column> {
+    fn columns(width: f32, collection: Collection, has_files: bool, cx: &App) -> Vec<Column> {
         let name = (width * NAME_FRACTION).max(NAME_MIN_WIDTH);
-        [
-            ("name", "name", name),
-            (
-                "location",
-                "place-location",
-                (width - name).max(PATH_MIN_WIDTH),
-            ),
-        ]
-        .into_iter()
-        .map(|(key, label, width)| {
-            Column::new(key, i18n::text(label, cx))
-                .width(px(width))
-                .min_width(px(width))
-                .resizable(false)
-                .movable(false)
-                .paddings(Edges {
-                    top: px(DataListStyle::CELL_PADDING_Y),
-                    bottom: px(DataListStyle::CELL_PADDING_Y),
-                    left: px(DataListStyle::CELL_PADDING_X),
-                    right: px(DataListStyle::CELL_PADDING_X),
-                })
-        })
-        .collect()
+        let columns = if collection == Collection::Tags && !has_files {
+            vec![("name", "name", width.max(NAME_MIN_WIDTH))]
+        } else if collection == Collection::Tags {
+            vec![
+                ("name", "name", (width - 370.).max(NAME_MIN_WIDTH)),
+                ("modified", "modified", 160.),
+                ("kind", "type", 110.),
+                ("size", "size", 100.),
+            ]
+        } else {
+            vec![
+                ("name", "name", name),
+                (
+                    "location",
+                    "place-location",
+                    (width - name).max(PATH_MIN_WIDTH),
+                ),
+            ]
+        };
+        columns
+            .into_iter()
+            .map(|(key, label, width)| {
+                Column::new(key, i18n::text(label, cx))
+                    .width(px(width))
+                    .min_width(px(width))
+                    .resizable(false)
+                    .movable(false)
+                    .paddings(Edges {
+                        top: px(DataListStyle::CELL_PADDING_Y),
+                        bottom: px(DataListStyle::CELL_PADDING_Y),
+                        left: px(DataListStyle::CELL_PADDING_X),
+                        right: px(DataListStyle::CELL_PADDING_X),
+                    })
+            })
+            .collect()
     }
 
     pub(in super::super) fn sync(
@@ -112,15 +124,17 @@ impl LocationTable {
         width: f32,
         cx: &mut App,
     ) {
-        let columns = Self::columns(width, cx);
+        let has_files = rows.iter().any(|location| location.local_path().is_some());
+        let columns = Self::columns(width, state.read(cx).delegate().collection, has_files, cx);
         state.update(cx, |state, cx| {
             Self::clear_selection(state, cx);
             let delegate = state.delegate_mut();
-            let refresh = delegate
-                .columns
-                .iter()
-                .zip(&columns)
-                .any(|(old, new)| old.name != new.name || old.width != new.width);
+            let refresh = delegate.columns.len() != columns.len()
+                || delegate
+                    .columns
+                    .iter()
+                    .zip(&columns)
+                    .any(|(old, new)| old.name != new.name || old.width != new.width);
             let changed = delegate.rows != rows || delegate.selected != selected;
             delegate.rows = rows;
             delegate.selected = selected;
@@ -203,24 +217,66 @@ impl TableDelegate for LocationTable {
         } else {
             cx.theme().foreground
         };
-        let name = location.label(cx);
-        let icon = location.icon();
+        let entry = self
+            .browser
+            .upgrade()
+            .and_then(|browser| browser.read(cx).tag_entry(location).cloned());
+        let name = entry
+            .as_ref()
+            .map(|entry| entry.display_name.clone())
+            .unwrap_or_else(|| location.label(cx));
+        let icon = if let Some(entry) = &entry {
+            super::super::file_icon::FileArtwork::default()
+                .icon(super::super::file_icon::FileIcon::for_entry(entry))
+                .size(px(tokens::SIDEBAR_ICON_SIZE))
+                .color(super::super::file_icon::FileIcon::color(entry, cx))
+                .into_any_element()
+        } else {
+            Icon::new(location.icon())
+                .size(px(tokens::SIDEBAR_ICON_SIZE))
+                .into_any_element()
+        };
         let address = location.display_address();
         let tooltip: SharedString = address.clone().into();
+        let cell = match self.columns[column].key.as_ref() {
+            "name" => div().min_w_0().truncate().child(name).into_any_element(),
+            "modified" => gds::ui::time::Timestamp::new(
+                ("tag-modified", index),
+                entry.as_ref().and_then(|entry| entry.modified),
+            )
+            .into_any_element(),
+            "kind" => div()
+                .child(
+                    entry
+                        .as_ref()
+                        .map(|entry| super::super::table::EntryPresentation::type_label(entry, cx))
+                        .unwrap_or_else(|| i18n::text("tags-title", cx)),
+                )
+                .into_any_element(),
+            "size" => div()
+                .child(
+                    entry
+                        .as_ref()
+                        .map(super::super::table::EntryPresentation::size)
+                        .unwrap_or_else(|| "—".into()),
+                )
+                .into_any_element(),
+            _ => div().min_w_0().truncate().child(address).into_any_element(),
+        };
         let hint_enabled = self
             .menu_focus
             .as_ref()
             .is_none_or(|focus| !focus.contains_focused(window, cx));
         el! { .div { size_full; flex; items_center; min_w_0; gap: ICON_GAP.px; text_color: foreground;
-            # $("location-cell", index * 2 + column);
+            # $("location-cell", index * 5 + column);
             @if (hint_enabled)
                 tooltip_show_delay: tokens::TOOLTIP_DELAY;
                 tooltip: $(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx));
             @end;
             text_size: $(typography::scaled(if column == 0 { DataListStyle::NAME_SIZE } else { DataListStyle::META_SIZE }, cx));
         } [
-            @if (column == 0) icon.Icon::new { size: tokens::SIDEBAR_ICON_SIZE.px; flex_shrink_0 }, @end,
-            .div { min_w_0; truncate } [$(if column == 0 { name } else { address })],
+            @if (column == 0) icon, @end,
+            cell,
         ] }
     }
 

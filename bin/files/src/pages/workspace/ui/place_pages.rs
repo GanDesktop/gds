@@ -3,7 +3,6 @@
 mod network;
 mod network_view;
 pub(super) mod table;
-use gds::ui::IconButton;
 use gds::ui::ListSurface;
 pub(super) use network::State as Network;
 
@@ -11,11 +10,13 @@ use super::*;
 use gds::ui::page::*;
 use gds::{appearance::tokens::DataListStyle, ui::ContentPage};
 use gds_uim::el;
-use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Sizable, table::DataTable};
 use gpui_kit::prelude::*;
 
 pub(super) struct State {
+    pub tags: Entity<gpui_kit::component::table::TableState<table::LocationTable>>,
+    pub preview_location: Option<Location>,
+    pub preview_task: Option<Task<()>>,
     pub recent: Entity<gpui_kit::component::table::TableState<table::LocationTable>>,
     pub favorites: Favorites,
     pub network: NetworkPage,
@@ -38,6 +39,9 @@ impl State {
             table::LocationTable::make_state(cx.entity().downgrade(), collection, window, cx)
         };
         Self {
+            tags: table(Collection::Tags),
+            preview_location: None,
+            preview_task: None,
             recent: table(Collection::Recent),
             favorites: Favorites {
                 table: table(Collection::Favorites),
@@ -58,6 +62,7 @@ impl Browser {
         collection: Collection,
     ) -> Option<&Entity<gpui_kit::component::table::TableState<table::LocationTable>>> {
         match collection {
+            Collection::Tags => Some(&self.collections.tags),
             Collection::Recent => Some(&self.collections.recent),
             Collection::Favorites => Some(&self.collections.favorites.table),
             Collection::Network => Some(&self.collections.network.table),
@@ -67,6 +72,25 @@ impl Browser {
 
     pub(super) fn place_locations(&self, collection: Collection) -> Option<Vec<Location>> {
         let locations = match collection {
+            Collection::Tags => {
+                let contents = self.current_tab()?.tags.as_ref()?.as_ref().ok()?;
+                contents
+                    .listing
+                    .tags
+                    .iter()
+                    .filter_map(|name| {
+                        crate::entities::scheme::TagAddress::new(name)
+                            .ok()
+                            .map(Location::Tags)
+                    })
+                    .chain(
+                        contents
+                            .entries
+                            .iter()
+                            .map(|entry| Location::from(&entry.path)),
+                    )
+                    .collect()
+            }
             Collection::Favorites => self.locations.places.favorites.clone(),
             Collection::Recent => self.locations.places.recent.clone(),
             Collection::Network => self
@@ -79,9 +103,16 @@ impl Browser {
                 .collect(),
             _ => return None,
         };
+        let filter = self
+            .current_tab()
+            .map(|slot| slot.filter.to_lowercase())
+            .unwrap_or_default();
         Some(
             locations
                 .into_iter()
+                .filter(|location| {
+                    filter.is_empty() || location.display_address().to_lowercase().contains(&filter)
+                })
                 .filter(|location| {
                     self.picker.is_none() || !matches!(location, Location::Remote(_))
                 })
@@ -231,7 +262,7 @@ impl Browser {
     }
 
     pub(super) fn render_places_page(
-        &self,
+        &mut self,
         collection: Collection,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -239,91 +270,52 @@ impl Browser {
         if collection == Collection::Network {
             return self.render_network_page(cx);
         }
+        self.sync_preview(cx);
         let locations = self.place_locations(collection).unwrap_or_default();
         let selected = self.selected_place();
-        let has_selection = selected.is_some();
-        let favorite = selected
-            .as_ref()
-            .is_some_and(|path| self.locations.places.is_favorite(path));
-        let loading = self.collections.favorites.loading;
-        let table_state = self
-            .place_table(collection)
-            .expect("folder collection has a table");
-        let width =
-            f32::from(window.bounds().size.width) - self.width() - ContentPage::TABLE_INSET * 2.;
-        table::LocationTable::sync(table_state, locations.clone(), selected, width, cx);
-        let table = el! {
-            ($table_state).DataTable::new {
+        let progress = if self.details_visible() { 1. } else { 0. };
+        let width = f32::from(window.bounds().size.width)
+            - self.width()
+            - ContentPage::TABLE_INSET * 2.
+            - super::view::PREVIEW_WIDTH * progress;
+        let scale = f32::from(gds::appearance::typography::scaled(1., cx));
+        let mode = self.view_mode();
+        if let Some(slot) = self.current_tab_mut() {
+            slot.grid = grid::Geometry::new(width, scale);
+            slot.view_mode = mode;
+        }
+        let list = if self.grid_mode() {
+            let grid = self.render_location_grid(collection, locations.clone(), cx);
+            self.grid_surface(grid, cx)
+        } else {
+            let table_state = self
+                .place_table(collection)
+                .expect("location collection has a table");
+            table::LocationTable::sync(table_state, locations.clone(), selected, width, cx);
+            let table = el! { ($table_state).DataTable::new {
                 bordered: false; with_size: $(gpui_kit::component::Size::Size(px(DataListStyle::ROW_HEIGHT)));
                 header_row_height: DataListStyle::HEADER_HEIGHT.px; into_any_element;
-            }
+            } };
+            let scroll = table_state
+                .read(cx)
+                .vertical_scroll_handle
+                .0
+                .borrow()
+                .base_handle
+                .clone();
+            let area = el! { .PageTableArea::default { # "locations-table-area"; } [table] };
+            el! { ("locations-selection-surface", $(area.into_any_element()), $(locations.len()), scroll).ListSurface::new {
+                inset_x: $(px(ContentPage::TABLE_INSET));
+                on_blank_press: $(cx.listener(Self::on_list_background_press));
+            } }.into_any_element()
         };
-        let scroll = table_state
-            .read(cx)
-            .vertical_scroll_handle
-            .0
-            .borrow()
-            .base_handle
-            .clone();
-        let area = el! { .PageTableArea::default {
-            # "locations-table-area";
-        } [
-            table,
-        ] };
-        let list = el! { ("locations-selection-surface", $(area.into_any_element()), $(locations.len()), scroll).ListSurface::new {
-            inset_x: $(px(ContentPage::TABLE_INSET));
-            on_blank_press: $(cx.listener(Self::on_list_background_press));
-        } };
-        let on_copy_path = cx.listener(Self::click_command(Command::CopyPaths));
-        let mut actions = Vec::new();
-        if collection != Collection::Recent {
-            let on_copy = cx.listener(Self::click_command(Command::Copy));
-            actions.push(el! {
-                "place-copy".IconButton::new { icon: IconName::Copy; label: $i18n::text("copy-files", cx);
-                    command: Command::Copy; disabled: $(self.selected_place_path().is_none()); on_click: on_copy;
-                }
-            }.into_any_element());
-        }
-        actions.push(el! {
-            "place-copy-path".IconButton::new { icon: IconName::ClipboardCopy; label: $i18n::text(Command::CopyPaths.label_id(), cx);
-                command: Command::CopyPaths; disabled: $(!has_selection); on_click: on_copy_path;
-            }
-        }.into_any_element());
-        let on_favorite = cx.listener(Self::click_command(Command::Favorite));
-        actions.push(el! {
-            "place-favorite".IconButton::new { icon: $(if favorite { IconName::StarOff } else { IconName::Star });
-                label: $i18n::text(if favorite { "place-favorite-remove" } else { "place-favorite-add" }, cx);
-                command: Command::Favorite; disabled: $(!has_selection); on_click: on_favorite;
-            }
-        }.into_any_element());
-        if collection == Collection::Recent {
-            let on_clear = cx.listener(Self::click_command(Command::ClearRecent));
-            actions.push(el! {
-                "clear-recent".IconButton::new { icon: IconName::Broom; label: $i18n::text("clear-recent", cx);
-                    command: Command::ClearRecent; disabled: $(locations.is_empty()); on_click: on_clear;
-                }
-            }.into_any_element());
-        } else {
-            let on_refresh = cx.listener(Self::click_command(Command::Refresh));
-            actions.push(el! {
-                "place-refresh".IconButton::new { icon: IconName::RefreshCw; label: $i18n::text("refresh", cx);
-                    command: Command::Refresh; disabled: loading; on_click: on_refresh;
-                }
-            }.into_any_element());
-        }
-        el! {
-            .ContentPage::default { # $(collection.label_id()) } [
-                .PageHeader::default { @if (self.window.layout.compact) hidden; @end } [
-                    .PageTitle::default [$i18n::text(collection.label_id(), cx)],
-                    @if (!actions.is_empty())
-                        .PageActions::default [..actions],
-                    @end,
-                ],
-                .PageContent::default [
-                    list,
-                ],
-            ]
-        }
-        .into_any_element()
+        let content = self.directory_page(list, window, cx);
+        let panel = (progress > 0.).then(|| {
+            el! { .div {
+                # "preview-panel"; w: super::view::PREVIEW_WIDTH.px; flex_shrink_0; h_full; min_h_0;
+                flex; flex_col; overflow_hidden; border_l_1; border_color: $cx.theme().border;
+            } [$(self.files.preview.clone())] }
+        });
+        el! { .div { flex; size_full; min_h_0; min_w_0; } [content, ..panel] }.into_any_element()
     }
 }

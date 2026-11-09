@@ -127,6 +127,7 @@ impl Browser {
                         .offset()
                         .y,
                 )),
+                Some(_) if slot.view_mode == ViewMode::Grid => None,
                 Some(collection) => self.place_table(collection).map(|table| {
                     f32::from(
                         table
@@ -206,10 +207,8 @@ impl Browser {
             Command::Back => slot.navigation.history_index().checked_sub(1),
             Command::Forward => Some(slot.navigation.history_index() + 1),
             Command::Parent => {
-                let location = match slot.navigation.location() {
-                    Location::Remote(address) => address.parent().map(Location::Remote),
-                    _ => slot.path().and_then(Path::parent).map(Location::from),
-                };
+                let location = crate::entities::scheme::parent(slot.navigation.location())
+                    .or_else(|| slot.path().and_then(Path::parent).map(Location::from));
                 if let Some(location) = location {
                     self.navigate_location(self.tabs.active_id, location, cx);
                 }
@@ -285,6 +284,7 @@ impl Location {
     pub(super) fn icon(&self) -> gpui_kit::assets::IconName {
         use gpui_kit::assets::IconName;
         match self {
+            Self::Tags(_) => IconName::Tag,
             Self::Directory(_) => IconName::Folder,
             Self::Remote(_) => IconName::Network,
             Self::Recent => IconName::Clock,
@@ -297,6 +297,13 @@ impl Location {
 
     pub(super) fn label(&self, cx: &App) -> String {
         match self {
+            Self::Tags(address) => {
+                if address.tag().is_empty() {
+                    i18n::text("tags-title", cx).to_string()
+                } else {
+                    address.label().to_owned()
+                }
+            }
             Self::Remote(address) => address.name(),
             Self::Directory(path) => Path::new(path)
                 .file_name()
@@ -327,6 +334,9 @@ impl Location {
 impl LocationTarget {
     pub(super) fn location(self, home: &Path) -> Location {
         match self {
+            Self::Tags => Location::Tags(
+                crate::entities::scheme::TagAddress::new("").expect("root tag address"),
+            ),
             Self::Home => Location::from(home),
             Self::Recent => Location::Recent,
             Self::Favorites => Location::Favorites,

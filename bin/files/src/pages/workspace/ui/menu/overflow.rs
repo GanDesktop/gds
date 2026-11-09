@@ -85,7 +85,19 @@ pub(super) fn rows(
                 false,
             );
         }
-        Some(Collection::Recent | Collection::Favorites) => {
+        Some(Collection::Recent | Collection::Favorites | Collection::Tags) => {
+            let grid = browser.grid_mode();
+            add(
+                Command::ViewMode,
+                if grid { "view-list" } else { "view-grid" },
+                if grid {
+                    IconName::List
+                } else {
+                    IconName::LayoutGrid
+                },
+                browser.browse_settled(),
+                false,
+            );
             let recent = browser.collection() == Some(Collection::Recent);
             let selected = browser.selected_place();
             let favorite = selected
@@ -129,6 +141,9 @@ pub(super) fn rows(
                     false,
                 );
             } else {
+                if browser.selected_deletable_tag().is_some() {
+                    add(Command::Trash, "tags-delete", IconName::Trash, true, false);
+                }
                 add(
                     Command::Refresh,
                     "refresh",

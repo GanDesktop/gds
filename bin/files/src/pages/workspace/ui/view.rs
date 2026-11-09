@@ -40,7 +40,7 @@ const ADDRESS_HEIGHT: f32 = tokens::ICON_BUTTON_SIZE + 2.;
 const TAB_CLOSE_RESERVE: f32 = ITEM_GAP * 2. + tokens::ICON_BUTTON_SIZE;
 /// Height reserved by Kit's overlay scrollbar at the table's bottom edge.
 pub(super) const SCROLLBAR_LANE: f32 = DataListStyle::SCROLLBAR_LANE;
-const PREVIEW_WIDTH: f32 = 280.;
+pub(super) const PREVIEW_WIDTH: f32 = 280.;
 /// Whether the footer's left slot renders the current location scope label.
 const SHOW_LOCATION_SCOPE: bool = false;
 
@@ -311,7 +311,7 @@ impl Browser {
     }
 
     fn render_navigation(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let has_parent = matches!(self.current_location(), Location::Remote(ref address) if address.parent().is_some())
+        let has_parent = crate::entities::scheme::parent(&self.current_location()).is_some()
             || self
                 .active()
                 .and_then(OpenTab::path)
@@ -364,7 +364,9 @@ impl Browser {
             }
             .into_any_element();
         }
-        let content = if let Location::Remote(address) = self.current_location() {
+        let content = if let Location::Tags(address) = self.current_location() {
+            self.render_tag_breadcrumbs(address, cx)
+        } else if let Location::Remote(address) = self.current_location() {
             el! { .div { flex_1; min_w_0; px: CAPTION_PADDING.px; truncate } [$(address.to_string())] }
                 .into_any_element()
         } else if self.current_path().is_none() {
@@ -739,7 +741,7 @@ impl Browser {
         }.into_any_element()
     }
 
-    fn directory_page(
+    pub(super) fn directory_page(
         &self,
         body: AnyElement,
         window: &mut Window,
@@ -758,6 +760,16 @@ impl Browser {
         let details = self
             .command_button("details", IconName::Info, Command::Details, cx)
             .active(self.details_visible());
+        let delete_tag = el! {
+            "delete-tag".IconButton::new {
+                icon: IconName::Trash;
+                label: $(i18n::text("tags-delete", cx)); command: Command::Trash;
+                on_click: $(cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.request_delete_tag(window, cx);
+                }));
+            }
+        };
         let on_columns = cx.listener(Self::on_columns);
         let filter = self.directory_filter(window, cx);
         let favorite = el! {
@@ -788,7 +800,7 @@ impl Browser {
                 Command::ViewMode,
                 cx,
             )
-            .disabled(!self.folder_settled())
+            .disabled(!self.browse_settled())
             .label(i18n::text(
                 if self.grid_mode() {
                     "view-list"
@@ -804,7 +816,7 @@ impl Browser {
                      .div { # "page-title"; test_support; aria_label: $(title.clone()); flex_1; min_w_0; overflow_hidden } [
                         .PageTitle::default [title],
                     ],
-                    .PageActions::default { min_w_0; flex_shrink_1; } [filter, view_mode, favorite, sort, columns, hidden, details, refresh],
+                    .PageActions::default { min_w_0; flex_shrink_1; } [filter, view_mode, favorite, @if (self.collection().is_none()) sort, columns, hidden, @end, @if (self.details_available()) details, @end, @if (self.selected_deletable_tag().is_some()) delete_tag, @end, refresh],
                 ],
                 @end,
                 .PageContent::default [body],
@@ -820,8 +832,10 @@ impl Browser {
         {
             return self.render_location_loading(&location, cx);
         }
-        if matches!(self.current_location(), Location::Remote(_)) {
-            return self.render_remote(window, cx);
+        match crate::entities::scheme::browse(&self.current_location()) {
+            crate::entities::scheme::Browse::Remote(_) => return self.render_remote(window, cx),
+            crate::entities::scheme::Browse::Tags(_) => return self.render_tags(window, cx),
+            crate::entities::scheme::Browse::Location => (),
         }
         if let Some(collection) = self.collection() {
             return self.render_collection(collection, window, cx);
@@ -1024,7 +1038,7 @@ impl Browser {
     }
 
     fn render_collection(
-        &self,
+        &mut self,
         collection: Collection,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1032,6 +1046,7 @@ impl Browser {
         // Trash and Network are virtual locations; they never borrow a
         // filesystem path from the active tab.
         match collection {
+            Collection::Tags => self.render_tags(window, cx),
             Collection::Volumes => self.render_devices_page(window, cx),
             Collection::Trash => self.render_trash(window, cx),
             Collection::Recent | Collection::Network | Collection::Favorites => {
@@ -1106,6 +1121,13 @@ impl Browser {
                 self.collections.trash.rows().len(),
                 cx,
             ));
+        } else if let Some(collection) = self.place_collection() {
+            labels.push(i18n::count(
+                "item-count",
+                self.place_locations(collection)
+                    .map_or(0, |rows| rows.len()),
+                cx,
+            ));
         } else if let Some(slot) = self.active().filter(|slot| slot.files_available())
             && let Some(directory) = slot.navigation.directory()
         {
@@ -1152,8 +1174,9 @@ impl Browser {
 }
 
 impl LocationTarget {
-    pub(super) const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 7] = [
         Self::Home,
+        Self::Tags,
         Self::Recent,
         Self::Favorites,
         Self::Volumes,
@@ -1162,6 +1185,7 @@ impl LocationTarget {
     ];
     fn label_id(self) -> &'static str {
         match self {
+            Self::Tags => "tags-title",
             Self::Home => "home",
             Self::Recent => "recent",
             Self::Favorites => "favorites",
@@ -1172,24 +1196,13 @@ impl LocationTarget {
     }
     fn icon(self) -> IconName {
         match self {
+            Self::Tags => IconName::Tag,
             Self::Home => IconName::House,
             Self::Recent => IconName::Clock,
             Self::Favorites => IconName::Star,
             Self::Volumes => IconName::HardDrive,
             Self::Network => IconName::Network,
             Self::Trash => IconName::Trash,
-        }
-    }
-}
-
-impl Collection {
-    pub(super) fn label_id(self) -> &'static str {
-        match self {
-            Self::Volumes => "volumes",
-            Self::Recent => "recent",
-            Self::Favorites => "favorites",
-            Self::Network => "network",
-            Self::Trash => "trash",
         }
     }
 }

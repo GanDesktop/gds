@@ -58,10 +58,7 @@ impl Browser {
             return;
         }
         let value = input.read(cx).value();
-        if ["location:", "file:", "sftp:", "smb:"]
-            .iter()
-            .any(|scheme| value.starts_with(scheme))
-        {
+        if crate::entities::scheme::recognizes(&value) {
             match Location::from_uri(&value) {
                 Ok(Location::Directory(path)) => {
                     self.navigate(PathBuf::from(path), cx);
@@ -114,7 +111,7 @@ impl Browser {
             return;
         }
         let value = input.read(cx).value().to_string();
-        if let Some(slot) = self.active_mut() {
+        if let Some(slot) = self.current_tab_mut() {
             slot.filter = value;
             slot.refresh_visible();
         }
@@ -123,7 +120,7 @@ impl Browser {
 
     pub(super) fn sync_filter_input(&self, window: &mut Window, cx: &mut Context<Self>) {
         let filter = self
-            .active()
+            .current_tab()
             .map(|tab| tab.filter.clone())
             .unwrap_or_default();
         if self.toolbar.filter.input.read(cx).value().as_ref() != filter {

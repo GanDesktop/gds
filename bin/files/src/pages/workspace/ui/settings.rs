@@ -12,12 +12,14 @@ pub(super) struct State {
 impl State {
     pub(super) fn new(
         preferences: configuration::Preferences,
+        runtime: Handle,
         window: &mut Window,
         cx: &mut App,
     ) -> Self {
         Self {
-            view: cx
-                .new(|cx| widget::View::new(preferences.clone(), Default::default(), window, cx)),
+            view: cx.new(|cx| {
+                widget::View::new(preferences.clone(), Default::default(), runtime, window, cx)
+            }),
             theme_reload: gds::appearance::theme::HotReload::shared(
                 preferences.appearance.clone(),
                 window,
@@ -77,11 +79,15 @@ impl Browser {
         }
         let hidden_changed =
             preferences.files.show_hidden != self.settings.preferences.files.show_hidden;
+        let tags_changed = preferences.tags != self.settings.preferences.tags;
         if !preferences.terminal_enabled() {
             self.terminal.visible = false;
             self.terminal.maximized = false;
         }
         self.settings.preferences = preferences.clone();
+        if !preferences.tags.enabled && self.sidebar.regions.location == LocationTarget::Tags {
+            self.sidebar.regions.location = LocationTarget::Home;
+        }
         self.apply_terminal_preferences(cx);
         if appearance_changed {
             self.settings.theme_reload.update(cx, |reload, cx| {
@@ -104,6 +110,27 @@ impl Browser {
         }
         if hidden_changed {
             self.refresh_current(cx);
+        }
+        if tags_changed {
+            let targets: Vec<_> = self
+                .tabs
+                .items
+                .iter()
+                .filter_map(|slot| {
+                    let location = slot
+                        .navigation
+                        .pending_location()
+                        .unwrap_or(slot.navigation.location());
+                    matches!(location, Location::Tags(_)).then(|| (slot.id, location.clone()))
+                })
+                .collect();
+            for (id, location) in targets {
+                if let Some(slot) = self.tab_slot_mut(id) {
+                    slot.tags_load = None;
+                    slot.navigation.cancel_pending();
+                }
+                self.navigate_location(id, location, cx);
+            }
         }
         cx.notify();
     }

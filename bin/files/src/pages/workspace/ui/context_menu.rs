@@ -111,17 +111,37 @@ impl Browser {
                 ))
             }
             Some(
-                collection @ (Collection::Recent | Collection::Favorites | Collection::Network),
+                collection @ (Collection::Recent
+                | Collection::Favorites
+                | Collection::Network
+                | Collection::Tags),
             ) => {
                 let location = self.selected_place()?;
                 let index = self
                     .place_locations(collection)?
                     .iter()
                     .position(|entry| entry == &location)?;
-                let table = self.place_table(collection)?;
-                let handle = &table.read(cx).vertical_scroll_handle;
-                handle.scroll_to_item(index, ScrollStrategy::Nearest);
-                let scroll = handle.0.borrow().base_handle.clone();
+                let (index, height, inset, scroll) = if self.grid_mode() {
+                    let slot = self.current_tab()?;
+                    slot.scroll_to_entry(index);
+                    let tile = slot.grid.tile(index, point(px(0.), px(0.)), px(0.));
+                    (
+                        index / slot.grid.columns,
+                        px(slot.grid.row_height),
+                        tile.left() - px(view::TABLE_INSET),
+                        slot.scroll.0.borrow().base_handle.clone(),
+                    )
+                } else {
+                    let table = self.place_table(collection)?;
+                    let handle = &table.read(cx).vertical_scroll_handle;
+                    handle.scroll_to_item(index, ScrollStrategy::Nearest);
+                    (
+                        index,
+                        height,
+                        px(tokens::DataListStyle::CELL_PADDING_X),
+                        handle.0.borrow().base_handle.clone(),
+                    )
+                };
                 Some((
                     Target::Place {
                         collection,
@@ -130,7 +150,7 @@ impl Browser {
                     RowAnchor {
                         index,
                         height,
-                        inset: px(tokens::DataListStyle::CELL_PADDING_X),
+                        inset,
                         scroll,
                     },
                 ))
@@ -289,62 +309,109 @@ impl Browser {
         mut menu: PopupMenu,
         cx: &Context<Self>,
     ) -> PopupMenu {
+        #[derive(Clone, Copy)]
+        enum Item {
+            Command(Command),
+            ShowParent,
+            EditTags,
+            DeleteTag,
+        }
         menu = ui::menu::popup(menu);
         let Some(location) = self.selected_place() else {
             return menu;
         };
         let collection = self.collection();
-        let mut commands = vec![Command::Open, Command::OpenInNewTab, Command::CopyPaths];
+        let local = location.local_path().is_some();
+        let mut open = vec![
+            Item::Command(Command::Open),
+            Item::Command(Command::OpenInNewTab),
+        ];
+        if local {
+            open.push(Item::ShowParent);
+        }
+        let mut copy = Vec::new();
+        if local
+            && matches!(
+                collection,
+                Some(Collection::Favorites | Collection::Network | Collection::Tags)
+            )
+        {
+            copy.push(Item::Command(Command::Copy));
+        }
+        copy.push(Item::Command(Command::CopyPaths));
+        let mut organize = vec![Item::Command(Command::Favorite)];
+        if local && self.settings.preferences.tags.enabled {
+            organize.push(Item::EditTags);
+        }
+        let mut groups = vec![open, copy, organize];
+        if self.selected_deletable_tag().is_some() {
+            groups.push(vec![Item::DeleteTag]);
+        }
         if matches!(
             collection,
-            Some(Collection::Favorites | Collection::Network)
+            Some(Collection::Favorites | Collection::Network | Collection::Tags)
         ) {
-            if location.local_path().is_some() {
-                commands.insert(2, Command::Copy);
-            }
-            commands.push(Command::Refresh);
+            groups.push(vec![Item::Command(Command::Refresh)]);
         }
-        commands.push(Command::Favorite);
-        for command in commands {
-            let browser = cx.entity().downgrade();
-            let target = location.clone();
-            let label = i18n::text(
-                if command == Command::Favorite {
-                    if self.locations.places.is_favorite(&location) {
-                        "place-favorite-remove"
-                    } else {
-                        "place-favorite-add"
+        for (group, items) in groups.into_iter().enumerate() {
+            if group > 0 {
+                menu = menu.separator();
+            }
+            for item in items {
+                let favorite = self.locations.places.is_favorite(&location);
+                let (label, icon, command) = match item {
+                    Item::ShowParent => ("tags-show-parent", IconName::Folder, None),
+                    Item::EditTags => ("tags-edit", IconName::Tag, None),
+                    Item::DeleteTag => ("tags-delete", IconName::Trash, Some(Command::Trash)),
+                    Item::Command(command) => {
+                        let label = if command == Command::Favorite {
+                            if favorite {
+                                "place-favorite-remove"
+                            } else {
+                                "place-favorite-add"
+                            }
+                        } else {
+                            command.label_id()
+                        };
+                        let icon = match command {
+                            Command::Open | Command::OpenInNewTab => location.icon(),
+                            Command::Copy => IconName::Copy,
+                            Command::CopyPaths => IconName::ClipboardCopy,
+                            Command::Favorite if favorite => IconName::StarOff,
+                            Command::Favorite => IconName::Star,
+                            Command::Refresh => IconName::RefreshCw,
+                            _ => unreachable!("place menu actions have icons"),
+                        };
+                        (label, icon, Some(command))
                     }
-                } else {
-                    command.label_id()
-                },
-                cx,
-            );
-            let icon = match command {
-                Command::Open | Command::OpenInNewTab => IconName::Folder,
-                Command::Copy => IconName::Copy,
-                Command::CopyPaths => IconName::ClipboardCopy,
-                Command::Favorite if self.locations.places.is_favorite(&location) => {
-                    IconName::StarOff
-                }
-                Command::Favorite => IconName::Star,
-                Command::Refresh => IconName::RefreshCw,
-                _ => unreachable!("place menu actions have icons"),
-            };
-            let shortcut = command != Command::OpenInNewTab || self.picker.is_none();
-            let row = ui::menu::row(label, shortcut.then(|| command.into()));
-            menu = menu.item(el! { row.PopupMenuItem::element {
-                icon: icon;
-                on_click: $(move |_, window, cx| {
-                    let _ = browser.update(cx, |view, cx| {
-                        if view.collection() == collection
-                            && view.selected_place().as_ref() == Some(&target)
-                        {
-                            view.dispatch(command, window, cx);
-                        }
+                };
+                let shortcut = command
+                    .filter(|command| *command != Command::OpenInNewTab || self.picker.is_none());
+                let row = ui::menu::row(i18n::text(label, cx), shortcut.map(Into::into));
+                let browser = cx.entity().downgrade();
+                let target = location.clone();
+                menu = menu.item(el! { row.PopupMenuItem::element {
+                    icon: icon;
+                    on_click: $(move |_, window, cx| {
+                        let _ = browser.update(cx, |view, cx| {
+                            if view.collection() != collection || view.selected_place().as_ref() != Some(&target) { return; }
+                            match item {
+                                Item::Command(command) => view.dispatch(command, window, cx),
+                                Item::ShowParent => {
+                                    if let Some(path) = target.local_path() && let Some(parent) = path.parent() {
+                                        if let Some(slot) = view.current_tab_mut() { slot.pending_selection = Some(path.to_path_buf()); }
+                                        view.navigate(parent.to_path_buf(), cx);
+                                    }
+                                }
+                                Item::EditTags => {
+                                    if let Some(path) = target.local_path() { view.edit_tags(path.to_path_buf(), window, cx); }
+                                }
+                                Item::DeleteTag => view.request_delete_tag(window, cx),
+                            }
+                        });
                     });
-                });
-            } });
+                } });
+            }
         }
         menu
     }

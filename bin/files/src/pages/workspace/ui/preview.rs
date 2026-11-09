@@ -7,7 +7,7 @@
 
 mod info;
 mod metadata;
-use metadata::MetadataRow;
+use metadata::{MetadataRow, MetadataTags};
 
 use gds::ui::file_inspection::{Cache, State};
 use gds::ui::thumbnail::Thumbnail;
@@ -59,7 +59,7 @@ pub(super) struct Item {
 }
 
 impl Item {
-    fn from_entry(entry: &Entry) -> Self {
+    pub(super) fn from_entry(entry: &Entry) -> Self {
         Self {
             entry: entry.clone(),
         }
@@ -86,6 +86,9 @@ impl Eq for Item {}
 pub(super) struct View {
     target: Target,
     inspections: Entity<Cache>,
+    tags_enabled: bool,
+    tags: Option<Result<Vec<String>, String>>,
+    tags_task: Option<Task<()>>,
 }
 
 impl View {
@@ -94,6 +97,9 @@ impl View {
         Self {
             target: Target::Empty,
             inspections,
+            tags_enabled: false,
+            tags: None,
+            tags_task: None,
         }
     }
 
@@ -107,8 +113,42 @@ impl View {
             return;
         }
         self.target = target;
+        self.request_tags(cx);
         self.request(cx);
         cx.notify();
+    }
+
+    pub(super) fn set_tags_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.tags_enabled != enabled {
+            self.tags_enabled = enabled;
+            self.request_tags(cx);
+            cx.notify();
+        }
+    }
+
+    fn request_tags(&mut self, cx: &mut Context<Self>) {
+        self.tags_task = None;
+        self.tags = None;
+        if !self.tags_enabled {
+            return;
+        }
+        let Target::Item(item) = &self.target else {
+            return;
+        };
+        if !matches!(item.entry.kind, EntryKind::File | EntryKind::Directory) {
+            return;
+        }
+        let path = item.entry.path.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { gds::service::file_tags::read(&path).map_err(|e| e.to_string()) });
+        self.tags_task = Some(cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.tags = Some(result);
+                cx.notify();
+            });
+        }));
     }
 
     fn request(&self, cx: &mut Context<Self>) {
@@ -142,6 +182,8 @@ impl View {
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
         self.target = Target::Empty;
+        self.tags_task = None;
+        self.tags = None;
         cx.notify();
     }
 
@@ -193,6 +235,27 @@ impl View {
     /// Name-adjacent metadata shared by every entry kind.
     fn base_rows(&self, item: &Item, cx: &App) -> Vec<DescriptionItem> {
         let mut rows = Vec::new();
+        if self.tags_enabled && matches!(item.entry.kind, EntryKind::File | EntryKind::Directory) {
+            if let Some(Ok(tags)) = &self.tags
+                && !tags.is_empty()
+            {
+                rows.push(
+                    el! { .MetadataRow::default {
+                        label: $(i18n::text("tags-title", cx));
+                        value: $(el! { .MetadataTags::default { tags: $(tags.clone()); } });
+                    } }
+                    .into(),
+                );
+            } else {
+                let text: SharedString = match &self.tags {
+                    Some(Ok(tags)) if !tags.is_empty() => tags.join(", ").into(),
+                    Some(Ok(_)) => i18n::text("tags-none", cx),
+                    Some(Err(error)) => error.clone().into(),
+                    None => i18n::text("tags-loading", cx),
+                };
+                rows.push(el! { .MetadataRow::default { label: $(i18n::text("tags-title", cx)); text: text; } }.into());
+            }
+        }
         let kind = EntryPresentation::type_label(&item.entry, cx);
         rows.push(
             el! { .MetadataRow::default { label: $(i18n::text("type", cx)); text: kind; } }.into(),
@@ -420,6 +483,53 @@ fn text_hint(text: SharedString) -> impl Fn(&mut Window, &mut App) -> AnyView {
 }
 
 impl Browser {
+    fn sync_place_preview(&mut self, cx: &mut Context<Self>) {
+        let location = self.selected_place();
+        let enabled = self.settings.preferences.tags.enabled;
+        self.files
+            .preview
+            .update(cx, |view, cx| view.set_tags_enabled(enabled, cx));
+        if let Some(entry) = location
+            .as_ref()
+            .and_then(|location| self.tag_entry(location))
+            .cloned()
+        {
+            self.collections.preview_task = None;
+            self.collections.preview_location = location;
+            self.files
+                .preview
+                .update(cx, |view, cx| view.show_entry(entry, cx));
+            return;
+        }
+        if self.collections.preview_location == location && location.is_some() {
+            return;
+        }
+        self.collections.preview_task = None;
+        self.collections.preview_location = location.clone();
+        self.files
+            .preview
+            .update(cx, |view, cx| view.sync(Target::Empty, cx));
+        let Some(path) =
+            location.and_then(|location| location.local_path().map(std::path::Path::to_path_buf))
+        else {
+            return;
+        };
+        let work = cx
+            .background_executor()
+            .spawn(async move { Entry::inspect(&path) });
+        self.collections.preview_task = Some(cx.spawn(async move |this, cx| {
+            let entry = work.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(entry) = entry {
+                    this.files
+                        .preview
+                        .update(cx, |view, cx| view.show_entry(entry, cx));
+                }
+                cx.notify();
+            });
+        }));
+    }
+
     pub(super) fn preview_target(&self) -> Target {
         let Some(slot) = self.active() else {
             return Target::Empty;
@@ -442,12 +552,20 @@ impl Browser {
 
     /// Recompute the preview from current selection state during render.
     pub(super) fn sync_preview(&mut self, cx: &mut Context<Self>) {
-        if !self.details_visible() || !self.pages.is_empty() || self.collection().is_some() {
+        if !self.details_visible() || !self.pages.is_empty() {
             return;
         }
+        if self.place_collection().is_some() {
+            self.sync_place_preview(cx);
+            return;
+        }
+        self.collections.preview_location = None;
+        self.collections.preview_task = None;
         let target = self.preview_target();
-        self.files
-            .preview
-            .update(cx, |preview, cx| preview.sync(target, cx));
+        let tags_enabled = self.settings.preferences.tags.enabled;
+        self.files.preview.update(cx, |preview, cx| {
+            preview.set_tags_enabled(tags_enabled, cx);
+            preview.sync(target, cx);
+        });
     }
 }

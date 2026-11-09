@@ -286,3 +286,32 @@ new-window = 新建窗口
 
 theme-search = 搜索主题…
 theme-custom-selection = 自定义主题
+
+tags-title = 标签
+tags-enabled = 启用标签
+tags-backend = 标签后端
+tags-backend-baloo = Baloo
+tags-control-command = Baloo 控制程序
+tags-kio-command = KIO 客户端程序
+tags-command-hint = 留空时从 PATH 查找。自定义值必须指向可执行文件。
+tags-checking = 正在检测 Baloo 命令与标签插件…
+tags-ready = Baloo 可用
+tags-unavailable = 标签后端不可用
+tags-detect = 重新检测后端
+tags-disabled = 标签功能已关闭，可在“设置 → 文件”中启用。
+tags-show-parent = 在所在文件夹中显示
+tags-edit = 编辑标签…
+tags-loading = 正在读取标签…
+tags-saving = 正在保存标签…
+tags-saved = 标签已保存。
+tags-none = 无标签
+
+tags-add = 添加标签
+tags-remove = 移除标签
+
+tags-editor-title = 编辑标签
+tags-add-placeholder = 添加标签…
+tags-delete = 删除标签
+tags-delete-title = 删除标签？
+tags-delete-message = 将从关联文件中移除此标签及其子标签。文件会保留，此操作无法撤销。
+tags-deleted = 标签已删除。

@@ -67,7 +67,7 @@ impl Browser {
                             .items
                             .iter()
                             .filter(|tab| tab.pinned)
-                            .filter_map(|tab| tab.path().map(|path| path.as_os_str().to_owned()))
+                            .map(OpenTab::location)
                             .collect();
                         this.locations.places.reorder_pinned(paths);
                         this.sync_pinned();

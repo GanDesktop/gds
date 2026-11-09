@@ -17,9 +17,9 @@ The window combines a top path bar, vertical file tabs, a content area, an optio
 
 Each tab has its own location history, selection, filter and scroll position. Home, recent items, favorites, network locations, trash and volumes all participate in that history. Sidebar entries open in the current tab; Ctrl/Cmd+click creates a tab. Closing the last tab creates a Home tab. Pinned locations reopen on the next launch; this does not restore shell processes.
 
-The address bar supports editable local paths, supported remote URIs and the virtual addresses `location://recent`, `location://favorites`, `location://volumes`, `location://network` and `location://trash`. Click the address bar or press Ctrl+L to edit it, then press Enter to navigate. Home keeps its filesystem path. Navigation commits after loading succeeds; failure or cancellation preserves the previous location. Back/forward restores the visited view. Right-clicking a navigation arrow lists that direction's history.
+The address bar supports editable local paths, supported remote URIs and the virtual addresses `location:/recent`, `location:/favorites`, `location:/volumes`, `location:/network` and `location:/trash`. Click the address bar or press Ctrl+L to edit it, then press Enter to navigate. Home keeps its filesystem path. Navigation commits after loading succeeds; failure or cancellation preserves the previous location. Back/forward restores the visited view. Right-clicking a navigation arrow lists that direction's history.
 
-Every browsable location has a URI: local paths use `file://`, remote directories use `sftp://` or `smb://`, and built-in pages use `location://`. Volume locations retain their device identity through `location://volume/<stable|attachment>/<id>?path=<relative-path>`. Home and available local folders still display filesystem paths in the address bar, which also accepts file URIs.
+Every browsable location has a URI: local paths use `file://`, remote directories use `sftp://` or `smb://`, and built-in pages use `location:/`. Volume locations retain their device identity through `location:/volume/<stable|attachment>/<id>?path=<relative-path>`. Home and available local folders display filesystem paths in the address bar, which also accepts file URIs. The `location://…` form is not supported.
 
 Recent and Favorites use one list for local, remote and built-in locations. Successful visits share one most-recent-first history; bookmarks are added explicitly. Rows share selection, keyboard navigation, opening in a tab, copying their URI and bookmark removal. Removing a favorite does not delete its target. Existing local and remote records migrate automatically; their old separate histories cannot reconstruct a shared visit chronology, so unified ordering starts with subsequent visits.
 
@@ -45,6 +45,8 @@ Archive files use external applications through the usual open/open-with flow. B
 - [File picker](picker.md): file/directory selection, multiple selection and the native Portal request protocol. Results are local paths.
 
 ## Settings and diagnostics
+
+Enable [tags](tags.md) under Settings → Files after Baloo backend detection succeeds. Commands can be discovered from PATH or configured explicitly. `tags:/` opens the tag catalogue.
 
 Open settings from the application menu or Ctrl+,. Changes apply immediately and save automatically; each field has its own default. Preferences apply only to Files. Settings are stored in `$XDG_CONFIG_HOME/gds/app/files/settings.toml`; location and view state are in `$XDG_STATE_HOME/gds/files/state.sqlite`. Managed symlinks and read-only settings are protected from replacement; save failures are reported separately from changes already applied in memory.
 

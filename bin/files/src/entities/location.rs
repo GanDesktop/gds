@@ -4,6 +4,7 @@ mod model;
 pub(crate) use api::volumes;
 pub(crate) mod places;
 
+pub(crate) use model::address::uri::Error as AddressError;
 pub(crate) use model::address::{Location, ViewScope, VolumeIdentity};
 pub(crate) use model::view::{ColumnWidths, ViewSettings};
 

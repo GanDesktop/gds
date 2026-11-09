@@ -50,6 +50,7 @@ pub struct Preferences {
     #[serde(skip_serializing_if = "typography::Preferences::is_default")]
     pub font: typography::Preferences,
     pub files: FilesPreferences,
+    pub tags: crate::entities::tags::Preferences,
     pub terminal: gds::ui::terminal::Preferences,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_enabled: Option<bool>,
