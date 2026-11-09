@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use directories::BaseDirs;
 use gds::service::storage::{self, Database, MigrationFile, MigrationSet, Options};
 use toasty::models;
 
@@ -38,8 +37,6 @@ const MIGRATIONS: MigrationSet = MigrationSet::new(&[
 pub(crate) enum Error {
     #[error("invalid saved remote location: {0}")]
     Remote(String),
-    #[error("the user state directory is not available")]
-    NoStateDirectory,
     #[error(transparent)]
     Storage(#[from] storage::Error),
     #[error(transparent)]
@@ -56,17 +53,6 @@ pub(crate) struct Store {
 }
 
 impl Store {
-    /// # Errors
-    /// Reports an unavailable state directory or database.
-    pub(crate) async fn open() -> Result<Self, Error> {
-        let dirs = BaseDirs::new().ok_or(Error::NoStateDirectory)?;
-        let root = dirs
-            .state_dir()
-            .unwrap_or(dirs.data_local_dir())
-            .join("gds/files");
-        Self::open_at(&root.join("state.sqlite")).await
-    }
-
     /// # Errors
     /// Reports database or migration failures.
     pub(crate) async fn open_at(path: &Path) -> Result<Self, Error> {

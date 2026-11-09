@@ -1,5 +1,78 @@
 use super::*;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_windows_share_a_pool_and_preserve_independent_edits() {
+    let root = tempfile::tempdir().expect("fixture");
+    let storage = Arc::new(Storage::new(root.path().join("state.sqlite")));
+    let barrier = Arc::new(tokio::sync::Barrier::new(8));
+    let mut windows = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let storage = storage.clone();
+        let barrier = barrier.clone();
+        windows.spawn(async move {
+            barrier.wait().await;
+            storage.load().await.expect("window state")
+        });
+    }
+    let mut places = Vec::new();
+    while let Some(window) = windows.join_next().await {
+        places.push(window.expect("window task"));
+    }
+    let store = places[0].store.clone().expect("shared store");
+    for window in &places {
+        assert!(Arc::ptr_eq(window.store.as_ref().unwrap(), &store));
+        assert!(!window.has_pending());
+    }
+    places[0].set_favorite(Path::new("/first").into(), true);
+    assert!(!places[1].has_pending());
+    assert!(!places[1].is_favorite(Path::new("/first")));
+
+    let mut saves = tokio::task::JoinSet::new();
+    for (id, mut window) in places.into_iter().enumerate() {
+        window.set_favorite(Path::new(&format!("/window-{id}")).into(), true);
+        let save = window.take_save().expect("pending edit");
+        saves.spawn(async move { save.run().await.expect("save window state") });
+    }
+    while let Some(save) = saves.join_next().await {
+        save.expect("save task");
+    }
+    let reopened = storage.load().await.expect("fresh window state");
+    assert!(Arc::ptr_eq(reopened.store.as_ref().unwrap(), &store));
+    assert!(reopened.is_favorite(Path::new("/first")));
+    for id in 0..8 {
+        assert!(reopened.is_favorite(Path::new(&format!("/window-{id}"))));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn opening_another_window_does_not_initialize_storage_again() {
+    use gds::service::storage::{Database, TransactionMode};
+    use toasty_driver_sqlite::Sqlite;
+
+    let root = tempfile::tempdir().expect("fixture");
+    let path = root.path().join("state.sqlite");
+    let storage = Storage::new(path.clone());
+    // The application must retain the pool even after its window state is dropped.
+    drop(storage.load().await.expect("first window"));
+    let mut blocker = Database::builder()
+        .build(Sqlite::open(&path))
+        .await
+        .expect("external connection");
+    let transaction = blocker
+        .transaction_builder()
+        .mode(TransactionMode::Immediate)
+        .begin()
+        .await
+        .expect("hold writer");
+    // Reading an existing WAL snapshot needs no writer lock. Reopening the
+    // store would instead block on the defaults initialization transaction.
+    tokio::time::timeout(std::time::Duration::from_secs(1), storage.load())
+        .await
+        .expect("new window must not wait for a writer")
+        .expect("new window snapshot");
+    transaction.rollback().await.expect("release writer");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn save_drains_edits_made_while_waiting_even_after_the_window_state_is_dropped() {
     use gds::service::storage::{Database, TransactionMode};

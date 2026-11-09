@@ -1,7 +1,7 @@
 //! Install preferences and open the first Files workspace or picker window.
 
 use crate::app::cli;
-use crate::entities::location::places::Places;
+use crate::entities::location::places::Storage;
 use crate::entities::preferences as configuration;
 use crate::features::file_operations::commands as actions;
 use crate::features::pick_files as picker;
@@ -9,7 +9,7 @@ use crate::pages::workspace;
 use crate::shared::i18n;
 use crate::shared::ui::assets;
 use clap::Parser;
-use std::process::ExitCode;
+use std::{process::ExitCode, sync::Arc};
 
 use anyhow::Context as _;
 use directories::BaseDirs;
@@ -58,10 +58,13 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
         build = env!("GDS_BUILD_TAG"),
         "Files started"
     );
-    let home = BaseDirs::new()
-        .context("cannot determine the home directory")?
-        .home_dir()
-        .to_path_buf();
+    let dirs = BaseDirs::new().context("cannot determine the home directory")?;
+    let home = dirs.home_dir().to_path_buf();
+    let storage = Arc::new(Storage::new(
+        dirs.state_dir()
+            .unwrap_or(dirs.data_local_dir())
+            .join("gds/files/state.sqlite"),
+    ));
     let picker_options = if arguments.portal_request {
         Some(picker::Options::from_request(serde_json::from_reader(
             std::io::stdin().lock(),
@@ -237,9 +240,9 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
             })
             .detach();
             configuration::publish(preferences.clone(), cx);
-            let manager = super::windows::Windows::install(handle.clone(), home.clone(), cx);
+            let manager = super::windows::Windows::install(handle.clone(), home.clone(), storage.clone(), cx);
             cx.spawn(async move |cx| {
-                let places = tokio_util::task::AbortOnDropHandle::new(handle.spawn(Places::load()))
+                let places = tokio_util::task::AbortOnDropHandle::new(handle.spawn(async move { storage.load().await }))
                     .await.unwrap_or_else(|error| Err(error.into()));
                 cx.update(move |cx| {
                     let opened = manager.update(cx, |manager, cx| manager.open(workspace::LaunchOptions {

@@ -2,7 +2,7 @@
 
 use std::{
     ops::Deref,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, Weak},
 };
 
@@ -14,6 +14,37 @@ use super::{
 use crate::entities::file::x::location::{Layout, Sort, ViewMode};
 
 pub(crate) use super::api::places::Error;
+
+/// Application-owned storage; windows share its pool but load independent state.
+pub(crate) struct Storage {
+    path: PathBuf,
+    store: tokio::sync::OnceCell<Arc<Store>>,
+}
+
+impl Storage {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            store: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// Load a window's snapshot, initializing the shared pool once on success.
+    ///
+    /// # Errors
+    /// Reports storage or invalid-record errors. Failed initialization can be retried.
+    pub(crate) async fn load(&self) -> Result<Places, Error> {
+        let store = self
+            .store
+            .get_or_try_init(|| async { Store::open_at(&self.path).await.map(Arc::new) })
+            .await?;
+        Ok(Places {
+            snapshot: store.read().await?,
+            store: Some(store.clone()),
+            pending: Arc::default(),
+        })
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct Places {
@@ -35,7 +66,7 @@ pub(crate) struct Save {
 }
 
 /// Weak handles let the app await queued edits on exit without retaining
-/// database pools for windows that have already closed.
+/// pending queues for windows that have already closed.
 #[derive(Clone)]
 pub(crate) struct Shutdown {
     store: Weak<Store>,
@@ -81,19 +112,6 @@ impl Save {
 }
 
 impl Places {
-    /// Load saved places and directory views.
-    ///
-    /// # Errors
-    /// Reports storage or invalid-record errors.
-    pub(crate) async fn load() -> Result<Self, Error> {
-        let store = Store::open().await?;
-        Ok(Self {
-            snapshot: store.read().await?,
-            store: Some(Arc::new(store)),
-            pending: Arc::default(),
-        })
-    }
-
     pub(crate) fn shutdown(&self) -> Option<Shutdown> {
         Some(Shutdown {
             store: Arc::downgrade(self.store.as_ref()?),

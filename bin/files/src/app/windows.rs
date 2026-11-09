@@ -1,9 +1,9 @@
 //! Application-owned Files windows and desktop request routing.
-use crate::entities::{location::places::Places, preferences as configuration};
+use crate::entities::{location::places::Storage, preferences as configuration};
 use crate::pages::workspace::{Browser, LaunchOptions, NewWindowRequested};
 use crate::shared::i18n;
 use gpui_kit::*;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 use tokio::runtime::Handle;
 
 struct Manager {
@@ -14,14 +14,21 @@ impl Global for Manager {}
 pub(super) struct Windows {
     runtime: Handle,
     home: PathBuf,
+    storage: Arc<Storage>,
     windows: Vec<(AnyWindowHandle, WeakEntity<Browser>)>,
 }
 
 impl Windows {
-    pub(super) fn install(runtime: Handle, home: PathBuf, cx: &mut App) -> Entity<Self> {
+    pub(super) fn install(
+        runtime: Handle,
+        home: PathBuf,
+        storage: Arc<Storage>,
+        cx: &mut App,
+    ) -> Entity<Self> {
         let manager = cx.new(|_| Self {
             runtime,
             home,
+            storage,
             windows: Vec::new(),
         });
         cx.set_global(Manager {
@@ -105,7 +112,8 @@ impl Windows {
     fn request(&mut self, start: PathBuf, command: Option<DesktopCommand>, cx: &mut Context<Self>) {
         let runtime = self.runtime.clone();
         let home = self.home.clone();
-        let work = runtime.spawn(Places::load());
+        let storage = self.storage.clone();
+        let work = runtime.spawn(async move { storage.load().await });
         cx.spawn(async move |this, cx| {
             let places = work.await.unwrap_or_else(|error| Err(error.into()));
             if let Err(error) = this.update(cx, |this, cx| {
