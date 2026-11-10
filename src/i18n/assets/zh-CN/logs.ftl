@@ -1,5 +1,5 @@
-logs-title = 调试日志
-logs-open-error = 无法打开调试日志
+logs-title = Debug
+logs-open-error = 无法打开 Debug 面板
 logs-search = 搜索消息和来源…
 logs-all = 所有级别
 logs-level = 按级别筛选
@@ -9,3 +9,19 @@ logs-close-detail = 关闭日志详情
 logs-clear = 清空日志
 logs-copy-selected = 复制所选日志
 logs-count = 显示 { $visible } 条 · 保留 { $retained } 条 · 已淘汰 { $evicted } 条
+
+logs-tab-logs = 日志
+logs-tab-tasks = 任务
+logs-tasks-name = 作用域 / 任务
+logs-tasks-execution = 执行方式
+logs-tasks-age = 存活时间
+logs-tasks-active = 活动
+logs-tasks-cancelling = 取消中
+logs-tasks-scope-open = 开放
+logs-tasks-scope-closing = 关闭中
+logs-tasks-empty = 当前没有活动的已登记任务。
+logs-tasks-supervisor = 生命周期监督
+logs-tasks-gpui-background = GPUI 后台
+logs-tasks-tokio = Tokio 异步
+logs-tasks-blocking = Tokio 阻塞
+logs-tasks-thread = 系统线程

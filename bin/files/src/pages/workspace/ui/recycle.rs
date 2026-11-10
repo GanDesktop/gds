@@ -433,9 +433,14 @@ impl Browser {
             cx,
         );
         let cancel = self.background_tasks.read(cx).token("trash");
-        let work = cx
-            .background_executor()
-            .spawn(async move { backend::perform_cancellable(action, entries, &cancel) });
+        let work = gds::ui::task_manager::scope(cx)
+            .track_named(
+                "Trash operation",
+                gds::task_manager::Execution::GpuiBackground,
+                async move { backend::perform_cancellable(action, entries, &cancel) },
+            )
+            .expect("trash operation accepted");
+        let work = cx.background_executor().spawn(work);
         cx.spawn(async move |this, cx| {
             let outcomes = work.await;
             if let Err(error) = this.update(cx, |this, cx| {

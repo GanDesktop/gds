@@ -1,4 +1,4 @@
-//! An independently-lived, in-memory frontend log viewer.
+//! An independent Debug window for logs and registered application tasks.
 
 use crate::i18n::t;
 use crate::service::logs::{Entry, Level, Snapshot, Store};
@@ -20,6 +20,7 @@ use std::time::Duration;
 
 mod filters;
 mod navigation;
+mod tasks;
 mod window;
 
 #[cfg(all(test, feature = "gui-tests"))]
@@ -43,7 +44,15 @@ actions!(
 
 pub use window::{OpenLogs, Options, init, install, is_enabled, open, store};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Logs,
+    Tasks,
+}
+
 pub struct Viewer {
+    tab: Tab,
+    tasks: Entity<tasks::View>,
     store: Store,
     snapshot: Snapshot,
     visible: Vec<usize>,
@@ -97,7 +106,11 @@ impl Viewer {
                 }
             }
         });
+        let task_scope = crate::ui::task_manager::scope(cx);
+        let tasks = cx.new(|cx| tasks::View::new(task_scope, cx));
         let mut viewer = Self {
+            tab: Tab::Logs,
+            tasks,
             store,
             snapshot,
             visible: Vec::new(),
@@ -250,7 +263,6 @@ fn preview(text: &str) -> String {
 
 impl Render for Viewer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let detail = self.selected_entry().map(Entry::text);
         el! {
             .div {
                 # "logs-window";
@@ -272,65 +284,99 @@ impl Render for Viewer {
                 } [
                     t!(@cx, "logs-title"),
                 ],
-                .div {
-                    flex;
-                    flex_col;
-                    flex_1;
-                    min_h_0;
-                    min_w_0;
-                } [
-                    .div {
-                        # "logs-toolbar";
-                        test_support;
-                        flex;
-                        items_center;
-                        gap_2;
-                        p_2;
-                        flex_shrink_0;
-                    } [
-                        $(self.level_filter(cx)),
-                        $(self.target_filter(cx)),
-                        .div {
-                            flex_1;
-                            min_w_0;
-                        } [
-                            $(crate::ui::field::placeholder(&self.search, crate::ui::field::input(&self.search, cx).cleanable(true))),
-                        ],
-                        ("logs-clear", IconName::ListX, t!(@cx, "logs-clear")).icon_action {
-                            on_click: $(cx.listener(|this, _, _, cx| { this.clear(); cx.notify(); }));
-                        },
-                    ],
-                    .div {
-                        # "logs-list-viewport";
-                        test_support;
-                        key_context: "GdsLogsList";
-                        track_focus: $(&self.list_focus);
-                        flex_1;
-                        min_h_0;
-                        on_mouse_down: gpui_kit::MouseButton::Left, $(cx.listener(|this, _, window, cx| this.list_focus.focus(window, cx)));
-                    } [
-                        $(uniform_list("logs-list", self.visible.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                                        range.map(|index| this.row(index, cx)).collect()
-                            })).track_scroll(&self.scroll).size_full()),
-                    ],
-                    ..$(detail.map(|text| div().id("logs-detail").test_support().w_full().min_w_0().max_h(px(DETAIL_HEIGHT)).flex_shrink_0().flex().gap_2().p_2()
-                            .border_t_1().border_color(cx.theme().border)
-                            .child(div().id("logs-detail-text").flex_1().min_w_0().max_h(px(DETAIL_HEIGHT - 16.)).overflow_y_scroll()
-                                .font_family(cx.theme().mono_font_family.clone()).text_size(px(12.))
-                                .whitespace_normal().child(crate::ui::tooltip::wrap_tokens(&text)))
-                            .child(icon_action("logs-copy-selected", IconName::Copy, t!(@cx, "logs-copy-selected"))
-                                .on_click(cx.listener(|this, _, _, cx| this.copy_selected(cx))))
-                            .child(icon_action("logs-close-detail", IconName::Close, t!(@cx, "logs-close-detail"))
-                                .on_click(cx.listener(|this, _, _, cx| { this.selected = None; cx.notify(); }))))),
-                    .div {
-                        px_2;
-                        text_xs;
-                        text_color: $(cx.theme().muted_foreground);
-                    } [
-                        t!(@cx, "logs-count", visible = self.visible.len(), retained = self.snapshot.entries.len(), evicted = self.snapshot.evicted),
-                    ],
-                ],
+                $(gpui_kit::component::tab::TabBar::new("logs-tabs")
+                    .underline().px_3().flex_shrink_0()
+                    .selected_index(if self.tab == Tab::Logs { 0 } else { 1 })
+                    .child(gpui_kit::component::tab::Tab::new().label(t!(@cx, "logs-tab-logs")))
+                    .child(gpui_kit::component::tab::Tab::new().label(t!(@cx, "logs-tab-tasks")))
+                    .on_click(cx.listener(|this, index: &usize, window, cx| {
+                        this.switch_tab(if *index == 0 { Tab::Logs } else { Tab::Tasks }, window, cx);
+                    }))),
+                $(if self.tab == Tab::Logs { self.log_content(cx) } else { self.tasks.clone().into_any_element() }),
             ]
         }
+    }
+}
+
+impl Viewer {
+    fn switch_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = tab;
+        self.tasks
+            .update(cx, |view, cx| view.set_active(tab == Tab::Tasks, cx));
+        self.focus_tab(window, cx);
+        cx.notify();
+    }
+
+    fn focus_tab(&self, window: &mut Window, cx: &mut App) {
+        if self.tab == Tab::Logs {
+            self.search
+                .update(cx, |search, cx| search.focus(window, cx));
+        } else {
+            self.tasks.read(cx).focus.clone().focus(window, cx);
+        }
+    }
+
+    fn log_content(&self, cx: &mut Context<Self>) -> AnyElement {
+        let detail = self.selected_entry().map(Entry::text);
+        el! {
+            .div {
+                flex;
+                flex_col;
+                flex_1;
+                min_h_0;
+                min_w_0;
+            } [
+                .div {
+                    # "logs-toolbar";
+                    test_support;
+                    flex;
+                    items_center;
+                    gap_2;
+                    p_2;
+                    flex_shrink_0;
+                } [
+                    $(self.level_filter(cx)),
+                    $(self.target_filter(cx)),
+                    .div {
+                        flex_1;
+                        min_w_0;
+                    } [
+                        $(crate::ui::field::placeholder(&self.search, crate::ui::field::input(&self.search, cx).cleanable(true))),
+                    ],
+                    ("logs-clear", IconName::ListX, t!(@cx, "logs-clear")).icon_action {
+                        on_click: $(cx.listener(|this, _, _, cx| { this.clear(); cx.notify(); }));
+                    },
+                ],
+                .div {
+                    # "logs-list-viewport";
+                    test_support;
+                    key_context: "GdsLogsList";
+                    track_focus: $(&self.list_focus);
+                    flex_1;
+                    min_h_0;
+                    on_mouse_down: gpui_kit::MouseButton::Left, $(cx.listener(|this, _, window, cx| this.list_focus.focus(window, cx)));
+                } [
+                    $(uniform_list("logs-list", self.visible.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                    range.map(|index| this.row(index, cx)).collect()
+                        })).track_scroll(&self.scroll).size_full()),
+                ],
+                ..$(detail.map(|text| div().id("logs-detail").test_support().w_full().min_w_0().max_h(px(DETAIL_HEIGHT)).flex_shrink_0().flex().gap_2().p_2()
+                        .border_t_1().border_color(cx.theme().border)
+                        .child(div().id("logs-detail-text").flex_1().min_w_0().max_h(px(DETAIL_HEIGHT - 16.)).overflow_y_scroll()
+                            .font_family(cx.theme().mono_font_family.clone()).text_size(px(12.))
+                            .whitespace_normal().child(crate::ui::tooltip::wrap_tokens(&text)))
+                        .child(icon_action("logs-copy-selected", IconName::Copy, t!(@cx, "logs-copy-selected"))
+                            .on_click(cx.listener(|this, _, _, cx| this.copy_selected(cx))))
+                        .child(icon_action("logs-close-detail", IconName::Close, t!(@cx, "logs-close-detail"))
+                            .on_click(cx.listener(|this, _, _, cx| { this.selected = None; cx.notify(); }))))),
+                .div {
+                    px_2;
+                    text_xs;
+                    text_color: $(cx.theme().muted_foreground);
+                } [
+                    t!(@cx, "logs-count", visible = self.visible.len(), retained = self.snapshot.entries.len(), evicted = self.snapshot.evicted),
+                ],
+            ]
+        }.into_any_element()
     }
 }

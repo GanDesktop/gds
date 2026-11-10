@@ -26,7 +26,7 @@ use super::{
 
 const READ_CHUNK: usize = 4096;
 const IO_BUDGET: usize = 64 * 1024;
-// GPUI's quit fallback has a 200 ms budget; normal window close awaits Completion.
+// GPUI's quit fallback has a 200 ms budget; normal exit waits after closing the GUI.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(50);
 const FINAL_DRAIN_BUDGET: usize = 256 * 1024;
 

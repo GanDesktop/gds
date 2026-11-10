@@ -177,9 +177,11 @@ impl Editor {
         let edited = self.history.current.tags.clone();
         let path = self.path.clone();
         self.saving = true;
-        let work = self
-            .runtime
-            .spawn_blocking(move || file_tags::apply_edit(&path, &original, &edited));
+        let work = gds::ui::task_manager::scope(cx)
+            .spawn_blocking(&self.runtime, move || {
+                file_tags::apply_edit(&path, &original, &edited)
+            })
+            .expect("application accepts file operations");
         cx.spawn_in(window, async move |this, cx| {
             let result = work
                 .await

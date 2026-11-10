@@ -18,6 +18,7 @@ pub(crate) fn init(cx: &mut App) {
     cx.set_global(ActionsRegistered);
     gds::ui::actions::register(cx);
     gds::ui::terminal::init(cx);
+    gds::ui::task_manager::init(cx);
     cx.on_app_quit(|_| async { gds::service::terminal::shutdown_all().await })
         .detach();
     crate::shared::config::terminal::init(cx);
@@ -79,18 +80,9 @@ pub(crate) fn request_quit(cx: &mut App) {
     }
     cx.set_global(QuitPending);
     settings::window::flush_pending(cx);
-    let pending = crate::pages::workspace::windows::shutdown_terminals(cx);
-    if pending.is_empty() {
-        cx.quit();
-        return;
-    }
-    cx.spawn(async move |cx| {
-        for shutdown in pending {
-            shutdown.await;
-        }
-        cx.update(|cx| cx.quit());
-    })
-    .detach();
+    let closed = crate::pages::workspace::windows::close_all(cx);
+    gds::ui::task_manager::retain_until_quit(closed, cx);
+    gds::ui::task_manager::quit_when_idle(cx);
 }
 
 #[cfg(all(test, feature = "gui-tests"))]

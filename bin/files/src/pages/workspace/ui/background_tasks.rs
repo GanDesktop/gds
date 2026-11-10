@@ -106,7 +106,7 @@ impl Browser {
                 state.items.push(Item {
                     key: key.into(),
                     label,
-                    cancel: CancellationToken::new(),
+                    cancel: gds::ui::task_manager::scope(cx).token().child_token(),
                 });
             }
             cx.notify();

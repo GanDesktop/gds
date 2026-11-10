@@ -9,12 +9,15 @@ async fn reads_standalone_options_and_isolates_unavailable_values() {
     )
     .expect("write fixture");
     let path = directory.path().to_str().expect("temporary path is UTF-8");
-    let targets = discover(path)
+    let targets = discover(path, &tokio_util::sync::CancellationToken::new())
         .await
         .expect("discover fixture with nix installed");
     assert_eq!(targets.len(), 1);
     for target in targets {
-        let options = target.options(path).await.expect("read options");
+        let options = target
+            .options(path, &tokio_util::sync::CancellationToken::new())
+            .await
+            .expect("read options");
         assert_eq!(options.len(), 4);
         assert!(options.iter().all(|option| {
             option
@@ -81,11 +84,13 @@ async fn reads_nixos_options_in_each_users_module_context() {
     );
     std::fs::write(directory.path().join("flake.nix"), fixture).expect("write fixture");
     let path = directory.path().to_str().expect("UTF-8 path");
-    let targets = discover(path).await.expect("discover real submodules");
+    let targets = discover(path, &tokio_util::sync::CancellationToken::new())
+        .await
+        .expect("discover real submodules");
     assert_eq!(targets.len(), 2);
     for target in targets {
         let options = target
-            .options(path)
+            .options(path, &tokio_util::sync::CancellationToken::new())
             .await
             .expect("evaluate configured user options");
         let version = if target.name == "alice" {

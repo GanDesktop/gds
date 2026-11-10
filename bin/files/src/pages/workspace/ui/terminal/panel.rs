@@ -1,6 +1,9 @@
 //! Files' window-level terminal collection, selection and tab-bar interactions.
 //! Process startup and shutdown races belong to the single shared Terminal.
 
+#[cfg(all(test, feature = "gui-tests", unix))]
+mod tests;
+
 use gds::appearance::tokens;
 use gds::ui::DialogActions;
 use gds::ui::IconButton;
@@ -403,19 +406,12 @@ impl Panel {
             return;
         };
         entry.closing = true;
-        let shutdown = entry
-            .terminal
-            .update(cx, |terminal, cx| terminal.shutdown(cx));
-        cx.spawn_in(window, async move |panel, cx| {
-            shutdown.await;
-            if let Err(error) =
-                panel.update_in(cx, |panel, window, cx| panel.remove_stopped(id, window, cx))
-            {
-                tracing::warn!("Files terminal cleanup finished after its panel closed: {error}");
-            }
-        })
-        .detach();
-        cx.notify();
+        drop(
+            entry
+                .terminal
+                .update(cx, |terminal, cx| terminal.shutdown(cx)),
+        );
+        self.remove_entry(id, window, cx);
     }
 
     fn tab(&self, entry: &Entry, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -484,7 +480,7 @@ impl Panel {
         }.into_any_element()
     }
 
-    fn remove_stopped(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    fn remove_entry(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if self.sealed {
             return;
         }

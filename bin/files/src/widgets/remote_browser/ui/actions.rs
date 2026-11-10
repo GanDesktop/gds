@@ -223,7 +223,7 @@ impl View {
         if self.busy || sources.is_empty() {
             return;
         }
-        self.cancel = CancellationToken::new();
+        self.cancel = gds::ui::task_manager::scope(cx).token().child_token();
         let (sender, receiver) = watch::channel(Default::default());
         let work = operations::copy(sources, target, self.cancel.clone(), sender);
         self.run_job(work, receiver, open, cx);
@@ -243,7 +243,7 @@ impl View {
             } };
             let on_ok = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
                 let _ = view.update(cx, |view, cx| {
-                    view.cancel = CancellationToken::new();
+                    view.cancel = gds::ui::task_manager::scope(cx).token().child_token();
                     let (sender, receiver) = watch::channel(Default::default());
                     let work = operations::delete(sources.clone(), view.cancel.clone(), sender);
                     view.run_job(work, receiver, None, cx);
@@ -288,7 +288,9 @@ impl View {
             }
         }));
         // Cancellation completes protocol close/cleanup before the Tokio task is dropped.
-        let work = self.options.runtime.spawn(work);
+        let work = gds::ui::task_manager::scope(cx)
+            .spawn(&self.options.runtime, work)
+            .expect("remote operation accepted");
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {

@@ -20,7 +20,11 @@ impl Target {
 
     /// # Errors
     /// Reports Nix evaluation errors or an unsupported output shape.
-    pub async fn options(&self, flake: &str) -> anyhow::Result<Vec<OptionDefinition>> {
+    pub async fn options(
+        &self,
+        flake: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<Vec<OptionDefinition>> {
         let target = match &self.host {
             None => format!("flake.homeConfigurations.{}", nix_string(&self.name)),
             Some(host) => format!(
@@ -32,6 +36,7 @@ impl Target {
         };
         evaluate(
             flake,
+            cancel,
             &format!("({}) ({target})", include_str!("home/assets/options.nix")),
         )
         .await
@@ -95,9 +100,13 @@ impl OptionDefinition {
 
 /// # Errors
 /// Reports a missing local flake, Nix errors or invalid output.
-pub async fn discover(flake: &str) -> anyhow::Result<Vec<Target>> {
+pub async fn discover(
+    flake: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> anyhow::Result<Vec<Target>> {
     evaluate(
         flake,
+        cancel,
         &format!("({}) flake", include_str!("home/assets/discover.nix")),
     )
     .await
@@ -110,7 +119,11 @@ fn nix_string(value: &str) -> String {
         .replace("${", "\\${")
 }
 
-async fn evaluate<T: serde::de::DeserializeOwned>(flake: &str, body: &str) -> anyhow::Result<T> {
+async fn evaluate<T: serde::de::DeserializeOwned>(
+    flake: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+    body: &str,
+) -> anyhow::Result<T> {
     let path = tokio::fs::canonicalize(Path::new(flake))
         .await
         .context("Cannot open the flake directory")?;
@@ -135,10 +148,13 @@ async fn evaluate<T: serde::de::DeserializeOwned>(flake: &str, body: &str) -> an
             &expression,
         ])
         .kill_on_drop(true);
-    let output = tokio::time::timeout(std::time::Duration::from_secs(180), command.output())
-        .await
-        .context("Nix evaluation timed out")?
-        .context("Cannot start nix")?;
+    let output = gds::task_manager::process::output(
+        &mut command,
+        cancel,
+        std::time::Duration::from_secs(180),
+    )
+    .await
+    .context("Nix evaluation failed or cancelled")?;
     if !output.status.success() {
         bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
     }

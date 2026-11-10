@@ -405,7 +405,18 @@ async fn terminal_tabs_keep_workspace_shortcuts_out_and_f6_restores_composer(
 
 #[cfg(unix)]
 #[gpui_kit::test]
-async fn close_without_confirmation_reaps_hidden_starting_terminal(cx: &mut TestAppContext) {
+async fn close_removes_window_before_reaping_hidden_starting_terminal(cx: &mut TestAppContext) {
+    close_hidden_starting_terminal(cx, false).await;
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn quit_removes_window_before_reaping_hidden_starting_terminal(cx: &mut TestAppContext) {
+    close_hidden_starting_terminal(cx, true).await;
+}
+
+#[cfg(unix)]
+async fn close_hidden_starting_terminal(cx: &mut TestAppContext, quit: bool) {
     // The PTY supervisor is an OS thread, outside the deterministic UI scheduler.
     cx.executor().allow_parking();
     let fixture = fixture(cx);
@@ -436,9 +447,11 @@ async fn close_without_confirmation_reaps_hidden_starting_terminal(cx: &mut Test
         })
     });
     cx.update_window(fixture.window.into(), |_, window, cx| {
-        fixture
-            .view
-            .update(cx, |view, cx| view.close_window(window, cx));
+        if !quit {
+            fixture
+                .view
+                .update(cx, |view, cx| view.close_window(window, cx));
+        }
         assert!(
             cx.windows()
                 .iter()
@@ -447,9 +460,17 @@ async fn close_without_confirmation_reaps_hidden_starting_terminal(cx: &mut Test
         );
     })
     .expect("request immediate close");
-    finished
-        .await
-        .expect("Host closes only after the real PTY shutdown completes");
+    if quit {
+        cx.update(crate::app::request_quit);
+    }
+    assert!(
+        cx.update_window(fixture.window.into(), |_, _, _| ())
+            .is_err(),
+        "the window must disappear before polling terminal cleanup"
+    );
+    finished.await.expect("Host closes immediately");
+    let shutdown = cx.update(|cx| panel.update(cx, |panel, cx| panel.shutdown(cx)));
+    shutdown.await;
     cx.run_until_parked();
     cx.update(|cx| {
         assert!(!panel.read(cx).has_sessions());

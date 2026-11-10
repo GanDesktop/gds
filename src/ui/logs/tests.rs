@@ -43,7 +43,7 @@ fn disabled_logging_has_no_store_window_or_shortcut(cx: &mut TestAppContext) {
     cx.update(|cx| assert!(cx.global::<OpenWindow>().viewer.upgrade().is_some()));
 }
 
-fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Root>, WeakEntity<Viewer>, Store) {
+pub(super) fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Root>, WeakEntity<Viewer>, Store) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::i18n::install(crate::i18n::Language::Chinese, cx).expect("translations");
@@ -63,7 +63,7 @@ fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Root>, WeakEntity<Viewer>, 
     })
 }
 
-fn deliver(cx: &mut TestAppContext) {
+pub(super) fn deliver(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.executor().advance_clock(UPDATE_INTERVAL);
     cx.run_until_parked();

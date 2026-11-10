@@ -209,7 +209,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (connection, events) = Connection::new(server.clone(), runtime);
+        let (connection, events) =
+            Connection::new(server.clone(), runtime, &gds::ui::task_manager::scope(cx));
         let store = navigation::restore::Store::discover(&server);
         let mut view = Self::with_connection(connection, events, server, cwd, compact, window, cx);
         view.attach_restore(store);

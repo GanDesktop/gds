@@ -68,6 +68,7 @@ enum CacheError {
 /// # Errors
 /// Reports unreadable sources and thumbnail generation failures. Cache failures
 /// are diagnosed separately and never prevent displaying a generated thumbnail.
+#[cfg(test)]
 pub(super) fn load(source: &Source, cache: Option<&Cache>) -> Result<Thumbnail, Error> {
     load_with(source, cache, || source.generate())
 }

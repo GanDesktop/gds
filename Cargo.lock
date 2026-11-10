@@ -3895,7 +3895,7 @@ dependencies = [
 [[package]]
 name = "gpui-fast-linux"
 version = "0.1.13"
-source = "git+https://github.com/GanDesktop/gpui-fast-linux?branch=gds-0.1.13#11821fd41544ae45105c0621973d497f84bdbf48"
+source = "git+https://github.com/GanDesktop/gpui-fast-linux?rev=2270030d3e0cf75def11e44e5cc0f6c9991fae49#2270030d3e0cf75def11e44e5cc0f6c9991fae49"
 dependencies = [
  "accesskit",
  "accesskit_unix",

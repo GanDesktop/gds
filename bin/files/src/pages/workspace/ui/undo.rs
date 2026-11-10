@@ -82,10 +82,11 @@ impl Browser {
         self.window.focus.focus(window, cx);
         self.start_background(label, cx);
         let cancel = self.background_tasks.read(cx).token("files");
-        let work = self
-            .window
-            .runtime
-            .spawn_blocking(move || entry.execute_cancellable(&cancel));
+        let work = gds::ui::task_manager::scope(cx)
+            .spawn_blocking(&self.window.runtime, move || {
+                entry.execute_cancellable(&cancel)
+            })
+            .expect("undo accepted");
         cx.spawn(async move |this, cx| {
             let result = work.await;
             if let Err(error) = this.update(cx, |this, cx| {

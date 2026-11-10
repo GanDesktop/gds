@@ -33,6 +33,12 @@ bin/
 
 各安装方式的构建、打包与系统集成统一放在 `packaging/`。Nix 的根目录入口委托给 `packaging/nix/` 中的定义；生成的二进制、安装包和构建缓存保留在 `target/`，不放进打包定义目录。
 
+## 任务与退出生命周期
+
+UI 与服务负责资源所有权，`gds::task_manager` 负责跨 GPUI、Tokio、线程和子进程的取消与完成追踪。新应用通过 `gds::ui::task_manager` 接入窗口关闭、显式退出和 Unix 信号；先关闭原生窗口，再等待服务清理，最后退出应用。
+
+新增后台工作时，先确定所属作用域、取消策略和完成条件，再选择执行器。涉及进程、设备或持久化的任务必须登记完成；仅用于 UI 更新的任务可以随其拥有者释放。具体 API、服务示例和测试约定见[任务所有权与应用退出](development/task-manager.md)。
+
 ## 运行
 
 应用使用方式见 [Files](apps/files/README.md)、[Agents](apps/agents/README.md)；系统安装与桌面接入见 [NixOS 安装](nixos.md)。
@@ -96,6 +102,7 @@ cargo build --bins --features files,agents,portal
 | `file-tags` | `desktop` 的可选标签能力：`user.xdg.tags` 读写与复制保留；`files` 显式启用 |
 | `storage` | Toasty / SQLite 存储 |
 | `logs` | 本进程日志服务 |
+| `task-manager` | 任务作用域、取消与完成追踪，以及可选的诊断快照 |
 | `terminal` | PTY 与终端模型 |
 | `file-inspection` | 按需读取文件内容元信息、生成缩略图与标准磁盘缓存 |
 | `remote` | SFTP / SMB 文件服务 |
@@ -133,11 +140,11 @@ cargo tree --no-default-features --features portal --edges normal,build
 
 ## 第三方补丁
 
-第三方源码在 GanDesktop 的独立仓库维护，通过 Git 分支引用，由 `Cargo.lock` 固定提交；不将源码复制进本项目。当前使用 GPUI Kit `0.9.0` 的 `gpui-fast` feature，补丁基于发布的 GPUI Fast `0.1.13` 包快照，保留包名和版本：
+第三方源码在 GanDesktop 的独立仓库维护，通过 Git 分支或 revision 引用，由 `Cargo.lock` 固定提交；不将源码复制进本项目。当前使用 GPUI Kit `0.9.0` 的 `gpui-fast` feature，补丁基于发布的 GPUI Fast `0.1.13` 包快照，保留包名和版本：
 
 - [gpui-kit / gds-0.9.0](https://github.com/GanDesktop/gpui-kit/tree/gds-0.9.0)：仅替换 `gpui-component`，基于 0.9.0 发布提交，增加可配置 Linux 窗口圆角并同步内容裁切与平台命中区域；默认直角，其余 Kit crate 保持发布版本。
 - [gpui-fast / gds-0.1.13](https://github.com/GanDesktop/gpui-fast/tree/gds-0.1.13)：外部父窗口与调用方激活 token 的公共接口；外部文件拖入恢复鼠标输入模式，修复键盘操作后放下事件无法命中目标的问题。
-- [gpui-fast-linux / gds-0.1.13](https://github.com/GanDesktop/gpui-fast-linux/tree/gds-0.1.13)：对应 Wayland / X11 实现。
+- [gpui-fast-linux / 2270030](https://github.com/GanDesktop/gpui-fast-linux/tree/2270030d3e0cf75def11e44e5cc0f6c9991fae49)：对应 Wayland / X11 实现；保留外部父窗口关联直到模态窗口销毁完成，避免 KWin 遗留父窗口变暗效果。
 
 Fast 补丁从原 `gpui-pre` / `gpui-pre-linux` 的 `gds-0.3.11` 分支迁移。应用的 `gpui` 宏依赖也指向 `gpui-fast`；HTTP 客户端沿用 Fast 共用的 `gpui-pre-http-client` 协议类型。Kit 的 feature 为叠加启用，依赖图中仍可出现未被应用选用的 `gpui-pre`，这不表示运行时混用了两套 GPUI。
 

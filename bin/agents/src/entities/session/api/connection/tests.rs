@@ -943,6 +943,7 @@ async fn missing_session_stops_retrying_and_reports_an_actionable_error() {
 impl Connection {
     pub fn for_test(commands: mpsc::UnboundedSender<Command>) -> Self {
         Self {
+            scope: None,
             commands,
             task: None,
         }

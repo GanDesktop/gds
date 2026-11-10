@@ -432,10 +432,17 @@ impl Workspace {
         }
         let path = store.path.clone();
         let seen = self.sessions.seen_replies.clone();
+        let Ok(completion) = gds::ui::task_manager::scope(cx).register_named(
+            "Navigation state write",
+            gds::task_manager::Execution::Supervisor,
+        ) else {
+            return;
+        };
         enqueue(
             &mut self.navigation.restore.pending_save,
             cx.background_executor(),
             move || {
+                let _completion = completion;
                 let mut store = Store {
                     path,
                     saved: Saved::default(),
@@ -455,11 +462,25 @@ impl Workspace {
         let Some(store) = &mut self.navigation.restore.store else {
             return;
         };
+        let Ok(completion) = gds::ui::task_manager::scope(cx).register_named(
+            "Navigation state write",
+            gds::task_manager::Execution::Supervisor,
+        ) else {
+            return;
+        };
         store.queue_forget_reads(
             &mut self.navigation.restore.pending_save,
             cx.background_executor(),
             removed,
         );
+        if let Some(pending) = self.navigation.restore.pending_save.clone() {
+            cx.background_executor()
+                .spawn(async move {
+                    pending.await;
+                    drop(completion);
+                })
+                .detach();
+        }
     }
 
     pub(in crate::pages::workspace) fn restore_thread(

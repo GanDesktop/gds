@@ -409,9 +409,14 @@ impl Browser {
         let count = request.batch.paths().len();
         self.start_background(i18n::count(kind.progress_label(), count, cx), cx);
         let cancel = self.background_tasks.read(cx).token("files");
-        let work = cx
-            .background_executor()
-            .spawn(async move { request.batch.execute_cancellable(kind, &cancel) });
+        let work = gds::ui::task_manager::scope(cx)
+            .track_named(
+                "File operation",
+                gds::task_manager::Execution::GpuiBackground,
+                async move { request.batch.execute_cancellable(kind, &cancel) },
+            )
+            .expect("file operation accepted");
+        let work = cx.background_executor().spawn(work);
         cx.spawn(async move |this, cx| {
             let report = work.await;
             for item in report.failed_items() {

@@ -435,9 +435,14 @@ impl Browser {
         };
         self.start_background(i18n::count("transfer-working", count, cx), cx);
         let cancel = self.background_tasks.read(cx).token("files");
-        let work = cx
-            .background_executor()
-            .spawn(async move { batch.execute_cancellable(cancel) });
+        let work = gds::ui::task_manager::scope(cx)
+            .track_named(
+                "File transfer",
+                gds::task_manager::Execution::GpuiBackground,
+                async move { batch.execute_cancellable(cancel) },
+            )
+            .expect("paste accepted");
+        let work = cx.background_executor().spawn(work);
         cx.spawn_in(window, async move |this, cx| {
             let report = work.await;
             let _ = this.update_in(cx, |browser, window, cx| {

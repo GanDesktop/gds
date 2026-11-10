@@ -1,5 +1,5 @@
-logs-title = Debug logs
-logs-open-error = Cannot open debug logs
+logs-title = Debug
+logs-open-error = Cannot open Debug
 logs-search = Search messages and targets…
 logs-all = All levels
 logs-level = Filter by level
@@ -9,3 +9,19 @@ logs-close-detail = Close entry details
 logs-clear = Clear logs
 logs-copy-selected = Copy selected
 logs-count = { $visible } visible · { $retained } retained · { $evicted } evicted
+
+logs-tab-logs = Logs
+logs-tab-tasks = Tasks
+logs-tasks-name = Scope / task
+logs-tasks-execution = Execution
+logs-tasks-age = Lifetime
+logs-tasks-active = Active
+logs-tasks-cancelling = Cancelling
+logs-tasks-scope-open = Open
+logs-tasks-scope-closing = Closing
+logs-tasks-empty = No registered tasks are active.
+logs-tasks-supervisor = Supervisor
+logs-tasks-gpui-background = GPUI background
+logs-tasks-tokio = Tokio async
+logs-tasks-blocking = Tokio blocking
+logs-tasks-thread = System thread

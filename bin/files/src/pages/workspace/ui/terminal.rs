@@ -424,8 +424,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Client-side titlebar controls remove windows directly; route them
-        // through the same shutdown barrier as WM requests.
+        // Client-side and WM close requests must both stop the window's PTYs.
         self.request_terminal_close(CloseTarget::Window, window, cx);
     }
 
@@ -468,30 +467,13 @@ impl Browser {
         if self.terminal.closing {
             return;
         }
-        // Shutdown futures include in-flight spawns and worker cleanup, so the
-        // final window cannot quit before the last PTY has actually stopped.
+        // Each terminal registers its cleanup with the application before the
+        // window disappears, including launches that have not finished yet.
         self.terminal.closing = true;
         self.terminal.close_pending = Some(target);
-        let shutdowns: Vec<_> = self
-            .closing_panels(target)
-            .into_iter()
-            .map(|panel| panel.update(cx, |panel, cx| panel.shutdown(cx)))
-            .collect();
-        cx.spawn_in(window, async move |this, cx| {
-            // Every shutdown already requested termination before waiting.
-            for shutdown in shutdowns {
-                shutdown.await;
-            }
-            if let Err(error) = this.update_in(cx, |this, window, _cx| {
-                this.terminal.closing = false;
-                this.terminal.close_pending = None;
-                match target {
-                    CloseTarget::Window => window.remove_window(),
-                }
-            }) {
-                tracing::warn!("Terminal shutdown finished after the Files window closed: {error}");
-            }
-        })
-        .detach();
+        for panel in self.closing_panels(target) {
+            drop(panel.update(cx, |panel, cx| panel.shutdown(cx)));
+        }
+        window.remove_window();
     }
 }

@@ -66,6 +66,7 @@ enum State {
 }
 
 pub(crate) struct Player {
+    worker_scope: Option<gds::task_manager::Owner>,
     id: Option<String>,
     generation: Arc<AtomicU64>,
     scope: u64,
@@ -77,6 +78,7 @@ pub(crate) struct Player {
 impl Player {
     pub(crate) fn new() -> Self {
         Self {
+            worker_scope: None,
             id: None,
             generation: Arc::new(AtomicU64::new(0)),
             scope: 0,
@@ -95,9 +97,13 @@ impl Player {
         let (commands, receiver) = mpsc::channel();
         let (events, mut updates) = tokio::sync::mpsc::unbounded_channel();
         let generation = Arc::clone(&self.generation);
-        std::thread::Builder::new()
-            .name("gds-agents-audio".into())
-            .spawn(move || worker::run(receiver, events, generation))?;
+        let scope = gds::ui::task_manager::scope(cx).named_child("Audio playback");
+        let cancel = scope.token();
+        scope.spawn_thread(
+            std::thread::Builder::new().name("gds-agents-audio".into()),
+            move || worker::run(receiver, events, generation, cancel),
+        )?;
+        self.worker_scope = Some(scope);
         self.commands = Some(commands);
         self._events = Some(cx.spawn(async move |player, cx| {
             while let Some(event) = updates.recv().await {

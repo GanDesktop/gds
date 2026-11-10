@@ -104,6 +104,7 @@ struct Entry {
 
 #[derive(Default)]
 pub struct Cache {
+    scope: Option<crate::task_manager::Owner>,
     entries: HashMap<Source, Entry>,
     pending: VecDeque<Source>,
     running: usize,
@@ -122,6 +123,9 @@ impl Cache {
         request: Request,
         cx: &mut Context<Self>,
     ) -> Snapshot {
+        if self.scope.is_none() {
+            self.scope = Some(crate::ui::task_manager::scope(cx).named_child("File previews"));
+        }
         if self.clock == 0 {
             cx.on_release(|cache, cx| {
                 for (_, entry) in cache.entries.drain() {
@@ -200,9 +204,23 @@ impl Cache {
             let ticket = entry.ticket;
             self.running += 1;
             let work_source = source.clone();
-            let work = cx
-                .background_executor()
-                .spawn(async move { Snapshot::from_inspection(work_source.load(request)) });
+            let scope = self.scope.as_ref().expect("cache scope");
+            let cancel = scope.token();
+            let label = if scope.inspection_enabled() {
+                work_source.path.display().to_string()
+            } else {
+                String::new()
+            };
+            let work = async move {
+                Snapshot::from_inspection(work_source.load_cancellable(request, &cancel))
+            };
+            let Ok(work) =
+                scope.track_named(&label, crate::task_manager::Execution::GpuiBackground, work)
+            else {
+                self.running -= 1;
+                return;
+            };
+            let work = cx.background_executor().spawn(work);
             cx.spawn(async move |cache, cx| {
                 let result = work.await;
                 if let Err(error) = cache.update(cx, |cache, cx| {

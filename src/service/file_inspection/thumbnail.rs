@@ -18,14 +18,26 @@ impl Source {
     ///
     /// # Errors
     /// Reports unreadable or unsupported media, image limits and video extraction failures.
+    #[cfg(test)]
     pub(super) fn thumbnail(&self) -> Result<Thumbnail, Error> {
         cache::load(self, cache::Cache::for_user().as_ref())
     }
 
+    #[cfg(test)]
     pub(super) fn generate(&self) -> Result<::image::RgbaImage, Error> {
+        self.generate_cancellable(&tokio_util::sync::CancellationToken::new())
+    }
+
+    pub(super) fn generate_cancellable(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<::image::RgbaImage, Error> {
+        if cancel.is_cancelled() {
+            return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
+        }
         match self.kind {
             Kind::Image => image::load(&self.path),
-            Kind::Video => video::load(&self.path),
+            Kind::Video => video::load(&self.path, cancel),
             Kind::Audio => {
                 let bytes = super::audio::cover(&self.path)?.ok_or(Error::NoCover)?;
                 image::load_bytes(&bytes, None)

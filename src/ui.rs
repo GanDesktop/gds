@@ -26,6 +26,7 @@ pub mod picker;
 pub mod sidebar;
 pub mod split;
 pub mod surface;
+pub mod task_manager;
 pub mod terminal;
 pub mod thumbnail;
 pub mod window;

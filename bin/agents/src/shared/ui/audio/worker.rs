@@ -45,21 +45,21 @@ pub(super) fn run(
     commands: mpsc::Receiver<Command>,
     events: tokio::sync::mpsc::UnboundedSender<Event>,
     current: Arc<AtomicU64>,
+    cancel: tokio_util::sync::CancellationToken,
 ) {
     let mut playback: Option<Playback> = None;
     loop {
-        let command = if playback.is_some() {
-            match commands.recv_timeout(COMPLETION_INTERVAL) {
-                Ok(command) => Some(command),
-                Err(mpsc::RecvTimeoutError::Timeout) => None,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        } else {
-            match commands.recv() {
-                Ok(command) => Some(command),
-                Err(_) => break,
-            }
+        if cancel.is_cancelled() {
+            break;
+        }
+        let command = match commands.recv_timeout(COMPLETION_INTERVAL) {
+            Ok(command) => Some(command),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
+        if cancel.is_cancelled() {
+            break;
+        }
         match command {
             Some(Command::Play { generation, audio }) => {
                 playback.take();
@@ -67,7 +67,10 @@ pub(super) fn run(
                     continue;
                 }
                 let state = match prepare(generation, &audio) {
-                    Ok(active) if start_if_current(generation, &active.sink, &current) => {
+                    Ok(active)
+                        if !cancel.is_cancelled()
+                            && start_if_current(generation, &active.sink, &current) =>
+                    {
                         playback = Some(active);
                         State::Playing
                     }

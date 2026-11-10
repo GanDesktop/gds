@@ -139,8 +139,15 @@ impl Page {
         self.feedback = Feedback::Idle;
         // Keep accepted writes alive after window close, tied to their original server.
         let page = cx.entity();
+        let Ok(completion) = gds::ui::task_manager::scope(cx).register_named(
+            "ACP settings write",
+            gds::task_manager::Execution::Supervisor,
+        ) else {
+            return;
+        };
         let task = cx
             .spawn(async move |_, cx| {
+                let _completion = completion;
                 let mut request = request;
                 loop {
                     let result = service.acp_configuration(Some(request)).await;

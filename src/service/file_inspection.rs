@@ -77,6 +77,17 @@ impl Source {
     /// Inspect only the requested content. Each field reports its own failure.
     /// Run on a background worker; no audio playback or UI allocation is involved.
     pub fn load(&self, request: Request) -> Inspection {
+        self.load_cancellable(request, &tokio_util::sync::CancellationToken::new())
+    }
+
+    pub fn load_cancellable(
+        &self,
+        request: Request,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Inspection {
+        if cancel.is_cancelled() {
+            return Inspection::default();
+        }
         let mut result = Inspection::default();
         if request.thumbnail() {
             result.thumbnail = if !self.kind.supports_thumbnail() {
@@ -93,7 +104,7 @@ impl Source {
                         thumbnail::cover(&file)
                     })
                 } else {
-                    self.thumbnail()
+                    thumbnail::load_with(self, || self.generate_cancellable(cancel))
                 };
                 match thumbnail {
                     Ok(thumbnail) => Field::Available(thumbnail),
@@ -102,7 +113,10 @@ impl Source {
                 }
             };
         }
-        if request.metadata() && matches!(result.metadata, Field::NotRequested) {
+        if !cancel.is_cancelled()
+            && request.metadata()
+            && matches!(result.metadata, Field::NotRequested)
+        {
             result.metadata = match self.metadata() {
                 Ok(Metadata::File(FileFacts::Unknown)) => Field::Unavailable,
                 Ok(metadata) => Field::Available(metadata),

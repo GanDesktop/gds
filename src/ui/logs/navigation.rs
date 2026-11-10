@@ -3,6 +3,9 @@ use gpui_kit::{ScrollStrategy, point};
 
 impl Viewer {
     pub(super) fn move_selection(&mut self, forward: bool, page: bool, cx: &mut Context<Self>) {
+        if self.tab != Tab::Logs {
+            return;
+        }
         let Some(last) = self.visible.len().checked_sub(1) else {
             return;
         };

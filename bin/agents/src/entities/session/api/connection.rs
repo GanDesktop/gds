@@ -294,43 +294,54 @@ pub(crate) enum StreamState {
 }
 
 pub(crate) struct Connection {
+    scope: Option<gds::task_manager::Owner>,
     commands: mpsc::UnboundedSender<Command>,
     task: Option<JoinHandle<()>>,
 }
 
 impl Connection {
-    pub fn new(server: Target, runtime: &Handle) -> (Self, mpsc::Receiver<Update>) {
+    pub fn new(
+        server: Target,
+        runtime: &Handle,
+        parent: &gds::task_manager::Scope,
+    ) -> (Self, mpsc::Receiver<Update>) {
         let (commands, receiver) = mpsc::unbounded_channel();
         let (updates, events) = mpsc::channel(EVENT_CAPACITY);
-        let task = runtime.spawn(async move {
-            let channel = match server.channel_lazy(REQUEST_TIMEOUT) {
-                Ok(channel) => channel,
-                Err(error) => {
-                    let _ = updates
-                        .send(Update::Catalog(Err(Failure::from(anyhow::Error::from(
-                            error,
-                        )))))
-                        .await;
-                    return;
-                }
-            };
-            let cache = match cache::Cache::open(&server).await {
-                Ok(cache) => Some(cache),
-                Err(error) => {
-                    tracing::warn!(%error, "History cache unavailable");
-                    None
-                }
-            };
-            run_cached(
-                Client::new(channel).with_payload_limit(),
-                receiver,
-                updates,
-                cache,
-            )
-            .await;
-        });
+        let scope = parent.named_child("Agent connection / history");
+        let cancel = scope.token();
+        let task = scope
+            .spawn(runtime, async move {
+                let channel = match server.channel_lazy(REQUEST_TIMEOUT) {
+                    Ok(channel) => channel,
+                    Err(error) => {
+                        let _ = updates
+                            .send(Update::Catalog(Err(Failure::from(anyhow::Error::from(
+                                error,
+                            )))))
+                            .await;
+                        return;
+                    }
+                };
+                let cache = match cache::Cache::open(&server).await {
+                    Ok(cache) => Some(cache),
+                    Err(error) => {
+                        tracing::warn!(%error, "History cache unavailable");
+                        None
+                    }
+                };
+                run_cached_scoped(
+                    Client::new(channel).with_payload_limit(),
+                    receiver,
+                    updates,
+                    cache,
+                    cancel,
+                )
+                .await;
+            })
+            .expect("connection scope is open");
         (
             Self {
+                scope: Some(scope),
                 commands,
                 task: Some(task),
             },
@@ -351,16 +362,37 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
+        if let Some(scope) = &self.scope {
+            scope.cancel();
+        }
         // Closing the command sender lets the worker drain its disk writes.
         self.task.take();
     }
 }
 
+#[cfg(test)]
 async fn run_cached(
+    client: Client,
+    commands: mpsc::UnboundedReceiver<Command>,
+    updates: mpsc::Sender<Update>,
+    cache: Option<cache::Cache>,
+) {
+    run_cached_scoped(
+        client,
+        commands,
+        updates,
+        cache,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await;
+}
+
+async fn run_cached_scoped(
     client: Client,
     mut commands: mpsc::UnboundedReceiver<Command>,
     updates: mpsc::Sender<Update>,
     cache: Option<cache::Cache>,
+    cancel: tokio_util::sync::CancellationToken,
 ) {
     let protocol = protocol::Pool::default();
     let (history, writer) = history::Store::new(cache);
@@ -374,6 +406,7 @@ async fn run_cached(
     let mut attachment: Option<AbortHandle> = None;
     loop {
         tokio::select! {
+            _ = cancel.cancelled() => break,
             command = commands.recv() => {
                 let Some(command) = command else { break };
                 match command {

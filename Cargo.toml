@@ -58,6 +58,7 @@ required-features = ["nixes"]
 # capability that owns them; every feature enables the packages its own code
 # uses directly.
 default = []
+task-manager = ["dep:tokio", "dep:tokio-util", "dep:thiserror", "dep:nix"]
 desktop-protocol = ["dep:serde"]
 persistence = ["dep:thiserror", "dep:tempfile", "dep:nix"]
 watch = ["dep:notify", "dep:tokio"]
@@ -73,10 +74,12 @@ storage = [
 ]
 logs = ["dep:tokio", "dep:tracing", "dep:tracing-subscriber", "dep:thiserror"]
 terminal = [
+    "task-manager",
     "dep:tokio", "dep:anyhow", "dep:portable-pty", "dep:alacritty_terminal",
     "dep:thiserror", "dep:nix",
 ]
 file-inspection = [
+    "task-manager",
     "dep:lofty",
     "dep:tracing", "dep:directories", "dep:image", "dep:png", "dep:resvg",
     "dep:thiserror", "dep:tempfile", "dep:url", "dep:md-5",
@@ -298,4 +301,4 @@ incremental = false
 [patch.crates-io]
 gpui-component = { git = "https://github.com/GanDesktop/gpui-kit", branch = "gds-0.9.0" }
 gpui-fast = { git = "https://github.com/GanDesktop/gpui-fast", branch = "gds-0.1.13" }
-gpui-fast-linux = { git = "https://github.com/GanDesktop/gpui-fast-linux", branch = "gds-0.1.13" }
+gpui-fast-linux = { git = "https://github.com/GanDesktop/gpui-fast-linux", rev = "2270030d3e0cf75def11e44e5cc0f6c9991fae49" }

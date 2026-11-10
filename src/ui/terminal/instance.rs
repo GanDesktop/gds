@@ -11,13 +11,14 @@ mod tests;
 
 /// One terminal surface; the service owns startup, process state and cleanup.
 pub struct Terminal {
+    scope: crate::task_manager::Owner,
     service: service::Terminal,
     preferences: Preferences,
     focus: FocusHandle,
     view: Option<Entity<View>>,
     updates: Option<Subscription>,
     _theme: Subscription,
-    shutdown_done: Option<watch::Receiver<bool>>,
+    shutdown_done: watch::Receiver<bool>,
     observed: Option<(Status, Option<SharedString>)>,
 }
 impl Terminal {
@@ -39,6 +40,23 @@ impl Terminal {
             palette: Some(super::view::palette::Palette::new(cx).query_colors()),
         };
         let (service, launch) = service::Terminal::prepare(options);
+        let scope = crate::ui::task_manager::scope(cx)
+            .named_child(format_args!("Terminal · {}", service.cwd().display()));
+        let cancel = scope.token();
+        let cleanup_service = service.clone();
+        let (finished, done) = watch::channel(false);
+        let cleanup = scope
+            .track_named(
+                "PTY session and cleanup",
+                crate::task_manager::Execution::GpuiBackground,
+                async move {
+                    cancel.cancelled().await;
+                    cleanup_service.shutdown().await;
+                    finished.send_replace(true);
+                },
+            )
+            .expect("terminal scope is open");
+        cx.background_executor().spawn(cleanup).detach();
         let ready = service.ready();
         cx.background_executor()
             .spawn(async move {
@@ -64,6 +82,7 @@ impl Terminal {
         })
         .detach();
         Self {
+            scope,
             service,
             preferences,
             focus: cx.focus_handle(),
@@ -77,7 +96,7 @@ impl Terminal {
                 }
                 cx.notify();
             }),
-            shutdown_done: None,
+            shutdown_done: done,
             observed: None,
         }
     }
@@ -149,15 +168,13 @@ impl Terminal {
     }
     /// Wait for the service's cleanup even if startup has not completed.
     pub fn shutdown(&mut self, cx: &mut Context<Self>) -> Shutdown {
-        if let Some(done) = &self.shutdown_done {
-            return wait_for_cleanup(done.clone());
-        }
-        let cleanup = self.service.shutdown();
-        let (finished, done) = watch::channel(false);
-        self.shutdown_done = Some(done.clone());
+        self.scope.cancel();
+        // Request termination now; the tracked supervisor owns completion.
+        drop(self.service.shutdown());
+        let done = self.shutdown_done.clone();
+        let mut completed = done.clone();
         cx.spawn(async move |terminal, cx| {
-            cleanup.await;
-            finished.send_replace(true);
+            let _ = completed.wait_for(|done| *done).await;
             let _ = terminal.update(cx, |this, cx| this.changed(cx));
         })
         .detach();

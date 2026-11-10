@@ -311,7 +311,7 @@ impl Host {
         }
     }
 
-    fn close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
             return;
         }
@@ -349,22 +349,9 @@ impl Host {
         if self.closing {
             return;
         }
-        let pending = self.shutdown_terminals(cx);
+        drop(self.shutdown_terminals(cx));
         self.prepare_to_close(window, cx);
-        if pending.is_empty() {
-            window.remove_window();
-            return;
-        }
-        // Await only this window's PTYs, including starts and retiring closed tabs.
-        cx.spawn_in(window, async move |host, cx| {
-            for shutdown in pending {
-                shutdown.await;
-            }
-            if let Err(error) = host.update_in(cx, |_, window, _| window.remove_window()) {
-                tracing::debug!(%error, "terminal shutdown finished after window removal");
-            }
-        })
-        .detach();
+        window.remove_window();
     }
 
     fn on_toggle_terminal(

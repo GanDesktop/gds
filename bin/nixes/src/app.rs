@@ -50,10 +50,11 @@ pub fn run() -> anyhow::Result<()> {
                     cx,
                 );
             }
+            gds::ui::task_manager::init(cx);
+            #[cfg(unix)]
+            gds::ui::task_manager::signals(&handle, gds::ui::task_manager::request_quit, cx);
             cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
+                gds::ui::task_manager::quit_when_idle(cx);
             })
             .detach();
             let options = WindowOptions {

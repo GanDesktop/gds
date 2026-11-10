@@ -67,9 +67,11 @@ impl Editor {
         self.error = None;
         let path = self.path.clone();
         let recursive = self.recursive;
-        let work = self
-            .runtime
-            .spawn_blocking(move || permissions::apply(&path, mode, recursive));
+        let work = gds::ui::task_manager::scope(cx)
+            .spawn_blocking(&self.runtime, move || {
+                permissions::apply(&path, mode, recursive)
+            })
+            .expect("application accepts file operations");
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {

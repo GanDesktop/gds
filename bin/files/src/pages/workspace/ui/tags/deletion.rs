@@ -72,12 +72,14 @@ impl Browser {
         }
         self.operations.in_progress = true;
         let commands = self.settings.preferences.tags.commands.clone();
-        let work = self.window.runtime.spawn(async move {
-            crate::entities::tags::connect(&commands)
-                .await?
-                .delete_tag(address.tag())
-                .await
-        });
+        let work = gds::ui::task_manager::scope(cx)
+            .spawn(&self.window.runtime, async move {
+                crate::entities::tags::connect(&commands)
+                    .await?
+                    .delete_tag(address.tag())
+                    .await
+            })
+            .expect("tag mutation accepted");
         cx.spawn(async move |this, cx| {
             let result = work
                 .await

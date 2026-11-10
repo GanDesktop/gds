@@ -55,6 +55,7 @@ impl Global for OpenWindow {}
 /// Install the collector created before the application's background tasks start.
 pub fn install(store: Store, cx: &mut App) {
     cx.set_global(Records(store));
+    crate::ui::task_manager::init(cx);
 }
 
 pub fn is_enabled(cx: &App) -> bool {
@@ -132,9 +133,7 @@ pub fn open(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
         if handle
             .update(cx, |_, window, cx| {
                 let _ = viewer.update(cx, |viewer, cx| {
-                    viewer
-                        .search
-                        .update(cx, |search, cx| search.focus(window, cx));
+                    viewer.focus_tab(window, cx);
                 });
                 window.activate_window();
             })

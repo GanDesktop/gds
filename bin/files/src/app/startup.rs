@@ -239,12 +239,13 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
             }
             actions::register(cx);
             gds::ui::terminal::init(cx);
+            gds::ui::task_manager::init(cx);
+            #[cfg(unix)]
+            gds::ui::task_manager::signals(&handle, gds::ui::task_manager::request_quit, cx);
             cx.on_app_quit(|_| async { gds::service::terminal::shutdown_all().await })
                 .detach();
             cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
+                gds::ui::task_manager::quit_when_idle(cx);
             })
             .detach();
             configuration::publish(preferences.clone(), cx);
@@ -253,6 +254,9 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
                 let places = tokio_util::task::AbortOnDropHandle::new(handle.spawn(async move { storage.load().await }))
                     .await.unwrap_or_else(|error| Err(error.into()));
                 cx.update(move |cx| {
+                    if gds::ui::task_manager::is_shutting_down(cx) {
+                        return;
+                    }
                     let opened = manager.update(cx, |manager, cx| manager.open(workspace::LaunchOptions {
                         runtime: handle, places, start, home, preferences, startup_error, picker: picker_options,
                     }, cx));

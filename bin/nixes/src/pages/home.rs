@@ -15,6 +15,7 @@ use gpui_kit::{
 use std::collections::BTreeSet;
 
 pub struct HomePage {
+    scope: gds::task_manager::Owner,
     runtime: tokio::runtime::Handle,
     path: Entity<InputState>,
     search: Entity<InputState>,
@@ -45,6 +46,7 @@ impl HomePage {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(text("nixes-search", cx)));
         let subscription = cx.observe(&search, |_, _, cx| cx.notify());
         let mut page = Self {
+            scope: gds::ui::task_manager::scope(cx).named_child("Nix evaluation"),
             runtime,
             path,
             search,
@@ -66,7 +68,7 @@ impl HomePage {
     }
 
     fn open(&mut self, cx: &mut Context<Self>) {
-        if self.loading {
+        if self.loading || self.scope.token().is_cancelled() {
             return;
         }
         self.flake = self.path.read(cx).value().trim().to_string();
@@ -78,9 +80,13 @@ impl HomePage {
         self.selected = None;
         self.opened = true;
         let flake = self.flake.clone();
+        let cancel = self.scope.token();
         let task = self
-            .runtime
-            .spawn(async move { home::discover(&flake).await });
+            .scope
+            .spawn(&self.runtime, async move {
+                home::discover(&flake, &cancel).await
+            })
+            .expect("Nix scope open");
         cx.spawn(async move |page, cx| {
             let result = task.await.unwrap_or_else(|error| Err(error.into()));
             let _ = page.update(cx, |page, cx| {
@@ -102,7 +108,7 @@ impl HomePage {
     }
 
     fn select(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.loading {
+        if self.loading || self.scope.token().is_cancelled() {
             return;
         }
         self.selected = Some(index);
@@ -112,9 +118,13 @@ impl HomePage {
         self.loading = true;
         let target = self.targets[index].clone();
         let flake = self.flake.clone();
+        let cancel = self.scope.token();
         let task = self
-            .runtime
-            .spawn(async move { target.options(&flake).await });
+            .scope
+            .spawn(&self.runtime, async move {
+                target.options(&flake, &cancel).await
+            })
+            .expect("Nix scope open");
         cx.spawn(async move |page, cx| {
             let result = task.await.unwrap_or_else(|error| Err(error.into()));
             let _ = page.update(cx, |page, cx| {

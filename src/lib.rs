@@ -11,5 +11,7 @@ pub mod i18n;
 #[cfg(feature = "persistence")]
 pub mod persistence;
 pub mod service;
+#[cfg(feature = "task-manager")]
+pub mod task_manager;
 #[cfg(feature = "ui")]
 pub mod ui;

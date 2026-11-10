@@ -50,10 +50,11 @@ pub(crate) fn open(request: OpenRequest, cx: &mut App) -> anyhow::Result<WindowH
     if let Some(handle) = reopen(request.clone(), cx) {
         return Ok(handle);
     }
+    let scope = gds::ui::task_manager::scope(cx);
     let service = cx
         .try_global::<crate::entities::agent::catalog::Service>()
         .ok_or_else(|| anyhow::anyhow!(tr!("agent-history-unavailable")))?;
-    let (connection, events) = Connection::new(request.server.clone(), service.runtime());
+    let (connection, events) = Connection::new(request.server.clone(), service.runtime(), &scope);
     open_connected(request, connection, events, cx)
 }
 
@@ -62,10 +63,11 @@ pub(crate) fn content(
     window: &mut Window,
     cx: &mut App,
 ) -> anyhow::Result<Entity<Browser>> {
+    let scope = gds::ui::task_manager::scope(cx);
     let service = cx
         .try_global::<crate::entities::agent::catalog::Service>()
         .ok_or_else(|| anyhow::anyhow!(tr!("agent-history-unavailable")))?;
-    let (connection, events) = Connection::new(request.server.clone(), service.runtime());
+    let (connection, events) = Connection::new(request.server.clone(), service.runtime(), &scope);
     Ok(connected_content(request, connection, events, window, cx))
 }
 

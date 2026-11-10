@@ -64,13 +64,13 @@ pub(crate) fn run() -> Result<()> {
             theme::init(cx);
             theme::watch(cx);
             super::init(cx);
+            #[cfg(unix)]
+            gds::ui::task_manager::signals(&handle, super::request_quit, cx);
             workspace::bind_keys(cx);
             settings::window::bind_keys(cx);
             history::window::bind_keys(cx);
             cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
+                gds::ui::task_manager::quit_when_idle(cx);
             })
             .detach();
             let options = workspace::windows::window_options(args.compact, cx);

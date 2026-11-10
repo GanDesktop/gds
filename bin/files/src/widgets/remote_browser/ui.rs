@@ -88,7 +88,7 @@ impl View {
             compact: false,
             task: None,
             progress_task: None,
-            cancel: CancellationToken::new(),
+            cancel: gds::ui::task_manager::scope(cx).token().child_token(),
             busy: false,
             cancellable: false,
             progress: Default::default(),

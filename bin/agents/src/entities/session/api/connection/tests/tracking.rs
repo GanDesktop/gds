@@ -160,6 +160,7 @@ async fn dropping_connection_aborts_pending_turn_tracking() {
     let (commands, receiver) = mpsc::unbounded_channel();
     let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
     let connection = Connection {
+        scope: None,
         commands,
         task: Some(tokio::spawn(run(fixture.client.clone(), receiver, updates))),
     };
@@ -181,4 +182,41 @@ async fn dropping_connection_aborts_pending_turn_tracking() {
     })
     .await
     .expect("all operation tasks dropped their update senders");
+}
+
+#[tokio::test]
+async fn application_cancellation_drains_connection_with_its_sender_still_alive() {
+    let fixture = fixture(super::Scenario::Tracking(Scenario::Pending)).await;
+    let root = gds::task_manager::Scope::default();
+    let owner = root.child();
+    let (commands, receiver) = mpsc::unbounded_channel();
+    let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
+    let task = owner
+        .spawn(
+            &tokio::runtime::Handle::current(),
+            super::super::run_cached_scoped(
+                fixture.client.clone(),
+                receiver,
+                updates,
+                None,
+                owner.token(),
+            ),
+        )
+        .unwrap();
+    commands
+        .send(prompt(fixture.session, fixture.turn))
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.attachments.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), root.shutdown())
+        .await
+        .unwrap();
+    task.await.unwrap();
+    assert!(commands.is_closed());
+    while events.recv().await.is_some() {}
 }

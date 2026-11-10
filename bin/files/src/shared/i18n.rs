@@ -28,3 +28,14 @@ pub fn install(language: Language, cx: &mut App) -> Result<(), Error> {
     };
     gds::i18n::install_resources(language, &sources, cx)
 }
+
+#[cfg(all(test, feature = "gui-tests"))]
+#[gpui_kit::test]
+fn application_and_shared_catalogs_have_no_conflicting_keys(cx: &mut gpui_kit::TestAppContext) {
+    for language in [Language::English, Language::Chinese] {
+        cx.update(|cx| {
+            install(language, cx).expect("Files and shared messages must compose");
+            assert_ne!(text("logs-tab-tasks", cx).as_ref(), "logs-tab-tasks");
+        });
+    }
+}

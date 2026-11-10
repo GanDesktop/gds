@@ -19,7 +19,12 @@ fn superseded_queued_playback_is_skipped_before_decoding() {
         })
         .expect("current play");
     drop(commands);
-    run(input, events, current);
+    run(
+        input,
+        events,
+        current,
+        tokio_util::sync::CancellationToken::new(),
+    );
     let event = output.blocking_recv().expect("current decoding failure");
     assert_eq!(event.generation, 2);
     assert!(matches!(event.state, State::Failed(_)));

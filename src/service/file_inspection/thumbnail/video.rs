@@ -3,19 +3,21 @@ use std::{
     io::Read,
     path::Path,
     process::{Command, Stdio},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use super::{EDGE, Error};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const ERROR_BYTES: u64 = 4 * 1024;
 const MAX_FRAME_BYTES: u64 = (EDGE as u64) * (EDGE as u64) * 4 + 64 * 1024;
 
 /// # Errors
 /// Reports unavailable FFmpeg, extraction failures, timeouts and filesystem errors.
-pub(super) fn load(path: &Path) -> Result<::image::RgbaImage, Error> {
+pub(super) fn load(
+    path: &Path,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<::image::RgbaImage, Error> {
     let directory = tempfile::tempdir()?;
     let frame = directory.path().join("frame.png");
     let errors = directory.path().join("ffmpeg.log");
@@ -51,17 +53,14 @@ pub(super) fn load(path: &Path) -> Result<::image::RgbaImage, Error> {
                 Error::Io(error)
             }
         })?;
-    let mut child = Running(child);
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.0.try_wait()? {
-            break status;
+    let mut child = crate::task_manager::process::ChildGuard::new(child);
+    let status = child.wait(cancel, TIMEOUT).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::TimedOut {
+            Error::VideoTimeout
+        } else {
+            Error::Io(error)
         }
-        if started.elapsed() >= TIMEOUT {
-            return Err(Error::VideoTimeout);
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    };
+    })?;
     if !status.success() || !frame.is_file() {
         let mut message = String::new();
         File::open(errors)?
@@ -76,22 +75,4 @@ pub(super) fn load(path: &Path) -> Result<::image::RgbaImage, Error> {
         ::image::load_from_memory_with_format(&fs::read(frame)?, ::image::ImageFormat::Png)?
             .to_rgba8(),
     )
-}
-
-struct Running(std::process::Child);
-
-impl Drop for Running {
-    fn drop(&mut self) {
-        match self.0.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) => {}
-            Err(error) => tracing::warn!(%error, "cannot inspect thumbnail worker during cleanup"),
-        }
-        if let Err(error) = self.0.kill() {
-            tracing::warn!(%error, "cannot stop thumbnail worker");
-        }
-        if let Err(error) = self.0.wait() {
-            tracing::warn!(%error, "cannot reap thumbnail worker");
-        }
-    }
 }

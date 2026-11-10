@@ -22,6 +22,7 @@ Nix entry points; generated packages and build caches stay under `target/`.
 Developer references:
 
 - [Development and architecture](development.md)
+- [Task ownership and application shutdown](development/task-manager.md)
 - [Visual language](vistual-language/README.md), [themes](vistual-language/theme.md) and [shortcuts](vistual-language/shortcuts.md)
 - [Settings](settings/README.md) and [derived configuration editors](settings/config-editor.md)
 - [Component composition](vistual-language/composition.md), [sidebar anatomy](vistual-language/sidebar.md) and [About](components/about.md)
