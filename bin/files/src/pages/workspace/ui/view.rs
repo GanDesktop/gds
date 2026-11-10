@@ -21,7 +21,6 @@ use gpui_kit::base::motion::Interpolate as _;
 use gpui_kit::component::empty::{Empty as EmptyState, EmptyDescription};
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, button::ButtonVariants, menu::ContextMenuExt, table::DataTable,
-    tooltip::Tooltip,
 };
 use gpui_kit::prelude::*;
 
@@ -508,8 +507,8 @@ impl Browser {
         let mut hints =
             self.render_tab_cycle_hints(id, cycle_targets, compact, show_action, window, cx);
         hints.extend(self.render_tab_ordinal_hint(id, position, compact, show_action, window, cx));
-        let muted = cx.theme().muted_foreground;
-        let tooltip = Self::tab_tooltip(title.clone(), path.clone(), muted);
+        let hint = ui::tooltip::Details::new(title.clone()).line(path.clone());
+        let tooltip = move |window: &mut Window, cx: &mut App| hint.view(window, cx);
         let tab = el! {
             .div {
                 # $("tab", id); relative; flex; items_center; gap: ITEM_GAP.px; w_full; flex_shrink_0;
@@ -548,27 +547,6 @@ impl Browser {
         };
         let tab = self.draggable_tab(tab, slot, cx);
         el! { tab { test_support; context_menu: menu; into_any_element } }
-    }
-
-    /// A row's folder name and its whole path.
-    fn tab_tooltip(
-        title: SharedString,
-        path: SharedString,
-        muted: Hsla,
-    ) -> impl Fn(&mut Window, &mut App) -> AnyView {
-        move |window, cx| {
-            let title = title.clone();
-            let path = path.clone();
-            Tooltip::element(move |_, _| {
-                el! {
-                    .div { flex; flex_col; gap: 2.0.px; max_w: 420.0.px } [
-                        .div { font_weight: FontWeight::SEMIBOLD; whitespace_normal } [$title.clone()],
-                        .div { text_xs; text_color: muted; whitespace_normal } [$path.clone()],
-                    ]
-                }
-            })
-            .build(window, cx)
-        }
     }
 
     /// The page-cycle keys staged on this tab row.

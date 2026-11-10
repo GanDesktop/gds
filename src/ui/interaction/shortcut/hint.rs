@@ -76,7 +76,6 @@ impl RenderOnce for ShortcutHint {
             .div {
                 flex; items_center; min_w_0; gap: HINT_GAP.px;
                 text_size: SMALL; text_color: $(cx.theme().popover_foreground);
-                line_height: $(relative(1.));
             } [
                 .div { min_w_0; flex_1 } [$(self.label)],
                 ..$(badge.map(|badge| el! { .div { flex_shrink_0 } [badge] })),

@@ -4,13 +4,13 @@
 use super::*;
 use gds::appearance::tokens;
 use gds::appearance::{tokens::DataListStyle, typography};
+use gds::ui::button::Button;
 use gds_uim::el;
 use gpui_kit::component::{
     Sizable,
-    button::{Button, ButtonVariants},
+    button::ButtonVariants,
     menu::{DropdownMenu, PopupMenu},
     table::{Column, TableDelegate, TableEvent, TableSelection, TableState},
-    tooltip::Tooltip,
 };
 
 const FORMAT_WIDTH: f32 = 76.;
@@ -172,7 +172,7 @@ impl VolumeTable {
             return el! {
                 .div { # format!("volume-default-{}", row.volume.object); min_w_0; truncate; text_xs;
                     tooltip_show_delay: tokens::TOOLTIP_DELAY;
-                    tooltip: $(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx));
+                    tooltip: $(move |window, cx| ui::tooltip::view(tooltip.clone(), window, cx));
                 } [label]
             }
             .into_any_element();
@@ -274,7 +274,7 @@ impl TableDelegate for VolumeTable {
                 el! { .div { # $("volume-name", index); flex; items_center; size_full; min_w_0; gap: CELL_GAP.px;
                     @if (hint_enabled)
                         tooltip_show_delay: tokens::TOOLTIP_DELAY;
-                        tooltip: $(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx));
+                        tooltip: $(move |window, cx| ui::tooltip::view(tooltip.clone(), window, cx));
                     @end;
                 } [
                     $(row.icon).Icon::new { size: tokens::SIDEBAR_ICON_SIZE.px; flex_shrink_0 },
