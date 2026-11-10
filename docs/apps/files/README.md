@@ -46,7 +46,7 @@ Archive files use external applications through the usual open/open-with flow. B
 
 ## Settings and diagnostics
 
-Enable [tags](tags.md) under Settings → Files after Baloo backend detection succeeds. Commands can be discovered from PATH or configured explicitly. `tags:/` opens the tag catalogue.
+Enable [tags](tags.md) under Settings → Extensions → Tags after Baloo backend detection succeeds. Commands can be discovered from PATH or configured explicitly. `tags:/` opens the tag catalogue.
 
 Open settings from the application menu or Ctrl+,. Changes apply immediately and save automatically; each field has its own default. Preferences apply only to Files. Settings are stored in `$XDG_CONFIG_HOME/gds/app/files/settings.toml`; location and view state are in `$XDG_STATE_HOME/gds/files/state.sqlite`. Managed symlinks and read-only settings are protected from replacement; save failures are reported separately from changes already applied in memory.
 

@@ -34,6 +34,6 @@ impl View {
             }
         };
         let search_row = self.setting_row(Field::AutoFocusSearch, search_toggle, cx);
-        el! { .div [row, volumes_row, search_row, $(self.render_tags_settings(cx))] }
+        el! { .div [row, volumes_row, search_row] }
     }
 }

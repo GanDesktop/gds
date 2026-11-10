@@ -1,7 +1,8 @@
 use super::*;
 use crate::entities::tags::{Commands, CommandsEditor};
+use gds::ui::button::Button;
 use gds::ui::settings::*;
-use gpui_kit::component::{button::Button, switch::Switch};
+use gpui_kit::component::switch::Switch;
 use gpui_kit::{base::Disableable, component::Sizable};
 
 pub(super) struct Controls {
@@ -96,11 +97,21 @@ impl View {
                     ],
                 ],
             ],
+            .div { flex; items_start; gap_3; } [
+                .div { flex_1; min_w_0; text_sm; whitespace_normal;
+                    text_color: $(cx.theme().muted_foreground);
+                } [status],
+                "tags-detect".Button::new { label: $(text("tags-detect", cx)); small;
+                    flex_shrink_0; disabled: $self.tags.pending;
+                    tooltip: $(text("tags-detect", cx));
+                    on_click: $(cx.listener(Self::on_detect_tags));
+                },
+            ],
             $(self.tags.editor.clone()),
-            .div { text_sm; text_color: $(cx.theme().muted_foreground); } [status],
-            "tags-detect".Button::new { label: $(text("tags-detect", cx)); small;
-                on_click: $(cx.listener(|this, _, _, cx| this.probe_tags(cx)));
-            },
         ] }
+    }
+
+    fn on_detect_tags(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.probe_tags(cx);
     }
 }

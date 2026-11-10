@@ -1,4 +1,5 @@
 mod appearance;
+mod extensions;
 mod files;
 mod general;
 mod terminal;
@@ -13,10 +14,17 @@ pub enum Page {
     Appearance,
     Terminal,
     Files,
+    Extensions,
 }
 
 impl Page {
-    pub const ALL: [Self; 4] = [Self::General, Self::Appearance, Self::Files, Self::Terminal];
+    pub const ALL: [Self; 5] = [
+        Self::General,
+        Self::Appearance,
+        Self::Files,
+        Self::Terminal,
+        Self::Extensions,
+    ];
 
     pub fn label_id(self) -> &'static str {
         match self {
@@ -24,6 +32,7 @@ impl Page {
             Self::Appearance => "settings-appearance",
             Self::Terminal => "settings-terminal",
             Self::Files => "settings-files",
+            Self::Extensions => "settings-extensions",
         }
     }
 
@@ -33,6 +42,7 @@ impl Page {
             Self::Appearance => IconName::Palette,
             Self::Terminal => IconName::Terminal,
             Self::Files => IconName::Folder,
+            Self::Extensions => IconName::Plug,
         }
     }
 
@@ -43,6 +53,7 @@ impl Page {
             Self::Appearance => 1,
             Self::Terminal => 3,
             Self::Files => 2,
+            Self::Extensions => 4,
         }
     }
 
@@ -52,6 +63,7 @@ impl Page {
             Self::Appearance => view.render_appearance(cx),
             Self::Terminal => view.render_terminal(cx),
             Self::Files => view.render_files(cx),
+            Self::Extensions => view.render_extensions(cx),
         }
     }
 }
