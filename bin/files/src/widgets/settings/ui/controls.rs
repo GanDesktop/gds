@@ -153,6 +153,7 @@ pub(super) struct Choice<T> {
     value: T,
     title: SharedString,
     search_terms: &'static str,
+    disabled: bool,
 }
 
 impl<T> Choice<T> {
@@ -161,7 +162,13 @@ impl<T> Choice<T> {
             value,
             title,
             search_terms,
+            disabled: false,
         }
+    }
+
+    fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
 }
 
@@ -174,6 +181,10 @@ impl<T: Clone + PartialEq> SelectItem for Choice<T> {
         &self.value
     }
 
+    fn disabled(&self) -> bool {
+        self.disabled
+    }
+
     fn matches(&self, query: &str) -> bool {
         let query = query.to_lowercase();
         self.title.to_lowercase().contains(&query)
@@ -182,9 +193,10 @@ impl<T: Clone + PartialEq> SelectItem for Choice<T> {
 }
 
 impl Choice<SourceKind> {
-    pub fn catalog(cx: &App) -> Vec<Self> {
+    pub fn catalog(system_available: bool, cx: &App) -> Vec<Self> {
         vec![
-            Self::new(SourceKind::System, text("theme-system", cx), "system 系统"),
+            Self::new(SourceKind::System, text("theme-system", cx), "system 系统")
+                .disabled(!system_available),
             Self::new(
                 SourceKind::Builtin,
                 text("theme-builtin", cx),

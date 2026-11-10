@@ -124,6 +124,29 @@ fn builtin_fallback_keeps_the_mode_intent_and_uses_safe_material_defaults() {
 }
 
 #[test]
+fn missing_palette_fallback_preserves_valid_opacity_and_selected_builtin() {
+    let directory = tempfile::tempdir().expect("isolated theme directory");
+    let requested = Appearance {
+        source: Source::Custom(directory.path().join("missing.toml")),
+        builtin: super::BuiltinTheme::Neon,
+        mode: ModePreference::Light,
+        content_opacity: 1.0,
+        sidebar_opacity: 0.8,
+        rounded_corners: true,
+    };
+    assert!(requested.prepare(WindowAppearance::Dark).is_err());
+    let fallback = requested.builtin_fallback();
+    let prepared = fallback
+        .prepare(WindowAppearance::Dark)
+        .expect("local fallback");
+    assert_eq!(prepared.appearance.content_opacity, 1.0);
+    assert_eq!(prepared.appearance.sidebar_opacity, 0.8);
+    assert_eq!(prepared.appearance.builtin, super::BuiltinTheme::Neon);
+    assert_eq!(prepared.loaded.mode, Mode::Light);
+    assert!(prepared.appearance.rounded_corners);
+}
+
+#[test]
 fn platform_appearance_is_only_used_for_system_mode() {
     assert_eq!(
         ModePreference::System.resolve(WindowAppearance::VibrantLight),

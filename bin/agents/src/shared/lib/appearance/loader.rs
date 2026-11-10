@@ -83,7 +83,15 @@ impl Loader {
         } else {
             WindowAppearance::Light
         };
-        let palette = preferences::appearance(&preferences).prepare(platform)?;
+        let appearance = preferences::appearance(&preferences);
+        let palette = match appearance.prepare(platform) {
+            Ok(palette) => palette,
+            Err(error) if appearance.source == gds::appearance::theme::Source::System => {
+                tracing::debug!(%error, "system theme unavailable; using built-in theme");
+                appearance.builtin_fallback().prepare(platform)?
+            }
+            Err(error) => return Err(error.into()),
+        };
         Ok(Snapshot {
             preferences,
             palette,
@@ -108,7 +116,11 @@ impl Loader {
 
 impl Snapshot {
     pub fn source_paths(&self) -> Vec<std::path::PathBuf> {
-        self.palette.source_paths()
+        let mut paths = preferences::appearance(&self.preferences).source_paths();
+        paths.extend(self.palette.source_paths());
+        paths.sort();
+        paths.dedup();
+        paths
     }
 
     pub(super) fn resolve(&self) -> Result<Resolved> {

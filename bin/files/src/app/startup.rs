@@ -141,7 +141,7 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
     } else {
         None
     };
-    let (preferences, mut startup_error) = match configuration::load() {
+    let (mut preferences, mut startup_error) = match configuration::load() {
         Ok(preferences) => (preferences, None),
         Err(error) => (
             configuration::Preferences::default(),
@@ -193,10 +193,15 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
             }
             time::apply(preferences.time_format, cx);
             if let Err(error) = theme::apply(&preferences.appearance, cx) {
-                startup_error = Some(match startup_error.take() {
-                    Some(previous) => format!("{previous}\n{error}"),
-                    None => error.to_string(),
-                });
+                let unavailable_system = preferences.appearance.source == theme::Source::System;
+                if unavailable_system {
+                    tracing::warn!(%error, "system theme unavailable; using built-in theme");
+                } else {
+                    startup_error = Some(match startup_error.take() {
+                        Some(previous) => format!("{previous}\n{error}"),
+                        None => error.to_string(),
+                    });
+                }
                 let fallback = preferences.appearance.builtin_fallback();
                 if let Err(error) = theme::apply(&fallback, cx) {
                     tracing::error!("Cannot initialize the built-in theme: {error}");
@@ -205,6 +210,9 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
                     }
                     cx.quit();
                     return;
+                }
+                if unavailable_system {
+                    preferences.appearance = fallback;
                 }
             }
             match typography::install(&preferences.font, cx) {

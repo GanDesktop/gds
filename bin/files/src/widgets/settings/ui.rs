@@ -44,6 +44,7 @@ pub struct View {
     page_focus: [FocusHandle; 4],
     general: Entity<PreferencesEditor>,
     source: ChoiceControl<theme::SourceKind>,
+    system_theme_available: bool,
     custom: ChoiceControl<std::path::PathBuf>,
     themes: Vec<theme::provider::custom::Entry>,
     builtin: ChoiceControl<theme::BuiltinTheme>,
@@ -58,6 +59,13 @@ pub struct View {
 impl EventEmitter<Event> for View {}
 
 impl View {
+    fn source_kind(preferences: &Preferences, system_available: bool) -> theme::SourceKind {
+        match &preferences.appearance.source {
+            theme::Source::System if !system_available => theme::SourceKind::Builtin,
+            source => theme::SourceKind::from(source),
+        }
+    }
+
     pub fn new(
         preferences: Preferences,
         sidebar: SidebarPresentation,
@@ -81,9 +89,10 @@ impl View {
             window,
             cx,
         );
+        let system_theme_available = theme::Source::system_available(cx.window_appearance());
         let source = ChoiceControl::new(
-            Choice::<theme::SourceKind>::catalog(cx),
-            &theme::SourceKind::from(&preferences.appearance.source),
+            Choice::<theme::SourceKind>::catalog(system_theme_available, cx),
+            &Self::source_kind(&preferences, system_theme_available),
             false,
             window,
             cx,
@@ -154,6 +163,7 @@ impl View {
             page_focus: std::array::from_fn(|_| cx.focus_handle()),
             general,
             source,
+            system_theme_available,
             custom,
             themes,
             builtin,
@@ -169,6 +179,7 @@ impl View {
     }
 
     pub fn refresh_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.system_theme_available = theme::Source::system_available(cx.window_appearance());
         match theme::provider::custom::catalog() {
             Ok(themes) => self.themes = themes,
             Err(error) => tracing::warn!(%error, "cannot list user themes"),
@@ -242,8 +253,8 @@ impl View {
             editor.set_value(self.preferences.clone(), window, cx)
         });
         self.source.sync(
-            Choice::<theme::SourceKind>::catalog(cx),
-            &theme::SourceKind::from(&self.preferences.appearance.source),
+            Choice::<theme::SourceKind>::catalog(self.system_theme_available, cx),
+            &Self::source_kind(&self.preferences, self.system_theme_available),
             window,
             cx,
         );
@@ -301,6 +312,11 @@ impl View {
     ) {
         if !update(&mut self.preferences) {
             return;
+        }
+        if !self.system_theme_available
+            && self.preferences.appearance.source == theme::Source::System
+        {
+            self.preferences.appearance.source = theme::Source::Builtin;
         }
         self.sync_controls(window, cx);
         cx.emit(Event::Apply(self.preferences.clone()));

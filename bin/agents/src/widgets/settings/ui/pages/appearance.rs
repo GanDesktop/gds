@@ -364,7 +364,15 @@ impl AppearancePage {
 
     fn dirty(&self, cx: &App) -> bool {
         match (self.candidate(cx), &self.document) {
-            (Ok(candidate), Some(document)) => candidate != document.preferences,
+            (Ok(candidate), Some(document)) => {
+                let mut current = document.preferences.clone();
+                if !self.form.system_theme_available
+                    && current.theme_source == theme::preferences::ThemeSource::Desktop
+                {
+                    current.theme_source = theme::preferences::ThemeSource::Builtin;
+                }
+                candidate != current
+            }
             (_, None) => false,
             _ => true,
         }

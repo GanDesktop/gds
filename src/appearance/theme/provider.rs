@@ -37,6 +37,12 @@ pub(super) struct Loaded {
 }
 
 impl Source {
+    /// Offer desktop following only when its palette can actually be loaded.
+    /// Call when opening or refreshing settings, not on each render or slider update.
+    pub fn system_available(platform: WindowAppearance) -> bool {
+        system::load(ModePreference::System, platform).is_ok()
+    }
+
     pub(super) fn source_paths(&self) -> Vec<PathBuf> {
         match self {
             Self::Builtin => Vec::new(),

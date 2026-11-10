@@ -29,7 +29,8 @@ pub(super) struct Form {
     pub line_height: Numeric,
     pub opacity: Numeric,
     pub sidebar_opacity: Numeric,
-    pub source: Entity<SelectState<Vec<Choice<SourceKind>>>>,
+    pub source: Entity<SelectState<Vec<SourceChoice>>>,
+    pub system_theme_available: bool,
     pub custom: Entity<SelectState<Vec<CustomChoice>>>,
     pub builtin: Entity<SelectState<Vec<Choice<BuiltinTheme>>>>,
     pub mode: Entity<SelectState<Vec<Choice<ThemeMode>>>>,
@@ -87,10 +88,16 @@ impl SelectItem for Choice<Language> {
     }
 }
 
-impl SelectItem for Choice<SourceKind> {
+#[derive(Clone)]
+pub(super) struct SourceChoice {
+    value: SourceKind,
+    disabled: bool,
+}
+
+impl SelectItem for SourceChoice {
     type Value = SourceKind;
     fn title(&self) -> gpui_kit::SharedString {
-        match self.0 {
+        match self.value {
             SourceKind::Custom => tr!("appearance-custom"),
             SourceKind::System => tr!("appearance-system"),
             SourceKind::Builtin => tr!("appearance-builtin"),
@@ -98,7 +105,10 @@ impl SelectItem for Choice<SourceKind> {
         .into()
     }
     fn value(&self) -> &SourceKind {
-        &self.0
+        &self.value
+    }
+    fn disabled(&self) -> bool {
+        self.disabled
     }
 }
 
@@ -218,6 +228,13 @@ fn validation_message(error: &theme::preferences::ValidationError) -> String {
 impl Form {
     pub fn new(p: &Preferences, window: &mut Window, cx: &mut Context<AppearancePage>) -> Self {
         let opacity = gds::appearance::tokens::SurfaceOpacity::default();
+        let system_theme_available =
+            gds::appearance::theme::Source::system_available(cx.window_appearance());
+        let sources = vec![SourceKind::System, SourceKind::Builtin, SourceKind::Custom];
+        let mut selected_source = source_kind(&p.theme_source);
+        if !system_theme_available && selected_source == SourceKind::System {
+            selected_source = SourceKind::Builtin;
+        }
         let default_agent_choices: Vec<_> = std::iter::once(None)
             .chain(p.default_agent.clone().map(Some))
             .collect();
@@ -301,12 +318,21 @@ impl Form {
             ),
             ui_font: font_choice(p.ui_font_family.clone(), window, cx),
             mono_font: font_choice(p.mono_font_family.clone(), window, cx),
-            source: choice(
-                vec![SourceKind::System, SourceKind::Builtin, SourceKind::Custom],
-                source_kind(&p.theme_source),
-                window,
-                cx,
-            ),
+            source: {
+                let selected = sources
+                    .iter()
+                    .position(|source| *source == selected_source)
+                    .map(IndexPath::new);
+                let items = sources
+                    .into_iter()
+                    .map(|value| SourceChoice {
+                        disabled: value == SourceKind::System && !system_theme_available,
+                        value,
+                    })
+                    .collect::<Vec<_>>();
+                cx.new(|cx| SelectState::new(items, selected, window, cx))
+            },
+            system_theme_available,
             custom: {
                 let items = custom_themes();
                 let selected = match &p.theme_source {

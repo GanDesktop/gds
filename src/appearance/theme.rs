@@ -367,14 +367,23 @@ impl Appearance {
         })
     }
 
-    /// Use a known local palette and safe opacity after a source-load failure.
-    /// The user's mode preference is retained, without modifying saved settings.
+    /// Fall back to a local palette while preserving independent appearance choices.
+    /// Only invalid opacity values are replaced by safe defaults.
     pub fn builtin_fallback(&self) -> Self {
+        let defaults = Self::default();
         Self {
             source: Source::Builtin,
-            mode: self.mode,
-            rounded_corners: self.rounded_corners,
-            ..Self::default()
+            content_opacity: if validate_opacity("content_opacity", self.content_opacity).is_ok() {
+                self.content_opacity
+            } else {
+                defaults.content_opacity
+            },
+            sidebar_opacity: if validate_opacity("sidebar_opacity", self.sidebar_opacity).is_ok() {
+                self.sidebar_opacity
+            } else {
+                defaults.sidebar_opacity
+            },
+            ..self.clone()
         }
     }
 
