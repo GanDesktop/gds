@@ -1,5 +1,9 @@
 use gds::service::task_manager::Scope;
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use gds::service::task_manager::Task as IoTask;
 use gpui_kit::*;
@@ -15,12 +19,31 @@ pub(super) struct Observation {
     pub result: Result<Snapshot, Error>,
 }
 
+struct ActionReport {
+    mount_point: Result<Option<std::path::PathBuf>, Error>,
+    observation: Observation,
+}
+
+struct BusyGuard {
+    busy: Arc<Mutex<HashMap<VolumeId, Vec<std::path::PathBuf>>>>,
+    scope: Vec<VolumeId>,
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        let mut busy = self.busy.lock().expect("volumes busy lock");
+        for id in &self.scope {
+            busy.remove(id);
+        }
+    }
+}
+
 /// One service per application, shared by every window and tab.
 pub struct Service {
     pub snapshot: Snapshot,
     pub error: Option<String>,
     pub discovering: bool,
-    busy: HashMap<VolumeId, Vec<std::path::PathBuf>>,
+    busy: Arc<Mutex<HashMap<VolumeId, Vec<std::path::PathBuf>>>>,
     last_observation: Instant,
     usage: super::usage::UsageCache,
     tasks: Scope,
@@ -91,7 +114,7 @@ impl Service {
             snapshot: Snapshot::default(),
             error: None,
             discovering: true,
-            busy: HashMap::new(),
+            busy: Arc::new(Mutex::new(HashMap::new())),
             last_observation,
             usage: super::usage::UsageCache::default(),
             tasks,
@@ -100,7 +123,10 @@ impl Service {
     }
 
     pub fn is_busy(&self, id: &VolumeId) -> bool {
-        self.busy.contains_key(id)
+        self.busy
+            .lock()
+            .expect("volumes busy lock")
+            .contains_key(id)
     }
 
     pub fn capacity(&self, id: &VolumeId) -> Option<&CapacityState> {
@@ -165,6 +191,8 @@ impl Service {
 
     pub fn removal_in_progress(&self, path: &std::path::Path) -> bool {
         self.busy
+            .lock()
+            .expect("volumes busy lock")
             .values()
             .flatten()
             .any(|root| path.starts_with(root))
@@ -186,7 +214,6 @@ impl Service {
             }
             Err(error) => {
                 self.error = Some(error.to_string());
-                self.snapshot = Snapshot::default();
             }
         }
         if was_discovering || previous_snapshot != self.snapshot || previous_error != self.error {
@@ -206,29 +233,36 @@ impl Service {
         if self.snapshot.volume(action.volume()).is_none() {
             return Err(Error::Disconnected);
         }
-        // Lock all volumes of a drive even for a single-volume operation, so a
-        // concurrent whole-drive removal cannot race mounting another partition.
-        let scope_action = DeviceAction::PowerOff(action.volume().clone());
+        if action.removes() && !self.snapshot.supports_removal(&action) {
+            return Err(Error::Unsupported);
+        }
         let mut scope: Vec<_> = self
             .snapshot
-            .removal_volumes(&scope_action)
+            .removal_volumes(&action)
             .iter()
             .map(|volume| volume.id.clone())
             .collect();
         if scope.is_empty() {
             scope.push(action.volume().clone());
         }
-        if scope.iter().any(|id| self.is_busy(id)) {
-            return Err(Error::Busy);
+        {
+            let mut busy = self.busy.lock().expect("volumes busy lock");
+            if scope.iter().any(|id| busy.contains_key(id)) {
+                return Err(Error::Busy);
+            }
+            for id in &scope {
+                let roots = self
+                    .snapshot
+                    .volume(id)
+                    .map(|volume| volume.mount_points.clone())
+                    .unwrap_or_default();
+                busy.insert(id.clone(), roots);
+            }
         }
-        for id in &scope {
-            let roots = self
-                .snapshot
-                .volume(id)
-                .map(|volume| volume.mount_points.clone())
-                .unwrap_or_default();
-            self.busy.insert(id.clone(), roots);
-        }
+        let guard = BusyGuard {
+            busy: self.busy.clone(),
+            scope,
+        };
         cx.notify();
         let expected = self.snapshot.clone();
         let work = IoTask::cancel_on_drop(self.tasks.spawn_named(
@@ -236,40 +270,47 @@ impl Service {
             async move {
                 #[cfg(target_os = "linux")]
                 {
-                    let result = super::linux::operate(expected, action).await;
+                    let mount_point = super::linux::operate(expected, action).await;
                     let started = Instant::now();
-                    let snapshot = super::linux::refresh().await;
-                    (result, started, snapshot)
+                    let result = super::linux::refresh().await;
+                    ActionReport {
+                        mount_point,
+                        observation: Observation { started, result },
+                    }
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
                     let _ = (expected, action);
-                    (
-                        Err(Error::Unsupported),
-                        Instant::now(),
-                        Err(Error::Unsupported),
-                    )
+                    ActionReport {
+                        mount_point: Err(Error::Unsupported),
+                        observation: Observation {
+                            started: Instant::now(),
+                            result: Err(Error::Unsupported),
+                        },
+                    }
                 }
             },
         ));
         Ok(cx.spawn(async move |this, cx| {
-            let (result, started, snapshot) = work.await.unwrap_or_else(|error| {
+            let guard = guard;
+            let report = work.await.unwrap_or_else(|error| {
                 let error = Error::Operation(error.to_string());
-                (Err(error.clone()), Instant::now(), Err(error))
-            });
-            let observation = Observation {
-                started,
-                result: snapshot.clone(),
-            };
-            let _ = this.update(cx, |service, cx| {
-                for id in scope {
-                    service.busy.remove(&id);
+                ActionReport {
+                    mount_point: Err(error.clone()),
+                    observation: Observation {
+                        started: Instant::now(),
+                        result: Err(error),
+                    },
                 }
-                service.apply(observation, cx);
+            });
+            drop(guard);
+            let refresh_result = report.observation.result.clone();
+            let _ = this.update(cx, |service, cx| {
+                service.apply(report.observation, cx);
                 cx.notify();
             });
-            let mount_point = result?;
-            snapshot?;
+            let mount_point = report.mount_point?;
+            refresh_result?;
             Ok(OperationOutcome { mount_point })
         }))
     }

@@ -12,8 +12,10 @@ use tokio::sync::mpsc;
 pub(crate) struct Current(pub Preferences);
 impl Global for Current {}
 
-fn current(cx: &App) -> Preferences {
-    cx.global::<Current>().0.clone()
+impl Current {
+    fn get(cx: &App) -> Preferences {
+        cx.global::<Self>().0.clone()
+    }
 }
 
 pub(crate) struct SaveFailed(pub String);
@@ -51,9 +53,13 @@ impl Service {
             closing.lock().expect("preferences queue lock").take();
         });
         let (results, mut saved) = mpsc::unbounded_channel();
+        let mut store = api::Store::new(path);
         let writer = tasks.spawn_blocking_named("Save preferences", move || {
-            while let Some(preferences) = receiver.blocking_recv() {
-                let result = api::save_to(&path, &preferences);
+            while let Some(mut preferences) = receiver.blocking_recv() {
+                while let Ok(newer) = receiver.try_recv() {
+                    preferences = newer;
+                }
+                let result = store.save(&preferences);
                 if let Err(error) = &result {
                     tracing::error!(%error, "Cannot save Files preferences");
                 }
@@ -78,7 +84,7 @@ impl Service {
     }
 
     fn update(&self, preferences: Preferences, cx: &mut App) -> Result<(), Error> {
-        let prepared = presentation::Prepared::new(&preferences, &current(cx), cx)?;
+        let prepared = presentation::Prepared::new(&preferences, &Current::get(cx), cx)?;
         let queue = self.queue.lock().expect("preferences queue lock");
         let sender = queue.as_ref().ok_or(Error::Closed)?;
         if cx.gds().tasks().is_shutting_down() || sender.is_closed() {
@@ -116,7 +122,7 @@ pub(crate) struct Accessor<'a> {
 
 impl Accessor<'_> {
     pub(crate) fn current(&self) -> Preferences {
-        current(self.cx)
+        Current::get(self.cx)
     }
 
     /// # Errors
@@ -151,7 +157,7 @@ impl Accessor<'_> {
     /// # Errors
     /// Rejects invalid presentation values or updates during shutdown.
     pub(crate) fn edit(&mut self, edit: impl FnOnce(&mut Preferences)) -> Result<(), Error> {
-        let mut preferences = current(self.cx);
+        let mut preferences = Current::get(self.cx);
         edit(&mut preferences);
         self.update(preferences)
     }

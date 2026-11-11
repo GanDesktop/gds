@@ -27,7 +27,6 @@ pub struct SidebarPreferences {
     pub show_volumes: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tabs_height: Option<f32>,
-    #[serde(alias = "devices_collapsed")]
     pub volumes_collapsed: bool,
     pub locations_collapsed: bool,
 }
@@ -49,7 +48,7 @@ pub struct Preferences {
     #[serde(skip_serializing_if = "typography::Preferences::is_default")]
     pub font: typography::Preferences,
     pub files: FilesPreferences,
-    pub tags: crate::entities::tags::Preferences,
+    pub tags: crate::entities::tags::x::preferences::Preferences,
     pub terminal: gds::ui::terminal::Preferences,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_enabled: Option<bool>,

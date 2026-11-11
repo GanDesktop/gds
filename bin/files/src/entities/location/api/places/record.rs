@@ -11,15 +11,6 @@ pub(super) enum Kind {
 }
 
 #[derive(Debug, Model)]
-#[table = "locations"]
-#[key(kind, path)]
-pub(super) struct Location {
-    pub kind: Kind,
-    pub path: Vec<u8>,
-    pub position: i64,
-}
-
-#[derive(Debug, Model)]
 #[table = "saved_locations"]
 #[key(kind, location_kind, identity, path)]
 pub(super) struct SavedLocation {

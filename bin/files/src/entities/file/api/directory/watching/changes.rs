@@ -33,6 +33,10 @@ impl Changes {
         }
     }
 
+    /// Apply queued filesystem notifications to an existing directory snapshot.
+    ///
+    /// # Errors
+    /// Reports directory open or read failures when a full rescan is required.
     pub fn apply(
         self,
         mut snapshot: directory::DirectorySnapshot,
@@ -40,16 +44,21 @@ impl Changes {
         if self.full || self.paths.contains(&snapshot.path) {
             return directory::read_directory(&snapshot.path, snapshot.options);
         }
+        let mut identities = directory::IdentityCache::new();
         for path in self.paths {
-            if path.parent() != Some(snapshot.path.as_path())
-                || (!snapshot.options.show_hidden
-                    && path
-                        .file_name()
-                        .is_some_and(|name| name.as_encoded_bytes().starts_with(b".")))
-            {
+            if path.parent() != Some(snapshot.path.as_path()) {
                 continue;
             }
-            match directory::Entry::inspect(&path) {
+            snapshot.warnings.retain(|warning| warning.path != path);
+            if !snapshot.options.show_hidden
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."))
+            {
+                snapshot.entries.retain(|entry| entry.path != path);
+                continue;
+            }
+            match directory::Entry::inspect_with_identities(&path, &mut identities) {
                 Ok(entry) => {
                     if let Some(previous) =
                         snapshot.entries.iter_mut().find(|entry| entry.path == path)
@@ -60,7 +69,7 @@ impl Changes {
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    snapshot.entries.retain(|entry| entry.path != path)
+                    snapshot.entries.retain(|entry| entry.path != path);
                 }
                 Err(error) => {
                     tracing::warn!(path = %path.display(), %error, "cannot update watched entry; rescanning");
@@ -68,6 +77,7 @@ impl Changes {
                 }
             }
         }
+        snapshot.sort_entries();
         Ok(snapshot)
     }
 }

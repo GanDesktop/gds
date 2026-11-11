@@ -117,50 +117,58 @@ pub fn read_directory(path: &Path, options: ReadOptions) -> Result<DirectorySnap
         path: path.clone(),
         source,
     })?;
-    Ok(collect_entries(path, entries, options))
+    Ok(DirectorySnapshot::collect(path, entries, options))
 }
 
-fn collect_entries(
-    path: PathBuf,
-    entries: impl Iterator<Item = io::Result<DirEntry>>,
-    options: ReadOptions,
-) -> DirectorySnapshot {
-    let mut snapshot = DirectorySnapshot {
-        path,
-        entries: Vec::new(),
-        warnings: Vec::new(),
-        options,
-    };
-    let mut identities = IdentityCache::new();
-    for result in entries {
-        match result {
-            Ok(entry) => {
-                let hidden = entry.file_name().as_encoded_bytes().first() == Some(&b'.');
-                if !options.show_hidden && hidden {
-                    continue;
+impl DirectorySnapshot {
+    fn collect(
+        path: PathBuf,
+        entries: impl Iterator<Item = io::Result<DirEntry>>,
+        options: ReadOptions,
+    ) -> Self {
+        let mut snapshot = Self {
+            path,
+            entries: Vec::new(),
+            warnings: Vec::new(),
+            options,
+        };
+        let mut identities = IdentityCache::new();
+        for result in entries {
+            match result {
+                Ok(entry) => {
+                    let hidden = entry.file_name().as_encoded_bytes().first() == Some(&b'.');
+                    if !options.show_hidden && hidden {
+                        continue;
+                    }
+                    snapshot.entries.push(Entry::from_dir_entry(
+                        entry,
+                        &mut identities,
+                        &mut snapshot.warnings,
+                    ));
                 }
-                snapshot.entries.push(Entry::from_dir_entry(
-                    entry,
-                    &mut identities,
-                    &mut snapshot.warnings,
-                ));
+                Err(error) => snapshot.warnings.push(EntryWarning {
+                    path: snapshot.path.clone(),
+                    operation: WarningOperation::Enumerate,
+                    source: error.into(),
+                }),
             }
-            Err(error) => snapshot.warnings.push(EntryWarning {
-                path: snapshot.path.clone(),
-                operation: WarningOperation::Enumerate,
-                source: error.into(),
-            }),
         }
+        snapshot.sort_entries();
+        snapshot
     }
-    snapshot.entries.sort_by(|left, right| {
-        (right.kind == EntryKind::Directory)
-            .cmp(&(left.kind == EntryKind::Directory))
-            .then_with(|| left.name.cmp(&right.name))
-    });
-    snapshot
+
+    pub(super) fn sort_entries(&mut self) {
+        self.entries.sort_by(Entry::canonical_order);
+    }
 }
 
 impl Entry {
+    pub(super) fn canonical_order(left: &Self, right: &Self) -> std::cmp::Ordering {
+        (right.kind == EntryKind::Directory)
+            .cmp(&(left.kind == EntryKind::Directory))
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.path.as_os_str().cmp(right.path.as_os_str()))
+    }
     fn from_dir_entry(
         entry: DirEntry,
         identities: &mut IdentityCache,
@@ -220,12 +228,19 @@ impl Entry {
     /// # Errors
     /// Reports metadata failures for the requested path.
     pub fn inspect(path: &Path) -> io::Result<Self> {
+        Self::inspect_with_identities(path, &mut IdentityCache::new())
+    }
+
+    pub(super) fn inspect_with_identities(
+        path: &Path,
+        identities: &mut IdentityCache,
+    ) -> io::Result<Self> {
         let metadata = fs::symlink_metadata(path)?;
         Ok(Self::from_metadata(
             path,
             &metadata,
             metadata.modified().ok(),
-            &mut IdentityCache::new(),
+            identities,
         ))
     }
 

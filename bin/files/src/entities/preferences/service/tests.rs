@@ -37,7 +37,7 @@ async fn independent_edits_are_preserved_and_exit_drains_the_latest_snapshot(
                 preferences.files.sidebar.tabs_height = Some(240.);
             })
             .expect("second window change");
-        let expected = current(cx);
+        let expected = Current::get(cx);
         assert!(expected.files.show_hidden);
         assert_eq!(expected.files.sidebar.tabs_height, Some(240.));
         (cx.gds().tasks().scope(), expected)
@@ -54,7 +54,7 @@ async fn independent_edits_are_preserved_and_exit_drains_the_latest_snapshot(
                 .edit(|preferences| preferences.files.show_hidden = false)
                 .is_err()
         );
-        assert_eq!(current(cx), expected);
+        assert_eq!(Current::get(cx), expected);
     });
 }
 
@@ -75,13 +75,13 @@ async fn failed_persistence_reports_an_error_and_keeps_the_live_snapshot(cx: &mu
             .preferences()
             .edit(|preferences| preferences.files.show_hidden = true)
             .expect("live change accepted");
-        assert!(current(cx).files.show_hidden);
+        assert!(Current::get(cx).files.show_hidden);
         cx.gds().tasks().scope()
     });
     scope.shutdown().await;
     cx.run_until_parked();
     assert!(reported.load(Ordering::SeqCst));
-    assert!(cx.update(|cx| current(cx).files.show_hidden));
+    assert!(cx.update(|cx| Current::get(cx).files.show_hidden));
     assert_eq!(
         std::fs::read_to_string(parent).expect("original file"),
         "keep this file"
@@ -94,13 +94,13 @@ async fn invalid_font_rejects_the_entire_update_before_changing_the_theme(cx: &m
     let path = directory.path().join("settings.toml");
     let _service = initialize(path.clone(), cx);
     let scope = cx.update(|cx| {
-        let previous = current(cx);
+        let previous = Current::get(cx);
         let palette = theme::Colors::current(cx);
         let mut invalid = previous.clone();
         invalid.appearance.mode = theme::ModePreference::Light;
         invalid.font.size = f32::NAN;
         assert!(cx.gds().preferences().update(invalid).is_err());
-        assert_eq!(current(cx), previous);
+        assert_eq!(Current::get(cx), previous);
         assert_eq!(theme::Colors::current(cx), palette);
         cx.gds().tasks().scope()
     });

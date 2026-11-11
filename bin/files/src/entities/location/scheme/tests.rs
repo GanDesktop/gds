@@ -1,10 +1,14 @@
 use super::*;
+
 #[test]
 fn schemes_keep_distinct_resource_identity() {
-    let tag = TagAddress::new("工作/a #?%\" b").unwrap();
-    assert_eq!(parse(&tag.uri()).unwrap(), Location::Tags(tag.clone()));
+    let tag = TagAddress::new("工作/a #?%\" b").expect("valid tag fixture");
     assert_eq!(
-        parse(&tag.display_uri()).unwrap(),
+        parse(&tag.uri()).expect("parse encoded tag URI"),
+        Location::Tags(tag.clone())
+    );
+    assert_eq!(
+        parse(&tag.display_uri()).expect("parse display tag URI"),
         Location::Tags(tag.clone())
     );
     assert!(tag.display_uri().starts_with("tags:/工作/"));
@@ -14,14 +18,19 @@ fn schemes_keep_distinct_resource_identity() {
     assert_display_round_trip("emoji/🐬");
     assert_eq!(
         parent(&Location::Tags(tag)),
-        Some(Location::Tags(TagAddress::new("工作").unwrap()))
+        Some(Location::Tags(
+            TagAddress::new("工作").expect("valid parent tag")
+        ))
     );
-    assert_eq!(parse("location:/recent").unwrap(), Location::Recent);
+    assert_eq!(
+        parse("location:/recent").expect("parse recent URI"),
+        Location::Recent
+    );
     assert!(parse("tags://host/path").is_err());
     assert!(parse("tags:/a/../b").is_err());
     assert!(parse("tags:/a?query").is_err());
     assert!(
-        Location::Tags(TagAddress::new("").unwrap())
+        Location::Tags(TagAddress::new("").expect("root tag"))
             .local_path()
             .is_none()
     );

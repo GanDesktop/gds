@@ -43,18 +43,4 @@ impl Format {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashSet;
-
-    #[test]
-    fn embedded_rules_have_unique_mime_types() {
-        let config: Config = toml::from_str(CONFIG).unwrap();
-        let mut seen = HashSet::new();
-        for rule in config.formats {
-            for mime in rule.mimes {
-                assert!(seen.insert(mime.clone()), "duplicate MIME rule: {mime}");
-            }
-        }
-    }
-}
+mod tests;

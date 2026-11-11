@@ -2,14 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A file table column whose visibility and order the user can configure.
+/// A file table column and sort key whose visibility and order the user can configure.
 ///
 /// The identifiers returned by [`Column::id`] are persisted, so they must stay
 /// stable when variants are added or renamed in the UI.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Column {
+    #[default]
     Name,
+    /// Broad content category, with symlinks ordered by their target.
     Type,
     Size,
     Owner,
@@ -17,6 +19,7 @@ pub enum Column {
     Permissions,
     Modified,
     Accessed,
+    /// Concrete format name, e.g. `PNG`, `Rust` or `MPEG-4`.
     DetailedType,
 }
 

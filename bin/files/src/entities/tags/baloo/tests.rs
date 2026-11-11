@@ -1,19 +1,24 @@
 use super::*;
+
 #[test]
 fn stat_preserves_spaces_in_local_paths() {
     assert_eq!(
-        field("LOCAL_PATH            /tmp/a b \n", "LOCAL_PATH"),
+        Baloo::field("LOCAL_PATH            /tmp/a b \n", "LOCAL_PATH"),
         Some("/tmp/a b ")
     );
     assert_eq!(
-        field("DISPLAY_TYPE          Tag Fragment\n", "DISPLAY_TYPE"),
+        Baloo::field("DISPLAY_TYPE          Tag Fragment\n", "DISPLAY_TYPE"),
         Some("Tag Fragment")
     );
-    assert_eq!(field("LOCAL_PATH_OTHER      bad\n", "LOCAL_PATH"), None);
+    assert_eq!(
+        Baloo::field("LOCAL_PATH_OTHER      bad\n", "LOCAL_PATH"),
+        None
+    );
 }
+
 #[test]
 fn explicit_missing_command_does_not_fall_back() {
-    assert!(resolve(Some(Path::new("/missing/gds-test-baloo")), &["sh"]).is_err());
+    assert!(Baloo::resolve(Some(Path::new("/missing/gds-test-baloo")), &["sh"]).is_err());
 }
 
 #[cfg(unix)]
@@ -23,10 +28,12 @@ mod command_tests {
 
     fn script(root: &Path, name: &str, body: &str) -> PathBuf {
         let path = root.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write test script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+            .expect("set script permissions");
         path
     }
+
     fn commands(root: &Path, kio_body: &str) -> Commands {
         Commands {
             control: Some(script(
@@ -40,15 +47,18 @@ mod command_tests {
     }
 
     #[test]
-    fn discovers_available_version_from_path_and_respects_custom_override() {
-        let root = tempfile::tempdir().unwrap();
-        let executable = script(root.path(), "balooctl", "exit 0");
+    fn discovers_available_version_from_path_and_preserves_symlink_path() {
+        let root = tempfile::tempdir().expect("create temp dir");
+        let executable = script(root.path(), "balooctl-real", "exit 0");
+        let symlink = root.path().join("balooctl");
+        std::os::unix::fs::symlink(&executable, &symlink).expect("create wrapper symlink");
         assert_eq!(
-            resolve_in_path(None, &["balooctl6", "balooctl"], root.path().as_os_str()).unwrap(),
-            executable
+            Baloo::resolve_in_path(None, &["balooctl6", "balooctl"], root.path().as_os_str())
+                .expect("resolve symlink in path"),
+            symlink
         );
         assert!(
-            resolve_in_path(
+            Baloo::resolve_in_path(
                 Some(Path::new("missing")),
                 &["balooctl"],
                 root.path().as_os_str()
@@ -59,7 +69,7 @@ mod command_tests {
 
     #[tokio::test]
     async fn resolves_virtual_folders_and_real_files_without_shell_interpolation() {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().expect("create temp dir");
         let commands = commands(
             root.path(),
             r#"
@@ -75,52 +85,60 @@ case "$1:$2" in
 esac
 "#,
         );
-        let backend = Baloo::connect(&commands).await.unwrap();
-        assert_eq!(backend.browse("").await.unwrap().tags, ["工作"]);
-        let listing = backend.browse("工作").await.unwrap();
+        let backend = Baloo::connect(&commands).await.expect("connect baloo");
+        assert_eq!(
+            backend.browse("").await.expect("browse root").tags,
+            ["工作"]
+        );
+        let listing = backend.browse("工作").await.expect("browse tag");
         assert_eq!(listing.tags, ["工作/design"]);
         assert_eq!(listing.files, [PathBuf::from("/tmp/a b;$(false).txt")]);
-        assert!(backend.browse("empty").await.unwrap().files.is_empty());
+        assert!(
+            backend
+                .browse("empty")
+                .await
+                .expect("browse empty tag")
+                .files
+                .is_empty()
+        );
         assert!(
             backend
                 .browse("failed")
                 .await
-                .unwrap_err()
+                .expect_err("expected failure for unknown tag")
+                .to_string()
                 .contains("unexpected arguments")
         );
     }
 
     #[tokio::test]
     async fn complete_backend_requires_working_control_client_and_tags_worker() {
-        let root = tempfile::tempdir().unwrap();
-        let mut commands = commands(
-            root.path(),
-            "if [ \"$1\" = --version ]; then echo KIO; else echo 'Unknown protocol tags' >&2; exit 1; fi",
-        );
+        let root = tempfile::tempdir().expect("create temp dir");
+        let mut commands = commands(root.path(), "echo 'Unknown protocol tags' >&2; exit 1");
         assert!(
             Baloo::connect(&commands)
                 .await
-                .unwrap_err()
+                .expect_err("expected missing protocol error")
+                .to_string()
                 .contains("Unknown protocol tags")
         );
-        commands.control = Some(script(
-            root.path(),
-            "disabled",
-            "if [ \"$1\" = --version ]; then echo Baloo; else echo 'Baloo is disabled'; fi",
-        ));
+        commands.control = Some(script(root.path(), "disabled", "echo 'Baloo is disabled'"));
+        commands.kio_client = Some(script(root.path(), "kio-ok", "printf '.\\n'"));
         assert!(
             Baloo::connect(&commands)
                 .await
-                .unwrap_err()
+                .expect_err("expected disabled error")
+                .to_string()
                 .contains("disabled")
         );
         let not_executable = root.path().join("plain file");
-        std::fs::write(&not_executable, "not executable").unwrap();
+        std::fs::write(&not_executable, "not executable").expect("write non-executable file");
         commands.control = Some(not_executable);
         assert!(
             Baloo::connect(&commands)
                 .await
-                .unwrap_err()
+                .expect_err("expected executable not found error")
+                .to_string()
                 .contains("Executable not found")
         );
     }
@@ -143,12 +161,12 @@ esac
             ..Default::default()
         };
         let target = PathBuf::from(std::env::var_os("GDS_TEST_TAGGED_FILE").expect("tagged file"));
-        let backend = Baloo::connect(&commands).await.unwrap();
+        let backend = Baloo::connect(&commands).await.expect("connect real baloo");
         assert!(
             backend
                 .browse("")
                 .await
-                .unwrap()
+                .expect("browse root")
                 .tags
                 .contains(&"工作".into())
         );
@@ -156,7 +174,7 @@ esac
             backend
                 .browse("工作")
                 .await
-                .unwrap()
+                .expect("browse tag")
                 .files
                 .contains(&target)
         );
@@ -164,7 +182,7 @@ esac
             backend
                 .browse("Project")
                 .await
-                .unwrap()
+                .expect("browse parent tag")
                 .tags
                 .contains(&"Project/design".into())
         );
@@ -172,7 +190,7 @@ esac
             backend
                 .browse("Project/design")
                 .await
-                .unwrap()
+                .expect("browse nested tag")
                 .files
                 .contains(&target)
         );
@@ -180,7 +198,7 @@ esac
             backend
                 .browse("space tag")
                 .await
-                .unwrap()
+                .expect("browse space tag")
                 .files
                 .contains(&target)
         );

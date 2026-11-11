@@ -3,21 +3,7 @@ use std::cmp::Ordering;
 
 use super::super::directory::{Entry, EntryKind, LinkTarget};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Key {
-    #[default]
-    Name,
-    Modified,
-    /// Broad content category, with symlinks ordered by their target.
-    Type,
-    Size,
-    Owner,
-    Group,
-    Permissions,
-    Accessed,
-    /// Concrete format name, e.g. `PNG`, `Rust` or `MPEG-4`.
-    DetailedType,
-}
+pub use super::columns::Column as Key;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {

@@ -1,8 +1,10 @@
-//! File tag associations and replaceable tag catalogue providers.
+//! File tag associations and tag catalogue backend.
 mod baloo;
-pub(crate) use baloo::Baloo;
+pub(crate) mod x;
+
+pub use baloo::Baloo;
 use serde::{Deserialize, Serialize};
-use std::{future::Future, path::PathBuf, pin::Pin};
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, gds::ConfigEditor)]
 #[serde(rename_all = "snake_case")]
@@ -31,25 +33,21 @@ pub struct Preferences {
     pub commands: Commands,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Listing {
     /// Full tag identities; never filesystem paths.
     pub tags: Vec<String>,
     pub files: Vec<PathBuf>,
 }
 
-pub type Query<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
-
-/// Catalogue queries and tag-wide operations. Per-file edits use `file_tags`.
-/// A future embedded backend shares this interface; no scanner is provided.
-pub trait TagIndex: Send + Sync {
-    fn browse<'a>(&'a self, tag: &'a str) -> Query<'a, Listing>;
-    /// Remove a tag and its descendants from indexed files, preserving the files.
-    fn delete_tag<'a>(&'a self, tag: &'a str) -> Query<'a, ()>;
-}
-
-pub async fn connect(commands: &Commands) -> Result<Box<dyn TagIndex>, String> {
+/// Connects to the configured file tag backend.
+///
+/// # Errors
+///
+/// Returns an error description when the configured backend executables are missing,
+/// disabled, or fail to respond.
+pub async fn connect(commands: &Commands) -> Result<Baloo, String> {
     match commands.backend {
-        Backend::Baloo => Ok(Box::new(Baloo::connect(commands).await?)),
+        Backend::Baloo => Baloo::connect(commands).await.map_err(Into::into),
     }
 }
