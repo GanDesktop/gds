@@ -1,9 +1,12 @@
 //! Safe single-item renaming and its dialog input state.
 
-use super::name_form::NameField;
-use crate::features::file_operations::{
-    history as operation_history,
-    rename::{Error, Request, validate_name},
+use super::name_form::NameForm;
+use crate::{
+    features::file_operations::{
+        history as operation_history,
+        rename::{Error, Request},
+    },
+    shared::i18n::t,
 };
 use std::{
     ffi::{OsStr, OsString},
@@ -14,40 +17,25 @@ use gds::{i18n, ui::DialogActions, ui::notifications};
 use gds_uim::el;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::WindowExt;
-use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::name_form;
 use super::{Browser, RenameNotice};
 
-#[derive(Clone, Debug)]
-struct Target {
+struct Active {
     path: PathBuf,
-    original: OsString,
+    form: Entity<NameForm>,
 }
 
 /// Input and validation state shared by the rename dialog and its owner.
 pub(super) struct State {
-    input: Entity<InputState>,
-    target: Option<Target>,
-    error: Option<SharedString>,
-    _subscription: Subscription,
+    active: Option<Active>,
 }
 
 impl State {
-    pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(i18n::text("rename-placeholder", cx))
-        });
-        let subscription = cx.subscribe_in(&input, window, Self::on_input);
-        Self {
-            input,
-            target: None,
-            error: None,
-            _subscription: subscription,
-        }
+    pub(super) fn new(_: &mut Window, _: &mut Context<Self>) -> Self {
+        Self { active: None }
     }
 
     pub(super) fn begin(
@@ -57,76 +45,55 @@ impl State {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let value = original.to_string_lossy().into_owned();
-        // The input caches its placeholder from construction, so a language
-        // switch would otherwise leave the old locale in the empty field.
         let placeholder = i18n::text("rename-placeholder", cx);
-        self.target = Some(Target { path, original });
-        self.error = None;
-        self.input.update(cx, |input, cx| {
-            input.set_placeholder(placeholder, window, cx);
-            input.set_value(value, window, cx);
-            input.select_all(window, cx);
-        });
+        let form = cx.new(|cx| NameForm::for_rename(original, placeholder, window, cx));
+        self.active = Some(Active { path, form });
         cx.notify();
     }
 
     pub(super) fn is_open(&self) -> bool {
-        self.target.is_some()
+        self.active.is_some()
     }
 
     pub(super) fn focus_input(&self, window: &mut Window, cx: &mut App) {
-        name_form::focus(&self.input, window, cx);
+        if let Some(active) = &self.active {
+            active
+                .form
+                .update(cx, |form, cx| form.focus_input(window, cx));
+        }
     }
 
     pub(super) fn cancel(&mut self, cx: &mut Context<Self>) {
-        self.target = None;
-        self.error = None;
+        self.active = None;
         cx.notify();
     }
 
     /// Consume a validated request. Invalid input leaves the dialog state intact.
-    pub(super) fn take(&mut self, cx: &App) -> Option<Request> {
-        if self.error.is_some() {
+    pub(super) fn take(&mut self, cx: &mut Context<Self>) -> Option<Request> {
+        let active = self.active.as_ref()?;
+        let valid = active.form.update(cx, |form, cx| {
+            let valid = form.refresh_error(cx);
+            cx.notify();
+            valid
+        });
+        if !valid {
             return None;
         }
-        let target = self.target.take()?;
-        let name = self.input.read(cx).value().to_string();
+        let active = self.active.take()?;
+        let name = active.form.read(cx).chosen_name(cx);
         Some(Request {
-            source: target.path,
-            name: name.into(),
+            source: active.path,
+            name,
         })
-    }
-
-    fn on_input(
-        &mut self,
-        _: &Entity<InputState>,
-        event: &InputEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            InputEvent::Change => self.refresh_error(cx),
-            _ => return,
-        }
-        cx.notify();
-    }
-
-    pub(super) fn refresh_error(&mut self, cx: &App) {
-        let Some(target) = &self.target else {
-            self.error = None;
-            return;
-        };
-        let value = self.input.read(cx).value();
-        self.error = validate_name(value.as_ref(), &target.original)
-            .err()
-            .map(|error| i18n::text(error.label_id(), cx));
     }
 }
 
 impl Render for State {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        el! { .NameField::default { input: $(self.input.clone()); error: $(self.error.clone()); } }
+        match &self.active {
+            Some(active) => el! { $(active.form.clone()) }.into_any_element(),
+            None => el! { .div }.into_any_element(),
+        }
     }
 }
 
@@ -194,13 +161,12 @@ impl Browser {
                     primary_icon: IconName::Pencil;
                     cancel_label: $(i18n::text("operation-cancel", cx));
                 } };
-                let mut arguments = fluent_bundle::FluentArgs::new();
-                arguments.set("name", title_name.clone());
+                let name = title_name.clone();
                 el! {
                     dialog {
                         confirm; width: 480.0.px;
                         bg: $(cx.theme().popover); text_color: $(cx.theme().popover_foreground);
-                        title: $(i18n::format("rename-title", Some(&arguments), cx));
+                        title: $(t!(@cx, "rename-title", name));
                         description: $(i18n::text("rename-message", cx));
                         icon: IconName::TextCursor.Icon::new;
                         footer: footer;
@@ -243,15 +209,7 @@ impl Browser {
     }
 
     fn confirm_rename(&mut self, cx: &mut Context<Self>) -> bool {
-        self.operations.rename.update(cx, |state, cx| {
-            state.refresh_error(cx);
-            cx.notify();
-        });
         if self.operations.in_progress {
-            return false;
-        }
-        let valid = self.operations.rename.read(cx).error.is_none();
-        if !valid {
             return false;
         }
         let Some(request) = self
@@ -311,9 +269,7 @@ impl Browser {
                 let name = destination
                     .file_name()
                     .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-                let mut arguments = fluent_bundle::FluentArgs::new();
-                arguments.set("name", name);
-                let summary = i18n::format("rename-done", Some(&arguments), cx);
+                let summary = t!(@cx, "rename-done", name);
                 if let Some(slot) = self.tab_slot_mut(origin_tab) {
                     slot.pending_selection = Some(destination.clone());
                 }
@@ -321,24 +277,19 @@ impl Browser {
                 self.refresh_after_file_operation(&[source, destination], cx);
                 notifications::Report::new(notifications::Level::Success, summary)
             }
-            Err(Error::Exists { name, .. }) => {
-                let mut arguments = fluent_bundle::FluentArgs::new();
-                arguments.set("name", name);
-                notifications::Report::new(
-                    notifications::Level::Error,
-                    i18n::format("rename-target-exists", Some(&arguments), cx),
-                )
-            }
+            Err(Error::Exists { name, .. }) => notifications::Report::new(
+                notifications::Level::Error,
+                t!(@cx, "rename-target-exists", name),
+            ),
             Err(Error::Name(error)) => notifications::Report::new(
                 notifications::Level::Error,
                 i18n::text(error.label_id(), cx),
             ),
             Err(error) => {
-                let mut arguments = fluent_bundle::FluentArgs::new();
-                arguments.set("error", error.to_string());
+                let error = error.to_string();
                 notifications::Report::new(
                     notifications::Level::Error,
-                    i18n::format("rename-failed", Some(&arguments), cx),
+                    t!(@cx, "rename-failed", error),
                 )
             }
         };

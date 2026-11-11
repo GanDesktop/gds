@@ -9,173 +9,32 @@
 
 mod conflict;
 
-use std::{collections::HashSet, ffi::OsString};
-
-use fluent_bundle::FluentArgs;
 use gds::{i18n, ui::notifications};
 
 use super::*;
-use crate::features::file_operations::{history, names, transfer};
-use crate::shared::lib::clipboard::{self as file_clipboard, Bridge, Mode, Snapshot};
+use crate::features::file_operations::{
+    history,
+    paste::{Ending, Inspection, PassOutcome, PasteConflict, PasteJob, Summary},
+    transfer,
+};
+use crate::shared::{
+    i18n::t,
+    lib::clipboard::{self as file_clipboard, Bridge, Mode, Snapshot},
+};
 use conflict::ConflictDialog;
 
-/// One paste flow that survives dialogs and transfer passes.
+/// UI context for one active paste flow across dialogs and transfer passes.
 struct Paste {
     origin_tab: u64,
     clipboard: Bridge,
     snapshot: Snapshot,
-    destination: PathBuf,
-    mode: transfer::Mode,
-    /// Sources not yet completed; after a pass only conflicting sources remain.
-    pending: Vec<PathBuf>,
-    chosen: Vec<names::NamedTarget>,
-    succeeded: Vec<PathBuf>,
-    undo: Vec<history::Step>,
-    committed: Vec<PathBuf>,
-    failures: Vec<(PathBuf, String)>,
-}
-
-/// Background pre-flight result: commit the flow, ask about one conflict, or
-/// stop with the error the destination inspection returned.
-enum Inspection {
-    Ready(Paste),
-    Conflict {
-        paste: Paste,
-        prompt: ConflictPrompt,
-    },
-    Failed {
-        paste: Paste,
-        error: names::Error,
-    },
-}
-
-/// The conflict to ask the user about, with a free name suggested for it.
-struct ConflictPrompt {
-    collision: names::Collision,
-    suggestion: OsString,
+    job: PasteJob,
 }
 
 impl Paste {
-    /// Detect conflicting targets and name the first one.
-    ///
-    /// Probing the destination can block on a slow or network mount, so this
-    /// runs on the background executor; the caller only presents the result.
-    fn inspect(self) -> Inspection {
-        let collisions = match names::collisions(&self.destination, &self.pending, &self.chosen) {
-            Ok(collisions) => collisions,
-            Err(error) => return Inspection::Failed { paste: self, error },
-        };
-        let Some(collision) = collisions.into_iter().next() else {
-            return Inspection::Ready(self);
-        };
-        let reserved = self.reserved_for(&collision.source);
-        let suggested = names::free_name(
-            &self.destination,
-            names::target_name(&collision.source, &self.chosen),
-            &reserved,
-        );
-        match suggested {
-            Ok(suggestion) => Inspection::Conflict {
-                paste: self,
-                prompt: ConflictPrompt {
-                    collision,
-                    suggestion,
-                },
-            },
-            Err(error) => Inspection::Failed { paste: self, error },
-        }
+    fn with_job(self, job: PasteJob) -> Self {
+        Self { job, ..self }
     }
-
-    fn name_for(&self, source: &Path) -> OsString {
-        names::target_name(source, &self.chosen).to_owned()
-    }
-
-    /// Planned targets of the other pending sources, so two suggestions cannot
-    /// both pick the same free leaf.
-    fn reserved_for(&self, source: &Path) -> HashSet<OsString> {
-        self.pending
-            .iter()
-            .filter(|pending| pending.as_path() != source)
-            .map(|pending| self.name_for(pending.as_path()))
-            .collect()
-    }
-
-    fn record_name(&mut self, source: PathBuf, name: OsString) {
-        self.chosen.retain(|target| target.source != source);
-        self.chosen.push(names::NamedTarget::new(source, name));
-    }
-}
-
-/// Final result of one paste flow, merged across retried conflict passes.
-struct Summary {
-    mode: transfer::Mode,
-    succeeded: Vec<PathBuf>,
-    undo: Vec<history::Step>,
-    committed: Vec<PathBuf>,
-    failures: Vec<String>,
-    clipboard_error: Option<String>,
-}
-
-impl Summary {
-    fn from_report(report: transfer::Report, clipboard_error: Option<String>) -> Self {
-        let undo = history::transfer_steps(&report);
-        let mode = report.mode;
-        let succeeded = report.succeeded_sources();
-        let committed = report.committed_destinations();
-        let failures = report
-            .items
-            .iter()
-            .filter_map(|item| {
-                let Err(error) = &item.result else {
-                    return None;
-                };
-                tracing::warn!(
-                    "File transfer failed for {}: {error}",
-                    item.source.display()
-                );
-                let path = item
-                    .source
-                    .as_os_str()
-                    .to_string_lossy()
-                    .escape_debug()
-                    .to_string();
-                Some(format!("{path}: {error}"))
-            })
-            .collect();
-        Self {
-            mode,
-            succeeded,
-            undo,
-            committed,
-            failures,
-            clipboard_error,
-        }
-    }
-}
-
-impl Paste {
-    fn summary(self, clipboard_error: Option<String>) -> Summary {
-        Summary {
-            mode: self.mode,
-            succeeded: self.succeeded,
-            undo: self.undo,
-            committed: self.committed,
-            failures: self
-                .failures
-                .into_iter()
-                .map(|(_, detail)| detail)
-                .collect(),
-            clipboard_error,
-        }
-    }
-}
-
-/// Why a paste flow stopped, which decides how partial work is reported.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Ending {
-    Completed,
-    Cancelled,
-    Aborted,
 }
 
 impl Browser {
@@ -189,12 +48,8 @@ impl Browser {
         cx.spawn(async move |_, cx| {
             if let Err(error) = cancel.await {
                 cx.update(|cx| {
-                    let mut args = fluent_bundle::FluentArgs::new();
-                    args.set("error", error.to_string());
-                    notifications::error(
-                        i18n::format("clipboard-cancel-failed", Some(&args), cx),
-                        cx,
-                    );
+                    let error = error.to_string();
+                    notifications::error(t!(@cx, "clipboard-cancel-failed", error), cx);
                 });
             }
         })
@@ -251,6 +106,7 @@ impl Browser {
             }
         })
         .detach();
+        cx.notify();
     }
 
     pub(super) fn paste_files(
@@ -307,28 +163,24 @@ impl Browser {
                     return;
                 }
             };
+            let mode = match snapshot.mode {
+                Mode::Copy => transfer::Mode::Copy,
+                Mode::Cut => transfer::Mode::Move,
+            };
+            let job = PasteJob::new(destination, mode, snapshot.paths.clone());
             let paste = Paste {
                 origin_tab,
-                mode: match snapshot.mode {
-                    Mode::Copy => transfer::Mode::Copy,
-                    Mode::Cut => transfer::Mode::Move,
-                },
-                pending: snapshot.paths.clone(),
-                snapshot,
                 clipboard,
-                destination,
-                chosen: Vec::new(),
-                succeeded: Vec::new(),
-                undo: Vec::new(),
-                committed: Vec::new(),
-                failures: Vec::new(),
+                snapshot,
+                job,
             };
             let _ = this.update_in(cx, |browser, window, cx| {
                 if paste
+                    .job
                     .pending
                     .iter()
                     .any(|path| !browser.device_path_available(path, cx))
-                    || !browser.device_path_available(&paste.destination, cx)
+                    || !browser.device_path_available(&paste.job.destination, cx)
                 {
                     browser.fail_paste(
                         i18n::text("device-path-unavailable", cx).to_string(),
@@ -337,12 +189,7 @@ impl Browser {
                     );
                     return;
                 }
-                browser.operations.paths = paste
-                    .pending
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(paste.destination.clone()))
-                    .collect();
+                browser.operations.paths = paste.job.involved_paths();
                 browser.inspect_paste(paste, window, cx);
             });
         })
@@ -354,25 +201,24 @@ impl Browser {
     /// a failed inspection, or ask the user to name the first conflict.
     fn present_conflicts(
         &mut self,
+        paste: Paste,
         inspection: Inspection,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.background_tasks.read(cx).token("files").is_cancelled() {
-            let paste = match inspection {
-                Inspection::Ready(paste)
-                | Inspection::Failed { paste, .. }
-                | Inspection::Conflict { paste, .. } => paste,
-            };
+            let paste = paste.with_job(inspection.into_job());
             self.cancel_paste(paste, window, cx);
             return;
         }
         match inspection {
-            Inspection::Ready(paste) => self.execute_paste(paste, window, cx),
-            Inspection::Failed { paste, error } => {
-                self.abort_paste(paste, error.to_string(), window, cx);
+            Inspection::Ready(job) => self.execute_paste(paste.with_job(job), window, cx),
+            Inspection::Failed { job, error } => {
+                self.abort_paste(paste.with_job(job), error.to_string(), window, cx);
             }
-            Inspection::Conflict { paste, prompt } => self.ask_conflict(paste, prompt, window, cx),
+            Inspection::Conflict { job, conflict } => {
+                self.ask_conflict(paste.with_job(job), conflict, window, cx);
+            }
         }
     }
 
@@ -380,26 +226,27 @@ impl Browser {
     fn ask_conflict(
         &mut self,
         paste: Paste,
-        prompt: ConflictPrompt,
+        conflict: PasteConflict,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let dialog = ConflictDialog::new(cx.entity().downgrade(), paste, prompt, window, cx);
+        let dialog = ConflictDialog::new(cx.entity().downgrade(), paste, conflict, window, cx);
         ConflictDialog::open(dialog, window);
         cx.notify();
     }
 
     /// Recheck every pending source off the UI thread, then present the next
     /// conflict or commit the flow.
-    fn inspect_paste(&mut self, paste: Paste, window: &mut Window, cx: &mut Context<Self>) {
+    fn inspect_paste(&mut self, mut paste: Paste, window: &mut Window, cx: &mut Context<Self>) {
+        let job = paste.job.take();
         let work = self
             .window
             .tasks
-            .spawn_blocking_named("Inspect paste conflicts", move || paste.inspect());
+            .spawn_blocking_named("Inspect paste conflicts", move || job.inspect());
         cx.spawn_in(window, async move |this, cx| {
             let inspection = work.await;
             let _ = this.update_in(cx, |browser, window, cx| match inspection {
-                Ok(inspection) => browser.present_conflicts(inspection, window, cx),
+                Ok(inspection) => browser.present_conflicts(paste, inspection, window, cx),
                 Err(error) => {
                     browser.fail_paste(error.to_string(), notifications::Level::Error, cx)
                 }
@@ -411,10 +258,11 @@ impl Browser {
 
     fn execute_paste(&mut self, paste: Paste, window: &mut Window, cx: &mut Context<Self>) {
         if paste
+            .job
             .pending
             .iter()
             .any(|path| !self.device_path_available(path, cx))
-            || !self.device_path_available(&paste.destination, cx)
+            || !self.device_path_available(&paste.job.destination, cx)
         {
             self.abort_paste(
                 paste,
@@ -424,13 +272,8 @@ impl Browser {
             );
             return;
         }
-        let count = paste.pending.len();
-        let request = transfer::Request {
-            paths: paste.pending.clone(),
-            destination: paste.destination.clone(),
-            mode: paste.mode,
-        };
-        let batch = match transfer::Batch::named(request, paste.chosen.clone()) {
+        let count = paste.job.pending.len();
+        let batch = match paste.job.prepare_batch() {
             Ok(batch) => batch,
             Err(error) => {
                 self.abort_paste(paste, error.to_string(), window, cx);
@@ -465,46 +308,15 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut retry: Vec<PathBuf> = Vec::new();
-        paste.undo.extend(history::transfer_steps(&report));
-        for item in report.items {
-            let source = item.source.clone();
-            paste.pending.retain(|pending| pending != &source);
-            match item.result {
-                Ok(()) => {
-                    paste.chosen.retain(|target| target.source != source);
-                    if item.destination_committed {
-                        paste.committed.push(item.destination);
-                    }
-                    paste.succeeded.push(source);
-                }
-                // The name the user picked for this source stays in force, so
-                // the retry is rechecked against that name rather than the
-                // original leaf.
-                Err(transfer::Error::Conflict { .. }) => retry.push(source),
-                Err(error) => {
-                    paste.chosen.retain(|target| target.source != source);
-                    tracing::warn!("File transfer failed for {}: {error}", source.display());
-                    let label = source
-                        .as_os_str()
-                        .to_string_lossy()
-                        .escape_debug()
-                        .to_string();
-                    if item.destination_committed {
-                        paste.committed.push(item.destination);
-                    }
-                    paste.failures.push((source, format!("{label}: {error}")));
-                }
+        let job = paste.job.take();
+        match job.apply_pass(report) {
+            PassOutcome::Completed(job) => {
+                self.complete_paste(paste.with_job(job), Ending::Completed, window, cx);
+            }
+            PassOutcome::RetryConflict(job) => {
+                self.inspect_paste(paste.with_job(job), window, cx);
             }
         }
-        if retry.is_empty() {
-            self.complete_paste(paste, Ending::Completed, window, cx);
-            return;
-        }
-        // A target that appeared after naming is prompted again instead of
-        // being replaced; the recheck runs off the UI thread.
-        paste.pending = retry;
-        self.inspect_paste(paste, window, cx);
     }
 
     /// Finish a flow, cleaning the clipboard for cut sources that really moved.
@@ -515,10 +327,10 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if paste.mode == transfer::Mode::Move && !paste.succeeded.is_empty() {
+        if paste.job.mode == transfer::Mode::Move && !paste.job.succeeded.is_empty() {
             let clipboard = paste.clipboard;
             let snapshot = paste.snapshot.clone();
-            let moved = paste.succeeded.clone();
+            let moved = paste.job.succeeded.clone();
             let cleanup = clipboard.finish_cut(snapshot.clone(), moved.clone(), cx);
             cx.spawn_in(window, async move |this, cx| {
                 let clipboard_error = cleanup.await.err().map(|error| error.to_string());
@@ -537,7 +349,7 @@ impl Browser {
     }
 
     fn cancel_paste(&mut self, paste: Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if paste.succeeded.is_empty() && paste.failures.is_empty() {
+        if paste.job.is_untouched() {
             self.operations.in_progress = false;
             self.finish_background(
                 notifications::Report::new(
@@ -563,11 +375,11 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if paste.succeeded.is_empty() && paste.failures.is_empty() {
+        if paste.job.is_untouched() {
             self.fail_paste(message, notifications::Level::Error, cx);
             return;
         }
-        paste.failures.push((PathBuf::new(), message));
+        paste.job.record_abort(message);
         self.complete_paste(paste, Ending::Aborted, window, cx);
     }
 
@@ -587,7 +399,7 @@ impl Browser {
     ) {
         let origin_tab = paste.origin_tab;
         self.operations.in_progress = false;
-        let summary = paste.summary(clipboard_error);
+        let summary = paste.job.into_summary(clipboard_error);
         self.finish_summary(summary, ending, cx);
         Self::restore_file_focus(cx.entity().downgrade(), origin_tab, window);
         cx.notify();
@@ -607,30 +419,19 @@ impl Browser {
     }
 
     fn finish_summary(&mut self, summary: Summary, ending: Ending, cx: &mut Context<Self>) {
-        if summary.committed.len() > summary.undo.len() {
+        if summary.requires_history_reset() {
             // A move may commit its destination before source removal fails.
             // That incomplete effect cannot be represented by an inverse move.
             self.operations.history.clear();
         }
-        self.operations.history.record(history::Entry::new(
-            if summary.mode == transfer::Mode::Move {
-                history::Kind::Move
-            } else {
-                history::Kind::Copy
-            },
-            summary.undo,
-        ));
-        let changed: Vec<PathBuf> = if summary.mode == transfer::Mode::Move {
+        let kind = summary.history_kind();
+        if summary.mode == transfer::Mode::Move {
             self.clear_completed_selection(&summary.succeeded);
-            summary
-                .committed
-                .iter()
-                .chain(summary.succeeded.iter())
-                .cloned()
-                .collect()
-        } else {
-            summary.committed.clone()
-        };
+        }
+        let changed = summary.affected_paths();
+        self.operations
+            .history
+            .record(history::Entry::new(kind, summary.undo));
         self.refresh_after_file_operation(&changed, cx);
         let failed = summary.failures.len();
         let level = if failed > 0 || summary.clipboard_error.is_some() {
@@ -650,36 +451,30 @@ impl Browser {
                 summary.succeeded.len(),
                 cx,
             ),
-            Ending::Completed => {
-                let mut arguments = FluentArgs::new();
-                arguments.set("succeeded", summary.succeeded.len() as i64);
-                arguments.set("failed", failed as i64);
-                i18n::format("transfer-partial", Some(&arguments), cx)
-            }
+            Ending::Completed => t!(
+                @cx,
+                "transfer-partial",
+                succeeded = summary.succeeded.len() as i64,
+                failed = failed as i64,
+            ),
             Ending::Cancelled if summary.succeeded.is_empty() => i18n::text("paste-cancelled", cx),
-            Ending::Cancelled => {
-                let mut arguments = FluentArgs::new();
-                arguments.set("completed", summary.succeeded.len() as i64);
-                i18n::format("paste-cancelled-partial", Some(&arguments), cx)
-            }
-            Ending::Aborted => {
-                let mut arguments = FluentArgs::new();
-                arguments.set("completed", summary.succeeded.len() as i64);
-                i18n::format("paste-aborted-partial", Some(&arguments), cx)
-            }
+            Ending::Cancelled => t!(
+                @cx,
+                "paste-cancelled-partial",
+                completed = summary.succeeded.len() as i64,
+            ),
+            Ending::Aborted => t!(
+                @cx,
+                "paste-aborted-partial",
+                completed = summary.succeeded.len() as i64,
+            ),
         };
         let mut notice = notifications::Report::new(level, text);
         for detail in &summary.failures {
             notice = notice.detail(detail.clone());
         }
         if let Some(error) = summary.clipboard_error {
-            let mut arguments = FluentArgs::new();
-            arguments.set("error", error);
-            notice = notice.detail(i18n::format(
-                "clipboard-update-failed",
-                Some(&arguments),
-                cx,
-            ));
+            notice = notice.detail(t!(@cx, "clipboard-update-failed", error));
         }
         self.finish_background(notice, cx);
     }

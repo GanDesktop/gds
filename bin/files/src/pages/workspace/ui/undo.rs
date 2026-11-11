@@ -1,9 +1,10 @@
 //! File-operation history belongs to the window, across folders and file tabs.
-use gds::app::AppExt as _;
 
 use super::*;
-use crate::features::file_operations::history::{Direction, Report};
-use fluent_bundle::FluentArgs;
+use crate::{
+    features::file_operations::history::{Direction, Report},
+    shared::i18n::t,
+};
 
 impl Browser {
     pub(super) fn history_available(&self, command: Command, cx: &App) -> bool {
@@ -33,20 +34,12 @@ impl Browser {
         let Some(entry) = self.operations.history.peek(direction(command)) else {
             return i18n::text(command.label_id(), cx);
         };
-        let mut args = FluentArgs::new();
-        args.set(
-            "operation",
-            i18n::text(entry.kind.label_id(), cx).to_string(),
-        );
-        i18n::format(
-            if command == Command::Undo {
-                "undo-operation"
-            } else {
-                "redo-operation"
-            },
-            Some(&args),
-            cx,
-        )
+        let operation = i18n::text(entry.kind.label_id(), cx).to_string();
+        if command == Command::Undo {
+            t!(@cx, "undo-operation", operation)
+        } else {
+            t!(@cx, "redo-operation", operation)
+        }
     }
 
     pub(super) fn replay_file_operation(
@@ -83,10 +76,9 @@ impl Browser {
         self.window.focus.focus(window, cx);
         self.start_background(label, cx);
         let cancel = self.background_tasks.read(cx).token("files");
-        let work = cx
-            .gds()
-            .tasks()
-            .scope()
+        let work = self
+            .window
+            .tasks
             .spawn_blocking_named("Undo or redo file operation", move || {
                 entry.execute_cancellable(&cancel)
             });

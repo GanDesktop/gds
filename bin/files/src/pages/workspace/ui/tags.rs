@@ -3,9 +3,18 @@ mod deletion;
 use super::*;
 use crate::entities::location::scheme::TagAddress;
 use gds_uim::el;
+
 pub(super) struct Contents {
     pub listing: crate::entities::tags::Listing,
     pub entries: Vec<directory::Entry>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum LoadError {
+    #[error("{0}")]
+    Backend(String),
+    #[error(transparent)]
+    Task(#[from] gds::service::task_manager::Error),
 }
 
 use gpui_kit::{
@@ -46,9 +55,11 @@ impl Browser {
             "Query tagged files",
             async move {
                 let listing = crate::entities::tags::connect(&commands)
-                    .await?
+                    .await
+                    .map_err(LoadError::Backend)?
                     .browse(address.tag())
-                    .await?;
+                    .await
+                    .map_err(|error| LoadError::Backend(error.to_string()))?;
                 tasks
                     .spawn_blocking_named("Inspect tagged files", move || {
                         let entries = listing
@@ -59,11 +70,15 @@ impl Browser {
                         Contents { listing, entries }
                     })
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_err(LoadError::from)
             },
         ));
         let task = cx.spawn(async move |this, cx| {
-            let result = work.await.map_err(|e| e.to_string()).and_then(|r| r);
+            let result = work
+                .await
+                .map_err(LoadError::from)
+                .and_then(std::convert::identity)
+                .map_err(|error| error.to_string());
             let _ = this.update(cx, |this, cx| {
                 if !this
                     .tab_slot(id)

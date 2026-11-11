@@ -1,6 +1,7 @@
 //! Single-file associations. Save applies the user's delta to freshly read tags.
-use gds::app::AppExt as _;
+
 mod history;
+
 use super::*;
 use gds::ui::button::Button;
 use gds::{
@@ -18,32 +19,54 @@ use gpui_kit::{
     prelude::*,
 };
 use history::History;
+use std::sync::Once;
+
+static KEY_BINDINGS: Once = Once::new();
+
+#[derive(Debug, thiserror::Error)]
+enum Error {
+    #[error("symbolic links and special files cannot be tagged directly")]
+    UnsupportedTarget,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Task(#[from] gds::service::task_manager::Error),
+}
 
 struct Editor {
     path: PathBuf,
     input: Entity<InputState>,
     original: Option<Vec<String>>,
     history: History,
-    error: Option<String>,
+    error: Option<SharedString>,
     saving: bool,
     browser: WeakEntity<Browser>,
     tasks: Scope,
 }
+
 impl Editor {
+    fn error_message(error: Error, cx: &App) -> SharedString {
+        match error {
+            Error::UnsupportedTarget => i18n::text("permissions-symlink", cx),
+            Error::Io(error) => error.to_string().into(),
+            Error::Task(error) => error.to_string().into(),
+        }
+    }
+
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let path = self.path.clone();
         let work = self.tasks.spawn_blocking_named("Read file tags", move || {
             let metadata = std::fs::symlink_metadata(&path)?;
             if !metadata.is_file() && !metadata.is_dir() {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Tags can only be edited on local files and directories; open the symbolic link target first"));
+                return Err(Error::UnsupportedTarget);
             }
-            file_tags::read(&path)
+            Ok(file_tags::read(&path)?)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = work
                 .await
-                .map_err(|e| e.to_string())
-                .and_then(|r| r.map_err(|e| e.to_string()));
+                .map_err(Error::from)
+                .and_then(std::convert::identity);
             let _ = this.update_in(cx, |this, window, cx| {
                 match result {
                     Ok(tags) => {
@@ -51,13 +74,14 @@ impl Editor {
                         this.original = Some(tags);
                         this.input.update(cx, |input, cx| input.focus(window, cx));
                     }
-                    Err(error) => this.error = Some(error),
+                    Err(error) => this.error = Some(Self::error_message(error, cx)),
                 }
                 cx.notify();
             });
         })
         .detach();
     }
+
     fn add(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.saving || self.original.is_none() {
             return false;
@@ -65,7 +89,7 @@ impl Editor {
         let tags = match file_tags::decode(self.input.read(cx).value().as_bytes()) {
             Ok(tags) => tags,
             Err(error) => {
-                self.error = Some(error.to_string());
+                self.error = Some(error.to_string().into());
                 cx.notify();
                 return false;
             }
@@ -86,6 +110,7 @@ impl Editor {
         cx.notify();
         true
     }
+
     fn record_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.original.is_none()
             || self.input.update(cx, |input, cx| {
@@ -178,18 +203,16 @@ impl Editor {
         let edited = self.history.current.tags.clone();
         let path = self.path.clone();
         self.saving = true;
-        let work = cx
-            .gds()
-            .tasks()
-            .scope()
+        let work = self
+            .tasks
             .spawn_blocking_named("Update file tags", move || {
-                file_tags::apply_edit(&path, &original, &edited)
+                file_tags::apply_edit(&path, &original, &edited).map_err(Error::from)
             });
         cx.spawn_in(window, async move |this, cx| {
             let result = work
                 .await
-                .map_err(|e| e.to_string())
-                .and_then(|r| r.map_err(|e| e.to_string()));
+                .map_err(Error::from)
+                .and_then(std::convert::identity);
             let _ = this.update_in(cx, |this, window, cx| {
                 this.saving = false;
                 match result {
@@ -212,7 +235,7 @@ impl Editor {
                         window.close_dialog(cx);
                         notifications::success(i18n::text("tags-saved", cx), cx);
                     }
-                    Err(error) => this.error = Some(error),
+                    Err(error) => this.error = Some(Self::error_message(error, cx)),
                 }
                 cx.notify();
             });
@@ -221,6 +244,7 @@ impl Editor {
         cx.notify();
     }
 }
+
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
@@ -293,16 +317,18 @@ impl Browser {
         let browser = cx.entity().downgrade();
         let tasks = self.window.tasks.clone();
         let editor = cx.new(|cx| {
-            cx.bind_keys([
-                KeyBinding::new("ctrl-z", Undo, Some("TagEditor")),
-                KeyBinding::new("ctrl-y", Redo, Some("TagEditor")),
-                KeyBinding::new("ctrl-shift-z", Redo, Some("TagEditor")),
-                #[cfg(target_os = "macos")]
-                KeyBinding::new("cmd-z", Undo, Some("TagEditor")),
-                #[cfg(target_os = "macos")]
-                KeyBinding::new("cmd-shift-z", Redo, Some("TagEditor")),
-                KeyBinding::new("backspace", Backspace, Some("TagEditor")),
-            ]);
+            KEY_BINDINGS.call_once(|| {
+                cx.bind_keys([
+                    KeyBinding::new("ctrl-z", Undo, Some("TagEditor")),
+                    KeyBinding::new("ctrl-y", Redo, Some("TagEditor")),
+                    KeyBinding::new("ctrl-shift-z", Redo, Some("TagEditor")),
+                    #[cfg(target_os = "macos")]
+                    KeyBinding::new("cmd-z", Undo, Some("TagEditor")),
+                    #[cfg(target_os = "macos")]
+                    KeyBinding::new("cmd-shift-z", Redo, Some("TagEditor")),
+                    KeyBinding::new("backspace", Backspace, Some("TagEditor")),
+                ]);
+            });
             let input = cx.new(|cx| {
                 InputState::new(window, cx).placeholder(i18n::text("tags-add-placeholder", cx))
             });

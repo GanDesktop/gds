@@ -1,6 +1,7 @@
 //! File mutations, immutable batches and operation history.
 mod api;
 pub(crate) use api::{Batch, Error, Kind, Report, names, transfer};
+pub(crate) mod paste;
 pub(crate) mod remote;
 
 pub(crate) mod history;

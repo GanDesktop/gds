@@ -886,10 +886,7 @@ impl Browser {
 /// otherwise the default ordering so no hidden column stays active.
 pub(super) fn sort_for(location: &Location, places: &Places) -> Sort {
     let sort = places.effective_sort(location);
-    if places
-        .effective_columns(location)
-        .contains(sort_column(sort.key))
-    {
+    if places.effective_columns(location).contains(sort.key) {
         sort
     } else {
         Sort::default()
@@ -905,32 +902,8 @@ fn report_column_state_unavailable(cx: &mut App) {
     .show(cx);
 }
 
-/// The column a sort key is displayed by. Inverse of [`sort_key`].
-pub(super) fn sort_column(key: Key) -> LayoutColumn {
-    match key {
-        Key::Name => LayoutColumn::Name,
-        Key::Type => LayoutColumn::Type,
-        Key::Size => LayoutColumn::Size,
-        Key::Owner => LayoutColumn::Owner,
-        Key::Group => LayoutColumn::Group,
-        Key::Permissions => LayoutColumn::Permissions,
-        Key::Modified => LayoutColumn::Modified,
-        Key::Accessed => LayoutColumn::Accessed,
-        Key::DetailedType => LayoutColumn::DetailedType,
-    }
-}
-
 /// The sort key a column header toggles.
-pub(super) fn sort_key(column: LayoutColumn) -> Key {
-    match column {
-        LayoutColumn::Name => Key::Name,
-        LayoutColumn::Type => Key::Type,
-        LayoutColumn::Size => Key::Size,
-        LayoutColumn::Owner => Key::Owner,
-        LayoutColumn::Group => Key::Group,
-        LayoutColumn::Permissions => Key::Permissions,
-        LayoutColumn::Modified => Key::Modified,
-        LayoutColumn::Accessed => Key::Accessed,
-        LayoutColumn::DetailedType => Key::DetailedType,
-    }
+#[allow(dead_code)]
+pub(super) const fn sort_key(column: LayoutColumn) -> Key {
+    column
 }

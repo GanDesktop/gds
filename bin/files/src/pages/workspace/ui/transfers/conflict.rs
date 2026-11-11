@@ -2,7 +2,6 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use fluent_bundle::FluentArgs;
 use gds::{i18n, ui::DialogActions};
 use gds_uim::el;
 use gpui_kit::assets::IconName;
@@ -10,10 +9,12 @@ use gpui_kit::component::{ActiveTheme, Icon, WindowExt, dialog::AlertDialog};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::{ConflictPrompt, Paste};
-use crate::features::file_operations::names;
-use crate::pages::workspace::ui::Browser;
-use crate::pages::workspace::ui::name_form::NameForm;
+use super::Paste;
+use crate::{
+    features::file_operations::{names, paste::PasteConflict},
+    pages::workspace::ui::{Browser, name_form::NameForm},
+    shared::i18n::t,
+};
 
 const CONFLICT_WIDTH: f32 = 520.;
 
@@ -31,7 +32,7 @@ impl ConflictDialog {
     pub(super) fn new(
         browser: WeakEntity<Browser>,
         paste: Paste,
-        prompt: ConflictPrompt,
+        prompt: PasteConflict,
         window: &mut Window,
         cx: &mut Context<Browser>,
     ) -> Rc<Self> {
@@ -80,13 +81,12 @@ impl ConflictDialog {
                 primary_icon: IconName::ClipboardPaste;
                 cancel_label: $(i18n::text("operation-cancel", cx));
             } };
-            let mut arguments = FluentArgs::new();
-            arguments.set("name", this.conflict.target_label());
+            let name = this.conflict.target_label();
             el! {
                 dialog {
                     confirm; width: CONFLICT_WIDTH.px;
                     bg: $(cx.theme().popover); text_color: $(cx.theme().popover_foreground);
-                    title: $(i18n::format("transfer-conflict-title", Some(&arguments), cx));
+                    title: $(t!(@cx, "transfer-conflict-title", name));
                     description: $(i18n::text("transfer-conflict-message", cx));
                     icon: IconName::ClipboardPaste.Icon::new;
                     footer: footer;
@@ -115,7 +115,9 @@ impl ConflictDialog {
                 return true;
             };
             let mut paste = paste;
-            paste.record_name(this.conflict.source.clone(), name);
+            paste
+                .job
+                .resolve_conflict(this.conflict.source.clone(), name);
             // Rechecking the destination happens off the UI thread; a target
             // that is still taken comes back as another prompt.
             browser.update(cx, |browser, cx| browser.inspect_paste(paste, window, cx));

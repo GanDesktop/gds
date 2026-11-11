@@ -20,14 +20,20 @@ use gpui_kit::{
     *,
 };
 
-use crate::features::file_operations::names;
+use crate::features::file_operations::{names, rename};
 
 pub(super) const DIALOG_GAP: f32 = 8.;
+
+enum Policy {
+    Create,
+    Rename { original: OsString },
+}
 
 pub(super) struct NameForm {
     input: Entity<InputState>,
     suggestion: OsString,
     display: String,
+    policy: Policy,
     error: Option<SharedString>,
     _subscription: Subscription,
 }
@@ -39,13 +45,38 @@ impl NameForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let mut form = Self::with_policy(suggestion, placeholder, Policy::Create, window, cx);
+        form.refresh_error(cx);
+        form
+    }
+
+    pub(super) fn for_rename(
+        original: OsString,
+        placeholder: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let policy = Policy::Rename {
+            original: original.clone(),
+        };
+        Self::with_policy(original, placeholder, policy, window, cx)
+    }
+
+    fn with_policy(
+        suggestion: OsString,
+        placeholder: SharedString,
+        policy: Policy,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let display = suggestion.to_string_lossy().into_owned();
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         let subscription = cx.subscribe_in(&input, window, Self::on_input);
-        let mut form = Self {
+        let form = Self {
             input,
             suggestion,
             display,
+            policy,
             error: None,
             _subscription: subscription,
         };
@@ -54,7 +85,6 @@ impl NameForm {
             input.set_value(value, window, cx);
             input.select_all(window, cx);
         });
-        form.refresh_error(cx);
         form
     }
 
@@ -75,13 +105,22 @@ impl NameForm {
     /// Check the typed leaf itself; the destination is only probed in the
     /// background after the user confirms.
     pub(super) fn refresh_error(&mut self, cx: &App) -> bool {
-        match names::validate(&self.chosen_name(cx)) {
-            Ok(()) => {
+        let chosen = self.chosen_name(cx);
+        let label_id = match &self.policy {
+            Policy::Create => names::validate(&chosen)
+                .err()
+                .map(names::NameError::label_id),
+            Policy::Rename { original } => rename::validate_name(&chosen, original)
+                .err()
+                .map(rename::NameError::label_id),
+        };
+        match label_id {
+            None => {
                 self.error = None;
                 true
             }
-            Err(error) => {
-                self.error = Some(i18n::text(error.label_id(), cx));
+            Some(label_id) => {
+                self.error = Some(i18n::text(label_id, cx));
                 false
             }
         }

@@ -36,15 +36,6 @@ impl Report {
 /// Child files keep their execute bits; directories are changed after their children
 /// so removing directory access does not prevent the rest of the traversal.
 /// Failures are collected while processing the remaining items.
-pub(crate) fn apply(path: &Path, access: u32, recursive: bool) -> Report {
-    apply_cancellable(
-        path,
-        access,
-        recursive,
-        &tokio_util::sync::CancellationToken::new(),
-    )
-}
-
 pub(crate) fn apply_cancellable(
     path: &Path,
     access: u32,
@@ -82,19 +73,13 @@ pub(crate) fn apply_cancellable(
             }
             continue;
         }
-        let result = if entry.file_type().is_dir() || entry.depth() == 0 {
-            save(current, access)
+        let preserve_execute = !entry.file_type().is_dir() && entry.depth() > 0;
+        let preserve_mask = if preserve_execute {
+            !ACCESS_BITS | EXECUTE_BITS
         } else {
-            entry
-                .metadata()
-                .map_err(|error| Error::Filesystem(error.into()))
-                .and_then(|metadata| {
-                    let mode =
-                        (access & !EXECUTE_BITS) | (metadata.permissions().mode() & EXECUTE_BITS);
-                    save(current, mode)
-                })
+            !ACCESS_BITS
         };
-        report.record(current, result);
+        report.record(current, save_preserving(current, access, preserve_mask));
     }
     report
 }
@@ -125,32 +110,48 @@ pub(crate) fn read(path: &Path) -> Result<u32, Error> {
 /// # Errors
 /// Reports inaccessible paths, symbolic links and permission changes denied by the OS.
 pub(crate) fn save(path: &Path, access: u32) -> Result<(), Error> {
+    save_preserving(path, access, !ACCESS_BITS)
+}
+
+fn save_preserving(path: &Path, access: u32, preserve_mask: u32) -> Result<(), Error> {
+    use rustix::{
+        fs::{CWD, FileType, Mode, OFlags, fstat, openat},
+        io::Errno,
+    };
+
+    #[cfg(target_os = "linux")]
+    let open_flags = OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    #[cfg(not(target_os = "linux"))]
+    let open_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+
+    let fd = match openat(CWD, path, open_flags, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(Errno::LOOP) => return Err(Error::Symlink),
+        Err(error) => return Err(io::Error::from(error).into()),
+    };
+    let stat = fstat(&fd).map_err(io::Error::from)?;
+    if FileType::from_raw_mode(stat.st_mode) == FileType::Symlink {
+        return Err(Error::Symlink);
+    }
+    let writable_mask = ACCESS_BITS & !preserve_mask;
+    let mode = (stat.st_mode & preserve_mask) | (access & writable_mask);
     #[cfg(target_os = "linux")]
     {
-        use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags, chmodat, fstat, openat};
+        use rustix::fs::{AtFlags, chmodat};
         use std::os::fd::AsRawFd;
 
-        let fd = openat(
-            CWD,
-            path,
-            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(io::Error::from)?;
-        let stat = fstat(&fd).map_err(io::Error::from)?;
-        if FileType::from_raw_mode(stat.st_mode) == FileType::Symlink {
-            return Err(Error::Symlink);
-        }
-        let mode = (stat.st_mode & !ACCESS_BITS) | (access & ACCESS_BITS);
         let fd_path = format!("/proc/self/fd/{}", fd.as_raw_fd());
         chmodat(CWD, fd_path, Mode::from_raw_mode(mode), AtFlags::empty())
             .map_err(io::Error::from)?;
-        Ok(())
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let mode = (read(path)? & !ACCESS_BITS) | (access & ACCESS_BITS);
-        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
-        Ok(())
+        use rustix::fs::fchmod;
+
+        fchmod(&fd, Mode::from_raw_mode(mode)).map_err(io::Error::from)?;
     }
+    Ok(())
 }
+
+#[cfg(test)]
+mod tests;

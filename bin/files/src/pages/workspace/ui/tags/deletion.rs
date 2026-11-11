@@ -1,10 +1,17 @@
 //! Deleting a virtual tag changes associations through its backend, never file targets.
 use super::*;
-use gds::app::AppExt as _;
 use gds::ui::DialogActions;
 use gpui_kit::assets::IconName;
 
 const CONFIRMATION_WIDTH: f32 = 480.;
+
+#[derive(Debug, thiserror::Error)]
+enum DeleteError {
+    #[error("{0}")]
+    Backend(String),
+    #[error(transparent)]
+    Task(#[from] gds::service::task_manager::Error),
+}
 
 impl Browser {
     pub(in super::super) fn selected_deletable_tag(&self) -> Option<TagAddress> {
@@ -73,21 +80,19 @@ impl Browser {
         }
         self.operations.in_progress = true;
         let commands = self.settings.preferences.tags.commands.clone();
-        let work = cx
-            .gds()
-            .tasks()
-            .scope()
-            .spawn_named("Delete tag", async move {
-                crate::entities::tags::connect(&commands)
-                    .await?
-                    .delete_tag(address.tag())
-                    .await
-            });
+        let work = self.window.tasks.spawn_named("Delete tag", async move {
+            crate::entities::tags::connect(&commands)
+                .await
+                .map_err(DeleteError::Backend)?
+                .delete_tag(address.tag())
+                .await
+                .map_err(|error| DeleteError::Backend(error.to_string()))
+        });
         cx.spawn(async move |this, cx| {
             let result = work
                 .await
-                .map_err(|error| error.to_string())
-                .and_then(|r| r);
+                .map_err(DeleteError::from)
+                .and_then(std::convert::identity);
             let _ = this.update(cx, |this, cx| {
                 this.operations.in_progress = false;
                 this.collections.preview_task = None;
@@ -108,7 +113,7 @@ impl Browser {
                 }
                 match result {
                     Ok(()) => notifications::success(i18n::text("tags-deleted", cx), cx),
-                    Err(error) => notifications::error(error, cx),
+                    Err(error) => notifications::error(error.to_string(), cx),
                 }
                 cx.notify();
             });

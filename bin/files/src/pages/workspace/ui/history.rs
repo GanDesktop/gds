@@ -16,25 +16,50 @@ struct Entry {
     label: String,
 }
 
+struct ButtonSpec {
+    id: &'static str,
+    icon: IconName,
+    command: Command,
+    label_id: &'static str,
+}
+
+impl ButtonSpec {
+    const fn for_direction(direction: NavigationDirection) -> Self {
+        match direction {
+            NavigationDirection::Back => Self {
+                id: "back",
+                icon: IconName::ArrowLeft,
+                command: Command::Back,
+                label_id: "back",
+            },
+            NavigationDirection::Forward => Self {
+                id: "forward",
+                icon: IconName::ArrowRight,
+                command: Command::Forward,
+                label_id: "forward",
+            },
+        }
+    }
+}
+
 impl Browser {
     pub(super) fn history_button(
         &self,
         direction: NavigationDirection,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (id, icon, command, label) = match direction {
-            NavigationDirection::Back => ("back", IconName::ArrowLeft, Command::Back, "back"),
-            NavigationDirection::Forward => {
-                ("forward", IconName::ArrowRight, Command::Forward, "forward")
-            }
-        };
+        let spec = ButtonSpec::for_direction(direction);
         let enabled = self.current_tab().is_some_and(|slot| match direction {
             NavigationDirection::Back => slot.navigation.can_go_back(),
             NavigationDirection::Forward => slot.navigation.can_go_forward(),
         });
-        let on_click = cx.listener(Self::click_command(command));
+        let on_click = cx.listener(Self::click_command(spec.command));
+        let id = spec.id;
+        let icon = spec.icon;
+        let command = spec.command;
+        let label = i18n::text(spec.label_id, cx);
         let button = el! {
-            id.IconButton::new { icon: icon; label: $i18n::text(label, cx);
+            id.IconButton::new { icon: icon; label: label;
                 command: command; disabled: $(!enabled); on_click: on_click;
             }
         }

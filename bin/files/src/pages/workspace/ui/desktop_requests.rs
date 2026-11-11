@@ -3,6 +3,14 @@ use super::*;
 use gds::service::desktop::file_manager::{Command as DesktopCommand, Request};
 use gds::ui::window::TitleBar;
 use gpui_kit::component::ActiveTheme;
+use std::sync::Once;
+
+static PROPERTIES_KEY_BINDINGS: Once = Once::new();
+
+struct InspectedEntry {
+    path: PathBuf,
+    result: std::io::Result<directory::Entry>,
+}
 
 impl Browser {
     pub fn apply_desktop_command(
@@ -68,6 +76,7 @@ impl Browser {
         }
         cx.notify();
     }
+
     fn open_desktop_properties(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         let work = self
             .window
@@ -77,7 +86,7 @@ impl Browser {
                     .into_iter()
                     .map(|path| {
                         let result = directory::Entry::inspect(&path);
-                        (path, result)
+                        InspectedEntry { path, result }
                     })
                     .collect::<Vec<_>>()
             });
@@ -91,11 +100,11 @@ impl Browser {
                         return;
                     }
                 };
-                for (path, result) in entries {
-                    let entry = match result {
+                for item in entries {
+                    let entry = match item.result {
                         Ok(entry) => entry,
                         Err(error) => {
-                            notifications::error(format!("{}: {error}", path.display()), cx);
+                            notifications::error(format!("{}: {error}", item.path.display()), cx);
                             continue;
                         }
                     };
@@ -169,42 +178,6 @@ impl Target {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::Target;
-    use std::path::PathBuf;
-
-    #[test]
-    fn item_targets_group_by_parent_and_deduplicate_selections() {
-        let targets = Target::items(
-            ["/tmp/a", "/", "/tmp/folder", "/tmp/a"]
-                .map(PathBuf::from)
-                .to_vec(),
-        );
-        assert_eq!(targets.len(), 2);
-        assert_eq!(targets[0].directory, PathBuf::from("/tmp"));
-        assert_eq!(
-            targets[0].selection,
-            [PathBuf::from("/tmp/a"), PathBuf::from("/tmp/folder")]
-        );
-        assert_eq!(targets[1].directory, PathBuf::from("/"));
-        assert_eq!(targets[1].selection, [PathBuf::from("/")]);
-    }
-
-    #[test]
-    fn folder_targets_open_each_directory_once_without_selection() {
-        let targets = Target::folders(
-            ["/tmp/folder", "/", "/tmp/folder"]
-                .map(PathBuf::from)
-                .to_vec(),
-        );
-        assert_eq!(targets.len(), 2);
-        assert_eq!(targets[0].directory, PathBuf::from("/tmp/folder"));
-        assert_eq!(targets[1].directory, PathBuf::from("/"));
-        assert!(targets.iter().all(|target| target.selection.is_empty()));
-    }
-}
-
 gpui_kit::actions!(gds_files_properties, [CloseProperties]);
 
 struct Properties {
@@ -229,10 +202,12 @@ impl Properties {
         });
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        cx.bind_keys([
-            KeyBinding::new("escape", CloseProperties, Some("FileProperties")),
-            KeyBinding::new("ctrl-w", CloseProperties, Some("FileProperties")),
-        ]);
+        PROPERTIES_KEY_BINDINGS.call_once(|| {
+            cx.bind_keys([
+                KeyBinding::new("escape", CloseProperties, Some("FileProperties")),
+                KeyBinding::new("ctrl-w", CloseProperties, Some("FileProperties")),
+            ]);
+        });
         Self { title, view, focus }
     }
 
@@ -259,3 +234,6 @@ impl Render for Properties {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,8 +1,11 @@
 //! Creating one folder inside a captured destination directory.
 
-use crate::features::file_operations::{
-    history as operation_history,
-    new_folder::{Error, Request},
+use crate::{
+    features::file_operations::{
+        history as operation_history, names,
+        new_folder::{Error, Request},
+    },
+    shared::i18n::t,
 };
 use std::{
     cell::Cell,
@@ -11,7 +14,6 @@ use std::{
     rc::Rc,
 };
 
-use fluent_bundle::FluentArgs;
 use gds::{i18n, ui::DialogActions, ui::notifications};
 use gds_uim::el;
 use gpui_kit::assets::IconName;
@@ -21,7 +23,6 @@ use gpui_kit::*;
 
 use super::Browser;
 use super::name_form::NameForm;
-use crate::features::file_operations::names;
 
 const DIALOG_WIDTH: f32 = 480.;
 
@@ -84,13 +85,12 @@ impl NewFolderDialog {
                 primary_icon: IconName::FolderPlus;
                 cancel_label: $(i18n::text("operation-cancel", cx));
             } };
-            let mut arguments = FluentArgs::new();
-            arguments.set("folder", this.destination.display().to_string());
+            let folder = this.destination.display().to_string();
             el! {
                 dialog {
                     confirm; width: DIALOG_WIDTH.px;
                     bg: $(cx.theme().popover); text_color: $(cx.theme().popover_foreground);
-                    title: $(i18n::format("new-folder-title", Some(&arguments), cx));
+                    title: $(t!(@cx, "new-folder-title", folder));
                     description: $(i18n::text("new-folder-message", cx));
                     icon: IconName::FolderPlus.Icon::new;
                     footer: footer;
@@ -271,36 +271,27 @@ impl Browser {
                     affected.push(parent.to_path_buf());
                 }
                 self.refresh_after_file_operation(&affected, cx);
-                let mut arguments = FluentArgs::new();
-                arguments.set(
-                    "name",
-                    destination
-                        .file_name()
-                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
-                );
+                let name = destination
+                    .file_name()
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
                 notifications::Report::new(
                     notifications::Level::Success,
-                    i18n::format("new-folder-done", Some(&arguments), cx),
+                    t!(@cx, "new-folder-done", name),
                 )
             }
-            Err(Error::Exists { name, .. }) => {
-                let mut arguments = FluentArgs::new();
-                arguments.set("name", name);
-                notifications::Report::new(
-                    notifications::Level::Error,
-                    i18n::format("new-folder-exists", Some(&arguments), cx),
-                )
-            }
+            Err(Error::Exists { name, .. }) => notifications::Report::new(
+                notifications::Level::Error,
+                t!(@cx, "new-folder-exists", name),
+            ),
             Err(Error::Name(error)) => notifications::Report::new(
                 notifications::Level::Error,
                 i18n::text(error.label_id(), cx),
             ),
             Err(error) => {
-                let mut arguments = FluentArgs::new();
-                arguments.set("error", error.to_string());
+                let error = error.to_string();
                 notifications::Report::new(
                     notifications::Level::Error,
-                    i18n::format("new-folder-failed", Some(&arguments), cx),
+                    t!(@cx, "new-folder-failed", error),
                 )
             }
         };

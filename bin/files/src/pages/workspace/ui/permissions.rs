@@ -1,9 +1,7 @@
 //! A staged permission editor; only Save writes to the filesystem.
-use gds::app::AppExt as _;
 
 use super::Browser;
-use crate::features::file_operations::permissions;
-use fluent_bundle::FluentArgs;
+use crate::{features::file_operations::permissions, shared::i18n::t};
 use gds::{i18n, ui::DialogActions, ui::notifications};
 use gds_uim::el;
 use gpui_kit::{
@@ -13,6 +11,7 @@ use gpui_kit::{
     *,
 };
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 
 const DIALOG_WIDTH: f32 = 520.;
 
@@ -26,6 +25,13 @@ struct Editor {
     browser: WeakEntity<Browser>,
     origin_tab: u64,
     tasks: gds::service::task_manager::Scope,
+    cancel: CancellationToken,
+}
+
+impl Drop for Editor {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
 
 impl Editor {
@@ -70,12 +76,11 @@ impl Editor {
         self.error = None;
         let path = self.path.clone();
         let recursive = self.recursive;
-        let work = cx
-            .gds()
-            .tasks()
-            .scope()
+        let cancel = self.cancel.child_token();
+        let work = self
+            .tasks
             .spawn_blocking_named("Change file permissions", move || {
-                permissions::apply(&path, mode, recursive)
+                permissions::apply_cancellable(&path, mode, recursive, &cancel)
             });
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
@@ -93,10 +98,12 @@ impl Editor {
                             window.close_dialog(cx);
                             notifications::success(i18n::text("permissions-saved", cx), cx);
                         } else {
-                            let mut args = FluentArgs::new();
-                            args.set("succeeded", report.succeeded as i64);
-                            args.set("failed", report.failures.len() as i64);
-                            let summary = i18n::format("permissions-partial", Some(&args), cx);
+                            let summary = t!(
+                                @cx,
+                                "permissions-partial",
+                                succeeded = report.succeeded as i64,
+                                failed = report.failures.len() as i64,
+                            );
                             this.error = Some(summary.clone());
                             let mut notice =
                                 notifications::Report::new(notifications::Level::Error, summary);
@@ -120,6 +127,7 @@ impl Editor {
     }
 
     fn release(&self, window: &mut Window, cx: &mut App) {
+        self.cancel.cancel();
         if let Some(browser) = self.browser.upgrade() {
             browser.update(cx, |browser, cx| {
                 browser.operations.in_progress = false;
@@ -248,6 +256,7 @@ impl Browser {
                 browser: browser.clone(),
                 origin_tab,
                 tasks,
+                cancel: CancellationToken::new(),
             };
             editor.load(cx);
             editor
@@ -270,8 +279,10 @@ impl Browser {
                     save.update(cx, |editor, cx| editor.save(window, cx));
                     false
                 };
-                let on_cancel =
-                    move |_: &ClickEvent, _: &mut Window, cx: &mut App| !cancel.read(cx).saving;
+                let on_cancel = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                    cancel.read(cx).cancel.cancel();
+                    true
+                };
                 let on_close = move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                     close.update(cx, |editor, cx| editor.release(window, cx));
                 };
