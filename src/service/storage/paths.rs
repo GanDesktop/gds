@@ -99,7 +99,7 @@ pub(super) async fn lock(
     // MigrationSet reads applied IDs before executing migrations. Serialize
     // initialization across processes; closing this file releases the lock.
     let file = tasks
-        .spawn_blocking(move || {
+        .spawn_blocking_named("Lock database initialization", move || {
             file.lock()?;
             Ok::<_, io::Error>(file)
         })

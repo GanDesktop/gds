@@ -30,20 +30,22 @@ impl Details {
         }
         self.paths = paths.clone();
         self.icons.retain(|path, _| paths.contains(path));
-        let work = self.tasks.spawn_blocking(move || {
-            let icons = paths
-                .iter()
-                .map(|path| {
-                    let icon = match directory::Entry::inspect(path) {
-                        Ok(entry) => FileIcon::for_entry(&entry),
-                        // Clipboard entries may disappear after a move or external deletion.
-                        Err(_) => FileIcon::plain(IconName::FileQuestionMark),
-                    };
-                    (path.clone(), icon)
-                })
-                .collect();
-            (paths, icons)
-        });
+        let work = self
+            .tasks
+            .spawn_blocking_named("Inspect clipboard files", move || {
+                let icons = paths
+                    .iter()
+                    .map(|path| {
+                        let icon = match directory::Entry::inspect(path) {
+                            Ok(entry) => FileIcon::for_entry(&entry),
+                            // Clipboard entries may disappear after a move or external deletion.
+                            Err(_) => FileIcon::plain(IconName::FileQuestionMark),
+                        };
+                        (path.clone(), icon)
+                    })
+                    .collect();
+                (paths, icons)
+            });
         self.loading = Some(cx.spawn(async move |this, cx| match work.await {
             Ok((paths, icons)) => {
                 let _ = this.update(cx, |this, cx| {

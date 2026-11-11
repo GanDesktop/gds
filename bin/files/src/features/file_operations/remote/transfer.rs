@@ -141,7 +141,7 @@ impl Work {
                 .map_err(|e| Error::Failed(e.to_string()))?;
                 let result = self
                     .tasks
-                    .spawn_blocking(move || batch.execute())
+                    .spawn_blocking_named("Commit downloaded files", move || batch.execute())
                     .await
                     .map_err(|e| Error::Failed(e.to_string()))?;
                 if let Some(item) = result.items.into_iter().find(|item| item.result.is_err()) {

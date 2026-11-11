@@ -54,5 +54,6 @@ with (artifacts / "session.log").open("w") as log:
     result = subprocess.run(command, env=environment, stdout=log, stderr=subprocess.STDOUT)
 (artifacts / "exit-code.txt").write_text(f"{result.returncode}\n")
 assert result.returncode == 0, f"Native session failed; inspect {artifacts / 'session.log'}"
+assert "timed out waiting on app_will_quit" not in (artifacts / "session.log").read_text(), f"Shutdown did not drain; inspect {artifacts / 'session.log'}"
 assert (artifacts / "passed.txt").is_file(), f"Scenario incomplete; inspect {artifacts / 'session.log'}"
 print((artifacts / "passed.txt").read_text(), end="")

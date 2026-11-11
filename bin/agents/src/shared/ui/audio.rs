@@ -100,7 +100,8 @@ impl Player {
         let generation = Arc::clone(&self.generation);
         let scope = cx.gds().tasks().scope().named_child("Audio playback");
         let cancel = scope.token();
-        scope.spawn_thread(
+        scope.spawn_thread_named(
+            "Play audio",
             std::thread::Builder::new().name("gds-agents-audio".into()),
             move || worker::run(receiver, events, generation, cancel),
         )?;

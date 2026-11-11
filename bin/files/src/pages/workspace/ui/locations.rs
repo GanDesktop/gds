@@ -64,7 +64,10 @@ impl Browser {
             return;
         };
         self.locations.saving = true;
-        let work = self.window.tasks.spawn(async move { save.run().await });
+        let work = self
+            .window
+            .tasks
+            .spawn_named("Save window locations", async move { save.run().await });
         cx.spawn(async move |this, cx| {
             let result = work
                 .await

@@ -49,13 +49,13 @@ impl Terminal {
         let cancel = scope.token();
         let cleanup_service = service.clone();
         let (finished, done) = watch::channel(false);
-        scope.spawn(async move {
+        scope.spawn_named("Shut down terminal", async move {
             cancel.cancelled().await;
             cleanup_service.shutdown().await;
             finished.send_replace(true);
         });
         let ready = service.ready();
-        scope.spawn_blocking(move || launch.run());
+        scope.spawn_blocking_named("Launch terminal", move || launch.run());
         cx.spawn_in(window, async move |terminal, cx| {
             let session = ready.await;
             let _ = terminal.update_in(cx, |this, window, cx| {

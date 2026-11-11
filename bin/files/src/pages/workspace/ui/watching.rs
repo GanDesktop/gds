@@ -30,7 +30,9 @@ impl Browser {
         let events = cx.spawn(async move |this, cx| {
             while watcher.changed().await {
                 if tasks
-                    .spawn(async { tokio::time::sleep(DEBOUNCE).await })
+                    .spawn_named("Debounce directory changes", async {
+                        tokio::time::sleep(DEBOUNCE).await
+                    })
                     .await
                     .is_err()
                 {
@@ -48,7 +50,9 @@ impl Browser {
                         break;
                     }
                     if tasks
-                        .spawn(async { tokio::time::sleep(DEBOUNCE).await })
+                        .spawn_named("Debounce directory changes", async {
+                            tokio::time::sleep(DEBOUNCE).await
+                        })
                         .await
                         .is_err()
                     {
@@ -68,7 +72,9 @@ impl Browser {
                 let Some((revision, snapshot)) = snapshot else {
                     continue;
                 };
-                let work = tasks.spawn_blocking(move || changes.apply(snapshot));
+                let work = tasks.spawn_blocking_named("Reconcile directory changes", move || {
+                    changes.apply(snapshot)
+                });
                 let result = work
                     .await
                     .map_err(directory::Error::from)

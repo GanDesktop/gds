@@ -165,7 +165,7 @@ impl Request {
         tasks: &gds::service::task_manager::Scope,
         cancel: tokio_util::sync::CancellationToken,
     ) -> gds::service::task_manager::Task<Result<PathBuf, Error>> {
-        tasks.spawn_blocking(move || {
+        tasks.spawn_blocking_named("Rename file", move || {
             if cancel.is_cancelled() {
                 Err(Error::Cancelled)
             } else {

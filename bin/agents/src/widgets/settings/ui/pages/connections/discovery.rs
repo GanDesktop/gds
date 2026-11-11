@@ -41,7 +41,11 @@ impl Page {
             return;
         };
         // Only borrow the application's tasks, never its target or credentials.
-        let task = IoTask::cancel_on_drop(service.tasks().spawn_cancellable(probe(Target::Local)));
+        let task = IoTask::cancel_on_drop(
+            service
+                .tasks()
+                .spawn_cancellable_named("Discover local server", probe(Target::Local)),
+        );
         self.begin_scan(async move { task.await.unwrap_or(Err(())) }, window, cx);
     }
 

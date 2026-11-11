@@ -134,11 +134,10 @@ impl Page {
         let request = cx
             .try_global::<crate::entities::agent::catalog::Service>()
             .map(|service| {
-                IoTask::cancel_on_drop(
-                    service
-                        .tasks()
-                        .spawn_cancellable(probe(options.clone(), CHECK_TIMEOUT)),
-                )
+                IoTask::cancel_on_drop(service.tasks().spawn_cancellable_named(
+                    "Check server connection",
+                    probe(options.clone(), CHECK_TIMEOUT),
+                ))
             });
         self.begin_check(
             profile.id.clone(),

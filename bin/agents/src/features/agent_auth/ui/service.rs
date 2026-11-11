@@ -71,12 +71,15 @@ pub(super) fn start(
     let (input, receive) = mpsc::unbounded_channel();
     let (events, receiver) = futures_mpsc::unbounded();
     let tasks = service.tasks();
-    let task = IoTask::cancel_on_drop(tasks.spawn_cancellable(async move {
-        let result = run(service, spec, method, path, receive, events.clone()).await;
-        if let Err(error) = result {
-            let _ = events.unbounded_send(Err(error));
-        }
-    }));
+    let task = IoTask::cancel_on_drop(tasks.spawn_cancellable_named(
+        "Authenticate agent",
+        async move {
+            let result = run(service, spec, method, path, receive, events.clone()).await;
+            if let Err(error) = result {
+                let _ = events.unbounded_send(Err(error));
+            }
+        },
+    ));
     Stream {
         input,
         events: receiver,
@@ -191,15 +194,19 @@ pub(super) fn terminal(
     tasks: &Scope,
     plan: bas::authentication::Invocation,
 ) -> impl Future<Output = Result<i32, String>> + use<> {
-    let task = IoTask::cancel_on_drop(tasks.spawn_cancellable(async move {
-        async {
-            let invocation =
-                super::terminal::Invocation::from_plan(plan).map_err(|error| error.to_string())?;
-            let login = super::terminal::launch(invocation).map_err(|error| error.to_string())?;
-            login.complete_code().await
-        }
-        .await
-    }));
+    let task = IoTask::cancel_on_drop(tasks.spawn_cancellable_named(
+        "Wait for terminal authentication",
+        async move {
+            async {
+                let invocation = super::terminal::Invocation::from_plan(plan)
+                    .map_err(|error| error.to_string())?;
+                let login =
+                    super::terminal::launch(invocation).map_err(|error| error.to_string())?;
+                login.complete_code().await
+            }
+            .await
+        },
+    ));
     async move {
         task.await.unwrap_or_else(|error| {
             tracing::error!(%error, "Agent request task failed");

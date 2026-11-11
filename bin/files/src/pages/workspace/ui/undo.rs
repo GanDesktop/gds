@@ -87,7 +87,9 @@ impl Browser {
             .gds()
             .tasks()
             .scope()
-            .spawn_blocking(move || entry.execute_cancellable(&cancel));
+            .spawn_blocking_named("Undo or redo file operation", move || {
+                entry.execute_cancellable(&cancel)
+            });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             if let Err(error) = this.update(cx, |this, cx| {

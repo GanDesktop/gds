@@ -186,21 +186,24 @@ impl Connector {
             }
         }));
         let destination = address.clone();
-        let work = IoTask::cancel_on_drop(self.tasks.spawn_cancellable(async move {
-            let session = Session::connect(
-                &destination,
-                ConnectOptions {
-                    credentials,
-                    known_hosts,
-                },
-                sender,
-            )
-            .await?;
-            if intent == Intent::Add {
-                session.list(&destination).await?;
-            }
-            Ok::<_, gds::service::remote::Error>(session)
-        }));
+        let work = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Connect to remote server",
+            async move {
+                let session = Session::connect(
+                    &destination,
+                    ConnectOptions {
+                        credentials,
+                        known_hosts,
+                    },
+                    sender,
+                )
+                .await?;
+                if intent == Intent::Add {
+                    session.list(&destination).await?;
+                }
+                Ok::<_, gds::service::remote::Error>(session)
+            },
+        ));
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -288,8 +291,10 @@ impl Connector {
     pub(crate) fn disconnect(&mut self, address: &Address, cx: &mut Context<Self>) {
         if let Some(connection) = self.sessions.remove(&address.connection_key()) {
             let session = connection.session;
-            let work =
-                IoTask::cancel_on_drop(self.tasks.spawn(async move { session.close().await }));
+            let work = IoTask::cancel_on_drop(
+                self.tasks
+                    .spawn_named("Close remote session", async move { session.close().await }),
+            );
             cx.spawn(async move |_, cx| match work.await {
                 Ok(Ok(())) => (),
                 Ok(Err(error)) => {

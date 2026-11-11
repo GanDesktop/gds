@@ -572,7 +572,10 @@ impl Browser {
             return;
         }
         let worker = request.clone();
-        let work = self.window.tasks.spawn_blocking(move || worker.load());
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking_named("Read directory", move || worker.load());
         cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -869,22 +872,24 @@ impl Browser {
         let target_tab = self.tabs.active_id;
         let worker_path = path.clone();
         let desktop = self.window.desktop.clone();
-        let work = IoTask::cancel_on_drop(self.window.tasks.spawn_cancellable(async move {
-            let metadata =
-                tokio::fs::metadata(&worker_path)
-                    .await
-                    .map_err(|source| desktop::Error::Io {
+        let work = IoTask::cancel_on_drop(self.window.tasks.spawn_cancellable_named(
+            "Open selected files",
+            async move {
+                let metadata = tokio::fs::metadata(&worker_path).await.map_err(|source| {
+                    desktop::Error::Io {
                         path: worker_path.clone(),
                         source,
-                    })?;
-            if metadata.is_dir() && mode == desktop::OpenMode::DefaultApplication {
-                return Ok::<Activation, desktop::Error>(Activation::Directory);
-            }
-            desktop
-                .open_file(&worker_path, mode)
-                .await
-                .map(Activation::File)
-        }));
+                    }
+                })?;
+                if metadata.is_dir() && mode == desktop::OpenMode::DefaultApplication {
+                    return Ok::<Activation, desktop::Error>(Activation::Directory);
+                }
+                desktop
+                    .open_file(&worker_path, mode)
+                    .await
+                    .map(Activation::File)
+            },
+        ));
         cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -920,7 +925,9 @@ impl Browser {
         let work = self
             .window
             .tasks
-            .spawn_blocking(move || desktop.open_terminal(&path));
+            .spawn_blocking_named("Open external terminal", move || {
+                desktop.open_terminal(&path)
+            });
         cx.spawn(async move |this, cx| {
             if let Err(error) = work
                 .await

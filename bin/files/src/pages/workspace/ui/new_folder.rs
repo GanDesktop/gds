@@ -166,13 +166,16 @@ impl Browser {
         // Suggesting a name probes the destination; a slow or network mount
         // must not block the UI while the dialog is being prepared.
         let directory = destination.clone();
-        let work = self.window.tasks.spawn_blocking(move || {
-            names::free_name(
-                &directory,
-                OsStr::new(&default),
-                &std::collections::HashSet::new(),
-            )
-        });
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking_named("Suggest folder name", move || {
+                names::free_name(
+                    &directory,
+                    OsStr::new(&default),
+                    &std::collections::HashSet::new(),
+                )
+            });
         cx.spawn_in(window, async move |this, cx| {
             let suggested = work
                 .await

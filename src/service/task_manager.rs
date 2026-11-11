@@ -222,10 +222,20 @@ impl Scope {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
+        self.spawn_named("", work)
+    }
+
+    /// Schedule work with a diagnostic name describing its responsibility.
+    #[track_caller]
+    pub fn spawn_named<F>(&self, name: &str, work: F) -> Task<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
         let Some(runtime) = &self.runtime else {
             return Task::rejected(Error::NoExecutor);
         };
-        match self.track_named("", Execution::Tokio, work) {
+        match self.track_named(name, Execution::Tokio, work) {
             Ok(work) => Task::running(runtime.spawn(async move { Ok(work.await) })),
             Err(error) => Task::rejected(error.into()),
         }
@@ -238,11 +248,21 @@ impl Scope {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
+        self.spawn_cancellable_named("", work)
+    }
+
+    /// Schedule work with a diagnostic name describing its responsibility.
+    #[track_caller]
+    pub fn spawn_cancellable_named<F>(&self, name: &str, work: F) -> Task<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
         let Some(runtime) = &self.runtime else {
             return Task::rejected(Error::NoExecutor);
         };
         let cancel = self.token();
-        let work = match self.track_named("", Execution::Tokio, async move {
+        let work = match self.track_named(name, Execution::Tokio, async move {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => Err(Closed.into()),
@@ -262,10 +282,20 @@ impl Scope {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
+        self.spawn_blocking_named("", work)
+    }
+
+    /// Schedule work with a diagnostic name describing its responsibility.
+    #[track_caller]
+    pub fn spawn_blocking_named<F, T>(&self, name: &str, work: F) -> Task<T>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
         let Some(runtime) = &self.runtime else {
             return Task::rejected(Error::NoExecutor);
         };
-        let completion = match self.register_named("", Execution::Blocking) {
+        let completion = match self.register_named(name, Execution::Blocking) {
             Ok(completion) => completion,
             Err(error) => return Task::rejected(error.into()),
         };
@@ -282,8 +312,17 @@ impl Scope {
     /// Rejects work after shutdown or without an executor. Must not run inside an async task.
     #[track_caller]
     pub fn block_on<F: Future>(&self, work: F) -> Result<F::Output, Error> {
+        self.block_on_named("", work)
+    }
+
+    /// Drive borrowed I/O with a diagnostic name.
+    ///
+    /// # Errors
+    /// Rejects work after shutdown or without an executor. Must not run inside an async task.
+    #[track_caller]
+    pub fn block_on_named<F: Future>(&self, name: &str, work: F) -> Result<F::Output, Error> {
         let runtime = self.runtime.as_ref().ok_or(Error::NoExecutor)?;
-        Ok(runtime.block_on(self.track(work)?))
+        Ok(runtime.block_on(self.track_named(name, Execution::Supervisor, work)?))
     }
 
     #[track_caller]
@@ -295,8 +334,25 @@ impl Scope {
     where
         F: FnOnce() + Send + 'static,
     {
+        self.spawn_thread_named("", builder, work)
+    }
+
+    /// Start a native worker with a diagnostic name.
+    ///
+    /// # Errors
+    /// Reports closed admission or thread creation failure.
+    #[track_caller]
+    pub fn spawn_thread_named<F>(
+        &self,
+        name: &str,
+        builder: std::thread::Builder,
+        work: F,
+    ) -> std::io::Result<std::thread::JoinHandle<()>>
+    where
+        F: FnOnce() + Send + 'static,
+    {
         let completion = self
-            .register_named("", Execution::Thread)
+            .register_named(name, Execution::Thread)
             .map_err(std::io::Error::other)?;
         builder.spawn(move || {
             work();

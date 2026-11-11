@@ -89,12 +89,16 @@ fn registration_site_and_unpolled_future_drop_are_visible() {
 async fn executor_adapters_report_kind_until_completion() {
     let root = Scope::with_handle(tokio::runtime::Handle::current(), true);
     let cancel = root.token();
-    let asynchronous = root.spawn(async move { cancel.cancelled().await });
+    let asynchronous = root.spawn_named("Watch events", async move { cancel.cancelled().await });
     let (send, receive) = std::sync::mpsc::channel();
-    let blocking = root.spawn_blocking(move || receive.recv().unwrap());
+    let blocking = root.spawn_blocking_named("Read metadata", move || receive.recv().unwrap());
     let (stop, stopped) = std::sync::mpsc::channel();
     let thread = root
-        .spawn_thread(std::thread::Builder::new(), move || stopped.recv().unwrap())
+        .spawn_thread_named(
+            "Run native worker",
+            std::thread::Builder::new(),
+            move || stopped.recv().unwrap(),
+        )
         .unwrap();
     let snapshot = root.snapshot();
     assert_eq!(
@@ -104,6 +108,14 @@ async fn executor_adapters_report_kind_until_completion() {
             .map(|task| task.execution)
             .collect::<Vec<_>>(),
         [Execution::Tokio, Execution::Blocking, Execution::Thread]
+    );
+    assert_eq!(
+        snapshot
+            .tasks
+            .iter()
+            .map(|task| task.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Watch events", "Read metadata", "Run native worker"]
     );
     assert!(
         snapshot

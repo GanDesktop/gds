@@ -48,12 +48,12 @@ impl Service {
         #[cfg(target_os = "linux")]
         let watcher = {
             let cancel = tasks.token();
-            tasks.spawn(async move {
+            tasks.spawn_named("Watch storage volumes", async move {
                 tokio::select! { _ = cancel.cancelled() => {}, _ = super::linux::watch(sender) => {} }
             })
         };
         #[cfg(not(target_os = "linux"))]
-        let watcher = tasks.spawn(async move {
+        let watcher = tasks.spawn_named("Discover storage volumes", async move {
             let _ = sender
                 .send(Observation {
                     started: Instant::now(),
@@ -116,16 +116,19 @@ impl Service {
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.discovering = true;
         let started = Instant::now();
-        let work = IoTask::cancel_on_drop(self.tasks.spawn_cancellable(async {
-            #[cfg(target_os = "linux")]
-            {
-                super::linux::refresh().await
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                Err(Error::Unsupported)
-            }
-        }));
+        let work = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Refresh storage volumes",
+            async {
+                #[cfg(target_os = "linux")]
+                {
+                    super::linux::refresh().await
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Err(Error::Unsupported)
+                }
+            },
+        ));
         cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -142,7 +145,9 @@ impl Service {
     fn sample_capacity(&mut self, cx: &mut Context<Self>) {
         for request in self.usage.requests(&self.snapshot, Instant::now()) {
             let worker_request = request.clone();
-            let work = self.tasks.spawn_blocking(move || worker_request.read());
+            let work = self
+                .tasks
+                .spawn_blocking_named("Read filesystem capacity", move || worker_request.read());
             cx.spawn(async move |this, cx| {
                 let result = work
                     .await
@@ -226,24 +231,27 @@ impl Service {
         }
         cx.notify();
         let expected = self.snapshot.clone();
-        let work = IoTask::cancel_on_drop(self.tasks.spawn(async move {
-            #[cfg(target_os = "linux")]
-            {
-                let result = super::linux::operate(expected, action).await;
-                let started = Instant::now();
-                let snapshot = super::linux::refresh().await;
-                (result, started, snapshot)
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let _ = (expected, action);
-                (
-                    Err(Error::Unsupported),
-                    Instant::now(),
-                    Err(Error::Unsupported),
-                )
-            }
-        }));
+        let work = IoTask::cancel_on_drop(self.tasks.spawn_named(
+            "Change volume mount state",
+            async move {
+                #[cfg(target_os = "linux")]
+                {
+                    let result = super::linux::operate(expected, action).await;
+                    let started = Instant::now();
+                    let snapshot = super::linux::refresh().await;
+                    (result, started, snapshot)
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = (expected, action);
+                    (
+                        Err(Error::Unsupported),
+                        Instant::now(),
+                        Err(Error::Unsupported),
+                    )
+                }
+            },
+        ));
         Ok(cx.spawn(async move |this, cx| {
             let (result, started, snapshot) = work.await.unwrap_or_else(|error| {
                 let error = Error::Operation(error.to_string());

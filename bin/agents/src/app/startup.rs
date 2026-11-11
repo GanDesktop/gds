@@ -36,7 +36,8 @@ pub(crate) fn run() -> Result<()> {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
     gpui_kit::application()
-        .with_http_client(supervisor.block_on(http::client(&tasks))??)
+        .with_quit_mode(gpui_kit::QuitMode::Explicit)
+        .with_http_client(supervisor.block_on_named("Initialize HTTP client", http::client(&tasks))??)
         .with_assets(assets::Assets)
         .run(move |cx| {
             cx.gds().initialize(tasks.clone(), logs);

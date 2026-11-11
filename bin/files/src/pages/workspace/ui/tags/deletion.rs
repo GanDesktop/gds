@@ -73,12 +73,16 @@ impl Browser {
         }
         self.operations.in_progress = true;
         let commands = self.settings.preferences.tags.commands.clone();
-        let work = cx.gds().tasks().scope().spawn(async move {
-            crate::entities::tags::connect(&commands)
-                .await?
-                .delete_tag(address.tag())
-                .await
-        });
+        let work = cx
+            .gds()
+            .tasks()
+            .scope()
+            .spawn_named("Delete tag", async move {
+                crate::entities::tags::connect(&commands)
+                    .await?
+                    .delete_tag(address.tag())
+                    .await
+            });
         cx.spawn(async move |this, cx| {
             let result = work
                 .await

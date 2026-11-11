@@ -29,7 +29,9 @@ impl View {
         let work = gds::service::task_manager::Task::cancel_on_drop(
             self.tags
                 .tasks
-                .spawn(async move { crate::entities::tags::connect(&work_commands).await }),
+                .spawn_named("Check tag backend", async move {
+                    crate::entities::tags::connect(&work_commands).await
+                }),
         );
         self.tags.task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;

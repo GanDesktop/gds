@@ -74,6 +74,11 @@ impl View {
                     let session = view.options.session.clone();
                     let source = source.clone();
                     view.mutate(
+                        if directory {
+                            "Create remote folder"
+                        } else {
+                            "Rename remote file"
+                        },
                         async move {
                             if directory {
                                 session.mkdir(&target).await
@@ -108,13 +113,14 @@ impl View {
 
     fn mutate(
         &mut self,
+        name: &str,
         work: impl Future<Output = Result<(), gds::service::remote::Error>> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
         self.busy = true;
         self.cancellable = false;
         self.message = None;
-        let work = self.options.tasks.spawn(work);
+        let work = self.options.tasks.spawn_named(name, work);
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -293,7 +299,11 @@ impl View {
             }
         }));
         // Cancellation completes protocol close/cleanup before the Tokio task is dropped.
-        let work = cx.gds().tasks().scope().spawn(work);
+        let work = cx
+            .gds()
+            .tasks()
+            .scope()
+            .spawn_named("Transfer remote files", work);
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -330,11 +340,14 @@ impl View {
 
     fn open_download(&self, path: PathBuf, cx: &mut Context<Self>) {
         let desktop = self.options.desktop.clone();
-        let work = self.options.tasks.spawn(async move {
-            desktop
-                .open_file(&path, desktop::OpenMode::DefaultApplication)
-                .await
-        });
+        let work = self
+            .options
+            .tasks
+            .spawn_named("Open downloaded file", async move {
+                desktop
+                    .open_file(&path, desktop::OpenMode::DefaultApplication)
+                    .await
+            });
         cx.spawn(async move |_, cx| {
             let result = work
                 .await

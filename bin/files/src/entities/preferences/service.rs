@@ -46,12 +46,12 @@ impl Service {
         let cancel = tasks.token();
         // Closing the sender seals admission. The writer drains accepted changes
         // before its blocking task completes, including during application exit.
-        tasks.spawn(async move {
+        tasks.spawn_named("Close preferences writer on exit", async move {
             cancel.cancelled().await;
             closing.lock().expect("preferences queue lock").take();
         });
         let (results, mut saved) = mpsc::unbounded_channel();
-        let writer = tasks.spawn_blocking(move || {
+        let writer = tasks.spawn_blocking_named("Save preferences", move || {
             while let Some(preferences) = receiver.blocking_recv() {
                 let result = api::save_to(&path, &preferences);
                 if let Err(error) = &result {

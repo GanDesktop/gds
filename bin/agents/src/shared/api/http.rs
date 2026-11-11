@@ -39,7 +39,10 @@ impl HttpClient for AssetClient {
                 .insert(RequestTimeout(REQUEST_TIMEOUT));
         }
         let work = self.inner.send(request);
-        let task = self.tasks.spawn_cancellable(work).cancel_on_drop();
+        let task = self
+            .tasks
+            .spawn_cancellable_named("Fetch HTTP resource", work)
+            .cancel_on_drop();
         Box::pin(async move { task.await? })
     }
 }
@@ -51,7 +54,7 @@ impl HttpClient for AssetClient {
 pub(crate) async fn client(tasks: &Scope) -> Result<Arc<dyn HttpClient>> {
     // The transport captures Tokio context while constructed by the supervisor.
     let inner = tasks
-        .spawn(async {
+        .spawn_named("Initialize HTTP transport", async {
             ReqwestClient::proxy_and_user_agent(None, USER_AGENT)
                 .context("cannot initialize the GUI asset HTTP client")
         })

@@ -141,9 +141,13 @@ impl View {
             return;
         }
         let path = item.entry.path.clone();
-        let work = cx.gds().tasks().scope().spawn_blocking(move || {
-            gds::service::file_tags::read(&path).map_err(|e| e.to_string())
-        });
+        let work = cx
+            .gds()
+            .tasks()
+            .scope()
+            .spawn_blocking_named("Read file tags", move || {
+                gds::service::file_tags::read(&path).map_err(|e| e.to_string())
+            });
         self.tags_task = Some(cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -522,7 +526,7 @@ impl Browser {
         let work = self
             .window
             .tasks
-            .spawn_blocking(move || Entry::inspect(&path));
+            .spawn_blocking_named("Inspect preview target", move || Entry::inspect(&path));
         self.collections.preview_task = Some(cx.spawn(async move |this, cx| {
             let entry = work
                 .await

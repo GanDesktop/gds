@@ -79,9 +79,9 @@ impl HomePage {
         self.opened = true;
         let flake = self.flake.clone();
         let cancel = self.scope.token();
-        let task = self
-            .scope
-            .spawn(async move { home::discover(&flake, &cancel).await });
+        let task = self.scope.spawn_named("Discover Nix targets", async move {
+            home::discover(&flake, &cancel).await
+        });
         cx.spawn(async move |page, cx| {
             let result = task.await.unwrap_or_else(|error| Err(error.into()));
             let _ = page.update(cx, |page, cx| {
@@ -114,9 +114,9 @@ impl HomePage {
         let target = self.targets[index].clone();
         let flake = self.flake.clone();
         let cancel = self.scope.token();
-        let task = self
-            .scope
-            .spawn(async move { target.options(&flake, &cancel).await });
+        let task = self.scope.spawn_named("Load Nix options", async move {
+            target.options(&flake, &cancel).await
+        });
         cx.spawn(async move |page, cx| {
             let result = task.await.unwrap_or_else(|error| Err(error.into()));
             let _ = page.update(cx, |page, cx| {

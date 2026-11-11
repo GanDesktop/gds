@@ -301,7 +301,10 @@ impl Browser {
             return;
         }
         let generation = self.collections.trash.begin_load();
-        let work = self.window.tasks.spawn_blocking(backend::list);
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking_named("Read trash contents", backend::list);
         cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -437,7 +440,9 @@ impl Browser {
         let work = self
             .window
             .tasks
-            .spawn_blocking(move || backend::perform_cancellable(action, entries, &cancel));
+            .spawn_blocking_named("Restore or purge trash", move || {
+                backend::perform_cancellable(action, entries, &cancel)
+            });
         cx.spawn(async move |this, cx| {
             let outcomes = work.await;
             if let Err(error) = this.update(cx, |this, cx| match outcomes {

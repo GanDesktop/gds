@@ -133,7 +133,7 @@ impl Tasks<'_> {
             }
             std::io::Result::Ok(())
         };
-        let task = root.spawn(work);
+        let task = root.spawn_named("Watch shutdown signals", work);
         cx.spawn(async move |cx| {
             if receive.await.is_ok() {
                 cx.update(quit);

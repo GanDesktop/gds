@@ -308,7 +308,7 @@ impl Connection {
         let (updates, events) = mpsc::channel(EVENT_CAPACITY);
         let scope = parent.named_child("Agent connection / history");
         let worker = (*scope).clone();
-        let task = scope.spawn(async move {
+        let task = scope.spawn_named("Maintain agent connection", async move {
             let channel = match server.channel_lazy(REQUEST_TIMEOUT) {
                 Ok(channel) => channel,
                 Err(error) => {
@@ -396,11 +396,10 @@ async fn run_cached_scoped(
     let (history, writer) = history::Store::new(cache, &scope);
     let refresh = Arc::new(Notify::new());
     let mut tasks = Group::new(scope);
-    tasks.spawn(catalog_loop(
-        client.clone(),
-        updates.clone(),
-        refresh.clone(),
-    ));
+    tasks.spawn_named(
+        "Watch session catalog",
+        catalog_loop(client.clone(), updates.clone(), refresh.clone()),
+    );
     let mut attachment: Option<AbortHandle> = None;
     loop {
         tokio::select! {
@@ -412,18 +411,18 @@ async fn run_cached_scoped(
                     Command::Watch { session, epoch } => {
                         if let Some(task) = attachment.take() { task.abort(); }
                         history.flush().await;
-                        attachment = tasks.spawn(permissions::watch_cached(protocol.clone(), client.clone(), updates.clone(), session, epoch, None, history.clone()));
+                        attachment = tasks.spawn_named("Watch session history and permissions", permissions::watch_cached(protocol.clone(), client.clone(), updates.clone(), session, epoch, None, history.clone()));
                     }
                     Command::Resume { session, epoch, cursor } => {
                         if let Some(task) = attachment.take() { task.abort(); }
                         history.flush().await;
-                        attachment = tasks.spawn(permissions::watch_cached(protocol.clone(), client.clone(), updates.clone(), session, epoch, Some(cursor), history.clone()));
+                        attachment = tasks.spawn_named("Resume session history and permissions", permissions::watch_cached(protocol.clone(), client.clone(), updates.clone(), session, epoch, Some(cursor), history.clone()));
                     }
                     Command::OlderHistory { session, epoch, before } => {
                         let history = history.clone();
                         let client = client.clone();
                         let updates = updates.clone();
-                        tasks.spawn(async move {
+                        tasks.spawn_named("Load older session history", async move {
                             let result = history.older(client, session, before).await.map(Into::into);
                             let _ = updates.send(Update::OlderHistory { epoch, before, result }).await;
                         });
@@ -431,7 +430,7 @@ async fn run_cached_scoped(
                     Command::HistoryOverview { session, epoch, request } => {
                         let mut client = client.clone();
                         let updates = updates.clone();
-                        tasks.spawn(async move {
+                        tasks.spawn_named("Load session history overview", async move {
                             let result = client.history_overview(session, REQUEST_TIMEOUT)
                                 .await.map(Into::into).map_err(Failure::from);
                             let _ = updates.send(Update::HistoryOverview { session, epoch, request, result }).await;
@@ -440,7 +439,7 @@ async fn run_cached_scoped(
                     Command::HistoryLocation { session, epoch, request, cursor } => {
                         let mut client = client.clone();
                         let updates = updates.clone();
-                        tasks.spawn(async move {
+                        tasks.spawn_named("Locate session history", async move {
                             // A located slice is not the latest suffix: never let it
                             // replace the live history cache or its attach frontier.
                             let result = client.history_window_at(session, cursor, REQUEST_TIMEOUT)
@@ -460,7 +459,7 @@ async fn run_cached_scoped(
                         let protocol = protocol.clone();
                         let updates = updates.clone();
                         let refresh = refresh.clone();
-                        tasks.spawn(async move {
+                        tasks.spawn_named("Execute session command", async move {
                             operation(protocol, client, command, updates, refresh).await;
                         });
                     }

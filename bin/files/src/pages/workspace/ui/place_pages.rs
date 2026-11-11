@@ -177,7 +177,10 @@ impl Browser {
         }
         self.collections.network.discovery.loading = true;
         self.collections.network.discovery.error = None;
-        let work = self.window.tasks.spawn_blocking(network::read);
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking_named("Discover network locations", network::read);
         cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -222,7 +225,11 @@ impl Browser {
         let Some(work) = self.locations.places.reload() else {
             return;
         };
-        let work = IoTask::cancel_on_drop(self.window.tasks.spawn_cancellable(work));
+        let work = IoTask::cancel_on_drop(
+            self.window
+                .tasks
+                .spawn_cancellable_named("Reload saved locations", work),
+        );
         self.collections.favorites.loading = true;
         let previous = self.locations.places.favorites.clone();
         cx.spawn(async move |this, cx| {

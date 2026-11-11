@@ -39,7 +39,7 @@ impl Storage {
         let storage = Arc::new(Self::new(path));
         let weak = Arc::downgrade(&storage);
         let cancel = tasks.token();
-        tasks.spawn(async move {
+        tasks.spawn_named("Flush saved locations on exit", async move {
             cancel.cancelled().await;
             let Some(storage) = weak.upgrade() else {
                 return;

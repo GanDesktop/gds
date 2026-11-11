@@ -77,13 +77,10 @@ impl Browser {
         self.operations.remote_paste_cancel = Some(cancel.clone());
         let (updates, _) = tokio::sync::watch::channel(Default::default());
         let target = operations::Resource::Local(destination.clone());
-        let work = self.window.tasks.spawn(operations::copy(
-            self.window.tasks.clone(),
-            sources,
-            target,
-            cancel,
-            updates,
-        ));
+        let work = self.window.tasks.spawn_named(
+            "Copy remote files",
+            operations::copy(self.window.tasks.clone(), sources, target, cancel, updates),
+        );
         cx.spawn(async move |this, cx| {
             let report = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -276,7 +273,9 @@ impl Browser {
         let work = IoTask::cancel_on_drop(
             self.window
                 .tasks
-                .spawn_cancellable(async move { worker_session.list(&worker_address).await }),
+                .spawn_cancellable_named("Read remote directory", async move {
+                    worker_session.list(&worker_address).await
+                }),
         );
         let task = cx.spawn(async move |this, cx| {
             let result = work

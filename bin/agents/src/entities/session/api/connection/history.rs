@@ -77,7 +77,10 @@ impl Store {
             );
         };
         let (writes, receiver) = mpsc::channel(WRITE_CAPACITY);
-        let task = scope.spawn(write_loop(cache.clone(), receiver));
+        let task = scope.spawn_named(
+            "Persist session history",
+            write_loop(cache.clone(), receiver),
+        );
         (
             Self {
                 cache: Some(cache),

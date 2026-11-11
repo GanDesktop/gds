@@ -117,7 +117,9 @@ impl Windows {
         let home = self.home.clone();
         let storage = self.storage.clone();
         let storage_tasks = tasks.clone();
-        let work = tasks.spawn(async move { storage.load(&storage_tasks).await });
+        let work = tasks.spawn_named("Load window locations", async move {
+            storage.load(&storage_tasks).await
+        });
         cx.spawn(async move |this, cx| {
             let places = work.await.unwrap_or_else(|error| Err(error.into()));
             if let Err(error) = this.update(cx, |this, cx| {

@@ -409,10 +409,13 @@ impl Browser {
         let count = request.batch.paths().len();
         self.start_background(i18n::count(kind.progress_label(), count, cx), cx);
         let cancel = self.background_tasks.read(cx).token("files");
-        let work = self
-            .window
-            .tasks
-            .spawn_blocking(move || request.batch.execute_cancellable(kind, &cancel));
+        let work = self.window.tasks.spawn_blocking_named(
+            match kind {
+                operations::Kind::Trash => "Move files to trash",
+                operations::Kind::PermanentDelete => "Delete files permanently",
+            },
+            move || request.batch.execute_cancellable(kind, &cancel),
+        );
         cx.spawn(async move |this, cx| {
             let report = match work.await {
                 Ok(report) => report,

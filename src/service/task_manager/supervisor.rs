@@ -30,8 +30,18 @@ impl Supervisor {
     ///
     /// # Errors
     /// Rejects work once shutdown has started. Must not run inside an async task.
+    #[track_caller]
     pub fn block_on<F: Future>(&self, work: F) -> Result<F::Output, Error> {
         self.scope.block_on(work)
+    }
+
+    /// Drive bootstrap I/O with a diagnostic name.
+    ///
+    /// # Errors
+    /// Rejects work after shutdown. Must not run inside an async task.
+    #[track_caller]
+    pub fn block_on_named<F: Future>(&self, name: &str, work: F) -> Result<F::Output, Error> {
+        self.scope.block_on_named(name, work)
     }
 }
 

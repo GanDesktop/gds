@@ -1,6 +1,7 @@
 //! Native-window scenarios, compiled only for the isolated E2E runner.
 use super::*;
 use futures::{StreamExt, channel::mpsc, future};
+use gds::app::AppExt as _;
 use gpui_kit::test::{ClickOptions, TestWindowExt};
 use std::fs;
 
@@ -15,7 +16,7 @@ pub(crate) fn start(window: AnyWindowHandle, browser: Entity<Browser>, cx: &mut 
             cx: cx.clone(),
         };
         session.workflow().await;
-        session.cx.update(|cx| cx.quit());
+        session.cx.update(|cx| cx.gds().tasks().request_quit());
     })
     .detach();
 }
@@ -500,7 +501,7 @@ impl Session {
         let capture =
             std::env::var_os("GDS_E2E_SCREENSHOT").expect("compositor screenshot command");
         let output = tasks
-            .spawn(async move {
+            .spawn_named("Capture test screenshot", async move {
                 tokio::process::Command::new(capture)
                     .current_dir(directory)
                     .output()

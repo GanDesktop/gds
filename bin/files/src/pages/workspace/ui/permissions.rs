@@ -31,11 +31,13 @@ struct Editor {
 impl Editor {
     fn load(&mut self, cx: &mut Context<Self>) {
         let path = self.path.clone();
-        let work = self.tasks.spawn_blocking(move || {
-            let mode = permissions::read(&path)?;
-            let is_directory = std::fs::symlink_metadata(&path)?.is_dir();
-            Ok::<_, permissions::Error>((mode, is_directory))
-        });
+        let work = self
+            .tasks
+            .spawn_blocking_named("Read file permissions", move || {
+                let mode = permissions::read(&path)?;
+                let is_directory = std::fs::symlink_metadata(&path)?.is_dir();
+                Ok::<_, permissions::Error>((mode, is_directory))
+            });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -72,7 +74,9 @@ impl Editor {
             .gds()
             .tasks()
             .scope()
-            .spawn_blocking(move || permissions::apply(&path, mode, recursive));
+            .spawn_blocking_named("Change file permissions", move || {
+                permissions::apply(&path, mode, recursive)
+            });
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {

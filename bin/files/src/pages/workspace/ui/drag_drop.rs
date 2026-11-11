@@ -428,7 +428,9 @@ impl Browser {
         let work = self
             .window
             .tasks
-            .spawn_blocking(move || batch.execute_cancellable(cancel));
+            .spawn_blocking_named("Transfer dropped files", move || {
+                batch.execute_cancellable(cancel)
+            });
         cx.spawn(async move |this, cx| {
             let report = work.await;
             if let Err(closed) = this.update(cx, |this, cx| {

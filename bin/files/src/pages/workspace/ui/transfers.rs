@@ -392,7 +392,10 @@ impl Browser {
     /// Recheck every pending source off the UI thread, then present the next
     /// conflict or commit the flow.
     fn inspect_paste(&mut self, paste: Paste, window: &mut Window, cx: &mut Context<Self>) {
-        let work = self.window.tasks.spawn_blocking(move || paste.inspect());
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking_named("Inspect paste conflicts", move || paste.inspect());
         cx.spawn_in(window, async move |this, cx| {
             let inspection = work.await;
             let _ = this.update_in(cx, |browser, window, cx| match inspection {
@@ -439,7 +442,9 @@ impl Browser {
         let work = self
             .window
             .tasks
-            .spawn_blocking(move || batch.execute_cancellable(cancel));
+            .spawn_blocking_named("Transfer pasted files", move || {
+                batch.execute_cancellable(cancel)
+            });
         cx.spawn_in(window, async move |this, cx| {
             let report = work.await;
             let _ = this.update_in(cx, |browser, window, cx| match report {

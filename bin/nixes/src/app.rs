@@ -22,6 +22,7 @@ pub fn run() -> anyhow::Result<()> {
     let tasks = supervisor.scope();
     let logs = gds::service::logs::init_tracing("warn", args.enable_logs)?;
     gpui_kit::application()
+        .with_quit_mode(gpui_kit::QuitMode::Explicit)
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             cx.gds().initialize(tasks.clone(), logs);

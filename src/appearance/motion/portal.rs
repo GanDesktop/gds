@@ -27,7 +27,7 @@ impl Drop for Watch {
 pub(super) fn follow(tasks: &Scope, cx: &mut App) {
     let (sender, mut receiver) = watch::channel(None);
     let cancel = tasks.token();
-    let io = tasks.spawn(async move {
+    let io = tasks.spawn_named("Watch reduced-motion preference", async move {
         let result = tokio::select! {
             _ = cancel.cancelled() => return,
             result = listen(sender) => result,

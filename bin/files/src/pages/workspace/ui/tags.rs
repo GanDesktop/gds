@@ -42,23 +42,26 @@ impl Browser {
         }
         let commands = self.settings.preferences.tags.commands.clone();
         let tasks = self.window.tasks.clone();
-        let work = IoTask::cancel_on_drop(self.window.tasks.spawn_cancellable(async move {
-            let listing = crate::entities::tags::connect(&commands)
-                .await?
-                .browse(address.tag())
-                .await?;
-            tasks
-                .spawn_blocking(move || {
-                    let entries = listing
-                        .files
-                        .iter()
-                        .filter_map(|path| directory::Entry::inspect(path).ok())
-                        .collect();
-                    Contents { listing, entries }
-                })
-                .await
-                .map_err(|error| error.to_string())
-        }));
+        let work = IoTask::cancel_on_drop(self.window.tasks.spawn_cancellable_named(
+            "Query tagged files",
+            async move {
+                let listing = crate::entities::tags::connect(&commands)
+                    .await?
+                    .browse(address.tag())
+                    .await?;
+                tasks
+                    .spawn_blocking_named("Inspect tagged files", move || {
+                        let entries = listing
+                            .files
+                            .iter()
+                            .filter_map(|path| directory::Entry::inspect(path).ok())
+                            .collect();
+                        Contents { listing, entries }
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+        ));
         let task = cx.spawn(async move |this, cx| {
             let result = work.await.map_err(|e| e.to_string()).and_then(|r| r);
             let _ = this.update(cx, |this, cx| {

@@ -53,15 +53,18 @@ impl Service {
         settings_path: PathBuf,
     ) -> impl Future<Output = Status> + use<> {
         let server = self.server.clone();
-        let task = IoTask::cancel_on_drop(self.tasks.spawn_cancellable(async move {
-            let result = tokio::time::timeout(
-                REQUEST_TIMEOUT,
-                request(server, spec, connect, settings_path),
-            )
-            .await
-            .unwrap_or_else(|_| Err(tr!("agent-check-timeout").into()));
-            result.unwrap_or_else(Status::Failed)
-        }));
+        let task = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Check agent availability",
+            async move {
+                let result = tokio::time::timeout(
+                    REQUEST_TIMEOUT,
+                    request(server, spec, connect, settings_path),
+                )
+                .await
+                .unwrap_or_else(|_| Err(tr!("agent-check-timeout").into()));
+                result.unwrap_or_else(Status::Failed)
+            },
+        ));
         async move {
             task.await.unwrap_or_else(|error| {
                 tracing::error!(%error, "Agent check task failed");

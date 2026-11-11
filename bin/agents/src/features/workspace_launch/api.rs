@@ -23,16 +23,19 @@ impl Service {
             + 'static,
     {
         let target = self.target.clone();
-        let task = IoTask::cancel_on_drop(self.tasks.spawn_cancellable(async move {
-            tokio::time::timeout(Duration::from_secs(60), async {
-                let client = Client::connect_options(&target)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                operation(client).await
-            })
-            .await
-            .map_err(|error| error.to_string())?
-        }));
+        let task = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Load workspace launch options",
+            async move {
+                tokio::time::timeout(Duration::from_secs(60), async {
+                    let client = Client::connect_options(&target)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    operation(client).await
+                })
+                .await
+                .map_err(|error| error.to_string())?
+            },
+        ));
         async move { task.await.map_err(|error| error.to_string())? }
     }
 

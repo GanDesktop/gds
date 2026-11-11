@@ -512,7 +512,8 @@ impl Session {
             // Backend::drop also reaps if thread creation fails after spawning.
             let worker_tasks = tasks.clone();
             tasks
-                .spawn_thread(
+                .spawn_thread_named(
+                    "Run terminal I/O",
                     std::thread::Builder::new().name("gds-terminal-io".into()),
                     move || backend.run(worker_shared, worker_tasks),
                 )

@@ -62,15 +62,18 @@ impl Browser {
             .iter()
             .flat_map(|target| target.selection.iter().cloned())
             .collect::<Vec<_>>();
-        let work = self.window.tasks.spawn_blocking(move || {
-            paths
-                .into_iter()
-                .map(|path| {
-                    let result = directory::Entry::inspect(&path);
-                    (path, result)
-                })
-                .collect::<Vec<_>>()
-        });
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking_named("Read file properties", move || {
+                paths
+                    .into_iter()
+                    .map(|path| {
+                        let result = directory::Entry::inspect(&path);
+                        (path, result)
+                    })
+                    .collect::<Vec<_>>()
+            });
         cx.spawn(async move |this, cx| {
             let entries = work.await;
             if let Err(error) = this.update(cx, |this, cx| {

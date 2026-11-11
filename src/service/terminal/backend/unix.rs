@@ -97,7 +97,7 @@ impl Backend {
     pub(crate) fn run(mut self, shared: Arc<Shared>, tasks: crate::service::task_manager::Scope) {
         let mut parser = Processor::new();
         let cancel = tasks.token();
-        let result = match tasks.block_on(async {
+        let result = match tasks.block_on_named("Read and write terminal PTY", async {
             tokio::select! {
                 _ = cancel.cancelled() => Ok(None),
                 result = self.io_loop(&shared, &mut parser) => result,

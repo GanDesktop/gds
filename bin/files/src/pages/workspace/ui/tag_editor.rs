@@ -32,7 +32,7 @@ struct Editor {
 impl Editor {
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let path = self.path.clone();
-        let work = self.tasks.spawn_blocking(move || {
+        let work = self.tasks.spawn_blocking_named("Read file tags", move || {
             let metadata = std::fs::symlink_metadata(&path)?;
             if !metadata.is_file() && !metadata.is_dir() {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Tags can only be edited on local files and directories; open the symbolic link target first"));
@@ -182,7 +182,9 @@ impl Editor {
             .gds()
             .tasks()
             .scope()
-            .spawn_blocking(move || file_tags::apply_edit(&path, &original, &edited));
+            .spawn_blocking_named("Update file tags", move || {
+                file_tags::apply_edit(&path, &original, &edited)
+            });
         cx.spawn_in(window, async move |this, cx| {
             let result = work
                 .await

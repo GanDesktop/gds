@@ -144,7 +144,9 @@ Services and lifecycle operations use `cx.gds().tasks()`, including
 `cx.gds().tasks().init(scope)` and needs only the `app` feature.
 Obtaining either accessor does not install any globals. `scope()` requires an
 installed service and never creates one implicitly. The diagnostics choice is fixed for that application's lifetime.
-Installing a log store or opening a diagnostic window cannot change it. Route the
+Installing a log store or opening a diagnostic window cannot change it. Build native
+applications with `with_quit_mode(gpui_kit::QuitMode::Explicit)` so closing the last
+window does not stop the event loop before TM finishes draining. Route the
 last-window callback to `cx.gds().tasks().quit_when_idle()`.
 
 The binding has three phases: Starting, Running and Closing. `ready(keep_alive)`
@@ -251,3 +253,14 @@ completion after actual process reaping. Use controllable channels rather than
 timing assertions to keep cleanup pending. UI tests should verify that windows
 disappear while cleanup is pending and that another window keeps the application
 alive. Preserve service tests for data flush and process-group ownership.
+
+## Task names
+
+Application and service call sites supply responsibility-based diagnostic names with
+`spawn_named`, `spawn_cancellable_named`, `spawn_blocking_named`,
+`spawn_thread_named`, `block_on_named` or `Group::spawn_named`. Names describe the
+work, such as `Watch storage volumes`, `Save preferences` or `Read directory`;
+source files and line numbers remain separate diagnostic metadata. The unnamed
+adapters retain the filename fallback for compatibility. Naming does not enable
+inspection: without `--enable-logs`, names are not copied into task records and no
+inspection records are created.

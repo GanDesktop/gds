@@ -51,6 +51,7 @@ fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
 
     // GPUI supplies App inside run; asynchronous startup keeps this event loop responsive.
     gpui_kit::application()
+        .with_quit_mode(gpui_kit::QuitMode::Explicit)
         .with_assets(crate::shared::ui::assets::Assets)
         .run(move |cx| {
             cx.spawn(async move |cx| {
@@ -99,7 +100,7 @@ impl Application {
 
         let worker = tasks.clone();
         let services = tasks
-            .spawn_cancellable(Services::start(config, worker))
+            .spawn_cancellable_named("Start Files services", Services::start(config, worker))
             .await;
         cx.update(move |cx| {
             if cx.gds().tasks().is_shutting_down() {
