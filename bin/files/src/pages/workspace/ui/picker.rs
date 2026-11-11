@@ -7,7 +7,7 @@
 //! report is decided here, never while rendering.
 
 use gds::appearance::tokens;
-use gds::service::desktop::protocol::chooser::{self, Mode};
+use gds::service::desktop::protocol::chooser::Mode;
 use gpui_kit::component::{
     WindowExt,
     dialog::AlertDialog,
@@ -334,26 +334,43 @@ impl Browser {
 
     /// A click or Enter on a file row in picker mode.
     pub(super) fn activate_picker_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        match std::fs::metadata(&path) {
-            Ok(metadata) if metadata.is_dir() => {
-                self.navigate(path, cx);
-                cx.notify();
-            }
-            Ok(metadata) if metadata.is_file() => {
-                if let Some(picker) = self.picker.as_mut().filter(|picker| picker.name.is_some()) {
-                    picker.pending_name = path.file_name().map(std::ffi::OsStr::to_owned);
+        let target = path.clone();
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking_named("Inspect picker activation target", move || {
+                crate::features::pick_files::inspect_activated_path(&target)
+            });
+        cx.spawn(async move |this, cx| {
+            let outcome = work.await;
+            let _ = this.update(cx, |this, cx| match outcome {
+                Ok(Ok(crate::features::pick_files::ActivatedPath::Directory)) => {
+                    this.navigate(path, cx);
                     cx.notify();
-                    return;
                 }
-                let paths = self
-                    .picker_candidates(cx)
-                    .filter(|paths| paths.contains(&path))
-                    .unwrap_or_else(|| vec![path]);
-                self.complete_picker_selection(paths, cx)
-            }
-            Ok(_) => self.picker_notice("picker-not-file", None, cx),
-            Err(error) => self.picker_notice("picker-missing", Some(error.to_string()), cx),
-        }
+                Ok(Ok(crate::features::pick_files::ActivatedPath::File)) => {
+                    if let Some(picker) =
+                        this.picker.as_mut().filter(|picker| picker.name.is_some())
+                    {
+                        picker.pending_name = path.file_name().map(std::ffi::OsStr::to_owned);
+                        cx.notify();
+                        return;
+                    }
+                    let paths = this
+                        .picker_candidates(cx)
+                        .filter(|paths| paths.contains(&path))
+                        .unwrap_or_else(|| vec![path]);
+                    this.complete_picker_selection(paths, cx);
+                }
+                Ok(Err(failure)) => {
+                    this.picker_notice(failure.message_id, failure.detail, cx);
+                }
+                Err(error) => {
+                    this.picker_notice("picker-missing", Some(error.to_string()), cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// Report the selection, then close the window.
@@ -369,137 +386,64 @@ impl Browser {
             notifications::error(i18n::text("device-path-unavailable", cx), cx);
             return;
         }
-        let (read_only, filter_index, directory, multiple) = match self.picker.as_ref() {
-            Some(picker) if !picker.session.completing => (
-                picker.session.read_only,
-                picker.session.active_filter,
-                picker.session.options.directory,
-                picker.session.options.multiple,
-            ),
-            _ => return,
-        };
-        if paths.is_empty()
-            || (!multiple
-                && paths.len() != 1
-                && !self.picker.as_ref().is_some_and(|picker| {
-                    matches!(
-                        picker
-                            .session
-                            .options
-                            .portal
-                            .as_ref()
-                            .map(|request| &request.mode),
-                        Some(Mode::SaveFiles { .. })
-                    )
-                }))
-        {
-            self.picker_notice(
-                if directory {
-                    "picker-select-directory"
-                } else {
-                    "picker-select-file"
-                },
-                None,
-                cx,
-            );
-            return;
-        }
-        let saving = self
+        let Some(picker) = self
             .picker
             .as_ref()
-            .is_some_and(|picker| picker.session.options.is_save());
-        for path in &paths {
-            if saving {
-                if path.is_dir() || !path.parent().is_some_and(|parent| parent.is_dir()) {
-                    self.picker_notice("picker-not-file", None, cx);
-                    return;
+            .filter(|picker| !picker.session.completing)
+        else {
+            return;
+        };
+        let accepted_in_table = self
+            .active()
+            .map(|slot| {
+                slot.table_rows
+                    .iter()
+                    .filter(|entry| picker.session.accepts_entry(entry))
+                    .map(|entry| entry.path.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let check = picker.session.selection_check(accepted_in_table);
+        let target_paths = paths.clone();
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking_named("Validate picker selection", move || {
+                check.validate(&target_paths)
+            });
+        cx.spawn(async move |this, cx| {
+            let outcome = work.await;
+            let _ = this.update(cx, |this, cx| match outcome {
+                Ok(Ok(())) => {
+                    let Some(picker) = this.picker.as_mut() else {
+                        return;
+                    };
+                    if picker.session.completing {
+                        return;
+                    }
+                    if let Err(error) = picker.session.complete(&paths) {
+                        tracing::warn!("Cannot report the picker selection: {error}");
+                    }
+                    cx.quit();
                 }
-                continue;
-            }
-            match std::fs::metadata(path) {
-                Ok(metadata)
-                    if (directory && metadata.is_dir()) || (!directory && metadata.is_file()) => {}
-                Ok(_) => {
-                    self.picker_notice(
-                        if directory {
-                            "picker-not-directory"
-                        } else {
-                            "picker-not-file"
-                        },
-                        None,
-                        cx,
-                    );
-                    return;
+                Ok(Err(failure)) => {
+                    this.picker_notice(failure.message_id, failure.detail, cx);
                 }
                 Err(error) => {
-                    self.picker_notice("picker-missing", Some(error.to_string()), cx);
-                    return;
+                    this.picker_notice("picker-missing", Some(error.to_string()), cx);
                 }
-            }
-            if !directory
-                && !self.picker.as_ref().is_some_and(|picker| {
-                    self.active()
-                        .and_then(|slot| slot.table_rows.iter().find(|entry| entry.path == *path))
-                        .map_or_else(
-                            || picker.session.matches(path),
-                            |entry| picker.session.accepts_entry(entry),
-                        )
-                })
-            {
-                self.picker_notice("picker-filter-mismatch", None, cx);
-                return;
-            }
-        }
-        let written = if let Some(picker) = self
-            .picker
-            .as_ref()
-            .filter(|picker| picker.session.options.portal.is_some())
-        {
-            let result = chooser::Result {
-                paths: paths
-                    .iter()
-                    .map(|path| path.clone().into_os_string())
-                    .collect(),
-                filter_index,
-                read_only,
-                choices: picker
-                    .session
-                    .choices
-                    .iter()
-                    .map(|choice| (choice.id.clone(), choice.selected.clone()))
-                    .collect(),
-            };
-            crate::features::pick_files::emit_portal_result(&result)
-        } else {
-            crate::features::pick_files::emit_selections(&paths, read_only, filter_index)
-        };
-        self.mark_picker_complete();
-        match written {
-            Ok(()) => crate::features::pick_files::mark_confirmed(),
-            Err(error) => {
-                tracing::warn!("Cannot report the picker selection: {error}");
-                crate::features::pick_files::mark_failed();
-            }
-        }
-        cx.quit();
+            });
+        })
+        .detach();
     }
 
     /// Leave the picker without reporting anything.
     pub(super) fn cancel_picker(&mut self, cx: &mut Context<Self>) {
-        let Some(picker) = self.picker.as_ref() else {
+        let Some(picker) = self.picker.as_mut() else {
             return;
         };
-        if picker.session.completing {
-            return;
-        }
-        self.mark_picker_complete();
-        crate::features::pick_files::mark_cancelled();
-        cx.quit();
-    }
-
-    fn mark_picker_complete(&mut self) {
-        if let Some(picker) = self.picker.as_mut() {
-            picker.session.completing = true;
+        if picker.session.cancel() {
+            cx.quit();
         }
     }
 

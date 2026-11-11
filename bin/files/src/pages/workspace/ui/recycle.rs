@@ -13,8 +13,10 @@ mod view;
 
 use std::{collections::HashSet, ffi::OsString, path::PathBuf, sync::Arc};
 
-use fluent_bundle::FluentArgs;
-use gds::{i18n, ui::notifications};
+use gds::{
+    i18n::{self, t},
+    ui::notifications,
+};
 use gpui_kit::component::table::TableState;
 use gpui_kit::*;
 
@@ -641,35 +643,24 @@ fn outcome_report(action: Action, outcomes: &[Outcome], cx: &App) -> notificatio
         .count();
     let untouched = outcomes.len() - moved;
     let labels = action_labels(action);
-    let (level, summary) = match (untouched, record_left) {
-        (0, 0) => (
+    let mut report = match (untouched, record_left) {
+        (0, 0) => notifications::Report::new(
             notifications::Level::Success,
             i18n::count(labels.done, moved, cx),
         ),
         // Every payload moved; only record cleanup is outstanding. Details name
         // the records that were left behind.
-        (0, left) => {
-            let mut arguments = FluentArgs::new();
-            arguments.set("count", moved as i64);
-            arguments.set("records_left", left as i64);
-            (
-                notifications::Level::Error,
-                i18n::format(labels.records_left, Some(&arguments), cx),
-            )
-        }
+        (0, left) => notifications::Report::new(
+            notifications::Level::Error,
+            records_left_summary(action, moved, left, cx),
+        ),
         // Mixed batches lead with the untouched records; the details still note
         // any record whose cleanup failed.
-        _ => {
-            let mut arguments = FluentArgs::new();
-            arguments.set("succeeded", moved as i64);
-            arguments.set("failed", untouched as i64);
-            (
-                notifications::Level::Error,
-                i18n::format(labels.partial, Some(&arguments), cx),
-            )
-        }
+        _ => notifications::Report::new(
+            notifications::Level::Error,
+            partial_summary(action, moved, untouched, cx),
+        ),
     };
-    let mut report = notifications::Report::new(level, summary);
     for outcome in outcomes.iter().filter(|outcome| outcome.result.is_err()) {
         if let Err(error) = &outcome.result {
             let path = outcome
@@ -684,14 +675,48 @@ fn outcome_report(action: Action, outcomes: &[Outcome], cx: &App) -> notificatio
     report
 }
 
+fn records_left_summary(action: Action, moved: usize, left: usize, cx: &App) -> SharedString {
+    let count = moved as i64;
+    let records_left = left as i64;
+    match action {
+        Action::Restore => t!(
+            @cx,
+            "recycle-restore-records-left",
+            count = count,
+            records_left = records_left
+        ),
+        Action::Purge => t!(
+            @cx,
+            "recycle-purge-records-left",
+            count = count,
+            records_left = records_left
+        ),
+    }
+}
+
+fn partial_summary(action: Action, succeeded: usize, failed: usize, cx: &App) -> SharedString {
+    let succeeded = succeeded as i64;
+    let failed = failed as i64;
+    match action {
+        Action::Restore => t!(
+            @cx,
+            "recycle-restore-partial",
+            succeeded = succeeded,
+            failed = failed
+        ),
+        Action::Purge => t!(
+            @cx,
+            "recycle-purge-partial",
+            succeeded = succeeded,
+            failed = failed
+        ),
+    }
+}
+
 /// Fluent keys for one action's progress and result notices.
 struct Labels {
     working: &'static str,
     done: &'static str,
-    /// Some payloads were left untouched in Trash.
-    partial: &'static str,
-    /// Every payload moved; some trash records could not be cleaned up.
-    records_left: &'static str,
 }
 
 fn action_labels(action: Action) -> Labels {
@@ -699,14 +724,10 @@ fn action_labels(action: Action) -> Labels {
         Action::Restore => Labels {
             working: "recycle-restore-working",
             done: "recycle-restore-done",
-            partial: "recycle-restore-partial",
-            records_left: "recycle-restore-records-left",
         },
         Action::Purge => Labels {
             working: "recycle-purge-working",
             done: "recycle-purge-done",
-            partial: "recycle-purge-partial",
-            records_left: "recycle-purge-records-left",
         },
     }
 }

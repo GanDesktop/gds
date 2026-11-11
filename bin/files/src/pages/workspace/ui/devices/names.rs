@@ -33,11 +33,13 @@ impl Browser {
             .volume(&id)
             .expect("rename target was checked above");
         let label = volume.label.clone();
-        let input = cx.new(|cx| {
-            let mut input = InputState::new(window, cx);
-            input.set_value(label, window, cx);
-            input.select_all(window, cx);
-            input
+        let form = cx.new(|cx| {
+            super::super::name_form::NameForm::new(
+                label.into(),
+                i18n::text("volume-rename", cx),
+                window,
+                cx,
+            )
         });
         let browser = cx.entity().downgrade();
         // Open after the context menu releases focus, then focus the text field.
@@ -47,12 +49,12 @@ impl Browser {
             };
             let focus = view.read(cx).window.focus.clone();
             focus.focus(window, cx);
-            let focus_input = input.clone();
+            let focus_form = form.clone();
             window.open_alert_dialog(cx, move |dialog, _, cx| {
                 let browser = browser.clone();
                 let id = id.clone();
-                let input = input.clone();
-                let field = gds::ui::field::input(&input, cx).w_full();
+                let form = form.clone();
+                let content = form.clone();
                 let footer = el! { .DialogActions::default {
                     primary_label: $(i18n::text("rename-confirm", cx));
                     primary_icon: IconName::Pencil;
@@ -67,7 +69,7 @@ impl Browser {
                         icon: IconName::TextCursor.Icon::new;
                         footer: footer;
                         on_ok: $(move |_, _, cx| {
-                            let label = input.read(cx).value().to_string();
+                            let label = form.read(cx).chosen_name(cx).to_string_lossy().into_owned();
                             browser.update(cx, |browser, cx| {
                                 if browser.volume_can_rename(&id, cx) {
                                     let unchanged = browser.devices.service.read(cx).snapshot.volume(&id)
@@ -81,11 +83,11 @@ impl Browser {
                                 true
                             }).unwrap_or(true)
                         });
-                    } [field]
+                    } [content]
                 }
             });
             window.on_next_frame(move |window, cx| {
-                focus_input.update(cx, |input, cx| input.focus(window, cx));
+                focus_form.update(cx, |form, cx| form.focus_input(window, cx));
             });
         });
     }

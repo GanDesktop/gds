@@ -8,17 +8,18 @@ async fn closing_a_tab_removes_it_before_its_terminal_finishes(cx: &mut TestAppC
     cx.update(|cx| {
         gpui_kit::init(cx);
         cx.gds().tasks().init_test(false);
-        crate::shared::i18n::install(gds::i18n::Language::English, cx).unwrap();
-        gds::appearance::theme::apply(&Default::default(), cx).unwrap();
+        crate::shared::i18n::install(gds::i18n::Language::English, cx)
+            .expect("install English translations");
+        gds::appearance::theme::apply(&Default::default(), cx).expect("apply default theme");
     });
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tempfile::tempdir().expect("create temporary working directory");
     let mut panel = None;
     let window = cx.open_window(size(px(800.), px(500.)), |window, cx| {
         let view = cx.new(Panel::new);
         panel = Some(view.clone());
         gpui_kit::component::Root::new(view, window, cx)
     });
-    let panel = panel.unwrap();
+    let panel = panel.expect("panel entity created in window");
     let shutdown = cx
         .update_window(window.into(), |_, window, cx| {
             panel.update(cx, |panel, cx| {
@@ -35,8 +36,8 @@ async fn closing_a_tab_removes_it_before_its_terminal_finishes(cx: &mut TestAppC
                 terminal.update(cx, |terminal, cx| terminal.shutdown(cx))
             })
         })
-        .unwrap();
+        .expect("update window to close terminal tab");
     cx.update_window(window.into(), |_, window, _| window.remove_window())
-        .unwrap();
+        .expect("remove test window");
     shutdown.await;
 }

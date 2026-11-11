@@ -138,8 +138,9 @@ impl Browser {
                 .collect();
             sections.push(Self::network_section("remote-connected-servers", rows, cx));
         }
-        if !self.collections.network.discovery.paths.is_empty() {
-            let rows = self.collections.network.discovery.paths.iter().enumerate().map(|(index, path)| {
+        let mounted_paths = self.collections.network.discovery.paths();
+        if !mounted_paths.is_empty() {
+            let rows = mounted_paths.iter().enumerate().map(|(index, path)| {
                 let target = path.clone();
                 el! { .div { # $("mounted-network", index); flex; items_center; gap_3; p_3; rounded: DataListStyle::ROW_RADIUS.px; border_1; border_color: $cx.theme().border; min_w_0 } [
                     (IconName::Folder).Icon::new { size: 20.0.px },
@@ -155,6 +156,13 @@ impl Browser {
             sections.push(Self::network_section("remote-mounted-folders", rows, cx));
         }
         let empty = sections.is_empty();
+        let discovery_loading = self.collections.network.discovery.is_loading();
+        let discovery_error = self
+            .collections
+            .network
+            .discovery
+            .error()
+            .map(str::to_owned);
         let on_add = cx.listener(|this, _, window, cx| this.add_network_location(window, cx));
         let add = el! { "add-network-location".IconButton::new {
             icon: IconName::Plus; label: $i18n::text("remote-add-location", cx);
@@ -163,7 +171,7 @@ impl Browser {
         let on_refresh = cx.listener(|this, _, _, cx| this.refresh_network(cx));
         let refresh = el! { "refresh-network".IconButton::new {
             icon: IconName::RefreshCw; label: $i18n::text("refresh", cx);
-            disabled: $self.collections.network.discovery.loading; on_click: on_refresh;
+            disabled: discovery_loading; on_click: on_refresh;
         } };
         el! { .ContentPage::default { # "network-page" } [
             .PageHeader::default { @if (self.window.layout.compact) hidden; @end } [
@@ -184,14 +192,14 @@ impl Browser {
                     ],
                 ],
             @end,
-            @if (self.collections.network.discovery.loading)
+            @if (discovery_loading)
                 .PageNotice::default [.div { flex; items_center; gap_2; text_xs; text_color: $cx.theme().muted_foreground } [.Spinner::new { small; }, $i18n::text("network-loading", cx)]],
             @end,
-            @if (let Some(error) = &self.collections.network.discovery.error)
-                .PageNotice::default [.div { text_xs; text_color: $cx.theme().danger } [$(error.clone())]],
+            @if (let Some(error) = discovery_error)
+                .PageNotice::default [.div { text_xs; text_color: $cx.theme().danger } [error]],
             @end,
             .PageContent::default [
-                @if (empty && !connecting && !self.collections.network.discovery.loading)
+                @if (empty && !connecting && !discovery_loading)
                     .div { flex; flex_col; flex_1; items_center; justify_center; gap_3; text_color: $cx.theme().muted_foreground } [
                         (IconName::Network).Icon::new { size: 32.0.px },
                         .div [$i18n::text("remote-network-empty", cx)],

@@ -2,22 +2,20 @@
 //! confirmation for permanent deletion.
 
 use gds::ui::ListSurface;
-use std::{cell::RefCell, rc::Rc};
 
 use crate::shared::ui::actions::Command;
 use gds::ui::page::*;
 use gds::{
     appearance::tokens::DataListStyle,
     i18n,
-    ui::{ContentPage, DialogActions, IconButton, menu},
+    ui::{ContentPage, IconButton, menu},
 };
 use gds_uim::{component, el};
 use gpui_kit::IntoElement;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Icon, Sizable, WindowExt,
+    ActiveTheme, Icon, Sizable,
     button::Button,
-    dialog::AlertDialog,
     empty::{Empty as EmptyState, EmptyContent, EmptyDescription, EmptyMedia, EmptyTitle},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     table::DataTable,
@@ -26,6 +24,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::super::Browser;
+use super::super::file_actions::{Confirmation as SharedConfirmation, NAME_PREVIEW_LIMIT};
 use super::{
     backend::{Action, Entry},
     table::{self, TrashTable},
@@ -36,9 +35,6 @@ const TABLE_INSET: f32 = ContentPage::TABLE_INSET;
 const STATE_GAP: f32 = 8.;
 const STATE_ICON_SIZE: f32 = 28.;
 const STATE_MAX_WIDTH: f32 = 420.;
-const NAME_PREVIEW_LIMIT: usize = 5;
-const CONFIRMATION_WIDTH: f32 = 480.;
-const CONFIRMATION_GAP: f32 = 8.;
 
 impl Browser {
     pub(in crate::pages::workspace::ui) fn render_trash(
@@ -443,21 +439,11 @@ impl Intent {
     }
 }
 
-struct Pending {
-    entries: Vec<Entry>,
-}
-
 /// Confirmation for permanent deletion.
 ///
 /// The entries are frozen when the dialog opens; confirmation never re-lists
 /// Trash, so records deleted there after the dialog appeared are untouched.
-pub(super) struct Confirmation {
-    browser: WeakEntity<Browser>,
-    pending: RefCell<Option<Pending>>,
-    intent: Intent,
-    names: Vec<SharedString>,
-    count: usize,
-}
+pub(super) struct Confirmation;
 
 impl Confirmation {
     pub(super) fn open(
@@ -479,88 +465,25 @@ impl Confirmation {
             })
             .collect();
         let count = entries.len();
-        let this = Rc::new(Self {
+        let confirmation = SharedConfirmation::new(
             browser,
-            pending: RefCell::new(Some(Pending { entries })),
-            intent,
             names,
             count,
-        });
-        // Wait for a triggering popup to leave the focus tree. Kit then records
-        // the browser, not the disappearing popup, as this dialog's return target.
-        window.on_next_frame(move |window, cx| {
-            let Some(browser) = this.browser.upgrade() else {
-                return;
-            };
-            let focus = browser.read(cx).window.focus.clone();
-            focus.focus(window, cx);
-            window.open_alert_dialog(cx, Self::builder(this));
-        });
-    }
-
-    fn builder(this: Rc<Self>) -> impl Fn(AlertDialog, &mut Window, &mut App) -> AlertDialog {
-        move |dialog, _, cx| {
-            let on_confirm = Self::confirm_handler(this.clone());
-            let on_close = Self::close_handler(this.clone());
-            let names = this.names.iter().cloned().map(Self::name_row);
-            let remaining = this.count.saturating_sub(NAME_PREVIEW_LIMIT);
-            let footer = el! { .DialogActions::default {
-                primary_label: $(i18n::text(this.intent.ok_id(), cx));
-                primary_icon: $(this.intent.icon());
-                cancel_label: $(i18n::text("operation-cancel", cx));
-                danger;
-            } };
-            el! {
-                dialog {
-                    confirm; width: CONFIRMATION_WIDTH.px;
-                    bg: $(cx.theme().popover); text_color: $(cx.theme().popover_foreground);
-                    title: $(i18n::count(this.intent.title_id(), this.count, cx));
-                    description: $(this.intent.message(this.count, cx));
-                    icon: $(this.intent.icon()).Icon::new;
-                    footer: footer;
-                    on_ok: on_confirm;
-                    on_close: on_close;
-                } [
-                    .div { flex; flex_col; gap: CONFIRMATION_GAP.px; w_full; min_w_0 } [
-                        ..names,
-                        @if (remaining > 0)
-                            .div { text_sm; text_color: $(cx.theme().muted_foreground) } [$(i18n::count("operation-more-items", remaining, cx))],
-                        @end,
-                    ],
-                ]
-            }
-        }
-    }
-
-    fn name_row(name: SharedString) -> Div {
-        el! { .div { w_full; min_w_0; truncate; text_sm } [name] }
-    }
-
-    fn confirm_handler(this: Rc<Self>) -> impl Fn(&ClickEvent, &mut Window, &mut App) -> bool {
-        move |_, _, cx| {
-            let Some(pending) = this.pending.borrow_mut().take() else {
-                return false;
-            };
-            if let Some(browser) = this.browser.upgrade() {
-                browser.update(cx, |browser, cx| {
-                    browser.start_trash_operation(Action::Purge, pending.entries, cx)
+            intent.icon(),
+            move |count, cx| i18n::count(intent.title_id(), count, cx),
+            move |count, cx| intent.message(count, cx),
+            move |_, cx| i18n::text(intent.ok_id(), cx),
+            move |browser, cx| browser.start_trash_operation(Action::Purge, entries, cx),
+            move |browser, _, window, _| {
+                window.on_next_frame(move |window, cx| {
+                    if let Some(browser) = browser.upgrade() {
+                        browser.update(cx, |browser, cx| {
+                            browser.window.focus.focus(window, cx);
+                        });
+                    }
                 });
-            }
-            true
-        }
-    }
-
-    fn close_handler(this: Rc<Self>) -> impl Fn(&ClickEvent, &mut Window, &mut App) {
-        move |_, window, _cx| {
-            this.pending.borrow_mut().take();
-            let browser = this.browser.clone();
-            window.on_next_frame(move |window, cx| {
-                if let Some(browser) = browser.upgrade() {
-                    browser.update(cx, |browser, cx| {
-                        browser.window.focus.focus(window, cx);
-                    });
-                }
-            });
-        }
+            },
+        );
+        SharedConfirmation::open(confirmation, window);
     }
 }

@@ -481,12 +481,13 @@ impl Browser {
         window.open_alert_dialog(cx, move |dialog, _, _| {
             let browser = browser.clone();
             let action = action.clone();
+            let footer = el! { .DialogActions::default {
+                primary_label: $(confirm.clone());
+                primary_icon: IconName::Check;
+                cancel_label: $(cancel.clone());
+            } };
             el! { dialog { confirm; title: ~title; description: ~description; icon: IconName::HardDrive.Icon::new;
-                footer: $(el! { .DialogActions::default {
-                    primary_label: $(confirm.clone());
-                    primary_icon: IconName::Check;
-                    cancel_label: $(cancel.clone());
-                } });
+                footer: footer;
                 on_ok: $(move |_, _, cx| {
                     let _ = browser.update(cx, |browser, cx| {
                         if browser.device_has_tasks(&action, cx) { browser.devices.pending_removals.push(action.clone()); cx.notify(); }

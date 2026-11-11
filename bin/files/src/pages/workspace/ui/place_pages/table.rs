@@ -1,4 +1,4 @@
-//! Shared table for recent items, bookmarked folders and mounted network locations.
+//! Shared table for recent items, bookmarked folders and tag locations.
 
 use super::super::*;
 use gds::appearance::tokens;
@@ -17,11 +17,48 @@ const NAME_MIN_WIDTH: f32 = 180.;
 const PATH_MIN_WIDTH: f32 = 280.;
 const ICON_GAP: f32 = 10.;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaceColumn {
+    Name,
+    Modified,
+    Kind,
+    Size,
+    Location,
+}
+
+impl PlaceColumn {
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Modified => "modified",
+            Self::Kind => "kind",
+            Self::Size => "size",
+            Self::Location => "location",
+        }
+    }
+
+    const fn label_id(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Modified => "modified",
+            Self::Kind => "type",
+            Self::Size => "size",
+            Self::Location => "place-location",
+        }
+    }
+}
+
+struct ColumnLayout {
+    kinds: Vec<PlaceColumn>,
+    columns: Vec<Column>,
+}
+
 pub(in super::super) struct LocationTable {
     browser: WeakEntity<Browser>,
     collection: Collection,
     rows: Vec<Location>,
     selected: Option<Location>,
+    column_kinds: Vec<PlaceColumn>,
     columns: Vec<Column>,
     menu_focus: Option<FocusHandle>,
     _selection: Option<Subscription>,
@@ -34,7 +71,7 @@ impl LocationTable {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<TableState<Self>> {
-        let columns = Self::columns(0., collection, false, cx);
+        let layout = Self::columns(0., collection, false, cx);
         let state = cx.new(|cx| {
             TableState::new(
                 Self {
@@ -42,7 +79,8 @@ impl LocationTable {
                     collection,
                     rows: Vec::new(),
                     selected: None,
-                    columns,
+                    column_kinds: layout.kinds,
+                    columns: layout.columns,
                     menu_focus: None,
                     _selection: None,
                 },
@@ -78,31 +116,28 @@ impl LocationTable {
         }
     }
 
-    fn columns(width: f32, collection: Collection, has_files: bool, cx: &App) -> Vec<Column> {
+    fn columns(width: f32, collection: Collection, has_files: bool, cx: &App) -> ColumnLayout {
         let name = (width * NAME_FRACTION).max(NAME_MIN_WIDTH);
-        let columns = if collection == Collection::Tags && !has_files {
-            vec![("name", "name", width.max(NAME_MIN_WIDTH))]
+        let specs = if collection == Collection::Tags && !has_files {
+            vec![(PlaceColumn::Name, width.max(NAME_MIN_WIDTH))]
         } else if collection == Collection::Tags {
             vec![
-                ("name", "name", (width - 370.).max(NAME_MIN_WIDTH)),
-                ("modified", "modified", 160.),
-                ("kind", "type", 110.),
-                ("size", "size", 100.),
+                (PlaceColumn::Name, (width - 370.).max(NAME_MIN_WIDTH)),
+                (PlaceColumn::Modified, 160.),
+                (PlaceColumn::Kind, 110.),
+                (PlaceColumn::Size, 100.),
             ]
         } else {
             vec![
-                ("name", "name", name),
-                (
-                    "location",
-                    "place-location",
-                    (width - name).max(PATH_MIN_WIDTH),
-                ),
+                (PlaceColumn::Name, name),
+                (PlaceColumn::Location, (width - name).max(PATH_MIN_WIDTH)),
             ]
         };
-        columns
+        let kinds = specs.iter().map(|(kind, _)| *kind).collect();
+        let columns = specs
             .into_iter()
-            .map(|(key, label, width)| {
-                Column::new(key, i18n::text(label, cx))
+            .map(|(kind, width)| {
+                Column::new(kind.key(), i18n::text(kind.label_id(), cx))
                     .width(px(width))
                     .min_width(px(width))
                     .resizable(false)
@@ -114,7 +149,8 @@ impl LocationTable {
                         right: px(DataListStyle::CELL_PADDING_X),
                     })
             })
-            .collect()
+            .collect();
+        ColumnLayout { kinds, columns }
     }
 
     pub(in super::super) fn sync(
@@ -125,20 +161,21 @@ impl LocationTable {
         cx: &mut App,
     ) {
         let has_files = rows.iter().any(|location| location.local_path().is_some());
-        let columns = Self::columns(width, state.read(cx).delegate().collection, has_files, cx);
+        let layout = Self::columns(width, state.read(cx).delegate().collection, has_files, cx);
         state.update(cx, |state, cx| {
             Self::clear_selection(state, cx);
             let delegate = state.delegate_mut();
-            let refresh = delegate.columns.len() != columns.len()
+            let refresh = delegate.columns.len() != layout.columns.len()
                 || delegate
                     .columns
                     .iter()
-                    .zip(&columns)
+                    .zip(&layout.columns)
                     .any(|(old, new)| old.name != new.name || old.width != new.width);
             let changed = delegate.rows != rows || delegate.selected != selected;
             delegate.rows = rows;
             delegate.selected = selected;
-            delegate.columns = columns;
+            delegate.column_kinds = layout.kinds;
+            delegate.columns = layout.columns;
             if refresh {
                 state.refresh(cx);
             }
@@ -238,30 +275,35 @@ impl TableDelegate for LocationTable {
         };
         let address = location.display_address();
         let tooltip: SharedString = address.clone().into();
-        let cell = match self.columns[column].key.as_ref() {
-            "name" => div().min_w_0().truncate().child(name).into_any_element(),
-            "modified" => gds::ui::time::Timestamp::new(
+        let cell = match self
+            .column_kinds
+            .get(column)
+            .copied()
+            .unwrap_or(PlaceColumn::Location)
+        {
+            PlaceColumn::Name => el! { .div { min_w_0; truncate; } [name] }.into_any_element(),
+            PlaceColumn::Modified => gds::ui::time::Timestamp::new(
                 ("tag-modified", index),
                 entry.as_ref().and_then(|entry| entry.modified),
             )
             .into_any_element(),
-            "kind" => div()
-                .child(
-                    entry
-                        .as_ref()
-                        .map(|entry| super::super::table::EntryPresentation::type_label(entry, cx))
-                        .unwrap_or_else(|| i18n::text("tags-title", cx)),
-                )
-                .into_any_element(),
-            "size" => div()
-                .child(
-                    entry
-                        .as_ref()
-                        .map(super::super::table::EntryPresentation::size)
-                        .unwrap_or_else(|| "—".into()),
-                )
-                .into_any_element(),
-            _ => div().min_w_0().truncate().child(address).into_any_element(),
+            PlaceColumn::Kind => {
+                let kind = entry
+                    .as_ref()
+                    .map(|entry| super::super::table::EntryPresentation::type_label(entry, cx))
+                    .unwrap_or_else(|| i18n::text("tags-title", cx));
+                el! { .div [kind] }.into_any_element()
+            }
+            PlaceColumn::Size => {
+                let size = entry
+                    .as_ref()
+                    .map(super::super::table::EntryPresentation::size)
+                    .unwrap_or_else(|| "—".into());
+                el! { .div [size] }.into_any_element()
+            }
+            PlaceColumn::Location => {
+                el! { .div { min_w_0; truncate; } [address] }.into_any_element()
+            }
         };
         let hint_enabled = self
             .menu_focus
@@ -319,19 +361,6 @@ impl TableDelegate for LocationTable {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let message = if self.collection == Collection::Network {
-            if self
-                .browser
-                .upgrade()
-                .is_some_and(|browser| browser.read(cx).collections.network.discovery.loading)
-            {
-                "network-loading"
-            } else {
-                "network-empty"
-            }
-        } else {
-            "empty-collection"
-        };
-        el! { .div { size_full; flex; items_center; justify_center; text_color: $cx.theme().muted_foreground } [$i18n::text(message, cx)] }
+        el! { .div { size_full; flex; items_center; justify_center; text_color: $cx.theme().muted_foreground } [$i18n::text("empty-collection", cx)] }
     }
 }

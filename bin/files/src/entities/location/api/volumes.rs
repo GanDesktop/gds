@@ -4,9 +4,13 @@
 #[cfg(target_os = "linux")]
 mod linux;
 mod model;
+mod network;
 mod service;
+#[cfg(test)]
+mod tests;
 mod usage;
 
 pub use model::*;
+pub use network::{NetworkMountError, read_network_mounts};
 pub use service::*;
 pub use usage::{Capacity, CapacityState};

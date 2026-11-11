@@ -75,16 +75,12 @@ impl Browser {
     }
 
     pub(super) fn capacity_label(capacity: storage::Capacity, cx: &App) -> SharedString {
-        let mut args = fluent_bundle::FluentArgs::new();
-        args.set(
-            "available",
-            super::super::table::EntryPresentation::format_size(capacity.available),
-        );
-        args.set(
-            "total",
-            super::super::table::EntryPresentation::format_size(capacity.total),
-        );
-        i18n::format("device-capacity", Some(&args), cx)
+        gds::i18n::t!(
+            @cx,
+            "device-capacity",
+            available = super::super::table::EntryPresentation::format_size(capacity.available),
+            total = super::super::table::EntryPresentation::format_size(capacity.total)
+        )
     }
 
     fn render_sidebar_volume(

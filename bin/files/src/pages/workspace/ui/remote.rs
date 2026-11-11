@@ -6,6 +6,16 @@ use crate::{features::file_operations::remote as operations, shared::lib::clipbo
 use gds::service::remote::{Address, Listing, Session};
 use gds_uim::el;
 
+#[derive(Debug, thiserror::Error)]
+enum PasteError {
+    #[error(transparent)]
+    Clipboard(#[from] clipboard::Error),
+    #[error(transparent)]
+    Address(#[from] crate::entities::location::AddressError),
+    #[error("{0}")]
+    Message(SharedString),
+}
+
 pub(super) struct State {
     pub connector: Entity<connect_server::Connector>,
     pub requests: std::collections::HashMap<u64, LoadRequest>,
@@ -21,51 +31,71 @@ impl State {
 }
 
 pub(super) struct Directory {
+    #[allow(dead_code)]
     pub listing: Listing,
+    #[allow(dead_code)]
     pub session: Session,
     pub view: Option<Entity<remote_browser::View>>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl Browser {
+    /// # Errors
+    /// Returns [`PasteError`] if the URI is invalid or refers to an unconnected remote server.
+    fn resolve_paste_source(
+        &self,
+        uri: &str,
+        cx: &App,
+    ) -> Result<operations::Resource, PasteError> {
+        match Location::from_uri(uri)? {
+            Location::Directory(path) => Ok(operations::Resource::Local(path.into())),
+            Location::Remote(address) => {
+                let session = self
+                    .remote
+                    .connector
+                    .read(cx)
+                    .session(&address)
+                    .ok_or_else(|| PasteError::Message(i18n::text("remote-connect-source", cx)))?;
+                Ok(operations::Resource::Remote { address, session })
+            }
+            _ => Err(PasteError::Address(
+                crate::entities::location::AddressError::Invalid(uri.to_owned()),
+            )),
+        }
+    }
+
+    /// # Errors
+    /// Returns [`PasteError`] when clipboard contents are missing, cut-mode, or invalid URIs.
+    fn collect_paste_sources(
+        &self,
+        result: Result<Option<(clipboard::Mode, Vec<String>)>, clipboard::Error>,
+        cx: &App,
+    ) -> Result<Vec<operations::Resource>, PasteError> {
+        let (mode, uris) =
+            result?.ok_or_else(|| PasteError::Message(i18n::text("clipboard-no-files", cx)))?;
+        if mode == clipboard::Mode::Cut {
+            return Err(PasteError::Message(i18n::text(
+                "remote-cut-unavailable",
+                cx,
+            )));
+        }
+        uris.iter()
+            .map(|uri| self.resolve_paste_source(uri, cx))
+            .collect()
+    }
+
     pub(super) fn paste_remote_uris(
         &mut self,
         result: Result<Option<(clipboard::Mode, Vec<String>)>, clipboard::Error>,
         destination: PathBuf,
         cx: &mut Context<Self>,
     ) {
-        let sources = (|| -> Result<Vec<operations::Resource>, String> {
-            let (mode, uris) = result
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| i18n::text("clipboard-no-files", cx).to_string())?;
-            if mode == clipboard::Mode::Cut {
-                return Err(i18n::text("remote-cut-unavailable", cx).to_string());
-            }
-            uris.into_iter()
-                .map(|uri| {
-                    let uri = url::Url::parse(&uri).map_err(|e| e.to_string())?;
-                    if uri.scheme() == "file" {
-                        return uri
-                            .to_file_path()
-                            .map(operations::Resource::Local)
-                            .map_err(|_| "Invalid local file URI".to_owned());
-                    }
-                    let address = Address::parse(uri.as_str()).map_err(|e| e.to_string())?;
-                    let session = self
-                        .remote
-                        .connector
-                        .read(cx)
-                        .session(&address)
-                        .ok_or_else(|| i18n::text("remote-connect-source", cx).to_string())?;
-                    Ok(operations::Resource::Remote { address, session })
-                })
-                .collect()
-        })();
-        let sources = match sources {
+        let sources = match self.collect_paste_sources(result, cx) {
             Ok(sources) => sources,
             Err(error) => {
                 self.operations.in_progress = false;
                 self.finish_background(
-                    notifications::Report::new(notifications::Level::Error, error),
+                    notifications::Report::new(notifications::Level::Error, error.to_string()),
                     cx,
                 );
                 cx.notify();
@@ -87,7 +117,7 @@ impl Browser {
                 this.operations.in_progress = false;
                 this.operations.remote_paste_cancel = None;
                 this.operations.paths.clear();
-                let (level, message) = match report {
+                let notice = match report {
                     Ok(report) => {
                         this.operations
                             .history
@@ -106,17 +136,17 @@ impl Browser {
                             this.refresh_after_file_operation(&[destination], cx);
                         }
                         if report.cancelled {
-                            (
+                            notifications::Report::new(
                                 notifications::Level::Warning,
                                 i18n::text("remote-cancelled", cx).to_string(),
                             )
                         } else if report.failures.is_empty() {
-                            (
+                            notifications::Report::new(
                                 notifications::Level::Success,
                                 i18n::count("copy-done", report.completed.len(), cx).to_string(),
                             )
                         } else {
-                            (
+                            notifications::Report::new(
                                 notifications::Level::Error,
                                 report
                                     .failures
@@ -127,14 +157,17 @@ impl Browser {
                             )
                         }
                     }
-                    Err(error) => (notifications::Level::Error, error.to_string()),
+                    Err(error) => {
+                        notifications::Report::new(notifications::Level::Error, error.to_string())
+                    }
                 };
-                this.finish_background(notifications::Report::new(level, message), cx);
+                this.finish_background(notice, cx);
                 cx.notify();
             });
         })
         .detach();
     }
+
     pub(super) fn remote_view(&self) -> Option<Entity<remote_browser::View>> {
         if !matches!(self.current_location(), Location::Remote(_)) {
             return None;
@@ -236,11 +269,11 @@ impl Browser {
             notifications::info(i18n::text("remote-picker-local", cx), cx);
             return;
         }
+        let window = self.window.handle;
         let Some(session) = self.remote.connector.read(cx).session(&address) else {
             let expected = request.clone();
             self.remote.requests.insert(id, request);
             let connector = self.remote.connector.clone();
-            let window = self.window.handle;
             let browser = cx.entity().downgrade();
             cx.defer(move |cx| {
                 let Some(browser) = browser.upgrade() else {
@@ -282,32 +315,32 @@ impl Browser {
                 .await
                 .map_err(|e| e.to_string())
                 .and_then(|r| r.map_err(|e| e.to_string()));
-            let _ = this.update(cx, |this, cx| {
-                if !this
-                    .tab_slot(id)
-                    .is_some_and(|slot| slot.navigation.is_current_request(&request))
-                {
-                    return;
-                }
-                match result {
-                    Ok(listing) => {
-                        this.finish_request(id, &request, Ok(None), None, cx);
-                        if let Some(slot) = this.tab_slot_mut(id) {
-                            slot.remote = Some(Directory {
-                                listing,
-                                session,
-                                view: None,
-                            });
+            let _ = window.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if !this
+                        .tab_slot(id)
+                        .is_some_and(|slot| slot.navigation.is_current_request(&request))
+                    {
+                        return;
+                    }
+                    match result {
+                        Ok(listing) => {
+                            this.finish_request(id, &request, Ok(None), None, cx);
+                            let directory =
+                                this.build_remote_directory(id, listing, session, window, cx);
+                            if let Some(slot) = this.tab_slot_mut(id) {
+                                slot.remote = Some(directory);
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(slot) = this.tab_slot_mut(id) {
+                                slot.navigation.cancel_request(&request);
+                            }
+                            report_load_failure(error, cx);
                         }
                     }
-                    Err(error) => {
-                        if let Some(slot) = this.tab_slot_mut(id) {
-                            slot.navigation.cancel_request(&request);
-                        }
-                        report_load_failure(error, cx);
-                    }
-                }
-                cx.notify();
+                    cx.notify();
+                });
             });
         });
         if let Some(slot) = self.tab_slot_mut(id) {
@@ -316,79 +349,168 @@ impl Browser {
         cx.notify();
     }
 
-    pub(super) fn render_remote(
+    fn build_remote_directory(
         &mut self,
+        tab: u64,
+        listing: Listing,
+        session: Session,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let tab = self.tabs.active_id;
-        let existing = self.remote_view();
-        let view = if let Some(view) = existing {
-            view
-        } else {
-            let Some(remote) = self.current_tab().and_then(|slot| slot.remote.as_ref()) else {
-                return self.render_remote_unopened(cx);
-            };
-            let favorite = self
-                .locations
-                .places
-                .is_favorite(Location::Remote(remote.listing.address.clone()));
-            let options = remote_browser::Options {
-                tasks: self.window.tasks.clone(),
-                session: remote.session.clone(),
-                listing: remote.listing.clone(),
-                connector: self.remote.connector.clone(),
-                desktop: self.window.desktop.clone(),
-                favorite,
-                filter: self.toolbar.filter.input.clone(),
-                focus: self.window.focus.clone(),
-            };
-            let address = options.listing.address.clone();
-            let view = cx.new(|cx| remote_browser::View::new(options, window, cx));
-            let tasks = self.background_tasks.clone();
-            let task_key: SharedString = format!("remote-task-{}", view.entity_id()).into();
-            cx.observe(&view, move |_, view, cx| {
-                let task = view.read(cx).background_task();
-                tasks.update(cx, |tasks, cx| {
-                    tasks.sync_remote(task_key.clone(), task, cx)
-                });
-                cx.notify();
-            })
-            .detach();
-            cx.subscribe(&view, move |this, _, event: &remote_browser::Event, cx| {
-                match event {
-                    remote_browser::Event::Navigate(target) => this.navigate_location(tab, Location::Remote(target.clone()), cx),
-                    remote_browser::Event::Refresh if this.tab_slot(tab).is_some_and(|s| s.location() == Location::Remote(address.clone())) => this.refresh_tab(tab, cx),
-                    remote_browser::Event::Favorite(target) => {
-                        this.locations.places.toggle_remote_favorite(target.clone()); this.save_places(cx); this.refresh_tab(tab, cx);
-                    }
-                    remote_browser::Event::Disconnect(target) => {
-                        let key = target.connection_key();
-                        if this.tabs.items.iter().filter_map(|slot| slot.remote.as_ref()).filter_map(|r| r.view.as_ref()).any(|v| v.read(cx).address().connection_key() == key && v.read(cx).busy()) {
-                            notifications::info(i18n::text("remote-task-running", cx), cx); return;
-                        }
-                        this.remote.connector.update(cx, |connector, cx| connector.disconnect(target, cx));
-                        let ids = this.tabs.items.iter().filter(|s| matches!(s.location(), Location::Remote(a) if a.connection_key() == key)).map(|s| s.id).collect::<Vec<_>>();
-                        for id in ids { this.navigate_location(id, Location::Network, cx); }
-                    }
-                    _ => (),
-                }
-            }).detach();
-            if let Some(slot) = self.current_tab_mut() {
-                if let Some(remote) = slot.remote.as_mut() {
-                    remote.view = Some(view.clone());
-                }
-            }
-            view
+    ) -> Directory {
+        let address = listing.address.clone();
+        let favorite = self
+            .locations
+            .places
+            .is_favorite(Location::Remote(address.clone()));
+        let options = remote_browser::Options {
+            tasks: self.window.tasks.clone(),
+            session: session.clone(),
+            listing: listing.clone(),
+            connector: self.remote.connector.clone(),
+            desktop: self.window.desktop.clone(),
+            favorite,
+            filter: self.toolbar.filter.input.clone(),
+            focus: self.window.focus.clone(),
         };
         let filter = self
-            .current_tab()
-            .map_or(String::new(), |s| s.filter.clone());
+            .tab_slot(tab)
+            .map_or_else(String::new, |slot| slot.filter.clone());
         let hidden = self.settings.preferences.files.show_hidden;
+        let compact = self.window.layout.compact;
+        let view = cx.new(|cx| {
+            let mut view = remote_browser::View::new(options, window, cx);
+            view.set_filter(filter, hidden, cx);
+            view.set_compact(compact, cx);
+            view
+        });
+        let tasks = self.background_tasks.clone();
+        let task_key: SharedString = format!("remote-task-{}", view.entity_id()).into();
+        let observe_view = cx.observe(&view, move |_, view, cx| {
+            let task = view.read(cx).background_task();
+            tasks.update(cx, |tasks, cx| {
+                tasks.sync_remote(task_key.clone(), task, cx)
+            });
+            cx.notify();
+        });
+        let subscribe_view =
+            cx.subscribe(&view, move |this, _, event: &remote_browser::Event, cx| {
+                this.on_remote_browser_event(tab, &address, event, cx);
+            });
+        let subscribe_filter = cx.subscribe(
+            &self.toolbar.filter.input,
+            move |this, _, _: &gpui_kit::component::input::InputEvent, cx| {
+                this.sync_remote_directory(tab, cx);
+            },
+        );
+        let observe_preferences = cx.observe_global::<configuration::Current>(move |this, cx| {
+            this.sync_remote_directory(tab, cx);
+        });
+        let observe_bounds = cx.observe_window_bounds(window, move |this, window, cx| {
+            let compact = responsive::Layout::for_width(window.bounds().size.width).compact;
+            if let Some(view) = this
+                .tab_slot(tab)
+                .and_then(|slot| slot.remote.as_ref())
+                .and_then(|remote| remote.view.clone())
+            {
+                view.update(cx, |view, cx| view.set_compact(compact, cx));
+            }
+        });
+        Directory {
+            listing,
+            session,
+            view: Some(view),
+            _subscriptions: vec![
+                observe_view,
+                subscribe_view,
+                subscribe_filter,
+                observe_preferences,
+                observe_bounds,
+            ],
+        }
+    }
+
+    fn sync_remote_directory(&self, tab: u64, cx: &mut Context<Self>) {
+        let Some(slot) = self.tab_slot(tab) else {
+            return;
+        };
+        let Some(view) = slot.remote.as_ref().and_then(|remote| remote.view.clone()) else {
+            return;
+        };
+        let filter = slot.filter.clone();
+        let hidden = self.settings.preferences.files.show_hidden;
+        let compact = self.window.layout.compact;
         view.update(cx, |view, cx| {
             view.set_filter(filter, hidden, cx);
-            view.set_compact(self.window.layout.compact, cx);
+            view.set_compact(compact, cx);
         });
+    }
+
+    fn on_remote_browser_event(
+        &mut self,
+        tab: u64,
+        address: &Address,
+        event: &remote_browser::Event,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            remote_browser::Event::Navigate(target) => {
+                self.navigate_location(tab, Location::Remote(target.clone()), cx);
+            }
+            remote_browser::Event::Refresh
+                if self
+                    .tab_slot(tab)
+                    .is_some_and(|slot| slot.location() == Location::Remote(address.clone())) =>
+            {
+                self.refresh_tab(tab, cx);
+            }
+            remote_browser::Event::Favorite(target) => {
+                self.locations.places.toggle_remote_favorite(target.clone());
+                self.save_places(cx);
+                self.refresh_tab(tab, cx);
+            }
+            remote_browser::Event::Disconnect(target) => {
+                let key = target.connection_key();
+                if self
+                    .tabs
+                    .items
+                    .iter()
+                    .filter_map(|slot| slot.remote.as_ref())
+                    .filter_map(|remote| remote.view.as_ref())
+                    .any(|view| {
+                        view.read(cx).address().connection_key() == key && view.read(cx).busy()
+                    })
+                {
+                    notifications::info(i18n::text("remote-task-running", cx), cx);
+                    return;
+                }
+                self.remote
+                    .connector
+                    .update(cx, |connector, cx| connector.disconnect(target, cx));
+                let ids = self
+                    .tabs
+                    .items
+                    .iter()
+                    .filter(|slot| {
+                        matches!(slot.location(), Location::Remote(addr) if addr.connection_key() == key)
+                    })
+                    .map(|slot| slot.id)
+                    .collect::<Vec<_>>();
+                for id in ids {
+                    self.navigate_location(id, Location::Network, cx);
+                }
+            }
+            remote_browser::Event::Refresh => {}
+        }
+    }
+
+    pub(super) fn render_remote(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(view) = self.remote_view() else {
+            return self.render_remote_unopened(cx);
+        };
         el! { .div { flex_1; min_h_0 } [view] }.into_any_element()
     }
 }

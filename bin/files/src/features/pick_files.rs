@@ -6,6 +6,10 @@ pub(crate) use model::{
 };
 
 mod session;
-pub(crate) use session::{Projection, Session};
+pub(crate) use session::{
+    ActivatedPath, Projection, SaveDecision, Session, inspect_activated_path, prepare_save_targets,
+};
 pub(crate) mod targets;
-pub(crate) use targets as SaveTargets;
+
+#[cfg(test)]
+mod tests;

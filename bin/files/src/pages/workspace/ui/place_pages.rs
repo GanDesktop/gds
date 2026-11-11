@@ -28,8 +28,8 @@ pub(super) struct Favorites {
     pub loading: bool,
 }
 
+#[derive(Default)]
 pub(super) struct NetworkPage {
-    pub table: Entity<gpui_kit::component::table::TableState<table::LocationTable>>,
     pub discovery: Network,
 }
 
@@ -47,10 +47,7 @@ impl State {
                 table: table(Collection::Favorites),
                 loading: false,
             },
-            network: NetworkPage {
-                table: table(Collection::Network),
-                discovery: Network::default(),
-            },
+            network: NetworkPage::default(),
             trash: recycle::State::new(cx.entity().downgrade(), window, cx),
         }
     }
@@ -65,7 +62,6 @@ impl Browser {
             Collection::Tags => Some(&self.collections.tags),
             Collection::Recent => Some(&self.collections.recent),
             Collection::Favorites => Some(&self.collections.favorites.table),
-            Collection::Network => Some(&self.collections.network.table),
             _ => None,
         }
     }
@@ -97,7 +93,7 @@ impl Browser {
                 .collections
                 .network
                 .discovery
-                .paths
+                .paths()
                 .iter()
                 .map(Location::from)
                 .collect(),
@@ -172,47 +168,38 @@ impl Browser {
     }
 
     pub(super) fn refresh_network(&mut self, cx: &mut Context<Self>) {
-        if self.collections.network.discovery.loading {
+        if !self.collections.network.discovery.begin_loading() {
             return;
         }
-        self.collections.network.discovery.loading = true;
-        self.collections.network.discovery.error = None;
-        let work = self
-            .window
-            .tasks
-            .spawn_blocking_named("Discover network locations", network::read);
+        let work = self.window.tasks.spawn_blocking_named(
+            "Discover network locations",
+            crate::entities::location::volumes::read_network_mounts,
+        );
         cx.spawn(async move |this, cx| {
             let result = work
                 .await
-                .map_err(network::Error::from)
+                .map_err(crate::entities::location::volumes::NetworkMountError::from)
                 .and_then(std::convert::identity);
-            let _ =
-                this.update(cx, |browser, cx| {
-                    browser.collections.network.discovery.loading = false;
-                    browser.collections.network.discovery.loaded = true;
-                    match result {
-                        Ok(paths) => {
-                            for slot in &mut browser.tabs.items {
-                                if slot.navigation.location() == &Location::Network {
-                                    if slot.navigation.view().place.as_ref().is_some_and(
-                                        |location| {
-                                            !paths
-                                                .iter()
-                                                .any(|path| location == &Location::from(path))
-                                        },
-                                    ) {
-                                        slot.navigation.view_mut().place = None;
-                                    }
-                                }
-                            }
-                            browser.collections.network.discovery.paths = paths;
-                        }
-                        Err(error) => {
-                            browser.collections.network.discovery.error = Some(error.to_string())
+            let _ = this.update(cx, |browser, cx| {
+                if let Ok(paths) = &result {
+                    for slot in &mut browser.tabs.items {
+                        if slot.navigation.location() == &Location::Network
+                            && slot
+                                .navigation
+                                .view()
+                                .place
+                                .as_ref()
+                                .is_some_and(|location| {
+                                    !paths.iter().any(|path| location == &Location::from(path))
+                                })
+                        {
+                            slot.navigation.view_mut().place = None;
                         }
                     }
-                    cx.notify();
-                });
+                }
+                browser.collections.network.discovery.finish(result);
+                cx.notify();
+            });
         })
         .detach();
         cx.notify();

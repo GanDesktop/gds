@@ -2,7 +2,7 @@
 
 use gds::appearance::tokens;
 use gds::ui::IconButton;
-use gds::ui::sidebar::SideBarSectionTitle;
+use gds::ui::sidebar::{SideBar, SideBarSectionTitle, SidebarPresentation, SidebarState};
 use gds::ui::split::VerticalSplit;
 mod panel;
 
@@ -24,6 +24,13 @@ const COLLAPSED_ACTION_INSET: f32 =
     (tokens::COLLAPSED_SIDEBAR_WIDTH - 2. * tokens::SIDEBAR_PADDING - tokens::ICON_BUTTON_SIZE)
         / 2.;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Lifecycle {
+    #[default]
+    Active,
+    Closing,
+}
+
 /// Sessions and selection belong to this window, never a file location.
 pub(super) struct State {
     pub dock: Option<Dock>,
@@ -31,8 +38,7 @@ pub(super) struct State {
     pub visible: bool,
     pub maximized: bool,
     pub split: Entity<ui::split::State>,
-    pub close_pending: Option<CloseTarget>,
-    pub closing: bool,
+    pub lifecycle: Lifecycle,
 }
 
 impl State {
@@ -52,8 +58,7 @@ impl State {
                 split.default_bottom(DEFAULT_DOCK_HEIGHT);
                 split
             }),
-            close_pending: None,
-            closing: false,
+            lifecycle: Lifecycle::Active,
         }
     }
 }
@@ -61,17 +66,13 @@ impl State {
 pub(super) struct Dock {
     pub panel: Entity<Panel>,
     cwd: Option<PathBuf>,
+    sidebar: SidebarPresentation,
     _changes: Subscription,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CloseTarget {
-    Window,
-}
-
-/// Only a real available directory is a local launch target.
+/// Only a verified available directory in the loaded workspace state is a local launch target.
 fn local_cwd(path: &Path, available: bool) -> Option<PathBuf> {
-    (available && path.is_absolute() && path.is_dir()).then(|| path.to_path_buf())
+    (available && path.is_absolute()).then(|| path.to_path_buf())
 }
 
 fn launch_cwd(path: Option<&Path>, available: bool, home: &Path) -> PathBuf {
@@ -119,24 +120,27 @@ impl Browser {
         if self.picker.is_some() || !self.settings.preferences.terminal_enabled() {
             return None;
         }
-        if self.terminal.closing {
+        if self.terminal.lifecycle == Lifecycle::Closing {
             return None;
         }
         if let Some(dock) = &self.terminal.dock {
             return Some(dock.panel.clone());
         }
         let cwd = self.terminal_cwd(cx);
+        let sidebar = self.sidebar.presentation;
         let preferences = self.settings.preferences.terminal.clone();
         let panel = cx.new(|cx| {
             let mut panel = Panel::new(cx);
             panel.set_preferences(preferences, cx);
             panel.set_cwd(cwd.clone(), cx);
+            panel.set_sidebar_presentation(sidebar, cx);
             panel
         });
         let changes = cx.observe(&panel, |_, _, cx| cx.notify());
         self.terminal.dock = Some(Dock {
             panel: panel.clone(),
             cwd,
+            sidebar,
             _changes: changes,
         });
         Some(panel)
@@ -167,8 +171,14 @@ impl Browser {
         if self.picker.is_some() || !self.pages.is_empty() {
             return;
         }
-        let available = self.active().is_some_and(|slot| slot.files_available())
-            && self.device_path_available(&cwd, cx);
+        let known_directory = self.active().is_some_and(|slot| {
+            slot.files_available()
+                && (slot.path() == Some(cwd.as_path())
+                    || slot.table_rows.iter().any(|entry| {
+                        entry.path == cwd && super::file_actions::is_directory_entry(entry)
+                    }))
+        });
+        let available = known_directory && self.device_path_available(&cwd, cx);
         let cwd = launch_cwd(Some(&cwd), available, &self.locations.home);
         let Some(panel) = self.ensure_terminal(cx) else {
             return;
@@ -207,12 +217,24 @@ impl Browser {
             });
         }
         let cwd = self.terminal_cwd(cx);
+        let state = if self.sidebar_collapsed() {
+            SidebarState::Collapsed
+        } else {
+            SidebarState::Expanded
+        };
+        let sidebar =
+            el! { .SideBar::default { state: state; } }.sample("files-sidebar-motion", window, cx);
         let Some(dock) = self.terminal.dock.as_mut() else {
             return;
         };
         if dock.cwd != cwd {
             dock.cwd = cwd.clone();
             dock.panel.update(cx, |panel, cx| panel.set_cwd(cwd, cx));
+        }
+        if dock.sidebar != sidebar {
+            dock.sidebar = sidebar;
+            dock.panel
+                .update(cx, |panel, cx| panel.set_sidebar_presentation(sidebar, cx));
         }
     }
 
@@ -295,6 +317,7 @@ impl Browser {
             .into_any_element();
         };
         let panel = dock.panel.clone();
+        let cwd_available = dock.cwd.is_some();
         let maximized = self.terminal.maximized;
         let maximize = el! { "files-terminal-maximize".IconButton::new {
             icon: $(if maximized {
@@ -313,12 +336,9 @@ impl Browser {
             on_click: $(cx.listener(Self::maximize_terminal));
         } };
         let width = self.width();
-        panel.update(cx, |panel, cx| {
-            panel.set_sidebar_presentation(self.sidebar.presentation, cx)
-        });
         let frame = el! { .Frame::default { sidebar_width: width; } };
         let title = t!(@cx, "settings-terminal");
-        let new_button = panel.update(cx, |panel, cx| panel.new_button(cx));
+        let new_button = panel.read(cx).new_button(&panel, window, cx);
         let heading = el! {
             .div {
                 # "files-terminal-title"; flex; items_center; h_full; min_w_0;
@@ -345,7 +365,7 @@ impl Browser {
                 } [active_title],
                 "files-terminal-switch-directory".IconButton::new {
                     icon: IconName::FolderInput; label: $(i18n::text("files-terminal-switch-directory", cx));
-                    disabled: $(self.collection().is_some() || self.terminal_cwd(cx).is_none()
+                    disabled: $(self.collection().is_some() || !cwd_available
                         || !panel.read(cx).can_change_directory(cx));
                     on_click: $(cx.listener(Self::switch_terminal_directory));
                 },
@@ -412,7 +432,7 @@ impl Browser {
         }
     }
 
-    fn closing_panels(&self, _: CloseTarget) -> Vec<Entity<Panel>> {
+    fn closing_panels(&self) -> Vec<Entity<Panel>> {
         self.terminal
             .dock
             .iter()
@@ -427,7 +447,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         // Client-side and WM close requests must both stop the window's PTYs.
-        self.request_terminal_close(CloseTarget::Window, window, cx);
+        self.request_terminal_close(window, cx);
     }
 
     pub(super) fn install_terminal_close_handler(window: &mut Window, cx: &mut Context<Self>) {
@@ -435,45 +455,27 @@ impl Browser {
         window.on_window_should_close(cx, move |window, cx| {
             owner
                 .update(cx, |this, cx| {
-                    if this.terminal.close_pending.is_some() {
+                    if this.terminal.lifecycle == Lifecycle::Closing {
                         return false;
                     }
-                    if this.closing_panels(CloseTarget::Window).is_empty() {
+                    if this.closing_panels().is_empty() {
                         return true;
                     }
-                    this.request_terminal_close(CloseTarget::Window, window, cx);
+                    this.request_terminal_close(window, cx);
                     false
                 })
                 .unwrap_or(true)
         });
     }
 
-    pub(super) fn request_terminal_close(
-        &mut self,
-        target: CloseTarget,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.terminal.close_pending.is_some() {
-            return;
-        }
-        self.finish_terminal_close(target, window, cx);
-    }
-
-    fn finish_terminal_close(
-        &mut self,
-        target: CloseTarget,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.terminal.closing {
+    pub(super) fn request_terminal_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.terminal.lifecycle == Lifecycle::Closing {
             return;
         }
         // Each terminal registers its cleanup with the application before the
         // window disappears, including launches that have not finished yet.
-        self.terminal.closing = true;
-        self.terminal.close_pending = Some(target);
-        for panel in self.closing_panels(target) {
+        self.terminal.lifecycle = Lifecycle::Closing;
+        for panel in self.closing_panels() {
             drop(panel.update(cx, |panel, cx| panel.shutdown(cx)));
         }
         window.remove_window();

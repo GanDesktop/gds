@@ -16,12 +16,13 @@ use super::super::drag_drop::FileDrag;
 use gds_uim::el;
 
 use gds::{
-    i18n, ui,
+    i18n::{self, t},
+    ui,
     ui::terminal::{self, Terminal},
 };
 use gpui_kit::{
     assets::IconName,
-    component::{ActiveTheme, Disableable, Icon, Selectable, WindowExt, input::InputState},
+    component::{ActiveTheme, Disableable, Icon, Selectable, WindowExt},
     prelude::*,
     *,
 };
@@ -163,20 +164,22 @@ impl Panel {
 
     fn hint(entry: &Entry, cx: &App) -> ui::tooltip::Details {
         let terminal = entry.terminal.read(cx);
-        let mut args = fluent_bundle::FluentArgs::new();
-        args.set("path", terminal.cwd().display().to_string());
-        let origin = i18n::format("files-terminal-started-in", Some(&args), cx);
+        let origin = t!(
+            @cx,
+            "files-terminal-started-in",
+            path = terminal.cwd().display().to_string()
+        );
         let status = match terminal.status(cx) {
             terminal::Status::Starting => i18n::text("gds-terminal-starting", cx),
             terminal::Status::Running => i18n::text("gds-terminal-running", cx),
             terminal::Status::Stopping => i18n::text("gds-terminal-stopping", cx),
             terminal::Status::Closed => i18n::text("gds-terminal-exited", cx),
-            terminal::Status::Exited { code, signal } => {
-                let mut args = fluent_bundle::FluentArgs::new();
-                args.set("code", i64::from(code));
-                args.set("signal", signal.unwrap_or_else(|| "—".into()));
-                i18n::format("gds-terminal-exit-status", Some(&args), cx)
-            }
+            terminal::Status::Exited { code, signal } => t!(
+                @cx,
+                "gds-terminal-exit-status",
+                code = i64::from(code),
+                signal = signal.unwrap_or_else(|| "—".into())
+            ),
             terminal::Status::Failed(error) => error.into(),
         };
         ui::tooltip::Details::new(Self::title(entry, cx))
@@ -266,12 +269,15 @@ impl Panel {
         }
     }
 
-    pub fn new_button(&self, cx: &mut Context<Self>) -> IconButton {
+    pub fn new_button(&self, panel: &Entity<Self>, window: &mut Window, cx: &App) -> IconButton {
+        let on_click = window.listener_for(panel, |panel, _, window, cx| {
+            panel.on_new(&NewTerminal, window, cx)
+        });
         el! { "files-terminal-new".IconButton::new {
             icon: IconName::Plus;
             label: $(i18n::text("files-terminal-new", cx));
             disabled: $(self.cwd.is_none() || self.sealed);
-            on_click: $(cx.listener(|panel, _, window, cx| panel.on_new(&NewTerminal, window, cx)));
+            on_click: on_click;
         } }
     }
 
@@ -298,18 +304,20 @@ impl Panel {
         };
         let id = entry.id;
         let name = Self::title(entry, cx);
-        let input = cx.new(|cx| {
-            let mut input = InputState::new(window, cx);
-            input.set_value(name, window, cx);
-            input.select_all(window, cx);
-            input
+        let form = cx.new(|cx| {
+            super::super::name_form::NameForm::new(
+                name.to_string().into(),
+                i18n::text("files-terminal-rename", cx),
+                window,
+                cx,
+            )
         });
         let panel = cx.entity().downgrade();
-        let focus_input = input.clone();
+        let focus_form = form.clone();
         window.open_alert_dialog(cx, move |dialog, _, cx| {
             let panel = panel.clone();
-            let input = input.clone();
-            let field = ui::field::input(&input, cx).w_full();
+            let form = form.clone();
+            let content = form.clone();
             let footer = el! { .DialogActions::default {
                 primary_label: $(i18n::text("rename-confirm", cx));
                 primary_icon: IconName::Pencil;
@@ -323,16 +331,18 @@ impl Panel {
                     icon: IconName::TextCursor.Icon::new;
                     footer: footer;
                     on_ok: $(move |_, _, cx| {
-                        let name = input.read(cx).value().to_string();
+                        let name = form.read(cx).chosen_name(cx).to_string_lossy().into_owned();
                         if let Err(error) = panel.update(cx, |panel, cx| panel.rename_entry(id, &name, cx)) {
                             tracing::warn!("Terminal rename dialog outlived its panel: {error}");
                         }
                         true
                     });
-                } [field]
+                } [content]
             }
         });
-        focus_input.update(cx, |input, cx| input.focus(window, cx));
+        window.on_next_frame(move |window, cx| {
+            focus_form.update(cx, |form, cx| form.focus_input(window, cx));
+        });
     }
 
     pub(super) fn on_close(
@@ -422,38 +432,51 @@ impl Panel {
         let hint = Self::hint(entry, cx);
         let close_label = i18n::text("files-terminal-end", cx);
         let compact = self.sidebar.progress() == 0.;
+        let disabled = self.sealed || entry.closing;
+        let on_close = cx.listener(move |panel, _, window, cx| {
+            cx.stop_propagation();
+            panel.request_close(id, window, cx);
+        });
+        let close_shortcut = Shortcut::new(Box::new(CloseTerminal), Some(TERMINAL_TABS_CONTEXT));
         let close = if compact {
-            gds::ui::corner_button(
+            let button = gds::ui::corner_button(
                 ("files-terminal-close", id),
                 IconName::X,
                 close_label.clone(),
-            )
+            );
+            el! {
+                $(button) {
+                    accessibility_label: $(close_label.clone());
+                    selected: selected;
+                    @if (shortcut_target)
+                        tooltip_with_shortcut: $(close_label.clone()), close_shortcut;
+                    @else
+                        tooltip: close_label;
+                    @end;
+                    disabled: disabled;
+                    on_click: on_close;
+                }
+            }
         } else {
             el! { $(("files-terminal-close", id)).Button::icon_button {
                 control_icon: IconName::X;
+                accessibility_label: $(close_label.clone());
+                selected: selected;
+                @if (shortcut_target)
+                    tooltip_with_shortcut: $(close_label.clone()), close_shortcut;
+                @else
+                    tooltip: close_label;
+                @end;
+                disabled: disabled;
+                on_click: on_close;
             } }
-        }
-        .accessibility_label(close_label.clone())
-        .selected(selected)
-        .when(shortcut_target, |button| {
-            button.tooltip_with_shortcut(
-                close_label.clone(),
-                Shortcut::new(Box::new(CloseTerminal), Some(TERMINAL_TABS_CONTEXT)),
-            )
-        })
-        .when(!shortcut_target, |button| button.tooltip(close_label))
-        .disabled(self.sealed || entry.closing)
-        .on_click(cx.listener(move |panel, _, window, cx| {
-            cx.stop_propagation();
-            panel.request_close(id, window, cx);
-        }));
+        };
         let reveal_close = shortcut_target
             && ui::HeldModifier::from_modifiers(window.modifiers()) == Some(ui::HeldModifier::Ctrl);
-        let (trailing, corner) = if compact {
-            (
-                Vec::new(),
-                Some(gds::ui::corner_action(group.clone(), close, reveal_close)),
-            )
+        let mut trailing = Vec::new();
+        let mut corner = None;
+        if compact {
+            corner = Some(gds::ui::corner_action(group.clone(), close, reveal_close));
         } else {
             let close = close.into_any_element();
             let close = if reveal_close {
@@ -461,8 +484,8 @@ impl Panel {
             } else {
                 gds::ui::hover_action(group.clone(), el! { .div }.into_any_element(), Some(close))
             };
-            (vec![close], None)
-        };
+            trailing.push(close);
+        }
         let on_select = cx.listener(move |panel, _, window, cx| panel.select(id, window, cx));
         let tooltip = move |window: &mut Window, cx: &mut App| hint.view(window, cx);
         el! {

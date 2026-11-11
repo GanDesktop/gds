@@ -215,7 +215,7 @@ pub(super) fn rows(
                 Command::Refresh,
                 "refresh",
                 IconName::RefreshCw,
-                !browser.collections.network.discovery.loading,
+                !browser.collections.network.discovery.is_loading(),
                 false,
             );
             if browser.picker.is_none() {

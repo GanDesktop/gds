@@ -2,8 +2,11 @@ mod menu;
 
 use std::{cell::RefCell, collections::HashSet, path::PathBuf, rc::Rc, sync::Arc};
 
-use fluent_bundle::FluentArgs;
-use gds::{i18n, ui::DialogActions, ui::notifications};
+use gds::{
+    i18n::{self, t},
+    ui::DialogActions,
+    ui::notifications,
+};
 use gds_uim::el;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, WindowExt, dialog::AlertDialog, menu::PopupMenu};
@@ -14,7 +17,6 @@ use crate::entities::file::directory::EntryKind;
 use crate::features::file_operations as operations;
 
 const CONFIRMATION_WIDTH: f32 = 480.;
-const NAME_PREVIEW_LIMIT: usize = 5;
 const CONFIRMATION_GAP: f32 = 8.;
 
 pub(super) struct State {
@@ -53,19 +55,23 @@ struct Selection {
     directories_only: bool,
 }
 
+pub(super) fn is_directory_entry(entry: &crate::entities::file::directory::Entry) -> bool {
+    entry.kind == EntryKind::Directory
+        || entry.kind == EntryKind::SymbolicLink
+            && entry.details.target.as_ref().is_some_and(|target| {
+                matches!(
+                    target,
+                    crate::entities::file::directory::LinkTarget::Resolved {
+                        kind: EntryKind::Directory,
+                        ..
+                    }
+                )
+            })
+}
+
 impl Selection {
     fn directory_entry(entry: &crate::entities::file::directory::Entry) -> bool {
-        entry.kind == EntryKind::Directory
-            || entry.kind == EntryKind::SymbolicLink
-                && entry.details.target.as_ref().is_some_and(|target| {
-                    matches!(
-                        target,
-                        crate::entities::file::directory::LinkTarget::Resolved {
-                            kind: EntryKind::Directory,
-                            ..
-                        }
-                    )
-                })
+        is_directory_entry(entry)
     }
 
     fn terminal_target(&self) -> Option<PathBuf> {
@@ -147,16 +153,46 @@ struct Request {
     batch: operations::Batch,
 }
 
-struct Confirmation {
+pub(in crate::pages::workspace::ui) const NAME_PREVIEW_LIMIT: usize = 5;
+
+pub(in crate::pages::workspace::ui) struct Confirmation {
     browser: WeakEntity<Browser>,
-    pending: RefCell<Option<Request>>,
     names: Vec<SharedString>,
     count: usize,
-    origin_tab: u64,
+    icon: IconName,
+    title: Box<dyn Fn(usize, &App) -> SharedString>,
+    description: Box<dyn Fn(usize, &App) -> SharedString>,
+    primary_label: Box<dyn Fn(usize, &App) -> SharedString>,
+    on_confirm: RefCell<Option<Box<dyn FnOnce(&mut Browser, &mut Context<Browser>)>>>,
+    on_cancel: Box<dyn Fn(WeakEntity<Browser>, bool, &mut Window, &mut App)>,
 }
 
 impl Confirmation {
-    fn new(browser: WeakEntity<Browser>, request: Request) -> Rc<Self> {
+    pub(in crate::pages::workspace::ui) fn new(
+        browser: WeakEntity<Browser>,
+        names: Vec<SharedString>,
+        count: usize,
+        icon: IconName,
+        title: impl Fn(usize, &App) -> SharedString + 'static,
+        description: impl Fn(usize, &App) -> SharedString + 'static,
+        primary_label: impl Fn(usize, &App) -> SharedString + 'static,
+        on_confirm: impl FnOnce(&mut Browser, &mut Context<Browser>) + 'static,
+        on_cancel: impl Fn(WeakEntity<Browser>, bool, &mut Window, &mut App) + 'static,
+    ) -> Rc<Self> {
+        Rc::new(Self {
+            browser,
+            names,
+            count,
+            icon,
+            title: Box::new(title),
+            description: Box::new(description),
+            primary_label: Box::new(primary_label),
+            on_confirm: RefCell::new(Some(Box::new(on_confirm))),
+            on_cancel: Box::new(on_cancel),
+        })
+    }
+
+    fn for_request(browser: WeakEntity<Browser>, request: Request) -> Rc<Self> {
         let names = request
             .batch
             .paths()
@@ -173,16 +209,30 @@ impl Confirmation {
             .collect();
         let count = request.batch.paths().len();
         let origin_tab = request.origin_tab;
-        Rc::new(Self {
+        Self::new(
             browser,
-            pending: RefCell::new(Some(request)),
             names,
             count,
-            origin_tab,
-        })
+            IconName::Trash,
+            |count, cx| i18n::count("delete-confirm-title", count, cx),
+            |_, cx| i18n::text("delete-confirm-message", cx),
+            |count, cx| i18n::count("delete-selected", count, cx),
+            move |browser, cx| browser.start_file_operation(request, cx),
+            move |browser, cancelled, window, cx| {
+                // Only cancellation releases the pending lock; confirmed work owns it
+                // until the background result arrives.
+                if cancelled && let Some(browser) = browser.upgrade() {
+                    browser.update(cx, |browser, cx| {
+                        browser.operations.in_progress = false;
+                        cx.notify();
+                    });
+                }
+                Browser::restore_file_focus(browser, origin_tab, window);
+            },
+        )
     }
 
-    fn open(this: Rc<Self>, window: &mut Window) {
+    pub(in crate::pages::workspace::ui) fn open(this: Rc<Self>, window: &mut Window) {
         // Wait for a triggering popup to leave the focus tree. Kit then records
         // the browser, not the disappearing popup, as this dialog's return target.
         window.on_next_frame(move |window, cx| {
@@ -202,8 +252,8 @@ impl Confirmation {
             let names = this.names.iter().cloned().map(Self::name_row);
             let remaining = this.count.saturating_sub(NAME_PREVIEW_LIMIT);
             let footer = el! { .DialogActions::default {
-                primary_label: $(i18n::count("delete-selected", this.count, cx));
-                primary_icon: IconName::Trash;
+                primary_label: $((this.primary_label)(this.count, cx));
+                primary_icon: $(this.icon);
                 cancel_label: $(i18n::text("operation-cancel", cx));
                 danger;
             } };
@@ -211,9 +261,9 @@ impl Confirmation {
                 dialog {
                     confirm; width: CONFIRMATION_WIDTH.px;
                     bg: $(cx.theme().popover); text_color: $(cx.theme().popover_foreground);
-                    title: $(i18n::count("delete-confirm-title", this.count, cx));
-                    description: $(i18n::text("delete-confirm-message", cx));
-                    icon: IconName::Trash.Icon::new;
+                    title: $((this.title)(this.count, cx));
+                    description: $((this.description)(this.count, cx));
+                    icon: $(this.icon).Icon::new;
                     footer: footer;
                     on_ok: on_confirm;
                     on_close: on_close;
@@ -235,12 +285,11 @@ impl Confirmation {
 
     fn confirm_handler(this: Rc<Self>) -> impl Fn(&ClickEvent, &mut Window, &mut App) -> bool {
         move |_, _, cx| {
-            let request = this.pending.borrow_mut().take();
-            let Some(request) = request else {
+            let Some(confirm) = this.on_confirm.borrow_mut().take() else {
                 return false;
             };
             if let Some(browser) = this.browser.upgrade() {
-                browser.update(cx, |browser, cx| browser.start_file_operation(request, cx));
+                browser.update(cx, |browser, cx| confirm(browser, cx));
             }
             true
         }
@@ -248,17 +297,8 @@ impl Confirmation {
 
     fn close_handler(this: Rc<Self>) -> impl Fn(&ClickEvent, &mut Window, &mut App) {
         move |_, window, cx| {
-            // Only cancellation releases the pending lock; confirmed work owns it
-            // until the background result arrives.
-            if this.pending.borrow_mut().take().is_some()
-                && let Some(browser) = this.browser.upgrade()
-            {
-                browser.update(cx, |browser, cx| {
-                    browser.operations.in_progress = false;
-                    cx.notify();
-                });
-            }
-            Browser::restore_file_focus(this.browser.clone(), this.origin_tab, window);
+            let cancelled = this.on_confirm.borrow_mut().take().is_some();
+            (this.on_cancel)(this.browser.clone(), cancelled, window, cx);
         }
     }
 }
@@ -278,10 +318,14 @@ impl operations::Kind {
         }
     }
 
-    fn partial_label(self) -> &'static str {
+    fn partial_summary(self, succeeded: usize, failed: usize, cx: &App) -> SharedString {
+        let succeeded = succeeded as i64;
+        let failed = failed as i64;
         match self {
-            Self::Trash => "trash-partial",
-            Self::PermanentDelete => "delete-partial",
+            Self::Trash => t!(@cx, "trash-partial", succeeded = succeeded, failed = failed),
+            Self::PermanentDelete => {
+                t!(@cx, "delete-partial", succeeded = succeeded, failed = failed)
+            }
         }
     }
 }
@@ -390,7 +434,7 @@ impl Browser {
                 self.start_file_operation(request, cx);
             }
             operations::Kind::PermanentDelete => {
-                let confirmation = Confirmation::new(cx.entity().downgrade(), request);
+                let confirmation = Confirmation::for_request(cx.entity().downgrade(), request);
                 Confirmation::open(confirmation, window);
             }
         }
@@ -479,10 +523,7 @@ impl Browser {
         let summary = if failed == 0 {
             i18n::count(report.kind.success_label(), succeeded.len(), cx)
         } else {
-            let mut args = FluentArgs::new();
-            args.set("succeeded", succeeded.len() as i64);
-            args.set("failed", failed as i64);
-            i18n::format(report.kind.partial_label(), Some(&args), cx)
+            report.kind.partial_summary(succeeded.len(), failed, cx)
         };
         let mut notice = notifications::Report::new(level, summary);
         for item in report.failed_items() {
