@@ -25,15 +25,6 @@ const EXIT_FAILED: u8 = 2;
 /// Outcome of one picker session, shared with the process exit path.
 static EXIT: AtomicU8 = AtomicU8::new(EXIT_CANCELLED);
 
-/// Filter groups always contain at least the default "all files" group.
-fn normalized_filters(filters: Vec<Filter>) -> Vec<Filter> {
-    if filters.is_empty() {
-        vec![Filter::all_files()]
-    } else {
-        filters
-    }
-}
-
 /// Picker behaviour handed to the browser.
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -49,11 +40,20 @@ pub struct Options {
 }
 
 impl Options {
+    /// Filter groups always contain at least the default "all files" group.
+    fn normalize_filters(filters: Vec<Filter>) -> Vec<Filter> {
+        if filters.is_empty() {
+            vec![Filter::all_files()]
+        } else {
+            filters
+        }
+    }
+
     /// Builds options, adding the default "all files" group when `filters` is
     /// empty so the invariant on [`Options::filters`] holds.
     pub fn new(filters: Vec<Filter>, read_only: bool) -> Self {
         Self {
-            filters: normalized_filters(filters),
+            filters: Self::normalize_filters(filters),
             read_only,
             directory: false,
             multiple: false,
@@ -72,19 +72,24 @@ impl Options {
         if filters.is_empty() {
             filters.push(Filter::all_files());
         }
-        let (directory, multiple) = match &request.mode {
+        let mut directory = false;
+        let mut multiple = false;
+        match &request.mode {
             Mode::Open {
-                directory,
-                multiple,
-            } => (*directory, *multiple),
-            Mode::Save { .. } => (false, false),
+                directory: dir,
+                multiple: multi,
+            } => {
+                directory = *dir;
+                multiple = *multi;
+            }
+            Mode::Save { .. } => {}
             Mode::SaveFiles { names } => {
                 if names.is_empty() || names.iter().any(|name| !Self::valid_name(name)) {
                     return Err(Error::InvalidSaveName);
                 }
-                (true, false)
+                directory = true;
             }
-        };
+        }
         Ok(Self {
             filters,
             read_only: false,
@@ -95,11 +100,7 @@ impl Options {
     }
 
     pub fn valid_name(name: &std::ffi::OsStr) -> bool {
-        let mut components = Path::new(name).components();
-        matches!(components.next(), Some(std::path::Component::Normal(_)))
-            && components.next().is_none()
-            && !name.as_encoded_bytes().contains(&0)
-            && Path::new(name).file_name() == Some(name)
+        crate::features::file_operations::names::validate(name).is_ok()
     }
 
     pub fn is_save(&self) -> bool {
@@ -138,6 +139,7 @@ pub struct Filter {
     /// `None` means the browser supplies its localized "all files" label;
     /// a bare glob without a label keeps the original glob text as label.
     pub label: Option<String>,
+    narrows: bool,
     matcher: GlobSet,
     mime_types: Vec<mime_guess::mime::Mime>,
 }
@@ -146,6 +148,11 @@ impl Filter {
     /// The group that shows every entry, used when no `--filter` was given.
     pub fn all_files() -> Self {
         Self::compile(None, &["*"], "*").expect("the wildcard glob is always valid")
+    }
+
+    /// Whether this filter restricts visible files rather than matching all files.
+    pub fn narrows(&self) -> bool {
+        self.narrows
     }
 
     /// Parses `[LABEL:]GLOB[,GLOB...]`.
@@ -164,6 +171,8 @@ impl Filter {
         Self::compile(label.map(str::to_owned), &patterns, spec)
     }
 
+    /// # Errors
+    /// Reports empty or invalid glob patterns.
     fn compile(label: Option<String>, patterns: &[&str], spec: &str) -> Result<Self, Error> {
         let mut builder = GlobSetBuilder::new();
         for pattern in patterns {
@@ -184,19 +193,27 @@ impl Filter {
             pattern: patterns.join(","),
             source,
         })?;
+        let narrows = !patterns.contains(&"*");
         Ok(Self {
             label,
+            narrows,
             matcher,
             mime_types: Vec::new(),
         })
     }
 
+    /// # Errors
+    /// Reports invalid glob or MIME filter patterns.
     fn from_portal(filter: &chooser::Filter) -> Result<Self, Error> {
         let mut builder = GlobSetBuilder::new();
         let mut mime_types = Vec::new();
+        let mut matches_all = false;
         for pattern in &filter.patterns {
             match pattern {
                 Pattern::Glob(pattern) => {
+                    if pattern.trim() == "*" {
+                        matches_all = true;
+                    }
                     let literal = pattern
                         .replace('\\', "\\\\")
                         .replace('{', "\\{")
@@ -213,6 +230,9 @@ impl Filter {
                     builder.add(glob);
                 }
                 Pattern::Mime(mime) => {
+                    if mime.trim() == "*/*" {
+                        matches_all = true;
+                    }
                     mime_types.push(mime.parse().map_err(|_| Error::InvalidMime(mime.clone()))?)
                 }
             }
@@ -224,6 +244,7 @@ impl Filter {
         })?;
         Ok(Self {
             label: Some(filter.label.clone()),
+            narrows: !matches_all && !filter.patterns.is_empty(),
             matcher,
             mime_types,
         })
@@ -271,7 +292,7 @@ pub fn emit_selections(
     read_only: bool,
     filter_index: usize,
 ) -> Result<(), Error> {
-    let line = selection_line(paths, read_only, filter_index)?;
+    let line = Selection::encode_line(paths, read_only, filter_index)?;
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(&line).map_err(Error::Output)?;
     stdout.write_all(b"\n").map_err(Error::Output)?;
@@ -287,46 +308,6 @@ pub fn emit_portal_result(result: &chooser::Result) -> Result<(), Error> {
     stdout.flush().map_err(Error::Output)
 }
 
-fn selection_line(
-    paths: &[PathBuf],
-    read_only: bool,
-    filter_index: usize,
-) -> Result<Vec<u8>, Error> {
-    let absolute: Vec<PathBuf> = paths
-        .iter()
-        .map(|path| {
-            std::path::absolute(path).map_err(|source| Error::AbsolutePath {
-                path: path.clone(),
-                source,
-            })
-        })
-        .collect::<Result<_, _>>()?;
-    let selections: Vec<Selection<'_>> = absolute
-        .iter()
-        .map(|path| Selection {
-            path: path.to_str(),
-            path_os: path
-                .to_str()
-                .is_none()
-                .then(|| path.clone().into_os_string()),
-            read_only,
-            filter_index,
-        })
-        .collect();
-    if let [selection] = selections.as_slice() {
-        serde_json::to_vec(selection).map_err(Error::Serialize)
-    } else {
-        #[derive(Serialize)]
-        struct Multiple<'a> {
-            selections: &'a [Selection<'a>],
-        }
-        serde_json::to_vec(&Multiple {
-            selections: &selections,
-        })
-        .map_err(Error::Serialize)
-    }
-}
-
 /// The selection line. A non-UTF-8 path is reported as `path: null` plus
 /// `path_os`, whose Serde representation keeps the raw bytes recoverable
 /// instead of substituting a lossy string.
@@ -337,6 +318,50 @@ struct Selection<'a> {
     path_os: Option<OsString>,
     read_only: bool,
     filter_index: usize,
+}
+
+impl Selection<'_> {
+    /// # Errors
+    /// Reports paths that cannot be made absolute or JSON serialization failures.
+    fn encode_line(
+        paths: &[PathBuf],
+        read_only: bool,
+        filter_index: usize,
+    ) -> Result<Vec<u8>, Error> {
+        let absolute: Vec<PathBuf> = paths
+            .iter()
+            .map(|path| {
+                std::path::absolute(path).map_err(|source| Error::AbsolutePath {
+                    path: path.clone(),
+                    source,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let selections: Vec<Selection<'_>> = absolute
+            .iter()
+            .map(|path| Selection {
+                path: path.to_str(),
+                path_os: path
+                    .to_str()
+                    .is_none()
+                    .then(|| path.clone().into_os_string()),
+                read_only,
+                filter_index,
+            })
+            .collect();
+        if let [selection] = selections.as_slice() {
+            serde_json::to_vec(selection).map_err(Error::Serialize)
+        } else {
+            #[derive(Serialize)]
+            struct Multiple<'a> {
+                selections: &'a [Selection<'a>],
+            }
+            serde_json::to_vec(&Multiple {
+                selections: &selections,
+            })
+            .map_err(Error::Serialize)
+        }
+    }
 }
 
 /// Records that the user picked a file and the result reached stdout.

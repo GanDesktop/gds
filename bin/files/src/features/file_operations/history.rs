@@ -94,7 +94,12 @@ impl Step {
         }
     }
 
+    /// # Errors
+    /// Propagates cancellation, move, trash or restore failures.
     fn apply(&self, cancel: &tokio_util::sync::CancellationToken) -> Result<Self, Error> {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
         match self {
             Self::Move {
                 source,
@@ -125,9 +130,11 @@ impl Step {
                     destination: source.clone(),
                 })
             }
-            Self::Trash { path, .. } => Ok(Self::Restore(recycle::trash(path)?.entry?)),
+            Self::Trash { path, .. } => Ok(Self::Restore(
+                recycle::trash_cancellable(path, cancel)?.entry?,
+            )),
             Self::Restore(entry) => {
-                recycle::perform(recycle::Action::Restore, vec![entry.clone()])
+                recycle::perform_cancellable(recycle::Action::Restore, vec![entry.clone()], cancel)
                     .pop()
                     .expect("one restore result")
                     .result?;
@@ -139,6 +146,8 @@ impl Step {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("operation cancelled")]
+    Cancelled,
     #[error("invalid history target: {0}")]
     InvalidPath(PathBuf),
     #[error(transparent)]
@@ -151,6 +160,12 @@ pub enum Error {
 pub struct Entry {
     pub kind: Kind,
     pub steps: Vec<Step>,
+}
+
+struct PendingTrash {
+    step: Step,
+    previous: Option<OsString>,
+    original: PathBuf,
 }
 
 impl Entry {
@@ -171,34 +186,58 @@ impl Entry {
             errors: Vec::new(),
             replacements: Vec::new(),
         };
+        let mut tracker = recycle::Tracker::new();
+        let mut pending_trash: Vec<PendingTrash> = Vec::new();
         for step in self.steps.into_iter().rev() {
             if cancel.is_cancelled() {
                 if report.remaining.is_empty() {
-                    report.errors.push("operation cancelled".into());
+                    report.errors.push(Error::Cancelled.to_string());
                 }
                 report.remaining.push(step);
                 continue;
             }
+            if let Step::Trash { path, previous } = &step {
+                match tracker.delete(path, cancel) {
+                    Ok(original) => pending_trash.push(PendingTrash {
+                        previous: previous.clone(),
+                        step,
+                        original,
+                    }),
+                    Err(error) => {
+                        report.errors.push(error.to_string());
+                        report.remaining.push(step);
+                    }
+                }
+                continue;
+            }
             match step.apply(cancel) {
                 Ok(inverse) => {
-                    if let (
-                        Step::Trash {
-                            previous: Some(previous),
-                            ..
-                        },
-                        Step::Restore(current),
-                    ) = (&step, &inverse)
-                    {
-                        report.replacements.push(Replacement {
-                            previous: previous.clone(),
-                            current: current.clone(),
-                        });
-                    }
                     report.inverse.push(inverse);
                 }
                 Err(error) => {
                     report.errors.push(error.to_string());
                     report.remaining.push(step);
+                }
+            }
+        }
+        let originals = pending_trash
+            .iter()
+            .map(|item| item.original.clone())
+            .collect();
+        for (pending, receipt) in pending_trash.into_iter().zip(tracker.finish(originals)) {
+            match receipt {
+                Ok(current) => {
+                    if let Some(previous) = pending.previous {
+                        report.replacements.push(Replacement {
+                            previous,
+                            current: current.clone(),
+                        });
+                    }
+                    report.inverse.push(Step::Restore(current));
+                }
+                Err(error) => {
+                    report.errors.push(error.to_string());
+                    report.remaining.push(pending.step);
                 }
             }
         }

@@ -37,7 +37,24 @@ impl Report {
 /// so removing directory access does not prevent the rest of the traversal.
 /// Failures are collected while processing the remaining items.
 pub(crate) fn apply(path: &Path, access: u32, recursive: bool) -> Report {
+    apply_cancellable(
+        path,
+        access,
+        recursive,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+}
+
+pub(crate) fn apply_cancellable(
+    path: &Path,
+    access: u32,
+    recursive: bool,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Report {
     let mut report = Report::default();
+    if cancel.is_cancelled() {
+        return report;
+    }
     if !recursive {
         report.record(path, save(path, access));
         return report;
@@ -47,6 +64,9 @@ pub(crate) fn apply(path: &Path, access: u32, recursive: bool) -> Report {
         .follow_root_links(false)
         .contents_first(true)
     {
+        if cancel.is_cancelled() {
+            break;
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
@@ -99,12 +119,38 @@ pub(crate) fn read(path: &Path) -> Result<u32, Error> {
     Ok(metadata.permissions().mode())
 }
 
-/// Replace only the nine access bits, retaining the current special mode bits.
+/// Replace only the nine access bits, retaining the current special mode bits,
+/// without following symbolic links at any step.
 ///
 /// # Errors
 /// Reports inaccessible paths, symbolic links and permission changes denied by the OS.
 pub(crate) fn save(path: &Path, access: u32) -> Result<(), Error> {
-    let mode = (read(path)? & !ACCESS_BITS) | (access & ACCESS_BITS);
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
-    Ok(())
+    #[cfg(target_os = "linux")]
+    {
+        use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags, chmodat, fstat, openat};
+        use std::os::fd::AsRawFd;
+
+        let fd = openat(
+            CWD,
+            path,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(io::Error::from)?;
+        let stat = fstat(&fd).map_err(io::Error::from)?;
+        if FileType::from_raw_mode(stat.st_mode) == FileType::Symlink {
+            return Err(Error::Symlink);
+        }
+        let mode = (stat.st_mode & !ACCESS_BITS) | (access & ACCESS_BITS);
+        let fd_path = format!("/proc/self/fd/{}", fd.as_raw_fd());
+        chmodat(CWD, fd_path, Mode::from_raw_mode(mode), AtFlags::empty())
+            .map_err(io::Error::from)?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mode = (read(path)? & !ACCESS_BITS) | (access & ACCESS_BITS);
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+        Ok(())
+    }
 }

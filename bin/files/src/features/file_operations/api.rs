@@ -135,25 +135,26 @@ impl Batch {
         kind: Kind,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Report {
-        let mut receipts = Vec::new();
-        let mut history_errors = Vec::new();
+        let mut tracker = super::recycle::Tracker::new();
+        let mut trashed_originals = Vec::new();
         let mut report = self.execute_with(kind, |path| {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
             if kind == Kind::Trash && super::recycle::supported() {
-                let receipt = super::recycle::trash(path).map_err(Error::Recycle)?;
-                match receipt.entry {
-                    Ok(entry) => receipts.push(entry),
-                    Err(error) => history_errors.push(error.to_string()),
-                }
+                let original = tracker.delete(path, cancel).map_err(Error::Recycle)?;
+                trashed_originals.push(original);
                 Ok(())
             } else {
                 kind.execute(path)
             }
         });
-        report.receipts = receipts;
-        report.history_errors = history_errors;
+        for receipt in tracker.finish(trashed_originals) {
+            match receipt {
+                Ok(entry) => report.receipts.push(entry),
+                Err(error) => report.history_errors.push(error.to_string()),
+            }
+        }
         report
     }
 

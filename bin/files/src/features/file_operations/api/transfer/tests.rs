@@ -86,15 +86,17 @@ fn cross_device_cleanup_preserves_replaced_inodes() {
 fn copies_file_and_directory_tags_before_restoring_readonly_permissions() {
     use gds::service::file_tags;
     use std::os::unix::fs::PermissionsExt;
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().expect("isolated tempdir for tag transfer test");
     let source = root.path().join("source");
     let destination = root.path().join("copy");
-    fs::create_dir(&source).unwrap();
-    fs::write(source.join("file"), "payload").unwrap();
-    file_tags::write(&source, &["工作".into()]).unwrap();
-    file_tags::write(&source.join("file"), &["Project/design".into()]).unwrap();
-    fs::set_permissions(source.join("file"), fs::Permissions::from_mode(0o444)).unwrap();
-    fs::set_permissions(&source, fs::Permissions::from_mode(0o555)).unwrap();
+    fs::create_dir(&source).expect("create source directory");
+    fs::write(source.join("file"), "payload").expect("write source file");
+    file_tags::write(&source, &["工作".into()]).expect("tag source directory");
+    file_tags::write(&source.join("file"), &["Project/design".into()]).expect("tag source file");
+    fs::set_permissions(source.join("file"), fs::Permissions::from_mode(0o444))
+        .expect("set readonly file mode");
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o555))
+        .expect("set readonly directory mode");
     let result = Node {
         source: source.clone(),
         destination: destination.clone(),
@@ -102,19 +104,28 @@ fn copies_file_and_directory_tags_before_restoring_readonly_permissions() {
     }
     .copy_root();
     // Make the fixture removable even if an assertion fails.
-    fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
-    let copied_mode = fs::metadata(&destination).unwrap().permissions().mode() & 0o777;
-    fs::set_permissions(&destination, fs::Permissions::from_mode(0o755)).unwrap();
-    result.unwrap();
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o755))
+        .expect("restore writable source directory mode for cleanup");
+    let copied_mode = fs::metadata(&destination)
+        .expect("inspect copied directory")
+        .permissions()
+        .mode()
+        & 0o777;
+    fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))
+        .expect("restore writable destination directory mode for cleanup");
+    result.expect("copy readonly tree with tags");
     assert_eq!(copied_mode, 0o555);
-    assert_eq!(file_tags::read(&destination).unwrap(), ["工作"]);
     assert_eq!(
-        file_tags::read(&destination.join("file")).unwrap(),
+        file_tags::read(&destination).expect("read copied directory tags"),
+        ["工作"]
+    );
+    assert_eq!(
+        file_tags::read(&destination.join("file")).expect("read copied file tags"),
         ["Project/design"]
     );
     assert_eq!(
         fs::metadata(destination.join("file"))
-            .unwrap()
+            .expect("inspect copied file")
             .permissions()
             .mode()
             & 0o777,
@@ -125,10 +136,12 @@ fn copies_file_and_directory_tags_before_restoring_readonly_permissions() {
 #[test]
 fn cross_device_cleanup_preserves_tags_changed_after_copy() {
     let copied = CopiedTree::new();
-    gds::service::file_tags::write(&copied.source.join("copied"), &["external".into()]).unwrap();
+    gds::service::file_tags::write(&copied.source.join("copied"), &["external".into()])
+        .expect("modify source file tags after copy");
     assert!(copied.prepared.remove_source(&copied.copied).is_err());
     assert_eq!(
-        gds::service::file_tags::read(&copied.source.join("copied")).unwrap(),
+        gds::service::file_tags::read(&copied.source.join("copied"))
+            .expect("read preserved source file tags"),
         ["external"]
     );
 }

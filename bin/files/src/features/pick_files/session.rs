@@ -36,7 +36,7 @@ impl Projection {
         self.options
             .filters
             .get(self.active_filter)
-            .is_some_and(|filter| filter.label.is_some())
+            .is_some_and(Filter::narrows)
     }
 
     /// Whether an entry is a folder, following a link only for navigation.

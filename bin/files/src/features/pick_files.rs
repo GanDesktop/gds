@@ -7,5 +7,5 @@ pub(crate) use model::{
 
 mod session;
 pub(crate) use session::{Projection, Session};
-mod targets;
-pub(crate) use targets::SaveTargets;
+pub(crate) mod targets;
+pub(crate) use targets as SaveTargets;

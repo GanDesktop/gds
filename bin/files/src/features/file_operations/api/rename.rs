@@ -1,5 +1,6 @@
 //! Filesystem execution for rename.
 
+use super::names;
 use std::{
     ffi::{OsStr, OsString},
     fs, io,
@@ -20,6 +21,17 @@ pub(crate) enum NameError {
     Invalid,
 }
 
+impl From<names::NameError> for NameError {
+    fn from(error: names::NameError) -> Self {
+        match error {
+            names::NameError::Empty => Self::Empty,
+            names::NameError::Separator => Self::Separator,
+            names::NameError::Reserved => Self::Reserved,
+            names::NameError::Invalid => Self::Invalid,
+        }
+    }
+}
+
 impl NameError {
     pub fn label_id(self) -> &'static str {
         match self {
@@ -34,22 +46,17 @@ impl NameError {
 
 /// Check a typed leaf name without touching the filesystem.
 ///
-/// The comparison is byte-exact: leading and trailing spaces are legal names
-/// and are never trimmed implicitly.
-pub(crate) fn validate_name(name: &str, current: &OsStr) -> Result<(), NameError> {
-    if name.is_empty() {
-        return Err(NameError::Empty);
-    }
-    if name.contains('/') || (cfg!(windows) && name.contains('\\')) {
-        return Err(NameError::Separator);
-    }
-    if name == "." || name == ".." {
-        return Err(NameError::Reserved);
-    }
-    if name.contains('\0') {
-        return Err(NameError::Invalid);
-    }
-    if OsStr::new(name) == current {
+/// The comparison is byte-exact on raw [`OsStr`] bytes: leading and trailing
+/// spaces are legal names and are never trimmed implicitly, and distinct
+/// non-UTF-8 byte sequences are never collapsed through lossy UTF-8 conversion.
+///
+/// # Errors
+/// Rejects empty names, path separators, reserved directory names, NUL bytes
+/// and names identical to `current`.
+pub(crate) fn validate_name(name: impl AsRef<OsStr>, current: &OsStr) -> Result<(), NameError> {
+    let name = name.as_ref();
+    names::validate(name)?;
+    if name == current {
         return Err(NameError::Unchanged);
     }
     Ok(())
@@ -97,7 +104,7 @@ impl Request {
             .ok_or_else(|| Error::InvalidTarget {
                 path: self.source.clone(),
             })?;
-        validate_name(&self.name.to_string_lossy(), current)?;
+        validate_name(&self.name, current)?;
         let parent = self.source.parent().ok_or_else(|| Error::InvalidTarget {
             path: self.source.clone(),
         })?;
@@ -105,61 +112,65 @@ impl Request {
         if destination == self.source {
             return Err(Error::Name(NameError::Unchanged));
         }
-        ensure_absent(&destination)?;
-        rename_no_replace(&self.source, &destination)?;
+        Self::ensure_absent(&destination)?;
+        Self::rename_no_replace(&self.source, &destination)?;
         Ok(destination)
     }
-}
 
-fn ensure_absent(destination: &Path) -> Result<(), Error> {
-    match fs::symlink_metadata(destination) {
-        Ok(_) => Err(exists(destination)),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(Error::Filesystem {
-            path: destination.to_path_buf(),
-            source,
-        }),
+    /// # Errors
+    /// Reports an existing destination entry or metadata inspection failure.
+    fn ensure_absent(destination: &Path) -> Result<(), Error> {
+        match fs::symlink_metadata(destination) {
+            Ok(_) => Err(Self::exists(destination)),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(Error::Filesystem {
+                path: destination.to_path_buf(),
+                source,
+            }),
+        }
     }
-}
 
-fn exists(destination: &Path) -> Error {
-    Error::Exists {
-        parent: destination
-            .parent()
-            .map_or_else(PathBuf::new, Path::to_path_buf),
-        name: destination
-            .file_name()
-            .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+    fn exists(destination: &Path) -> Error {
+        Error::Exists {
+            parent: destination
+                .parent()
+                .map_or_else(PathBuf::new, Path::to_path_buf),
+            name: destination
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+        }
     }
-}
 
-#[cfg(target_os = "linux")]
-fn rename_no_replace(source: &Path, destination: &Path) -> Result<(), Error> {
-    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    /// # Errors
+    /// Reports target conflicts or kernel rename errors.
+    #[cfg(target_os = "linux")]
+    fn rename_no_replace(source: &Path, destination: &Path) -> Result<(), Error> {
+        use rustix::fs::{CWD, RenameFlags, renameat_with};
 
-    match renameat_with(CWD, source, CWD, destination, RenameFlags::NOREPLACE) {
-        Ok(()) => Ok(()),
-        Err(error) if error == rustix::io::Errno::EXIST => Err(exists(destination)),
-        // Refuse rather than fall back to a check-then-rename sequence: that
-        // sequence can replace a destination created between the two calls.
-        Err(error) => Err(Error::Filesystem {
+        match renameat_with(CWD, source, CWD, destination, RenameFlags::NOREPLACE) {
+            Ok(()) => Ok(()),
+            Err(error) if error == rustix::io::Errno::EXIST => Err(Self::exists(destination)),
+            // Refuse rather than fall back to a check-then-rename sequence: that
+            // sequence can replace a destination created between the two calls.
+            Err(error) => Err(Error::Filesystem {
+                path: source.to_path_buf(),
+                source: error.into(),
+            }),
+        }
+    }
+
+    /// # Errors
+    /// Always refuses when atomic no-replace rename is unavailable.
+    #[cfg(not(target_os = "linux"))]
+    fn rename_no_replace(source: &Path, _destination: &Path) -> Result<(), Error> {
+        // No portable no-replace rename is wired on this target. A plain rename
+        // could overwrite an existing entry, so refuse explicitly until a native
+        // API is added here.
+        Err(Error::Unsupported {
             path: source.to_path_buf(),
-            source: error.into(),
-        }),
+        })
     }
-}
 
-#[cfg(not(target_os = "linux"))]
-fn rename_no_replace(source: &Path, _destination: &Path) -> Result<(), Error> {
-    // No portable no-replace rename is wired on this target. A plain rename
-    // could overwrite an existing entry, so refuse explicitly until a native
-    // API is added here.
-    Err(Error::Unsupported {
-        path: source.to_path_buf(),
-    })
-}
-
-impl Request {
     pub fn spawn(
         self,
         tasks: &gds::service::task_manager::Scope,

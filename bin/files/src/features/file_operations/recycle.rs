@@ -9,9 +9,10 @@ use std::{ffi::OsString, io, path::PathBuf, time::SystemTime};
 
 #[cfg(target_os = "linux")]
 use std::{
+    collections::{HashMap, HashSet},
     ffi::OsStr,
     fs,
-    path::{Component, Path},
+    path::Path,
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -20,7 +21,7 @@ use crate::features::file_operations::transfer;
 
 #[cfg(target_os = "linux")]
 use crate::features::file_operations::{
-    names::NamedTarget,
+    names::{self, NamedTarget},
     transfer::{Batch, Mode, Request},
 };
 
@@ -122,48 +123,156 @@ pub struct Receipt {
     pub entry: Result<Entry, Error>,
 }
 
-/// Move one file to trash and capture its exact new record, not an older
-/// deletion with the same original path.
-///
-/// # Errors
-/// Reports listing, path resolution or deletion failure before a receipt exists.
-#[cfg(target_os = "linux")]
-pub fn trash(path: &std::path::Path) -> Result<Receipt, Error> {
-    let before: std::collections::HashSet<_> = trash::os_limited::list()?
-        .into_iter()
-        .map(|entry| entry.id)
-        .collect();
-    let original = path
-        .parent()
-        .ok_or_else(|| Error::InvalidRecord {
-            path: path.to_owned(),
-        })?
-        .canonicalize()
-        .map_err(|source| Error::Io {
-            path: path.to_owned(),
-            source,
-        })?
-        .join(path.file_name().ok_or_else(|| Error::InvalidRecord {
-            path: path.to_owned(),
-        })?);
-    trash::delete(path)?;
-    let entry = trash::os_limited::list()
-        .map_err(Error::from)
-        .and_then(|entries| {
-            let mut matches = entries
-                .into_iter()
-                .filter(|entry| entry.original_path() == original && !before.contains(&entry.id));
-            match (matches.next(), matches.next()) {
-                (Some(entry), None) => Entry::from_item(entry),
-                _ => Err(Error::MissingReceipt { path: original }),
-            }
-        });
-    Ok(Receipt { entry })
+/// Tracks pre-existing trash IDs once across a batch of deletions so that
+/// `trash::os_limited::list()` is executed at most once before and once after
+/// the batch instead of $2N$ times.
+#[derive(Default)]
+pub(crate) struct Tracker {
+    #[cfg(target_os = "linux")]
+    before: Option<HashSet<OsString>>,
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn trash(_: &std::path::Path) -> Result<Receipt, Error> {
-    Err(Error::Unsupported)
+impl Tracker {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Delete one path to trash, lazily snapshotting pre-existing trash IDs on
+    /// the first deletion in the batch.
+    ///
+    /// # Errors
+    /// Reports cancellation, initial snapshot listing failure, path resolution
+    /// failure, or deletion failure.
+    pub(crate) fn delete(
+        &mut self,
+        path: &std::path::Path,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<PathBuf, Error> {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if self.before.is_none() {
+                let ids = trash::os_limited::list()?
+                    .into_iter()
+                    .map(|entry| entry.id)
+                    .collect();
+                self.before = Some(ids);
+            }
+            let original = Self::resolve_original(path)?;
+            trash::delete(path)?;
+            Ok(original)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = path;
+            Err(Error::Unsupported)
+        }
+    }
+
+    /// Resolve recovery [`Entry`] records for all paths deleted in this batch
+    /// with a single post-batch `trash::os_limited::list()` scan.
+    pub(crate) fn finish(self, originals: Vec<PathBuf>) -> Vec<Result<Entry, Error>> {
+        if originals.is_empty() {
+            return Vec::new();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let Some(before) = self.before else {
+                return originals
+                    .into_iter()
+                    .map(|path| Err(Error::MissingReceipt { path }))
+                    .collect();
+            };
+            let entries = match trash::os_limited::list() {
+                Ok(entries) => entries,
+                Err(error) => {
+                    let mut iter = originals.into_iter();
+                    let mut results = Vec::with_capacity(iter.len());
+                    if iter.next().is_some() {
+                        results.push(Err(Error::from(error)));
+                    }
+                    results.extend(iter.map(|path| Err(Error::MissingReceipt { path })));
+                    return results;
+                }
+            };
+            let mut expected_counts: HashMap<PathBuf, usize> = HashMap::new();
+            for original in &originals {
+                *expected_counts.entry(original.clone()).or_insert(0) += 1;
+            }
+            let mut by_original: HashMap<PathBuf, Vec<trash::TrashItem>> = HashMap::new();
+            for item in entries {
+                if !before.contains(&item.id) {
+                    by_original
+                        .entry(item.original_path())
+                        .or_default()
+                        .push(item);
+                }
+            }
+            for (original, items) in &mut by_original {
+                if expected_counts.get(original).copied().unwrap_or(0) != items.len() {
+                    items.clear();
+                } else {
+                    items.reverse();
+                }
+            }
+            originals
+                .into_iter()
+                .map(|original| {
+                    by_original
+                        .get_mut(&original)
+                        .and_then(Vec::pop)
+                        .ok_or_else(|| Error::MissingReceipt {
+                            path: original.clone(),
+                        })
+                        .and_then(Entry::from_item)
+                })
+                .collect()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            originals
+                .into_iter()
+                .map(|_| Err(Error::Unsupported))
+                .collect()
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn resolve_original(path: &Path) -> Result<PathBuf, Error> {
+        Ok(path
+            .parent()
+            .ok_or_else(|| Error::InvalidRecord {
+                path: path.to_owned(),
+            })?
+            .canonicalize()
+            .map_err(|source| Error::Io {
+                path: path.to_owned(),
+                source,
+            })?
+            .join(path.file_name().ok_or_else(|| Error::InvalidRecord {
+                path: path.to_owned(),
+            })?))
+    }
+}
+
+/// Move one file to trash with cancellation support and capture its exact new
+/// record, not an older deletion with the same original path.
+///
+/// # Errors
+/// Reports cancellation, listing, path resolution or deletion failure before a receipt exists.
+pub fn trash_cancellable(
+    path: &std::path::Path,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<Receipt, Error> {
+    let mut tracker = Tracker::new();
+    let original = tracker.delete(path, cancel)?;
+    let entry = tracker
+        .finish(vec![original.clone()])
+        .pop()
+        .unwrap_or(Err(Error::MissingReceipt { path: original }));
+    Ok(Receipt { entry })
 }
 
 /// List every trash record that can still be acted on.
@@ -179,7 +288,7 @@ pub fn trash(_: &std::path::Path) -> Result<Receipt, Error> {
 pub fn list() -> Result<Vec<Entry>, Error> {
     #[cfg(target_os = "linux")]
     {
-        collect_entries(trash::os_limited::list()?)
+        Entry::collect(trash::os_limited::list()?)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -187,41 +296,11 @@ pub fn list() -> Result<Vec<Entry>, Error> {
     }
 }
 
-/// Build entries from raw records, keeping the readable ones and remembering
-/// the first rejection. Failing only because some records are corrupt would
-/// hide the usable ones; succeeding with none of them would fake an empty bin.
-#[cfg(target_os = "linux")]
-fn collect_entries(items: impl IntoIterator<Item = trash::TrashItem>) -> Result<Vec<Entry>, Error> {
-    let mut entries = Vec::new();
-    let mut failures = 0;
-    let mut first_failure = None;
-    for item in items {
-        match Entry::from_item(item) {
-            Ok(entry) => entries.push(entry),
-            Err(error) => {
-                tracing::warn!("Skipping unusable trash record: {error}");
-                failures += 1;
-                first_failure.get_or_insert(error);
-            }
-        }
-    }
-    match first_failure {
-        Some(first) if entries.is_empty() => Err(Error::Unreadable {
-            failed: failures,
-            first: Box::new(first),
-        }),
-        _ => Ok(entries),
-    }
-}
-
-/// Apply one action to exactly the supplied records, keeping every outcome.
+/// Apply one action to exactly the supplied records with cancellation support,
+/// keeping every outcome.
 ///
 /// The outcome list preserves the input order, and one record's failure never
 /// stops the remaining records from being attempted.
-pub fn perform(action: Action, entries: Vec<Entry>) -> Vec<Outcome> {
-    perform_cancellable(action, entries, &tokio_util::sync::CancellationToken::new())
-}
-
 pub fn perform_cancellable(
     action: Action,
     entries: Vec<Entry>,
@@ -236,7 +315,7 @@ pub fn perform_cancellable(
                 result: if cancel.is_cancelled() {
                     Err(Error::Cancelled)
                 } else {
-                    entry.apply(action)
+                    entry.apply(action, cancel)
                 },
                 entry,
             }
@@ -245,17 +324,53 @@ pub fn perform_cancellable(
 }
 
 impl Entry {
-    fn apply(&self, action: Action) -> Result<(), Error> {
+    /// Build entries from raw records, keeping the readable ones and remembering
+    /// the first rejection. Failing only because some records are corrupt would
+    /// hide the usable ones; succeeding with none of them would fake an empty bin.
+    ///
+    /// # Errors
+    /// Reports [`Error::Unreadable`] when items exist but every single one is invalid.
+    #[cfg(target_os = "linux")]
+    fn collect(items: impl IntoIterator<Item = trash::TrashItem>) -> Result<Vec<Self>, Error> {
+        let mut entries = Vec::new();
+        let mut failures = 0;
+        let mut first_failure = None;
+        for item in items {
+            match Self::from_item(item) {
+                Ok(entry) => entries.push(entry),
+                Err(error) => {
+                    tracing::warn!("Skipping unusable trash record: {error}");
+                    failures += 1;
+                    first_failure.get_or_insert(error);
+                }
+            }
+        }
+        match first_failure {
+            Some(first) if entries.is_empty() => Err(Error::Unreadable {
+                failed: failures,
+                first: Box::new(first),
+            }),
+            _ => Ok(entries),
+        }
+    }
+
+    /// # Errors
+    /// Propagates restore or purge failures for this record.
+    fn apply(
+        &self,
+        action: Action,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<(), Error> {
         #[cfg(target_os = "linux")]
         {
             match action {
-                Action::Restore => self.restore(),
+                Action::Restore => self.restore(cancel),
                 Action::Purge => self.purge(),
             }
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = action;
+            let _ = (action, cancel);
             Err(Error::Unsupported)
         }
     }
@@ -265,7 +380,7 @@ impl Entry {
     /// original location, and reports a delivered payload whose record cleanup
     /// failed without rolling the restored payload back.
     #[cfg(target_os = "linux")]
-    fn restore(&self) -> Result<(), Error> {
+    fn restore(&self, cancel: &tokio_util::sync::CancellationToken) -> Result<(), Error> {
         self.verify()?;
         fs::create_dir_all(&self.original_parent).map_err(|source| Error::Io {
             path: self.original_parent.clone(),
@@ -278,7 +393,7 @@ impl Entry {
         };
         let targets = vec![NamedTarget::new(self.payload.clone(), self.name.clone())];
         let batch = Batch::named(request, targets)?;
-        let mut items = batch.execute().items;
+        let mut items = batch.execute_cancellable(cancel.clone()).items;
         let item = items
             .pop()
             .expect("a named batch retains its single frozen payload");
@@ -291,6 +406,7 @@ impl Entry {
             }
         } else if let Err(error) = item.result {
             return Err(match error {
+                transfer::Error::Cancelled => Error::Cancelled,
                 transfer::Error::Conflict { path } => Error::RestoreConflict { path },
                 other => Error::Transfer(other),
             });
@@ -324,15 +440,18 @@ impl Entry {
     }
 
     /// Reject a record whose info or payload was replaced since it was listed.
+    ///
+    /// # Errors
+    /// Reports missing/replaced records as [`Error::Stale`] and I/O failures.
     #[cfg(target_os = "linux")]
     fn verify(&self) -> Result<fs::Metadata, Error> {
-        let info = inspect(&self.info)?;
+        let info = Self::inspect(&self.info)?;
         if Identity::of(&info) != self.snapshot.info {
             return Err(Error::Stale {
                 path: self.info.clone(),
             });
         }
-        let payload = inspect(&self.payload)?;
+        let payload = Self::inspect(&self.payload)?;
         if Identity::of(&payload) != self.snapshot.payload {
             return Err(Error::Stale {
                 path: self.payload.clone(),
@@ -348,24 +467,23 @@ impl Entry {
     #[cfg(target_os = "linux")]
     fn from_item(item: trash::TrashItem) -> Result<Self, Error> {
         let paths = RecordPaths::parse(&item.id)?;
-        if !item.original_parent.is_absolute() || !is_leaf(&item.name) {
+        if !item.original_parent.is_absolute() || names::validate(&item.name).is_err() {
             return Err(Error::InvalidRecord { path: paths.info });
         }
-        let payload_metadata = inspect(&paths.payload)?;
-        let info_metadata = inspect(&paths.info)?;
+        let payload_metadata = Self::inspect(&paths.payload)?;
+        let info_metadata = Self::inspect(&paths.info)?;
         if !info_metadata.file_type().is_file() {
             return Err(Error::InvalidRecord { path: paths.info });
         }
-        let detail = trash::os_limited::metadata(&item).ok();
         let original_path = item.original_path();
-        let deleted_at = deleted_at(item.time_deleted);
+        let deleted_at = Self::deleted_at(item.time_deleted);
         Ok(Self {
             id: item.id,
             name: item.name,
             original_path,
             deleted_at,
-            size: detail.and_then(|detail| detail.size.size()),
-            items: detail.and_then(|detail| detail.size.entries()),
+            size: payload_metadata.is_file().then(|| payload_metadata.len()),
+            items: None,
             kind: EntryKind::from(payload_metadata.file_type()),
             snapshot: Snapshot {
                 info: Identity::of(&info_metadata),
@@ -375,6 +493,31 @@ impl Entry {
             payload: paths.payload,
             original_parent: item.original_parent,
         })
+    }
+
+    /// # Errors
+    /// Maps `NotFound` to [`Error::Stale`] and other errors to [`Error::Io`].
+    #[cfg(target_os = "linux")]
+    fn inspect(path: &Path) -> Result<fs::Metadata, Error> {
+        fs::symlink_metadata(path).map_err(|source| {
+            if source.kind() == io::ErrorKind::NotFound {
+                Error::Stale {
+                    path: path.to_owned(),
+                }
+            } else {
+                Error::Io {
+                    path: path.to_owned(),
+                    source,
+                }
+            }
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn deleted_at(seconds: i64) -> Option<SystemTime> {
+        u64::try_from(seconds)
+            .ok()
+            .and_then(|seconds| UNIX_EPOCH.checked_add(Duration::from_secs(seconds)))
     }
 }
 
@@ -387,73 +530,45 @@ struct RecordPaths {
 
 #[cfg(target_os = "linux")]
 impl RecordPaths {
+    /// # Errors
+    /// Rejects non-absolute paths, non-`.trashinfo` extensions, invalid stems,
+    /// or paths not directly inside `<trash_root>/info/`.
     fn parse(id: &OsStr) -> Result<Self, Error> {
         let info = PathBuf::from(id);
         if !info.is_absolute() {
-            return Err(invalid_record(&info));
+            return Err(Self::invalid(&info));
         }
         let Some(file_name) = info.file_name() else {
-            return Err(invalid_record(&info));
+            return Err(Self::invalid(&info));
         };
         let file_name = Path::new(file_name);
         if file_name.extension() != Some(OsStr::new("trashinfo")) {
-            return Err(invalid_record(&info));
+            return Err(Self::invalid(&info));
         }
         let Some(stem) = file_name.file_stem() else {
-            return Err(invalid_record(&info));
+            return Err(Self::invalid(&info));
         };
-        if !is_leaf(stem) {
-            return Err(invalid_record(&info));
+        if names::validate(stem).is_err() {
+            return Err(Self::invalid(&info));
         }
         let Some(info_dir) = info.parent() else {
-            return Err(invalid_record(&info));
+            return Err(Self::invalid(&info));
         };
         if info_dir.file_name() != Some(OsStr::new("info")) {
-            return Err(invalid_record(&info));
+            return Err(Self::invalid(&info));
         }
         let Some(root) = info_dir.parent() else {
-            return Err(invalid_record(&info));
+            return Err(Self::invalid(&info));
         };
         let payload = root.join("files").join(stem);
         Ok(Self { info, payload })
     }
-}
 
-#[cfg(target_os = "linux")]
-fn invalid_record(info: &Path) -> Error {
-    Error::InvalidRecord {
-        path: info.to_owned(),
-    }
-}
-
-/// Whether `name` is exactly one normal path component.
-#[cfg(target_os = "linux")]
-fn is_leaf(name: &OsStr) -> bool {
-    let mut components = Path::new(name).components();
-    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
-}
-
-#[cfg(target_os = "linux")]
-fn inspect(path: &Path) -> Result<fs::Metadata, Error> {
-    fs::symlink_metadata(path).map_err(|source| {
-        if source.kind() == io::ErrorKind::NotFound {
-            Error::Stale {
-                path: path.to_owned(),
-            }
-        } else {
-            Error::Io {
-                path: path.to_owned(),
-                source,
-            }
+    fn invalid(info: &Path) -> Error {
+        Error::InvalidRecord {
+            path: info.to_owned(),
         }
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn deleted_at(seconds: i64) -> Option<SystemTime> {
-    u64::try_from(seconds)
-        .ok()
-        .and_then(|seconds| UNIX_EPOCH.checked_add(Duration::from_secs(seconds)))
+    }
 }
 
 #[cfg(target_os = "linux")]
