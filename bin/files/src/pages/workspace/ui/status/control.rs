@@ -11,6 +11,9 @@ use gpui_kit::{
     prelude::*,
     *,
 };
+use std::rc::Rc;
+
+type OpenHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 #[component]
 #[derive(IntoElement)]
@@ -23,6 +26,8 @@ pub(in crate::pages::workspace::ui) struct StatusControl {
     summary: StatusSummary,
     #[attr(option, into)]
     details: Option<AnyView>,
+    #[attr(option)]
+    on_open: Option<OpenHandler>,
 }
 
 impl Default for StatusControl {
@@ -32,6 +37,7 @@ impl Default for StatusControl {
             title: SharedString::default(),
             summary: StatusSummary::default(),
             details: None,
+            on_open: None,
         }
     }
 }
@@ -43,6 +49,7 @@ impl RenderOnce for StatusControl {
             title,
             summary,
             details,
+            on_open,
         } = self;
         let trigger = el! {
             id.Button::new {
@@ -56,10 +63,16 @@ impl RenderOnce for StatusControl {
                     @if (let Some(details) = details.clone()) details, @end,
                 ] }
             };
+        let on_open_change = move |open: &bool, window: &mut Window, cx: &mut App| {
+            if *open && let Some(on_open) = &on_open {
+                on_open(window, cx);
+            }
+        };
         el! {
             id.Popover::new {
                 appearance: false; anchor: Anchor::BottomLeft;
                 trigger: trigger; content: content;
+                on_open_change: on_open_change;
             }
         }
     }

@@ -20,6 +20,15 @@ impl Motion {
         })
     }
 
+    /// Horizontal arrow motion inside a multi-column grid.
+    pub(super) fn for_horizontal_key(key: &str) -> Option<Self> {
+        Some(match key {
+            "left" => Self::Previous,
+            "right" => Self::Next,
+            _ => return None,
+        })
+    }
+
     pub(super) fn target(self, current: Option<usize>, count: usize) -> Option<usize> {
         if count == 0 {
             return None;
@@ -189,15 +198,21 @@ impl Browser {
             let Some(slot) = self.active() else {
                 return;
             };
+            let count = slot.table_rows.len();
             let current = slot
                 .cursor
                 .as_ref()
                 .or_else(|| slot.navigation.view().selected.last())
                 .and_then(|path| slot.table_rows.iter().position(|entry| &entry.path == path));
-            let Some(index) =
-                slot.grid
-                    .navigate(&event.keystroke.key, current, slot.table_rows.len())
-            else {
+            let target = if let Some(horizontal) = Motion::for_horizontal_key(&event.keystroke.key)
+            {
+                horizontal.target(current, count)
+            } else if let Some(motion) = Motion::for_key(&event.keystroke.key) {
+                slot.grid.navigate(motion, current, count)
+            } else {
+                None
+            };
+            let Some(index) = target else {
                 return;
             };
             self.select(index, modifiers, cx);
@@ -277,7 +292,9 @@ impl Browser {
         if modifiers.control || modifiers.alt || modifiers.platform {
             return;
         }
-        if self.grid_mode() && matches!(event.keystroke.key.as_str(), "left" | "right") {
+        if self.grid_mode()
+            && let Some(horizontal) = Motion::for_horizontal_key(&event.keystroke.key)
+        {
             let locations = self.place_locations(collection).unwrap_or_default();
             let Some(slot) = self.current_tab_mut() else {
                 return;
@@ -288,10 +305,7 @@ impl Browser {
                 .place
                 .as_ref()
                 .and_then(|location| locations.iter().position(|entry| entry == location));
-            if let Some(index) = slot
-                .grid
-                .navigate(&event.keystroke.key, current, locations.len())
-            {
+            if let Some(index) = horizontal.target(current, locations.len()) {
                 slot.navigation.view_mut().place = Some(locations[index].clone());
                 slot.scroll_to_entry(index);
                 cx.notify();
@@ -330,14 +344,8 @@ impl Browser {
             .and_then(|slot| slot.navigation.view().place.as_ref())
             .and_then(|location| locations.iter().position(|entry| entry == location));
         let target = if self.grid_mode() {
-            let key = match motion {
-                Motion::Previous => "up",
-                Motion::Next => "down",
-                Motion::First => "home",
-                Motion::Last => "end",
-            };
             self.current_tab()
-                .and_then(|slot| slot.grid.navigate(key, current, locations.len()))
+                .and_then(|slot| slot.grid.navigate(motion, current, locations.len()))
         } else {
             motion.target(current, locations.len())
         };

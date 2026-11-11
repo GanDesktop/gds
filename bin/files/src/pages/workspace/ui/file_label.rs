@@ -1,5 +1,5 @@
 //! File identity shared by drag previews and removable status lists.
-use super::file_icon::{FileArtwork, FileIcon};
+use crate::entities::file::ui::{FileArtwork, FileIcon};
 use gds_uim::{component, el};
 use gpui_kit::{IntoElement, assets::IconName, prelude::*, *};
 

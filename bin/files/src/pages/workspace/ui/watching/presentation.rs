@@ -1,6 +1,14 @@
 use super::*;
-use crate::entities::file::columns::{Column, Layout};
-use table::EntryPresentation;
+use crate::entities::file::{
+    columns::{Column, Layout},
+    ui::{EntryPresentation, FileIcon},
+};
+
+struct RowComparison<'a> {
+    grid: bool,
+    layout: &'a Layout,
+    now: std::time::SystemTime,
+}
 
 pub(super) fn changed(
     slot: &OpenTab,
@@ -24,7 +32,11 @@ pub(super) fn changed(
     let columns = if grid { slot.grid.columns } else { 1 };
     let start = (top.max(0.) / height).floor() as usize * columns;
     let end = (((top + viewport).max(0.) / height).ceil() as usize * columns).min(rows.len());
-    let now = ui::time::now(cx);
+    let comparison = RowComparison {
+        grid,
+        layout,
+        now: ui::time::now(cx),
+    };
     for (index, (before, after)) in previous.iter().zip(rows.iter()).enumerate() {
         if before == after {
             continue;
@@ -40,7 +52,7 @@ pub(super) fn changed(
         if !(start..end).contains(&index) {
             continue;
         }
-        if row_changed(before, after, grid, layout, now, cx) {
+        if row_changed(before, after, &comparison, cx) {
             return true;
         }
     }
@@ -50,27 +62,25 @@ pub(super) fn changed(
 fn row_changed(
     before: &directory::Entry,
     after: &directory::Entry,
-    grid: bool,
-    layout: &Layout,
-    now: std::time::SystemTime,
+    comparison: &RowComparison<'_>,
     cx: &App,
 ) -> bool {
     let format = ui::time::format(cx);
     if before.path != after.path
         || before.display_name != after.display_name
         || before.is_hidden != after.is_hidden
-        || file_icon::FileIcon::for_entry(before) != file_icon::FileIcon::for_entry(after)
-        || file_icon::FileIcon::color(before, cx) != file_icon::FileIcon::color(after, cx)
+        || FileIcon::for_entry(before) != FileIcon::for_entry(after)
+        || FileIcon::color(before, cx) != FileIcon::color(after, cx)
     {
         return true;
     }
-    if grid {
+    if comparison.grid {
         if before.thumbnail_source() != after.thumbnail_source() {
             return true;
         }
         return false;
     }
-    for column in layout.columns() {
+    for column in comparison.layout.columns() {
         let changed = match column {
             Column::Name => false,
             Column::Size => {
@@ -89,12 +99,12 @@ fn row_changed(
             Column::Group => before.details.group != after.details.group,
             Column::Permissions => before.details.permissions != after.details.permissions,
             Column::Modified => {
-                format.presentation(before.modified, now)
-                    != format.presentation(after.modified, now)
+                format.presentation(before.modified, comparison.now)
+                    != format.presentation(after.modified, comparison.now)
             }
             Column::Accessed => {
-                format.presentation(before.details.accessed, now)
-                    != format.presentation(after.details.accessed, now)
+                format.presentation(before.details.accessed, comparison.now)
+                    != format.presentation(after.details.accessed, comparison.now)
             }
         };
         if changed {

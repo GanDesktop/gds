@@ -8,7 +8,7 @@
 //! a press that never crosses the threshold keeps its plain blank-click meaning.
 
 use gds_uim::el;
-use std::{cell::RefCell, path::PathBuf, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, path::PathBuf, rc::Rc};
 
 use gds::appearance::tokens::DataListStyle;
 use gpui_kit::component::ActiveTheme;
@@ -28,6 +28,16 @@ struct Origin {
     path: PathBuf,
 }
 
+/// Selection and cursor snapshot captured before the press cleared them.
+#[derive(Clone)]
+struct Baseline {
+    selection: Vec<PathBuf>,
+    cursor: Option<PathBuf>,
+    anchor: Option<PathBuf>,
+    /// Ctrl/Shift was held at the press: keep the starting selection and add.
+    merge: bool,
+}
+
 /// One armed or running marquee, with the selection it must restore on cancel.
 struct Drag {
     origin: Origin,
@@ -35,12 +45,7 @@ struct Drag {
     start: Point<Pixels>,
     /// Latest clamped pointer point in window coordinates.
     current: Point<Pixels>,
-    /// Selection and cursor as they were before the press cleared them.
-    selection: Vec<PathBuf>,
-    cursor: Option<PathBuf>,
-    anchor: Option<PathBuf>,
-    /// Ctrl/Shift was held at the press: keep the starting selection and add.
-    merge: bool,
+    baseline: Baseline,
     /// Set once the pointer passes the threshold; until then the press keeps its
     /// plain blank-click behavior.
     started: bool,
@@ -195,7 +200,8 @@ impl Browser {
                 on_mouse_up: MouseButton::Left, $(cx.listener(Self::marquee_release));
                 on_mouse_up_out: MouseButton::Left, $(cx.listener(Self::marquee_release));
             } [content, overlay]
-        }.into_any_element()
+        }
+        .into_any_element()
     }
 
     /// Cancel a running marquee and restore the selection it started from.
@@ -210,7 +216,7 @@ impl Browser {
             return false;
         }
         if self.marquee_origin_current(&drag.origin) {
-            self.marquee_restore(&drag);
+            self.marquee_restore(&drag.baseline);
         }
         cx.notify();
         true
@@ -262,10 +268,12 @@ impl Browser {
             },
             start: event.position,
             current: event.position,
-            selection: tab.view().selected.clone(),
-            cursor: slot.cursor.clone(),
-            anchor: slot.anchor.clone(),
-            merge: event.modifiers.control || event.modifiers.platform || event.modifiers.shift,
+            baseline: Baseline {
+                selection: tab.view().selected.clone(),
+                cursor: slot.cursor.clone(),
+                anchor: slot.anchor.clone(),
+                merge: event.modifiers.control || event.modifiers.platform || event.modifiers.shift,
+            },
             started: false,
             header_height: if self.grid_mode() {
                 0.
@@ -310,12 +318,9 @@ impl Browser {
         }
         drag.current = current;
         let hits = self.marquee_hits(drag.rect(), bounds);
-        let selection = drag.selection.clone();
-        let cursor = drag.cursor.clone();
-        let anchor = drag.anchor.clone();
-        let merge = drag.merge;
+        let baseline = drag.baseline.clone();
         *self.files.marquee.drag.borrow_mut() = Some(drag);
-        self.marquee_write_selection(&hits, merge, &selection, cursor, anchor, cx);
+        self.marquee_write_selection(&hits, &baseline, cx);
         cx.notify();
     }
 
@@ -400,18 +405,20 @@ impl Browser {
     fn marquee_write_selection(
         &mut self,
         hits: &[PathBuf],
-        merge: bool,
-        baseline: &[PathBuf],
-        baseline_cursor: Option<PathBuf>,
-        baseline_anchor: Option<PathBuf>,
+        baseline: &Baseline,
         cx: &mut Context<Self>,
     ) {
         let Some(slot) = self.active_mut() else {
             return;
         };
-        let mut selected = if merge { baseline.to_vec() } else { Vec::new() };
+        let mut selected = if baseline.merge {
+            baseline.selection.clone()
+        } else {
+            Vec::with_capacity(hits.len())
+        };
+        let mut seen: HashSet<PathBuf> = selected.iter().cloned().collect();
         for path in hits {
-            if !selected.contains(path) {
+            if seen.insert(path.clone()) {
                 selected.push(path.clone());
             }
         }
@@ -426,15 +433,15 @@ impl Browser {
         };
         if let Some(last) = hits.last() {
             slot.cursor = Some(last.clone());
-            slot.anchor = if merge {
-                baseline_anchor.or_else(|| hits.first().cloned())
+            slot.anchor = if baseline.merge {
+                baseline.anchor.clone().or_else(|| hits.first().cloned())
             } else {
                 hits.first().cloned()
             };
-        } else if merge {
+        } else if baseline.merge {
             // The blank press cleared these; a merge must keep its starting point.
-            slot.cursor = baseline_cursor;
-            slot.anchor = baseline_anchor;
+            slot.cursor = baseline.cursor.clone();
+            slot.anchor = baseline.anchor.clone();
         } else {
             slot.cursor = None;
             slot.anchor = None;
@@ -444,16 +451,16 @@ impl Browser {
         }
     }
 
-    fn marquee_restore(&mut self, drag: &Drag) {
+    fn marquee_restore(&mut self, baseline: &Baseline) {
         let Some(slot) = self.active_mut() else {
             return;
         };
         {
             let tab = &mut slot.navigation;
-            tab.view_mut().selected = drag.selection.clone();
+            tab.view_mut().selected = baseline.selection.clone();
         }
-        slot.cursor = drag.cursor.clone();
-        slot.anchor = drag.anchor.clone();
+        slot.cursor = baseline.cursor.clone();
+        slot.anchor = baseline.anchor.clone();
     }
 
     /// Whether `origin` is still the page the marquee may write to.

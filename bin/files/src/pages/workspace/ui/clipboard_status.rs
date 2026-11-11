@@ -1,9 +1,15 @@
 //! Editable file clipboard summary; removing a row updates the platform offer.
 use super::*;
-use super::{file_icon::FileIcon, file_label::FileLabel, status::*};
+use super::{file_label::FileLabel, status::*};
+use crate::entities::file::ui::FileIcon;
 use gds::ui::IconButton;
 use gds_uim::el;
 use gpui_kit::{assets::IconName, prelude::*};
+
+struct IconBatch {
+    paths: Vec<PathBuf>,
+    icons: std::collections::HashMap<PathBuf, FileIcon>,
+}
 
 pub(super) struct Details {
     busy: bool,
@@ -24,12 +30,25 @@ impl Details {
         }
     }
 
+    pub(super) fn sync_from_clipboard(&mut self, cx: &mut Context<Self>) {
+        let paths = file_clipboard::current(cx)
+            .as_ref()
+            .map(|snapshot| snapshot.paths.clone())
+            .unwrap_or_default();
+        self.sync_icons(paths, cx);
+    }
+
     fn sync_icons(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         if paths == self.paths {
             return;
         }
         self.paths = paths.clone();
         self.icons.retain(|path, _| paths.contains(path));
+        if paths.is_empty() {
+            self.loading = None;
+            cx.notify();
+            return;
+        }
         let work = self
             .tasks
             .spawn_blocking_named("Inspect clipboard files", move || {
@@ -44,13 +63,13 @@ impl Details {
                         (path.clone(), icon)
                     })
                     .collect();
-                (paths, icons)
+                IconBatch { paths, icons }
             });
         self.loading = Some(cx.spawn(async move |this, cx| match work.await {
-            Ok((paths, icons)) => {
+            Ok(batch) => {
                 let _ = this.update(cx, |this, cx| {
-                    if this.paths == paths {
-                        this.icons = icons;
+                    if this.paths == batch.paths {
+                        this.icons = batch.icons;
                         cx.notify();
                     }
                 });
@@ -62,16 +81,9 @@ impl Details {
 impl Render for Details {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = file_clipboard::current(cx);
-        self.sync_icons(
-            snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.paths.clone())
-                .unwrap_or_default(),
-            cx,
-        );
         let rows = snapshot
             .map(|snapshot| {
-                snapshot.paths.iter().map(|path| {
+                snapshot.paths.iter().enumerate().map(|(index, path)| {
                     let expected = snapshot.as_ref().clone();
                     let path = path.clone();
                     let label: SharedString = path.to_string_lossy().into_owned().into();
@@ -99,6 +111,7 @@ impl Render for Details {
                                     notifications::error(error.to_string(), cx);
                                 }
                                 file_clipboard::refresh(cx);
+                                this.sync_from_clipboard(cx);
                                 cx.notify();
                             });
                         }).detach();
@@ -108,7 +121,7 @@ impl Render for Details {
                         .StatusRow::default {
                             # key; title: label;
                             content: .FileLabel::default { icon: icon; name: name; };
-                            action: "remove-clipboard-entry".IconButton::new {
+                            action: ($("remove-clipboard-entry", index)).IconButton::new {
                                 icon: IconName::X; label: $(i18n::text("clipboard-remove-item", cx));
                                 disabled: $(self.busy); on_click: on_click;
                             };
@@ -143,13 +156,21 @@ impl Browser {
                 }
             })
             .unwrap_or_default();
+        let details = self.clipboard_details.clone();
+        let on_open: std::rc::Rc<dyn Fn(&mut Window, &mut App)> = std::rc::Rc::new({
+            let details = details.clone();
+            move |_, cx| {
+                details.update(cx, |details, cx| details.sync_from_clipboard(cx));
+            }
+        });
         el! {
             .StatusControl::default {
                 # "file-clipboard-status"; title: $(i18n::text("clipboard-title", cx));
                 summary: .StatusSummary::default {
                     compact: $(self.window.layout.compact); icon: icon; label: label; count: count;
                 };
-                details: $(self.clipboard_details.clone());
+                details: details;
+                on_open: on_open;
             }
         }
         .into_any_element()

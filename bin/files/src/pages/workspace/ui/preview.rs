@@ -32,8 +32,11 @@ use gpui_kit::component::{
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::{Browser, table::EntryPresentation};
-use crate::entities::file::directory::{Entry, EntryKind};
+use super::Browser;
+use crate::entities::file::{
+    directory::{Entry, EntryKind},
+    ui::EntryPresentation,
+};
 use gds::service::file_inspection::{
     AudioFacts, DirectoryFacts, FileFacts, ImageFacts, Metadata, Request, TextFacts, VideoFacts,
 };
@@ -88,6 +91,7 @@ impl Eq for Item {}
 pub(super) struct View {
     target: Target,
     inspections: Entity<Cache>,
+    tasks: Option<gds::service::task_manager::Scope>,
     tags_enabled: bool,
     tags: Option<Result<Vec<String>, String>>,
     tags_task: Option<Task<()>>,
@@ -99,9 +103,16 @@ impl View {
         Self {
             target: Target::Empty,
             inspections,
+            tasks: None,
             tags_enabled: false,
             tags: None,
             tags_task: None,
+        }
+    }
+
+    pub(super) fn set_tasks(&mut self, tasks: gds::service::task_manager::Scope) {
+        if self.tasks.is_none() {
+            self.tasks = Some(tasks);
         }
     }
 
@@ -141,13 +152,13 @@ impl View {
             return;
         }
         let path = item.entry.path.clone();
-        let work = cx
-            .gds()
-            .tasks()
-            .scope()
-            .spawn_blocking_named("Read file tags", move || {
-                gds::service::file_tags::read(&path).map_err(|e| e.to_string())
-            });
+        let scope = self
+            .tasks
+            .clone()
+            .unwrap_or_else(|| cx.gds().tasks().scope());
+        let work = scope.spawn_blocking_named("Read file tags", move || {
+            gds::service::file_tags::read(&path).map_err(|e| e.to_string())
+        });
         self.tags_task = Some(cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -340,7 +351,9 @@ fn image_rows(facts: &ImageFacts, cx: &App) -> Vec<DescriptionItem> {
     let mut rows = Vec::new();
     if let Some(size) = facts.size {
         rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-dimensions", cx)); text: $(info::dimensions(size).into()); } }.into());
-        rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-aspect", cx)); text: $(info::aspect_ratio(size).into()); } }.into());
+        if let Some(ratio) = info::aspect_ratio(size) {
+            rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-aspect", cx)); text: $(ratio.into()); } }.into());
+        }
     }
     if let Some(bit_depth) = facts.bit_depth.filter(|depth| *depth > 0) {
         rows.push(el! { .MetadataRow::default { label: $(i18n::text("details-bit-depth", cx)); text: $(bit_depth.to_string().into()); } }.into());
@@ -461,7 +474,6 @@ impl RenderOnce for PreviewPlaceholder {
 
 impl Render for View {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.request(cx);
         let name: SharedString = match &self.target {
             Target::Item(item) => item.entry.display_name.clone().into(),
             _ => SharedString::default(),
@@ -495,9 +507,11 @@ impl Browser {
     fn sync_place_preview(&mut self, cx: &mut Context<Self>) {
         let location = self.selected_place();
         let enabled = self.settings.preferences.tags.enabled;
-        self.files
-            .preview
-            .update(cx, |view, cx| view.set_tags_enabled(enabled, cx));
+        let tasks = self.window.tasks.clone();
+        self.files.preview.update(cx, |view, cx| {
+            view.set_tasks(tasks);
+            view.set_tags_enabled(enabled, cx);
+        });
         if let Some(entry) = location
             .as_ref()
             .and_then(|location| self.tag_entry(location))
@@ -533,10 +547,15 @@ impl Browser {
                 .map_err(std::io::Error::other)
                 .and_then(std::convert::identity);
             let _ = this.update(cx, |this, cx| {
-                if let Ok(entry) = entry {
-                    this.files
-                        .preview
-                        .update(cx, |view, cx| view.show_entry(entry, cx));
+                match entry {
+                    Ok(entry) => {
+                        this.files
+                            .preview
+                            .update(cx, |view, cx| view.show_entry(entry, cx));
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "cannot inspect preview target");
+                    }
                 }
                 cx.notify();
             });
@@ -563,8 +582,33 @@ impl Browser {
         }
     }
 
-    /// Recompute the preview from current selection state during render.
-    pub(super) fn sync_preview(&mut self, cx: &mut Context<Self>) {
+    fn preview_needs_refresh(&self, cx: &App) -> bool {
+        if !self.details_visible() || !self.pages.is_empty() {
+            return false;
+        }
+        let tags_enabled = self.settings.preferences.tags.enabled;
+        let preview = self.files.preview.read(cx);
+        if preview.tags_enabled != tags_enabled || preview.tasks.is_none() {
+            return true;
+        }
+        if self.place_collection().is_some() {
+            let location = self.selected_place();
+            if let Some(entry) = location
+                .as_ref()
+                .and_then(|location| self.tag_entry(location))
+            {
+                return self.collections.preview_location != location
+                    || preview.target != Target::Item(Item::from_entry(entry));
+            }
+            return self.collections.preview_location != location
+                || (location.is_none() && preview.target != Target::Empty);
+        }
+        self.collections.preview_location.is_some()
+            || self.collections.preview_task.is_some()
+            || preview.target != self.preview_target()
+    }
+
+    pub(super) fn refresh_preview(&mut self, cx: &mut Context<Self>) {
         if !self.details_visible() || !self.pages.is_empty() {
             return;
         }
@@ -576,9 +620,20 @@ impl Browser {
         self.collections.preview_task = None;
         let target = self.preview_target();
         let tags_enabled = self.settings.preferences.tags.enabled;
+        let tasks = self.window.tasks.clone();
         self.files.preview.update(cx, |preview, cx| {
+            preview.set_tasks(tasks);
             preview.set_tags_enabled(tags_enabled, cx);
             preview.sync(target, cx);
         });
+    }
+
+    pub(super) fn sync_preview(&mut self, cx: &mut Context<Self>) {
+        if self.preview_needs_refresh(cx) {
+            let this = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = this.update(cx, |this, cx| this.refresh_preview(cx));
+            });
+        }
     }
 }

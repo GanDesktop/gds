@@ -1,8 +1,13 @@
 use crate::entities::file::columns::{Column as LayoutColumn, Layout};
 use crate::entities::location::{ColumnWidths, Location};
-use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+};
 
-use fluent_bundle::FluentArgs;
 use gds::ui::time::Timestamp;
 use gds::{
     appearance::{
@@ -22,14 +27,19 @@ use gpui_kit::component::{
 };
 use gpui_kit::{prelude::*, *};
 
+#[allow(unused_imports)]
+pub(super) use crate::entities::file::ui::{
+    EntryPresentation, OwnerLabel, UNKNOWN_VALUE, format_size,
+};
+use crate::entities::file::ui::{FileArtwork, FileIcon};
+
 use super::{
     Browser,
     columns::sort_key,
     drag_drop::{self, DragPreview, DragSnapshot, FileDrag},
     entry_appearance::EntryAppearance,
-    file_icon::{FileArtwork, FileIcon},
 };
-use crate::entities::file::directory::{ChildCount, ContentCategory, Entry, EntryKind, LinkTarget};
+use crate::entities::file::directory::{Entry, EntryKind};
 use crate::entities::file::sorting::{Direction, Key, Sort};
 
 const NAME_MIN_WIDTH: f32 = 180.;
@@ -55,8 +65,6 @@ const NAME_ICON_WIDTH: f32 = 18.;
 const NAME_ICON_GAP: f32 = 10.;
 const CUT_MARKER_SIZE: f32 = 12.;
 const CUT_MARKER_GAP: f32 = 6.;
-/// Shown for a metadata value the platform did not provide.
-const UNKNOWN_VALUE: &str = "—";
 
 pub(super) struct Data {
     pub rows: Arc<[Entry]>,
@@ -67,6 +75,37 @@ pub(super) struct Data {
     pub layout: Layout,
     pub location: Location,
     pub widths: ColumnWidths,
+}
+
+#[derive(Clone, Copy)]
+struct RowCell<'a> {
+    row_ix: usize,
+    entry: &'a Entry,
+    selection: f32,
+    emphasis: bool,
+    right_aligned: bool,
+}
+
+impl<'a> RowCell<'a> {
+    fn new(row_ix: usize, entry: &'a Entry, selection: f32) -> Self {
+        Self {
+            row_ix,
+            entry,
+            selection,
+            emphasis: false,
+            right_aligned: false,
+        }
+    }
+
+    fn emphasis(mut self, emphasis: bool) -> Self {
+        self.emphasis = emphasis;
+        self
+    }
+
+    fn right_aligned(mut self) -> Self {
+        self.right_aligned = true;
+        self
+    }
 }
 
 /// The name cell and its floating drag use the same content and typography.
@@ -128,6 +167,8 @@ pub(super) struct FileTable {
     browser: WeakEntity<Browser>,
     rows: Arc<[Entry]>,
     selected: Vec<PathBuf>,
+    selected_paths: HashMap<PathBuf, usize>,
+    row_selection: Option<(usize, f32)>,
     sort: Sort,
     sort_pending: bool,
     /// The layout these `columns` were built from.
@@ -156,6 +197,8 @@ impl FileTable {
                     browser,
                     rows: Arc::from([]),
                     selected: Vec::new(),
+                    selected_paths: HashMap::new(),
+                    row_selection: None,
                     sort: Sort::default(),
                     sort_pending: false,
                     layout,
@@ -277,11 +320,19 @@ impl FileTable {
                             || next.width != current.width
                             || next.sort != current.sort
                     });
-            let changed = !Arc::ptr_eq(&delegate.rows, &rows)
-                || delegate.selected != selected
-                || delegate.sort != sort;
+            let selection_changed = delegate.selected != selected;
+            let changed =
+                !Arc::ptr_eq(&delegate.rows, &rows) || selection_changed || delegate.sort != sort;
+            if selection_changed {
+                delegate.selected_paths = selected
+                    .iter()
+                    .enumerate()
+                    .map(|(index, path)| (path.clone(), index))
+                    .collect();
+            }
             if changed {
                 delegate.drag = DragSnapshot::new(&rows, &selected);
+                delegate.row_selection = None;
             }
             if changed || refresh {
                 delegate.name_bounds.borrow_mut().clear();
@@ -312,11 +363,16 @@ impl FileTable {
         state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
             delegate.drag = DragSnapshot::new(&rows, &delegate.selected);
+            delegate.row_selection = None;
             delegate.rows = rows;
             if notify {
                 cx.notify();
             }
         });
+    }
+
+    fn is_selected(&self, path: &Path) -> bool {
+        self.selected_paths.contains_key(path)
     }
 
     fn columns_for(layout: &Layout, content_width: f32, sort: Sort, cx: &App) -> Vec<Column> {
@@ -412,20 +468,39 @@ impl FileTable {
     fn selection_progress(&self, entry: &Entry, window: &mut Window, cx: &mut App) -> f32 {
         super::motion::state_progress(
             format!("file-row-selection:{}", entry.path.display()),
-            self.selected.contains(&entry.path),
+            self.is_selected(&entry.path),
             window,
             cx,
         )
     }
 
-    fn render_name(
+    fn row_selection_for(
         &self,
         row_ix: usize,
         entry: &Entry,
-        selection: f32,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> f32 {
+        self.row_selection
+            .filter(|(cached_row, _)| *cached_row == row_ix)
+            .map_or_else(
+                || self.selection_progress(entry, window, cx),
+                |(_, progress)| progress,
+            )
+    }
+
+    fn render_name(
+        &self,
+        cell: RowCell<'_>,
         window: &Window,
         cx: &Context<TableState<Self>>,
     ) -> AnyElement {
+        let RowCell {
+            row_ix,
+            entry,
+            selection,
+            ..
+        } = cell;
         let content = NameContent::new(entry, selection, cx);
         let tooltip = EntryPresentation::name_hint(content.name.clone());
         let hint_enabled = self.suppressed_hint.as_ref() != Some(&entry.path)
@@ -458,19 +533,16 @@ impl FileTable {
 
     fn render_meta(
         &self,
-        entry: &Entry,
+        cell: RowCell<'_>,
         text: impl IntoElement,
-        emphasis: bool,
-        right_aligned: bool,
-        selection: f32,
         cx: &Context<TableState<Self>>,
     ) -> AnyElement {
-        let appearance = EntryAppearance::of(entry, cx);
+        let appearance = EntryAppearance::of(cell.entry, cx);
         let foreground = cx
             .theme()
             .muted_foreground
-            .interpolate(&cx.theme().accent_foreground, selection);
-        let weight = if emphasis {
+            .interpolate(&cx.theme().accent_foreground, cell.selection);
+        let weight = if cell.emphasis {
             FontWeight::SEMIBOLD
         } else {
             FontWeight::NORMAL
@@ -482,42 +554,29 @@ impl FileTable {
                     text_size: $(typography::scaled(DataListStyle::META_SIZE, cx));
                     text_color: foreground;
                     font_weight: weight; opacity: $appearance.opacity;
-                    @if (right_aligned) text_right; @end;
+                    @if (cell.right_aligned) text_right; @end;
                 } [text],
             ]
         }
         .into_any_element()
     }
 
-    fn render_permissions(
-        &self,
-        row_ix: usize,
-        entry: &Entry,
-        selection: f32,
-        cx: &Context<TableState<Self>>,
-    ) -> AnyElement {
-        let Some(permissions) = entry.details.permissions.as_ref() else {
-            return self.render_meta(
-                entry,
-                SharedString::from(UNKNOWN_VALUE),
-                false,
-                false,
-                selection,
-                cx,
-            );
+    fn render_permissions(&self, cell: RowCell<'_>, cx: &Context<TableState<Self>>) -> AnyElement {
+        let Some(permissions) = cell.entry.details.permissions.as_ref() else {
+            return self.render_meta(cell, SharedString::from(UNKNOWN_VALUE), cx);
         };
-        let appearance = EntryAppearance::of(entry, cx);
+        let appearance = EntryAppearance::of(cell.entry, cx);
         let text: SharedString = permissions.symbols().into();
         let octal = SharedString::from(permissions.octal());
         let foreground = cx
             .theme()
             .muted_foreground
-            .interpolate(&cx.theme().accent_foreground, selection);
+            .interpolate(&cx.theme().accent_foreground, cell.selection);
         let tooltip =
             move |window: &mut Window, cx: &mut App| Tooltip::new(octal.clone()).build(window, cx);
         el! {
             .div {
-                # $("file-permissions", row_ix); size_full; flex; items_center; min_w_0; overflow_hidden;
+                # $("file-permissions", cell.row_ix); size_full; flex; items_center; min_w_0; overflow_hidden;
                 tooltip_show_delay: TOOLTIP_DELAY; tooltip: tooltip;
             } [
                 .div {
@@ -612,8 +671,9 @@ impl TableDelegate for FileTable {
         let Some(entry) = self.rows.get(row_ix) else {
             return row;
         };
-        let selected = self.selected.contains(&entry.path);
+        let selected = self.is_selected(&entry.path);
         let selection = self.selection_progress(entry, window, cx);
+        self.row_selection = Some((row_ix, selection));
         let on_click = self.row_click_handler(row_ix, entry.path.clone());
         let drag = self.drag.drag_for(entry);
         let mut content = NameContent::new(entry, if selected { 1. } else { 0. }, cx);
@@ -684,45 +744,40 @@ impl TableDelegate for FileTable {
         let Some(column) = self.layout.columns().get(col_ix).copied() else {
             return el! { .div }.into_any_element();
         };
-        let selection = self.selection_progress(entry, window, cx);
+        let selection = self.row_selection_for(row_ix, entry, window, cx);
+        let cell = RowCell::new(row_ix, entry, selection);
         match column {
-            LayoutColumn::Name => self.render_name(row_ix, entry, selection, window, cx),
-            LayoutColumn::Permissions => self.render_permissions(row_ix, entry, selection, cx),
+            LayoutColumn::Name => self.render_name(cell, window, cx),
+            LayoutColumn::Permissions => self.render_permissions(cell, cx),
             LayoutColumn::Owner => {
                 let owner = EntryPresentation::owner(entry, cx);
-                self.render_meta(entry, owner.text, owner.current, false, selection, cx)
+                self.render_meta(cell.emphasis(owner.current), owner.text, cx)
             }
             LayoutColumn::Group => {
                 let text = EntryPresentation::group(entry);
-                self.render_meta(entry, text, false, false, selection, cx)
+                self.render_meta(cell, text, cx)
             }
             LayoutColumn::Modified => self.render_meta(
-                entry,
+                cell,
                 Timestamp::new(("file-modified", row_ix), entry.modified),
-                false,
-                false,
-                selection,
                 cx,
             ),
             LayoutColumn::Accessed => self.render_meta(
-                entry,
+                cell,
                 Timestamp::new(("file-accessed", row_ix), entry.details.accessed),
-                false,
-                false,
-                selection,
                 cx,
             ),
             LayoutColumn::Type => {
                 let text = EntryPresentation::type_label(entry, cx);
-                self.render_meta(entry, text, false, false, selection, cx)
+                self.render_meta(cell, text, cx)
             }
             LayoutColumn::DetailedType => {
                 let text = EntryPresentation::detailed_type(entry, cx);
-                self.render_meta(entry, text, false, false, selection, cx)
+                self.render_meta(cell, text, cx)
             }
             LayoutColumn::Size => {
                 let text = EntryPresentation::size_label(entry, cx);
-                self.render_meta(entry, text, false, true, selection, cx)
+                self.render_meta(cell.right_aligned(), text, cx)
             }
         }
     }
@@ -757,176 +812,5 @@ impl TableDelegate for FileTable {
         browser.update(cx, |browser, cx| {
             browser.entry_context_menu(path, menu, window, cx)
         })
-    }
-}
-
-/// Formats the non-icon cells of a file row; the details view shares these.
-pub(super) struct EntryPresentation;
-
-/// Owner cell contents; the current user's name is emphasized.
-pub(super) struct OwnerLabel {
-    pub(super) text: SharedString,
-    pub(super) current: bool,
-}
-
-impl EntryPresentation {
-    pub(super) fn name_hint(name: SharedString) -> impl Fn(&mut Window, &mut App) -> AnyView {
-        move |window, cx| Tooltip::new(name.clone()).build(window, cx)
-    }
-
-    pub(super) fn owner(entry: &Entry, cx: &App) -> OwnerLabel {
-        let Some(owner) = entry.details.owner.as_ref() else {
-            return OwnerLabel {
-                text: UNKNOWN_VALUE.into(),
-                current: false,
-            };
-        };
-        let name = owner.label().into_owned();
-        if !owner.is_current_user {
-            return OwnerLabel {
-                text: name.into(),
-                current: false,
-            };
-        }
-        let mut arguments = FluentArgs::new();
-        arguments.set("name", name);
-        OwnerLabel {
-            text: i18n::format("owner-you", Some(&arguments), cx),
-            current: true,
-        }
-    }
-
-    pub(super) fn group(entry: &Entry) -> SharedString {
-        entry.details.group.as_ref().map_or_else(
-            || UNKNOWN_VALUE.into(),
-            |group| group.label().into_owned().into(),
-        )
-    }
-
-    /// Localized broad type, or the link relationship for a symbolic link.
-    pub(super) fn type_label(entry: &Entry, cx: &App) -> SharedString {
-        if entry.kind == EntryKind::Directory {
-            return i18n::text("kind-directory", cx);
-        }
-        if entry.kind != EntryKind::SymbolicLink {
-            return Self::kind_label(entry, cx);
-        }
-        let Some(target) = entry.details.target.as_ref() else {
-            return i18n::text("kind-link", cx);
-        };
-        match target {
-            LinkTarget::Broken => i18n::text("link-broken", cx),
-            LinkTarget::Unreachable => i18n::text("link-unreachable", cx),
-            LinkTarget::Resolved { kind, .. } => {
-                let target_label: SharedString = match kind {
-                    EntryKind::Directory => i18n::text("kind-directory", cx),
-                    EntryKind::File => entry.details.display_content().map_or_else(
-                        || i18n::text("kind-file", cx),
-                        |content| Self::category_label(content.category, cx),
-                    ),
-                    EntryKind::Other => i18n::text("kind-other", cx),
-                    EntryKind::Unknown => i18n::text("kind-unknown", cx),
-                    EntryKind::SymbolicLink => i18n::text("kind-link", cx),
-                };
-                let mut arguments = FluentArgs::new();
-                arguments.set("target", target_label.to_string());
-                i18n::format("type-link", Some(&arguments), cx)
-            }
-        }
-    }
-
-    /// Concrete format name, MIME fallback, or an explicit unknown value.
-    pub(super) fn detailed_type(entry: &Entry, cx: &App) -> SharedString {
-        if entry.kind == EntryKind::Directory {
-            return i18n::text("kind-directory", cx);
-        }
-        let Some(content) = entry.details.display_content() else {
-            return UNKNOWN_VALUE.into();
-        };
-        match content.label() {
-            Some(label) => label.into(),
-            None => i18n::text("kind-unknown", cx),
-        }
-    }
-
-    fn kind_label(entry: &Entry, cx: &App) -> SharedString {
-        match entry.kind {
-            EntryKind::Directory => i18n::text("kind-directory", cx),
-            EntryKind::File => entry.details.display_content().map_or_else(
-                || i18n::text("kind-file", cx),
-                |content| Self::category_label(content.category, cx),
-            ),
-            EntryKind::SymbolicLink => i18n::text("kind-link", cx),
-            EntryKind::Other => i18n::text("kind-other", cx),
-            EntryKind::Unknown => i18n::text("kind-unknown", cx),
-        }
-    }
-
-    fn category_label(category: ContentCategory, cx: &App) -> SharedString {
-        let id = match category {
-            ContentCategory::Text => "content-text",
-            ContentCategory::Code => "content-code",
-            ContentCategory::Document => "content-document",
-            ContentCategory::Image => "content-image",
-            ContentCategory::Audio => "content-audio",
-            ContentCategory::Video => "content-video",
-            ContentCategory::Archive => "content-archive",
-            ContentCategory::Executable => "content-executable",
-            ContentCategory::Font => "content-font",
-            ContentCategory::Binary => "content-binary",
-        };
-        i18n::text(id, cx)
-    }
-
-    /// Byte size for the details panel; a directory has no byte size there.
-    pub(super) fn size(entry: &Entry) -> String {
-        if entry.kind == EntryKind::Directory {
-            UNKNOWN_VALUE.to_owned()
-        } else {
-            entry
-                .size
-                .map(Self::format_size)
-                .unwrap_or_else(|| UNKNOWN_VALUE.into())
-        }
-    }
-
-    /// Size cell contents: bytes for a file, the direct child count for a
-    /// directory. A directory whose children could not be counted stays unknown.
-    pub(super) fn size_label(entry: &Entry, cx: &App) -> SharedString {
-        if entry.kind == EntryKind::Directory {
-            return match entry.details.children {
-                Some(children) => Self::child_count_label(children, cx),
-                None => UNKNOWN_VALUE.into(),
-            };
-        }
-        entry.size.map_or_else(
-            || UNKNOWN_VALUE.into(),
-            |bytes| Self::format_size(bytes).into(),
-        )
-    }
-
-    /// A count that stopped at the read limit is shown as a lower bound so the
-    /// cell never claims a precision it does not have.
-    fn child_count_label(children: ChildCount, cx: &App) -> SharedString {
-        let id = if children.truncated {
-            "directory-item-count-at-least"
-        } else {
-            "directory-item-count"
-        };
-        i18n::count(id, children.count as usize, cx)
-    }
-
-    pub(super) fn format_size(bytes: u64) -> String {
-        const KIB: f64 = 1024.;
-        let bytes = bytes as f64;
-        if bytes >= KIB * KIB * KIB {
-            format!("{:.1} GiB", bytes / (KIB * KIB * KIB))
-        } else if bytes >= KIB * KIB {
-            format!("{:.1} MiB", bytes / (KIB * KIB))
-        } else if bytes >= KIB {
-            format!("{:.1} KiB", bytes / KIB)
-        } else {
-            format!("{bytes:.0} B")
-        }
     }
 }

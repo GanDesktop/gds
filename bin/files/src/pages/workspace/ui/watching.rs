@@ -4,6 +4,25 @@ use super::*;
 
 const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
 
+struct WatchTarget {
+    revision: u64,
+    snapshot: directory::DirectorySnapshot,
+}
+
+enum WatchState {
+    Loading,
+    Ready(Option<WatchTarget>),
+    Closed,
+}
+
+enum WatchEvent {
+    Inspect(tokio::sync::oneshot::Sender<WatchState>),
+    Apply {
+        revision: u64,
+        result: Result<directory::DirectorySnapshot, directory::Error>,
+    },
+}
+
 pub(super) struct Watch {
     path: PathBuf,
     _events: Task<()>,
@@ -27,66 +46,85 @@ impl Browser {
             }
         };
         let tasks = self.window.tasks.clone();
-        let events = cx.spawn(async move |this, cx| {
-            while watcher.changed().await {
-                if tasks
-                    .spawn_named("Debounce directory changes", async {
-                        tokio::time::sleep(DEBOUNCE).await
-                    })
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-                // Keep changes queued during navigation rather than scheduling another
-                // full refresh, which can otherwise loop during sustained downloads.
-                loop {
-                    let Ok(loading) = this.update(cx, |this, _| {
-                        this.tab_slot(id).is_some_and(OpenTab::is_loading)
-                    }) else {
-                        return;
+        let worker_tasks = tasks.clone();
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(1);
+        let watcher_task = tasks
+            .spawn_cancellable_named("Watch directory", async move {
+                while watcher.changed().await {
+                    tokio::time::sleep(DEBOUNCE).await;
+                    // Keep changes queued during navigation rather than scheduling another
+                    // full refresh, which can otherwise loop during sustained downloads.
+                    let target = loop {
+                        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                        if events_tx.send(WatchEvent::Inspect(reply_tx)).await.is_err() {
+                            return;
+                        }
+                        match reply_rx.await {
+                            Ok(WatchState::Loading) => tokio::time::sleep(DEBOUNCE).await,
+                            Ok(WatchState::Ready(target)) => break target,
+                            Ok(WatchState::Closed) | Err(_) => return,
+                        }
                     };
-                    if !loading {
-                        break;
-                    }
-                    if tasks
-                        .spawn_named("Debounce directory changes", async {
-                            tokio::time::sleep(DEBOUNCE).await
-                        })
+                    let changes = watcher.take_changes();
+                    let Some(WatchTarget { revision, snapshot }) = target else {
+                        continue;
+                    };
+                    let work = worker_tasks
+                        .spawn_blocking_named("Reconcile directory changes", move || {
+                            changes.apply(snapshot)
+                        });
+                    let result = work
+                        .await
+                        .map_err(directory::Error::from)
+                        .and_then(std::convert::identity);
+                    if events_tx
+                        .send(WatchEvent::Apply { revision, result })
                         .await
                         .is_err()
                     {
-                        return;
+                        break;
                     }
                 }
-                let changes = watcher.take_changes();
-                let Ok(snapshot) = this.update(cx, |this, _| {
-                    let slot = this.tab_slot(id)?;
-                    Some((
-                        slot.navigation.revision(),
-                        slot.navigation.directory()?.clone(),
-                    ))
-                }) else {
-                    break;
-                };
-                let Some((revision, snapshot)) = snapshot else {
-                    continue;
-                };
-                let work = tasks.spawn_blocking_named("Reconcile directory changes", move || {
-                    changes.apply(snapshot)
-                });
-                let result = work
-                    .await
-                    .map_err(directory::Error::from)
-                    .and_then(std::convert::identity);
-                if this
-                    .update(cx, |this, cx| match result {
-                        Ok(snapshot) => this.apply_watch_snapshot(id, revision, snapshot, cx),
-                        Err(error) => tracing::warn!(%error, "cannot reconcile directory changes"),
-                    })
-                    .is_err()
-                {
-                    break;
+            })
+            .cancel_on_drop();
+        let events = cx.spawn(async move |this, cx| {
+            let _watcher = watcher_task;
+            while let Some(event) = events_rx.recv().await {
+                match event {
+                    WatchEvent::Inspect(reply) => {
+                        let state = this
+                            .update(cx, |this, _| {
+                                let Some(slot) = this.tab_slot(id) else {
+                                    return WatchState::Closed;
+                                };
+                                if slot.is_loading() {
+                                    return WatchState::Loading;
+                                }
+                                WatchState::Ready(slot.navigation.directory().cloned().map(
+                                    |snapshot| WatchTarget {
+                                        revision: slot.navigation.revision(),
+                                        snapshot,
+                                    },
+                                ))
+                            })
+                            .unwrap_or(WatchState::Closed);
+                        let _ = reply.send(state);
+                    }
+                    WatchEvent::Apply { revision, result } => {
+                        if this
+                            .update(cx, |this, cx| match result {
+                                Ok(snapshot) => {
+                                    this.apply_watch_snapshot(id, revision, snapshot, cx)
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, "cannot reconcile directory changes")
+                                }
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
                 }
             }
         });

@@ -1,7 +1,7 @@
 //! Window-owned running operations shown by the footer and its click popover.
 use super::*;
-use super::{file_icon::FileIcon, file_label::FileLabel, status::*};
-use gds::app::AppExt as _;
+use super::{file_label::FileLabel, status::*};
+use crate::entities::file::ui::FileIcon;
 use gds::ui::IconButton;
 use gds_uim::el;
 use gpui_kit::{assets::IconName, prelude::*};
@@ -61,7 +61,7 @@ impl State {
 
 impl Render for State {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = self.items.iter().map(|item| {
+        let rows = self.items.iter().enumerate().map(|(index, item)| {
             let cancel = item.cancel.clone();
             let cancelled = cancel.is_cancelled();
             let label = if cancelled {
@@ -79,7 +79,7 @@ impl Render for State {
                     content: .FileLabel::default {
                         icon: $(FileIcon::plain(IconName::ListTodo)); name: label;
                     };
-                    action: "cancel-task".IconButton::new {
+                    action: ($("cancel-task", index)).IconButton::new {
                         icon: IconName::X; label: $(i18n::text("operation-cancel", cx));
                         disabled: cancelled; on_click: on_click;
                     };
@@ -100,6 +100,7 @@ impl Browser {
         label: SharedString,
         cx: &mut Context<Self>,
     ) {
+        let cancel = self.window.tasks.token().child_token();
         self.background_tasks.update(cx, |state, cx| {
             if let Some(item) = state.items.iter_mut().find(|item| item.key.as_ref() == key) {
                 item.label = label;
@@ -107,7 +108,7 @@ impl Browser {
                 state.items.push(Item {
                     key: key.into(),
                     label,
-                    cancel: cx.gds().tasks().scope().token().child_token(),
+                    cancel,
                 });
             }
             cx.notify();

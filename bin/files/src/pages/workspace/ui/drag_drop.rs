@@ -11,9 +11,9 @@ use gds_uim::el;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::{prelude::*, *};
 
-use super::file_icon::{FileArtwork, FileIcon};
 use super::*;
 use crate::entities::file::directory::{Entry, EntryKind};
+use crate::entities::file::ui::{FileArtwork, FileIcon};
 use crate::features::file_operations::transfer;
 
 mod spring;
@@ -131,11 +131,15 @@ impl DragSnapshot {
         Self { entries, selected }
     }
 
+    pub(super) fn is_selected(&self, path: &Path) -> bool {
+        self.selected.contains(path)
+    }
+
     /// A drag started on `entry` carries the whole selection when that row
     /// belongs to it, and only that row otherwise. Starting a drag never
     /// rewrites the selection, so an unselected row drags alone.
     pub(super) fn drag_for(&self, entry: &Entry) -> FileDrag {
-        if self.selected.contains(&entry.path) {
+        if self.is_selected(&entry.path) {
             FileDrag::shared(Arc::clone(&self.entries))
         } else {
             FileDrag::single(entry)

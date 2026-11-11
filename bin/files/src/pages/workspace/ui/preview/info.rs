@@ -18,13 +18,19 @@ pub(super) fn dimensions(size: PixelSize) -> String {
 }
 
 /// Reduced aspect ratio, or a decimal ratio when the reduced form is unwieldy.
-pub(super) fn aspect_ratio(size: PixelSize) -> String {
+pub(super) fn aspect_ratio(size: PixelSize) -> Option<String> {
+    if size.width == 0 || size.height == 0 {
+        return None;
+    }
     let divisor = gcd(size.width, size.height);
     let (width, height) = (size.width / divisor, size.height / divisor);
     if width <= 50 && height <= 50 {
-        format!("{width}:{height}")
+        Some(format!("{width}:{height}"))
     } else {
-        format!("{:.2}:1", f64::from(size.width) / f64::from(size.height))
+        Some(format!(
+            "{:.2}:1",
+            f64::from(size.width) / f64::from(size.height)
+        ))
     }
 }
 
@@ -105,3 +111,6 @@ pub(super) fn count(count: u32, capped: bool) -> String {
         count.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests;

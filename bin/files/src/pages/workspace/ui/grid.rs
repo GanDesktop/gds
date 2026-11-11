@@ -1,7 +1,7 @@
 //! Virtual grid rows over the same path-based file selection as the table.
 use super::*;
 use gds::ui::button::Button;
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use gds::ui::thumbnail::Thumbnail;
 use gds_uim::el;
@@ -15,8 +15,9 @@ use gpui_kit::{
 use super::{
     drag_drop::{DragPreview, DragSnapshot, FileDrag},
     entry_appearance::EntryAppearance,
-    file_icon::{FileArtwork, FileIcon},
+    selection,
 };
+use crate::entities::file::ui::{EntryPresentation, FileArtwork, FileIcon};
 
 const MIN_WIDTH: f32 = 148.;
 const PADDING: f32 = 8.;
@@ -103,33 +104,63 @@ impl Geometry {
         .then_some(index)
     }
 
-    pub fn navigate(self, key: &str, current: Option<usize>, count: usize) -> Option<usize> {
+    pub fn navigate(
+        self,
+        motion: selection::Motion,
+        current: Option<usize>,
+        count: usize,
+    ) -> Option<usize> {
         if count == 0 {
             return None;
         }
-        if !matches!(key, "left" | "right" | "up" | "down" | "home" | "end") {
-            return None;
-        }
-        if current.is_none() {
-            return Some(if key == "end" { count - 1 } else { 0 });
-        }
-        let current = current.expect("a selected item was checked above");
-        Some(match key {
-            "left" => current.saturating_sub(1),
-            "right" => (current + 1).min(count - 1),
-            "up" => current.saturating_sub(self.columns),
-            "down" => (current + self.columns).min(count - 1),
-            "home" => 0,
-            "end" => count - 1,
-            _ => return None,
+        let Some(current) = current else {
+            return Some(match motion {
+                selection::Motion::Last => count - 1,
+                selection::Motion::Previous
+                | selection::Motion::Next
+                | selection::Motion::First => 0,
+            });
+        };
+        Some(match motion {
+            selection::Motion::Previous => current.saturating_sub(self.columns),
+            selection::Motion::Next => (current + self.columns).min(count - 1),
+            selection::Motion::First => 0,
+            selection::Motion::Last => count - 1,
         })
+    }
+}
+
+#[derive(Default)]
+struct SelectionCache {
+    tab: Option<u64>,
+    rows: Arc<[directory::Entry]>,
+    selected: Vec<PathBuf>,
+    drag: Rc<DragSnapshot>,
+}
+
+impl SelectionCache {
+    fn snapshot(
+        &mut self,
+        tab: u64,
+        rows: &Arc<[directory::Entry]>,
+        selected: &[PathBuf],
+    ) -> Rc<DragSnapshot> {
+        if self.tab != Some(tab)
+            || !Arc::ptr_eq(&self.rows, rows)
+            || self.selected.as_slice() != selected
+        {
+            self.tab = Some(tab);
+            self.rows = Arc::clone(rows);
+            self.selected = selected.to_vec();
+            self.drag = Rc::new(DragSnapshot::new(rows, selected));
+        }
+        Rc::clone(&self.drag)
     }
 }
 
 struct Data {
     rows: Arc<[directory::Entry]>,
-    selected: HashSet<PathBuf>,
-    drag: DragSnapshot,
+    drag: Rc<DragSnapshot>,
     geometry: Geometry,
 }
 
@@ -174,7 +205,7 @@ impl TileContent {
         };
         let name = if let Some(index) = index {
             name.id(("file-tile-name", index))
-                .tooltip(table::EntryPresentation::name_hint(
+                .tooltip(EntryPresentation::name_hint(
                     entry.display_name.clone().into(),
                 ))
                 .into_any_element()
@@ -255,22 +286,36 @@ impl Browser {
         let geometry = slot.grid;
         let rows = slot.table_rows.clone();
         let tab = slot.id;
-        let list = uniform_list("file-grid", geometry.rows(rows.len()), cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
-            let Some(slot) = this.tab_slot(tab) else { return Vec::new(); };
-            let rows = slot.table_rows.clone();
-            let selected = slot.navigation.view().selected.clone();
-            let data = Data {
-                rows: rows.clone(),
-                selected: selected.iter().cloned().collect(),
-                drag: DragSnapshot::new(&rows, &selected),
-                geometry,
-            };
-            range.map(|row| {
-                let tiles = (row * geometry.columns..((row + 1) * geometry.columns).min(rows.len()))
-                    .map(|index| this.grid_tile(index, &data, window, cx));
-                el! { .div { h: $(geometry.row_height).px; w_full; flex; items_center; gap: GAP.px; px: PADDING.px; } [..tiles] }.into_any_element()
-            }).collect()
-        }))
+        let list = uniform_list(
+            "file-grid",
+            geometry.rows(rows.len()),
+            cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
+                let cache = window.use_keyed_state("file-grid-selection", cx, |_, _| {
+                    SelectionCache::default()
+                });
+                let Some(slot) = this.tab_slot(tab) else {
+                    return Vec::new();
+                };
+                let rows = slot.table_rows.clone();
+                let drag = cache.update(cx, |cache, _| {
+                    cache.snapshot(tab, &rows, &slot.navigation.view().selected)
+                });
+                let data = Data {
+                    rows: rows.clone(),
+                    drag,
+                    geometry,
+                };
+                range
+                    .map(|row| {
+                        let tiles = (row * geometry.columns
+                            ..((row + 1) * geometry.columns).min(rows.len()))
+                            .map(|index| this.grid_tile(index, &data, window, cx));
+                        el! { .div { h: $(geometry.row_height).px; w_full; flex; items_center; gap: GAP.px; px: PADDING.px; } [..tiles] }
+                            .into_any_element()
+                    })
+                    .collect()
+            }),
+        )
         .track_scroll(&slot.scroll)
         .size_full();
         let scrollbar = gpui_kit::base::Scrollbar::vertical(&slot.scroll).viewport_from_layout();
@@ -279,7 +324,8 @@ impl Browser {
                 list,
                 .div { absolute; top_0; bottom_0; right_0; w: view::SCROLLBAR_LANE.px; } [scrollbar],
             ]
-        }.into_any_element()
+        }
+        .into_any_element()
     }
 
     fn grid_tile(
@@ -290,7 +336,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let entry = &data.rows[index];
-        let selected = data.selected.contains(&entry.path);
+        let selected = data.drag.is_selected(&entry.path);
         let target_bounds = data.geometry.tile(index, Point::default(), px(0.));
         let presented = gpui_kit::base::motion::transition(
             format!("file-grid-layout:{}", entry.path.display()),
@@ -397,7 +443,8 @@ impl Browser {
                 })
             })
             .into_any_element();
-        el! { .div { w: $(data.geometry.width).px; h: $(data.geometry.tile_height).px; flex_shrink_0; } [tile] }.into_any_element()
+        el! { .div { w: $(data.geometry.width).px; h: $(data.geometry.tile_height).px; flex_shrink_0; } [tile] }
+            .into_any_element()
     }
 
     pub(super) fn grid_surface(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
@@ -438,7 +485,8 @@ impl Browser {
                 this.on_list_background_press(event, window, cx);
             }
         });
-        el! { .div { # "file-grid-surface"; relative; size_full; flex; flex_col; min_h_0; capture_any_mouse_down: handler; } [content, measure] }.into_any_element()
+        el! { .div { # "file-grid-surface"; relative; size_full; flex; flex_col; min_h_0; capture_any_mouse_down: handler; } [content, measure] }
+            .into_any_element()
     }
 }
 
@@ -450,52 +498,92 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(slot) = self.current_tab() else {
-            return div().into_any_element();
+            return el! { .div }.into_any_element();
         };
         let geometry = slot.grid;
-        let list = uniform_list("location-grid", geometry.rows(rows.len()), cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-            let selected = this.selected_place();
-            range.map(|row| {
-                let tiles = (row * geometry.columns..((row + 1) * geometry.columns).min(rows.len())).map(|index| {
-                    let location = rows[index].clone();
-                    let selection = if selected.as_ref() == Some(&location) { 1. } else { 0. };
-                    let body = if let Some(entry) = this.tag_entry(&location) {
-                        TileContent { entry: entry.clone(), geometry, inspections: this.files.inspections.clone(), selection, appearance: EntryAppearance::of(entry, cx) }.render(Some(index), None, cx)
-                    } else {
-                        el! { .div { flex; flex_col; flex_shrink_0; items_center;
-                            w: $(geometry.width).px; h: $(geometry.tile_height).px; p: PADDING.px; gap: CONTENT_GAP.px;
-                            rounded_lg; border_1; border_color: $(cx.theme().primary.opacity(selection));
-                            bg: $(cx.theme().selection.opacity(selection)); overflow_hidden;
-                        } [
-                            .div { w_full; h: $(geometry.thumbnail_height).px; flex_shrink_0; flex; items_center; justify_center; } [
-                                $(location.icon()).Icon::new { size: $(geometry.icon_size).px; text_color: $(cx.theme().primary.interpolate(&cx.theme().accent_foreground, selection)); },
-                            ],
-                            .div { w_full; min_w_0; h: $(geometry.name_height).px; text_size: $(geometry.name_size).px;
-                                line_height: $(geometry.line_height).px; py: NAME_INSET.px; text_center; whitespace_normal; text_ellipsis; line_clamp: NAME_LINES;
-                            } [$(location.label(cx))],
-                        ] }
-                    };
-                    let target = location.clone();
-                    let browser = cx.entity().downgrade();
-                    let menu_target = location.clone();
-                    body.id(("location-tile", index)).cursor_pointer()
-                        .tooltip(table::EntryPresentation::name_hint(location.display_address().into()))
-                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                            if event.is_right_click() { return; }
-                            this.select_place(collection, target.clone(), window, cx);
-                            if event.click_count() == 2 { this.open_place_cursor(cx); }
-                        }))
-                        .context_menu(move |menu, window, cx| {
-                            let Some(browser) = browser.upgrade() else { return menu; };
-                            browser.update(cx, |this, cx| {
-                                this.select_place(collection, menu_target.clone(), window, cx);
-                                this.place_selection_menu(menu, cx)
+        let list = uniform_list(
+            "location-grid",
+            geometry.rows(rows.len()),
+            cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                let selected = this.selected_place();
+                range
+                    .map(|row| {
+                        let tiles = (row * geometry.columns
+                            ..((row + 1) * geometry.columns).min(rows.len()))
+                            .map(|index| {
+                                let location = rows[index].clone();
+                                let selection = if selected.as_ref() == Some(&location) {
+                                    1.
+                                } else {
+                                    0.
+                                };
+                                let body = if let Some(entry) = this.tag_entry(&location) {
+                                    TileContent {
+                                        entry: entry.clone(),
+                                        geometry,
+                                        inspections: this.files.inspections.clone(),
+                                        selection,
+                                        appearance: EntryAppearance::of(entry, cx),
+                                    }
+                                    .render(Some(index), None, cx)
+                                } else {
+                                    el! { .div { flex; flex_col; flex_shrink_0; items_center;
+                                        w: $(geometry.width).px; h: $(geometry.tile_height).px; p: PADDING.px; gap: CONTENT_GAP.px;
+                                        rounded_lg; border_1; border_color: $(cx.theme().primary.opacity(selection));
+                                        bg: $(cx.theme().selection.opacity(selection)); overflow_hidden;
+                                    } [
+                                        .div { w_full; h: $(geometry.thumbnail_height).px; flex_shrink_0; flex; items_center; justify_center; } [
+                                            $(location.icon()).Icon::new { size: $(geometry.icon_size).px; text_color: $(cx.theme().primary.interpolate(&cx.theme().accent_foreground, selection)); },
+                                        ],
+                                        .div { w_full; min_w_0; h: $(geometry.name_height).px; text_size: $(geometry.name_size).px;
+                                            line_height: $(geometry.line_height).px; py: NAME_INSET.px; text_center; whitespace_normal; text_ellipsis; line_clamp: NAME_LINES;
+                                        } [$(location.label(cx))],
+                                    ] }
+                                };
+                                let target = location.clone();
+                                let browser = cx.entity().downgrade();
+                                let menu_target = location.clone();
+                                body.id(("location-tile", index))
+                                    .cursor_pointer()
+                                    .tooltip(EntryPresentation::name_hint(
+                                        location.display_address().into(),
+                                    ))
+                                    .on_click(cx.listener(
+                                        move |this, event: &ClickEvent, window, cx| {
+                                            if event.is_right_click() {
+                                                return;
+                                            }
+                                            this.select_place(collection, target.clone(), window, cx);
+                                            if event.click_count() == 2 {
+                                                this.open_place_cursor(cx);
+                                            }
+                                        },
+                                    ))
+                                    .context_menu(move |menu, window, cx| {
+                                        let Some(browser) = browser.upgrade() else {
+                                            return menu;
+                                        };
+                                        browser.update(cx, |this, cx| {
+                                            this.select_place(
+                                                collection,
+                                                menu_target.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                            this.place_selection_menu(menu, cx)
+                                        })
+                                    })
+                                    .into_any_element()
                             })
-                        }).into_any_element()
-                }).collect::<Vec<_>>();
-                el! { .div { h: $(geometry.row_height).px; w_full; flex; items_center; gap: GAP.px; px: PADDING.px; } [..tiles] }.into_any_element()
-            }).collect()
-        })).track_scroll(&slot.scroll).size_full();
+                            .collect::<Vec<_>>();
+                        el! { .div { h: $(geometry.row_height).px; w_full; flex; items_center; gap: GAP.px; px: PADDING.px; } [..tiles] }
+                            .into_any_element()
+                    })
+                    .collect()
+            }),
+        )
+        .track_scroll(&slot.scroll)
+        .size_full();
         let scrollbar = gpui_kit::base::Scrollbar::vertical(&slot.scroll).viewport_from_layout();
         el! { .div { # "location-grid-area"; relative; size_full; min_h_0; } [
             list,
