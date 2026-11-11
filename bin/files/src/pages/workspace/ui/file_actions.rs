@@ -58,8 +58,13 @@ impl Selection {
         entry.kind == EntryKind::Directory
             || entry.kind == EntryKind::SymbolicLink
                 && entry.details.target.as_ref().is_some_and(|target| {
-                    target.status == crate::entities::file::directory::LinkStatus::Resolved
-                        && target.kind == EntryKind::Directory
+                    matches!(
+                        target,
+                        crate::entities::file::directory::LinkTarget::Resolved {
+                            kind: EntryKind::Directory,
+                            ..
+                        }
+                    )
                 })
     }
 

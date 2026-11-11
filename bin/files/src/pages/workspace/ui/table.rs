@@ -29,7 +29,7 @@ use super::{
     entry_appearance::EntryAppearance,
     file_icon::{FileArtwork, FileIcon},
 };
-use crate::entities::file::directory::{ChildCount, ContentCategory, Entry, EntryKind, LinkStatus};
+use crate::entities::file::directory::{ChildCount, ContentCategory, Entry, EntryKind, LinkTarget};
 use crate::entities::file::sorting::{Direction, Key, Sort};
 
 const NAME_MIN_WIDTH: f32 = 180.;
@@ -814,11 +814,11 @@ impl EntryPresentation {
         let Some(target) = entry.details.target.as_ref() else {
             return i18n::text("kind-link", cx);
         };
-        match target.status {
-            LinkStatus::Broken => i18n::text("link-broken", cx),
-            LinkStatus::Unreachable => i18n::text("link-unreachable", cx),
-            LinkStatus::Resolved => {
-                let target_label: SharedString = match target.kind {
+        match target {
+            LinkTarget::Broken => i18n::text("link-broken", cx),
+            LinkTarget::Unreachable => i18n::text("link-unreachable", cx),
+            LinkTarget::Resolved { kind, .. } => {
+                let target_label: SharedString = match kind {
                     EntryKind::Directory => i18n::text("kind-directory", cx),
                     EntryKind::File => entry.details.display_content().map_or_else(
                         || i18n::text("kind-file", cx),

@@ -73,7 +73,10 @@ impl EntryDetails {
     pub fn display_content(&self) -> Option<&ContentType> {
         self.content
             .as_ref()
-            .or_else(|| self.target.as_ref()?.content.as_ref())
+            .or_else(|| match self.target.as_ref()? {
+                LinkTarget::Resolved { content, .. } => content.as_ref(),
+                LinkTarget::Broken | LinkTarget::Unreachable => None,
+            })
     }
 }
 
@@ -131,6 +134,19 @@ impl Access {
             execute: mode & execute != 0,
         }
     }
+
+    fn symbols(self, special: bool, special_char: char) -> [char; 3] {
+        [
+            if self.read { 'r' } else { '-' },
+            if self.write { 'w' } else { '-' },
+            match (self.execute, special) {
+                (true, true) => special_char,
+                (false, true) => special_char.to_ascii_uppercase(),
+                (true, false) => 'x',
+                (false, false) => '-',
+            },
+        ]
+    }
 }
 
 /// Unix permission and special bits of an entry.
@@ -165,9 +181,9 @@ impl Permissions {
     /// `ls -l` does.
     pub fn symbols(&self) -> String {
         let mut symbols = String::with_capacity(9);
-        push_class(&mut symbols, self.owner, self.setuid, 's');
-        push_class(&mut symbols, self.group, self.setgid, 's');
-        push_class(&mut symbols, self.other, self.sticky, 't');
+        symbols.extend(self.owner.symbols(self.setuid, 's'));
+        symbols.extend(self.group.symbols(self.setgid, 's'));
+        symbols.extend(self.other.symbols(self.sticky, 't'));
         symbols
     }
 
@@ -177,22 +193,12 @@ impl Permissions {
     }
 }
 
-fn push_class(out: &mut String, access: Access, special: bool, special_char: char) {
-    out.push(if access.read { 'r' } else { '-' });
-    out.push(if access.write { 'w' } else { '-' });
-    out.push(match (access.execute, special) {
-        (true, true) => special_char,
-        (false, true) => special_char.to_ascii_uppercase(),
-        (true, false) => 'x',
-        (false, false) => '-',
-    });
-}
-
 /// Broad kind of content shown in the type column.
 ///
 /// The declaration order is the order used when sorting by type, so variants are
 /// grouped from text to binary rather than alphabetically.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContentCategory {
     Text,
     Code,
@@ -236,18 +242,13 @@ impl ContentType {
 
 /// Result of inspecting a symlink without replacing the link with its target.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinkTarget {
-    pub status: LinkStatus,
-    /// Target entry kind; `Unknown` unless `status` is [`LinkStatus::Resolved`].
-    pub kind: EntryKind,
-    /// Content of a resolved regular-file target.
-    pub content: Option<ContentType>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkStatus {
+pub enum LinkTarget {
     /// The target exists; `kind` and `content` describe it.
-    Resolved,
+    Resolved {
+        kind: EntryKind,
+        /// Content of a resolved regular-file target.
+        content: Option<ContentType>,
+    },
     /// The target does not exist.
     Broken,
     /// The target could not be inspected, for example a permission error or a loop.

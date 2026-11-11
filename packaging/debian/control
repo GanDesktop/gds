@@ -14,7 +14,7 @@ Package: gds-files
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, libwayland-client0, libxkbcommon0,
  libfontconfig1, libxkbcommon-x11-0, libegl1, libvulkan1, xdg-utils, xdg-terminal-exec,
- xdg-desktop-portal, udisks2, python3-gi, gir1.2-gtk-3.0
+ xdg-desktop-portal, shared-mime-info, udisks2, python3-gi, gir1.2-gtk-3.0
 Recommends: ffmpeg, mesa-vulkan-drivers
 Suggests: xdg-desktop-portal-gds
 Description: native GPUI file manager for Linux desktops

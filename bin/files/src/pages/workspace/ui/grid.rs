@@ -157,7 +157,7 @@ impl TileContent {
         let artwork = el! { .FileArtwork::default {
             icon: icon; size: $(geometry.icon_size).px; color: icon_color;
         } };
-        let media = match crate::entities::file::directory::thumbnail_source(entry) {
+        let media = match entry.thumbnail_source() {
             Some(source) => el! { ($(self.inspections.clone()), source).Thumbnail::new {
                 fallback: artwork;
             } }
@@ -314,7 +314,7 @@ impl Browser {
             selection,
             appearance: EntryAppearance::of(entry, cx),
         };
-        let source = crate::entities::file::directory::thumbnail_source(entry);
+        let source = entry.thumbnail_source();
         let is_video = source
             .as_ref()
             .is_some_and(|source| source.kind == gds::service::file_inspection::Kind::Video);

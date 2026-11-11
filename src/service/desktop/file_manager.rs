@@ -9,24 +9,22 @@ use zbus::{
 pub const BUS_NAME: &str = "org.freedesktop.FileManager1";
 pub const OBJECT_PATH: &str = "/org/freedesktop/FileManager1";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operation {
-    NewWindow,
-    Folders,
-    Items,
-    Properties,
-}
-
-#[derive(Clone, Debug)]
-pub struct Target {
-    pub directory: PathBuf,
-    pub selection: Vec<PathBuf>,
+/// Desktop requests carry the paths appropriate to each operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Request {
+    /// Open one directory in a new window.
+    NewWindow { directory: PathBuf },
+    /// Open the directories themselves, reusing a window when possible.
+    ShowFolders { directories: Vec<PathBuf> },
+    /// Reveal and select these files or folders in their parent directories.
+    ShowItems { paths: Vec<PathBuf> },
+    /// Show properties for these files or folders.
+    ShowProperties { paths: Vec<PathBuf> },
 }
 
 #[derive(Clone, Debug)]
 pub struct Command {
-    pub operation: Operation,
-    pub targets: Vec<Target>,
+    pub request: Request,
     pub startup_id: String,
 }
 
@@ -40,47 +38,16 @@ pub enum Error {
     InvalidUri(String),
 }
 
-impl Command {
-    /// # Errors
-    /// Rejects unsupported URI schemes, remote authorities and relative paths.
-    pub fn from_uris(
-        operation: Operation,
-        uris: &[String],
-        startup_id: String,
-    ) -> Result<Self, Error> {
-        let mut targets: Vec<Target> = Vec::new();
-        for uri in uris {
-            let path = url::Url::parse(uri)
-                .ok()
-                .and_then(|uri| uri.to_file_path().ok())
-                .filter(|path| path.is_absolute())
-                .ok_or_else(|| Error::InvalidUri(uri.clone()))?;
-            let directory = if matches!(operation, Operation::Folders | Operation::NewWindow) {
-                path.clone()
-            } else {
-                path.parent().unwrap_or(&path).to_owned()
-            };
-            let selected = matches!(operation, Operation::Items | Operation::Properties);
-            if let Some(target) = targets
-                .iter_mut()
-                .find(|target| target.directory == directory)
-            {
-                if selected && !target.selection.contains(&path) {
-                    target.selection.push(path);
-                }
-            } else {
-                targets.push(Target {
-                    directory,
-                    selection: if selected { vec![path] } else { Vec::new() },
-                });
-            }
-        }
-        Ok(Self {
-            operation,
-            targets,
-            startup_id,
-        })
-    }
+fn local_path(uri: &str) -> zbus::fdo::Result<PathBuf> {
+    url::Url::parse(uri)
+        .ok()
+        .and_then(|uri| uri.to_file_path().ok())
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| zbus::fdo::Error::InvalidArgs(Error::InvalidUri(uri.into()).to_string()))
+}
+
+fn local_paths(uris: &[String]) -> zbus::fdo::Result<Vec<PathBuf>> {
+    uris.iter().map(|uri| local_path(uri)).collect()
 }
 
 struct Interface {
@@ -88,16 +55,12 @@ struct Interface {
 }
 
 impl Interface {
-    async fn dispatch(
-        &self,
-        operation: Operation,
-        uris: Vec<String>,
-        startup_id: String,
-    ) -> zbus::fdo::Result<()> {
-        let command = Command::from_uris(operation, &uris, startup_id)
-            .map_err(|error| zbus::fdo::Error::InvalidArgs(error.to_string()))?;
+    async fn dispatch(&self, request: Request, startup_id: String) -> zbus::fdo::Result<()> {
         self.sender
-            .send(command)
+            .send(Command {
+                request,
+                startup_id,
+            })
             .await
             .map_err(|_| zbus::fdo::Error::Failed("Files is closing".into()))
     }
@@ -106,17 +69,35 @@ impl Interface {
 #[zbus::interface(name = "org.freedesktop.FileManager1")]
 impl Interface {
     async fn show_folders(&self, uris: Vec<String>, startup_id: String) -> zbus::fdo::Result<()> {
-        self.dispatch(Operation::Folders, uris, startup_id).await
+        self.dispatch(
+            Request::ShowFolders {
+                directories: local_paths(&uris)?,
+            },
+            startup_id,
+        )
+        .await
     }
     async fn show_items(&self, uris: Vec<String>, startup_id: String) -> zbus::fdo::Result<()> {
-        self.dispatch(Operation::Items, uris, startup_id).await
+        self.dispatch(
+            Request::ShowItems {
+                paths: local_paths(&uris)?,
+            },
+            startup_id,
+        )
+        .await
     }
     async fn show_item_properties(
         &self,
         uris: Vec<String>,
         startup_id: String,
     ) -> zbus::fdo::Result<()> {
-        self.dispatch(Operation::Properties, uris, startup_id).await
+        self.dispatch(
+            Request::ShowProperties {
+                paths: local_paths(&uris)?,
+            },
+            startup_id,
+        )
+        .await
     }
 }
 
@@ -127,8 +108,12 @@ struct Launcher {
 #[zbus::interface(name = "io.github.GanDesktop.Files")]
 impl Launcher {
     async fn open_window(&self, uri: String, startup_id: String) -> zbus::fdo::Result<()> {
-        let command = Command::from_uris(Operation::NewWindow, &[uri], startup_id)
-            .map_err(|error| zbus::fdo::Error::InvalidArgs(error.to_string()))?;
+        let command = Command {
+            request: Request::NewWindow {
+                directory: local_path(&uri)?,
+            },
+            startup_id,
+        };
         self.sender
             .send(command)
             .await

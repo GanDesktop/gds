@@ -38,8 +38,10 @@ pub(crate) fn run() -> anyhow::Result<ExitCode> {
 
 fn launch(arguments: cli::Arguments) -> anyhow::Result<()> {
     let config = Config::load(arguments)?;
+    // 1. logs
     let logs =
         gds::service::logs::init_tracing("warn,gds=debug,gds_files=debug", config.enable_logs)?;
+    // 2. task tracing
     let supervisor = gds::service::task_manager::Supervisor::new(config.enable_logs)
         .context("cannot start the application task supervisor")?;
     let application = Application {
@@ -100,7 +102,10 @@ impl Application {
 
         let worker = tasks.clone();
         let services = tasks
-            .spawn_cancellable_named("Start Files services", Services::start(config, worker))
+            .spawn_cancellable_named(
+                "Start Files services",
+                Services::start(config, logs, worker),
+            )
             .await;
         cx.update(move |cx| {
             if cx.gds().tasks().is_shutting_down() {
@@ -110,7 +115,7 @@ impl Application {
                 cx.gds().tasks().request_quit();
                 return Ok(());
             };
-            services.start_ui(logs, cx)
+            services.start_ui(cx)
         })
     }
 }
@@ -118,6 +123,7 @@ impl Application {
 /// I/O services prepared before the application installs its UI and accepts requests.
 struct Services {
     config: Config,
+    logs: Option<gds::service::logs::Store>,
     storage: Arc<Storage>,
     places:
         Result<crate::entities::location::places::Places, crate::entities::location::places::Error>,
@@ -128,6 +134,7 @@ struct Services {
 impl Services {
     async fn start(
         mut config: Config,
+        logs: Option<gds::service::logs::Store>,
         tasks: gds::service::task_manager::Scope,
     ) -> anyhow::Result<Option<Self>> {
         #[cfg(target_os = "linux")]
@@ -138,6 +145,7 @@ impl Services {
         let places = storage.load(&tasks).await;
         Ok(Some(Self {
             config,
+            logs,
             storage,
             places,
             #[cfg(target_os = "linux")]
@@ -145,12 +153,8 @@ impl Services {
         }))
     }
 
-    fn start_ui(
-        mut self,
-        logs: Option<gds::service::logs::Store>,
-        cx: &mut gpui_kit::App,
-    ) -> anyhow::Result<()> {
-        cx.gds().files().initialize(&mut self.config, logs)?;
+    fn start_ui(mut self, cx: &mut gpui_kit::App) -> anyhow::Result<()> {
+        cx.gds().files().initialize(&mut self.config, self.logs)?;
         let tasks = cx.gds().tasks().scope();
         let windows = super::windows::Windows::install(
             tasks.clone(),
@@ -191,6 +195,7 @@ impl Services {
 
         cx.gds().tasks().ready(keep_alive);
         #[cfg(target_os = "linux")]
+        // serving desktop requests
         self.desktop.listen(windows, cx)?;
         tracing::info!(
             version = env!("CARGO_PKG_VERSION"),

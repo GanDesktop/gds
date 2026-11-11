@@ -33,7 +33,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::{Browser, table::EntryPresentation};
-use crate::entities::file::directory::{Entry, EntryKind, inspection_source};
+use crate::entities::file::directory::{Entry, EntryKind};
 use gds::service::file_inspection::{
     AudioFacts, DirectoryFacts, FileFacts, ImageFacts, Metadata, Request, TextFacts, VideoFacts,
 };
@@ -164,7 +164,7 @@ impl View {
         let Target::Item(item) = &self.target else {
             return;
         };
-        let source = inspection_source(&item.entry);
+        let source = item.entry.inspection_source();
         let request = if source.kind.supports_thumbnail() {
             Request::Both
         } else {
@@ -182,7 +182,7 @@ impl View {
         let snapshot = self
             .inspections
             .read(cx)
-            .get(&inspection_source(&item.entry))?;
+            .get(&item.entry.inspection_source())?;
         match snapshot.metadata {
             State::Ready(metadata) => Some(metadata),
             _ => None,
@@ -200,7 +200,7 @@ impl View {
         let Target::Item(item) = &self.target else {
             return None;
         };
-        let source = crate::entities::file::directory::thumbnail_source(&item.entry)?;
+        let source = item.entry.thumbnail_source()?;
         let media = el! { ($(self.inspections.clone()), source).Thumbnail::new {
             show_status: true;
         } };

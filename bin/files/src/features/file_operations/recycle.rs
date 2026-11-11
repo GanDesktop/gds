@@ -366,7 +366,7 @@ impl Entry {
             deleted_at,
             size: detail.and_then(|detail| detail.size.size()),
             items: detail.and_then(|detail| detail.size.entries()),
-            kind: entry_kind(&payload_metadata),
+            kind: EntryKind::from(payload_metadata.file_type()),
             snapshot: Snapshot {
                 info: Identity::of(&info_metadata),
                 payload: Identity::of(&payload_metadata),
@@ -447,20 +447,6 @@ fn inspect(path: &Path) -> Result<fs::Metadata, Error> {
             }
         }
     })
-}
-
-#[cfg(target_os = "linux")]
-fn entry_kind(metadata: &fs::Metadata) -> EntryKind {
-    let file_type = metadata.file_type();
-    if file_type.is_symlink() {
-        EntryKind::SymbolicLink
-    } else if file_type.is_dir() {
-        EntryKind::Directory
-    } else if file_type.is_file() {
-        EntryKind::File
-    } else {
-        EntryKind::Other
-    }
 }
 
 #[cfg(target_os = "linux")]

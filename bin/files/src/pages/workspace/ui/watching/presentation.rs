@@ -65,7 +65,7 @@ fn row_changed(
         return true;
     }
     if grid {
-        if directory::thumbnail_source(before) != directory::thumbnail_source(after) {
+        if before.thumbnail_source() != after.thumbnail_source() {
             return true;
         }
         return false;

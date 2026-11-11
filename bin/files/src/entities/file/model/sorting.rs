@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-use super::super::directory::{Entry, EntryKind, LinkStatus};
+use super::super::directory::{Entry, EntryKind, LinkTarget};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Key {
@@ -232,18 +232,20 @@ impl Sort {
 
     fn target_status_rank(entry: &Entry) -> Option<u8> {
         let target = entry.details.target.as_ref()?;
-        Some(match target.status {
-            LinkStatus::Resolved => 0,
-            LinkStatus::Broken => 1,
-            LinkStatus::Unreachable => 2,
+        Some(match target {
+            LinkTarget::Resolved { .. } => 0,
+            LinkTarget::Broken => 1,
+            LinkTarget::Unreachable => 2,
         })
     }
 
     /// Directories first, then files grouped by content category; anything else
     /// the target could be stays last.
     fn target_category_rank(entry: &Entry) -> Option<u8> {
-        let target = entry.details.target.as_ref()?;
-        match target.kind {
+        let LinkTarget::Resolved { kind, .. } = entry.details.target.as_ref()? else {
+            return None;
+        };
+        match kind {
             EntryKind::Directory => Some(0),
             EntryKind::File => Some(1 + Self::category_rank(entry)?),
             _ => None,

@@ -6,7 +6,7 @@ use std::{
 };
 
 #[test]
-fn local_uri_grouping_preserves_names_directory_reveals_and_root() {
+fn local_uri_parsing_preserves_names_directories_and_root() {
     use std::os::unix::ffi::OsStringExt as _;
     let raw = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/a #\xff".to_vec()));
     let uris = [
@@ -21,33 +21,12 @@ fn local_uri_grouping_preserves_names_directory_reveals_and_root() {
             .to_string()
     })
     .collect::<Vec<_>>();
-    let command =
-        Command::from_uris(Operation::Items, &uris, "activation-token".into()).expect("reveal");
-    assert_eq!(command.targets.len(), 2);
-    assert_eq!(command.targets[0].directory, PathBuf::from("/tmp"));
     assert_eq!(
-        command.targets[0].selection,
-        [raw, PathBuf::from("/tmp/folder")]
+        local_paths(&uris).expect("local paths"),
+        [raw, PathBuf::from("/tmp/folder"), PathBuf::from("/")]
     );
-    assert_eq!(command.targets[1].directory, PathBuf::from("/"));
-    assert_eq!(command.targets[1].selection, [PathBuf::from("/")]);
-    assert_eq!(command.startup_id, "activation-token");
-    assert!(
-        Command::from_uris(
-            Operation::Folders,
-            &["smb://server/share".into()],
-            String::new()
-        )
-        .is_err()
-    );
-    assert!(
-        Command::from_uris(
-            Operation::Folders,
-            &["file://remote/tmp".into()],
-            String::new()
-        )
-        .is_err()
-    );
+    assert!(local_path("smb://server/share").is_err());
+    assert!(local_path("file://remote/tmp").is_err());
 }
 
 #[test]
@@ -93,10 +72,21 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
                 Err(Error::AlreadyRunning)
             ));
             let client = Connection::session().await.expect("client");
-            for (method, operation) in [
-                ("ShowFolders", Operation::Folders),
-                ("ShowItems", Operation::Items),
-                ("ShowItemProperties", Operation::Properties),
+            let paths = vec![PathBuf::from("/tmp/a name"), PathBuf::from("/tmp/another")];
+            for (method, request) in [
+                (
+                    "ShowFolders",
+                    Request::ShowFolders {
+                        directories: paths.clone(),
+                    },
+                ),
+                (
+                    "ShowItems",
+                    Request::ShowItems {
+                        paths: paths.clone(),
+                    },
+                ),
+                ("ShowItemProperties", Request::ShowProperties { paths }),
             ] {
                 client
                     .call_method(
@@ -112,16 +102,8 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
                     .await
                     .expect("standard call");
                 let command = receiver.recv().await.expect("delivered request");
-                assert_eq!(command.operation, operation);
+                assert_eq!(command.request, request);
                 assert_eq!(command.startup_id, "caller-token");
-                assert_eq!(
-                    command.targets.len(),
-                    if operation == Operation::Folders {
-                        2
-                    } else {
-                        1
-                    }
-                );
             }
             let invalid = client
                 .call_method(
@@ -147,9 +129,12 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
                 .expect("dispatch to Files identity");
             let request = receiver.recv().await.expect("own request");
             assert_eq!(request.startup_id, "another-token");
-            assert_eq!(request.operation, Operation::NewWindow);
-            assert_eq!(request.targets[0].directory, PathBuf::from("/tmp"));
-            assert!(request.targets[0].selection.is_empty());
+            assert_eq!(
+                request.request,
+                Request::NewWindow {
+                    directory: PathBuf::from("/tmp")
+                }
+            );
             other._connection.close().await.expect("close Files");
             client.close().await.expect("close other provider");
         });

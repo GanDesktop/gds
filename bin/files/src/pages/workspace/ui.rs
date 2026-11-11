@@ -1580,14 +1580,14 @@ fn report_directory_warnings(snapshot: &directory::DirectorySnapshot, cx: &mut A
     );
     for warning in &snapshot.warnings {
         tracing::warn!(path = %warning.path.display(), operation = ?warning.operation,
-            error_kind = ?warning.error_kind, "{}", warning.message);
+            error_kind = ?warning.source.kind(), "{}", warning.source);
         let path = warning
             .path
             .as_os_str()
             .to_string_lossy()
             .escape_debug()
             .to_string();
-        report = report.detail(format!("{path}: {}", warning.message));
+        report = report.detail(format!("{path}: {}", warning.source));
     }
     report.replacing::<WarningNotice>().show(cx);
 }

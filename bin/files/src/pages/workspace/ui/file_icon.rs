@@ -18,7 +18,7 @@ use gpui_kit::{
 };
 
 use crate::entities::file::directory::{
-    ContentCategory, ContentType, Entry, EntryKind, LinkStatus,
+    ContentCategory, ContentType, Entry, EntryKind, LinkTarget,
 };
 
 /// Size of the corner badge relative to the base icon.
@@ -51,7 +51,13 @@ impl FileIcon {
         let directory = entry.kind == EntryKind::Directory
             || (entry.kind == EntryKind::SymbolicLink
                 && entry.details.target.as_ref().is_some_and(|target| {
-                    target.status == LinkStatus::Resolved && target.kind == EntryKind::Directory
+                    matches!(
+                        target,
+                        LinkTarget::Resolved {
+                            kind: EntryKind::Directory,
+                            ..
+                        }
+                    )
                 }));
         if directory {
             cx.theme().primary
@@ -126,17 +132,17 @@ impl FileIcon {
         let Some(target) = entry.details.target.as_ref() else {
             return Self::plain(IconName::Link);
         };
-        match target.status {
+        match target {
             // A dangling link is the only state that shows the broken-chain icon.
-            LinkStatus::Broken => Self::plain(IconName::Unlink),
+            LinkTarget::Broken => Self::plain(IconName::Unlink),
             // The target exists as far as the path goes but could not be inspected;
             // that is not the same as a missing target, so keep the link badge.
-            LinkStatus::Unreachable => Self::badged(IconName::FileQuestionMark, IconName::Link),
-            LinkStatus::Resolved => {
-                let base = match target.kind {
+            LinkTarget::Unreachable => Self::badged(IconName::FileQuestionMark, IconName::Link),
+            LinkTarget::Resolved { kind, content } => {
+                let base = match kind {
                     EntryKind::Directory => Self::directory_icon(&entry.path),
                     EntryKind::File => {
-                        Self::category_icon(target.content.as_ref().map(|content| content.category))
+                        Self::category_icon(content.as_ref().map(|content| content.category))
                     }
                     EntryKind::Other => IconName::File,
                     EntryKind::Unknown => IconName::FileQuestionMark,

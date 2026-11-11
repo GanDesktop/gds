@@ -8,13 +8,13 @@ mod inspection;
 
 pub use self::children::ChildCount;
 pub use self::details::*;
-pub use self::inspection::*;
 
 use std::{
     ffi::OsString,
     fs::{self, DirEntry, FileType},
     io,
     path::{Path, PathBuf},
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -63,8 +63,7 @@ pub struct EntryWarning {
     /// The containing directory when enumeration failed before obtaining a name.
     pub path: PathBuf,
     pub operation: WarningOperation,
-    pub error_kind: io::ErrorKind,
-    pub message: String,
+    pub source: Arc<io::Error>,
 }
 
 #[derive(Debug, Clone)]
@@ -140,19 +139,17 @@ fn collect_entries(
                 if !options.show_hidden && hidden {
                     continue;
                 }
-                snapshot.entries.push(read_entry(
+                snapshot.entries.push(Entry::from_dir_entry(
                     entry,
-                    hidden,
                     &mut identities,
                     &mut snapshot.warnings,
                 ));
             }
-            Err(error) => push_warning(
-                &mut snapshot.warnings,
-                &snapshot.path,
-                WarningOperation::Enumerate,
-                error,
-            ),
+            Err(error) => snapshot.warnings.push(EntryWarning {
+                path: snapshot.path.clone(),
+                operation: WarningOperation::Enumerate,
+                source: error.into(),
+            }),
         }
     }
     snapshot.entries.sort_by(|left, right| {
@@ -163,155 +160,142 @@ fn collect_entries(
     snapshot
 }
 
-fn read_entry(
-    entry: DirEntry,
-    is_hidden: bool,
-    identities: &mut IdentityCache,
-    warnings: &mut Vec<EntryWarning>,
-) -> Entry {
-    let path = entry.path();
-    let name = entry.file_name();
-    let mut result = Entry {
-        path,
-        display_name: name.to_string_lossy().into_owned(),
-        name,
-        kind: EntryKind::Unknown,
-        size: None,
-        modified: None,
-        is_hidden,
-        details: EntryDetails::default(),
-    };
-    let mut metadata_available = false;
-    match fs::symlink_metadata(&result.path) {
-        Ok(metadata) => {
-            metadata_available = true;
-            result.kind = entry_kind(metadata.file_type());
-            if result.kind == EntryKind::File {
-                result.size = Some(metadata.len());
+impl Entry {
+    fn from_dir_entry(
+        entry: DirEntry,
+        identities: &mut IdentityCache,
+        warnings: &mut Vec<EntryWarning>,
+    ) -> Self {
+        let path = entry.path();
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                let modified = match metadata.modified() {
+                    Ok(modified) => Some(modified),
+                    Err(error) => {
+                        warnings.push(EntryWarning {
+                            path: path.clone(),
+                            operation: WarningOperation::ModifiedTime,
+                            source: error.into(),
+                        });
+                        None
+                    }
+                };
+                Self::from_metadata(&path, &metadata, modified, identities)
             }
-            match metadata.modified() {
-                Ok(modified) => result.modified = Some(modified),
-                Err(error) => push_warning(
-                    warnings,
-                    &result.path,
-                    WarningOperation::ModifiedTime,
-                    error,
-                ),
-            }
-            result.details = EntryDetails::from_metadata(&metadata, identities);
-        }
-        Err(error) => {
-            push_warning(warnings, &result.path, WarningOperation::Metadata, error);
-            // DirEntry may still provide a type captured during enumeration.
-            match entry.file_type() {
-                Ok(file_type) => result.kind = entry_kind(file_type),
-                Err(error) => {
-                    push_warning(warnings, &result.path, WarningOperation::FileType, error);
+            Err(error) => {
+                warnings.push(EntryWarning {
+                    path: path.clone(),
+                    operation: WarningOperation::Metadata,
+                    source: error.into(),
+                });
+                // DirEntry may still provide a type captured during enumeration.
+                let kind = match entry.file_type() {
+                    Ok(file_type) => EntryKind::from(file_type),
+                    Err(error) => {
+                        warnings.push(EntryWarning {
+                            path: path.clone(),
+                            operation: WarningOperation::FileType,
+                            source: error.into(),
+                        });
+                        EntryKind::Unknown
+                    }
+                };
+                let name = entry.file_name();
+                Self {
+                    path,
+                    display_name: name.to_string_lossy().into_owned(),
+                    is_hidden: name.as_encoded_bytes().starts_with(b"."),
+                    name,
+                    kind,
+                    size: None,
+                    modified: None,
+                    details: EntryDetails::default(),
                 }
             }
         }
     }
-    // Enrichment runs after the metadata sample so the recorded access time is
-    // the one from before any content probe. A failure here must never fail the
-    // listing: the entry keeps its place with whatever details were available.
-    // Entries whose own metadata could not be read are left unenriched instead
-    // of reporting inferred content for a path that may no longer exist.
-    if metadata_available {
-        match result.kind {
-            EntryKind::Directory => result.details.children = children::count(&result.path),
-            EntryKind::File => result.details.content = content::detect(&result.name, &result.path),
-            EntryKind::SymbolicLink => result.details.target = Some(link_target(&result.path)),
-            _ => {}
-        }
-    }
-    result
-}
 
-impl Entry {
     /// Read one item's properties, including a filesystem root.
     ///
     /// # Errors
     /// Reports metadata failures for the requested path.
     pub fn inspect(path: &Path) -> io::Result<Self> {
         let metadata = fs::symlink_metadata(path)?;
+        Ok(Self::from_metadata(
+            path,
+            &metadata,
+            metadata.modified().ok(),
+            &mut IdentityCache::new(),
+        ))
+    }
+
+    fn from_metadata(
+        path: &Path,
+        metadata: &fs::Metadata,
+        modified: Option<SystemTime>,
+        identities: &mut IdentityCache,
+    ) -> Self {
         let name = path.file_name().unwrap_or(path.as_os_str()).to_owned();
-        let kind = entry_kind(metadata.file_type());
-        let mut details = EntryDetails::from_metadata(&metadata, &mut IdentityCache::new());
+        let kind = EntryKind::from(metadata.file_type());
+        // Sample access time before any content probe. Unavailable metadata never
+        // reaches this constructor, so those entries remain unenriched.
+        let mut details = EntryDetails::from_metadata(metadata, identities);
         match kind {
-            EntryKind::Directory => details.children = children::count(path),
-            EntryKind::File => details.content = content::detect(&name, path),
-            EntryKind::SymbolicLink => details.target = Some(link_target(path)),
+            EntryKind::Directory => details.children = ChildCount::from_path(path),
+            EntryKind::File => details.content = ContentType::detect(&name, path),
+            EntryKind::SymbolicLink => details.target = Some(LinkTarget::from_path(path)),
             _ => (),
         }
-        Ok(Self {
+        Self {
             path: path.to_owned(),
             display_name: name.to_string_lossy().into_owned(),
             is_hidden: name.as_encoded_bytes().starts_with(b"."),
             name,
             kind,
             size: (kind == EntryKind::File).then_some(metadata.len()),
-            modified: metadata.modified().ok(),
+            modified,
             details,
-        })
-    }
-}
-
-/// Classify a symlink target for display without turning the link into its target.
-fn link_target(path: &Path) -> LinkTarget {
-    let target_name = fs::read_link(path)
-        .ok()
-        .and_then(|target| target.file_name().map(|name| name.to_os_string()));
-    match fs::metadata(path) {
-        Ok(metadata) => {
-            let kind = entry_kind(metadata.file_type());
-            let content = match kind {
-                EntryKind::File => {
-                    let name = target_name.as_deref().unwrap_or_else(|| path.as_os_str());
-                    content::detect(name, path)
-                }
-                _ => None,
-            };
-            LinkTarget {
-                status: LinkStatus::Resolved,
-                kind,
-                content,
-            }
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => LinkTarget {
-            status: LinkStatus::Broken,
-            kind: EntryKind::Unknown,
-            content: None,
-        },
-        Err(_) => LinkTarget {
-            status: LinkStatus::Unreachable,
-            kind: EntryKind::Unknown,
-            content: None,
-        },
     }
 }
 
-fn entry_kind(file_type: FileType) -> EntryKind {
-    if file_type.is_symlink() {
-        EntryKind::SymbolicLink
-    } else if file_type.is_dir() {
-        EntryKind::Directory
-    } else if file_type.is_file() {
-        EntryKind::File
-    } else {
-        EntryKind::Other
+impl LinkTarget {
+    /// Classify a symlink target for display without turning the link into its target.
+    fn from_path(path: &Path) -> Self {
+        let target_name = fs::read_link(path)
+            .ok()
+            .and_then(|target| target.file_name().map(|name| name.to_os_string()));
+        match fs::metadata(path) {
+            Ok(metadata) => {
+                let kind = EntryKind::from(metadata.file_type());
+                let content = match kind {
+                    EntryKind::File => {
+                        let name = target_name.as_deref().unwrap_or_else(|| path.as_os_str());
+                        ContentType::detect(name, path)
+                    }
+                    _ => None,
+                };
+                Self::Resolved { kind, content }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::Broken,
+            Err(_) => Self::Unreachable,
+        }
     }
 }
 
-fn push_warning(
-    warnings: &mut Vec<EntryWarning>,
-    path: &Path,
-    operation: WarningOperation,
-    error: io::Error,
-) {
-    warnings.push(EntryWarning {
-        path: path.to_path_buf(),
-        operation,
-        error_kind: error.kind(),
-        message: error.to_string(),
-    });
+impl From<FileType> for EntryKind {
+    fn from(file_type: FileType) -> Self {
+        if file_type.is_symlink() {
+            Self::SymbolicLink
+        } else if file_type.is_dir() {
+            Self::Directory
+        } else if file_type.is_file() {
+            Self::File
+        } else {
+            Self::Other
+        }
+    }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,6 +1,6 @@
 //! Selection and filter state independent of the picker window.
 use super::{Filter, Options};
-use crate::entities::file::directory::{Entry, EntryKind, LinkStatus};
+use crate::entities::file::directory::{Entry, EntryKind, LinkTarget};
 use gds::service::desktop::protocol::chooser;
 use std::{path::Path, sync::Arc};
 
@@ -44,7 +44,13 @@ impl Projection {
         match entry.kind {
             EntryKind::Directory => true,
             EntryKind::SymbolicLink => entry.details.target.as_ref().is_some_and(|target| {
-                target.status == LinkStatus::Resolved && target.kind == EntryKind::Directory
+                matches!(
+                    target,
+                    LinkTarget::Resolved {
+                        kind: EntryKind::Directory,
+                        ..
+                    }
+                )
             }),
             _ => false,
         }

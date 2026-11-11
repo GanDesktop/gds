@@ -156,7 +156,7 @@ impl Windows {
 
     #[cfg(target_os = "linux")]
     pub(super) fn desktop_command(&mut self, command: DesktopCommand, cx: &mut Context<Self>) {
-        use gds::service::desktop::file_manager::Operation;
+        use gds::service::desktop::file_manager::Request;
         let active = cx.active_window();
         let target = self
             .windows
@@ -169,17 +169,21 @@ impl Windows {
                     browser.upgrade().map(|browser| (*window, browser))
                 })
             });
-        if command.operation != Operation::NewWindow {
+        if !matches!(&command.request, Request::NewWindow { .. }) {
             if let Some((window, browser)) = target {
                 Self::apply(window, &browser, command, cx);
                 return;
             }
         }
-        let start = command
-            .targets
-            .first()
-            .map(|target| target.directory.clone())
-            .unwrap_or_else(|| self.home.clone());
+        let start = match &command.request {
+            Request::NewWindow { directory } => Some(directory.as_path()),
+            Request::ShowFolders { directories } => directories.first().map(|path| path.as_path()),
+            Request::ShowItems { paths } | Request::ShowProperties { paths } => {
+                paths.first().map(|path| path.parent().unwrap_or(path))
+            }
+        }
+        .unwrap_or(&self.home)
+        .to_owned();
         self.request(start, Some(command), cx);
     }
 
