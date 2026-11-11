@@ -1,0 +1,348 @@
+//! Locations stay at the bottom; tabs and devices divide the remaining height.
+
+use super::*;
+use gds::appearance::tokens;
+use gds::ui::IconButton;
+use gds::ui::region::surface as region_surface;
+use gds::ui::sidebar::SideBarSectionTitle;
+use gds::ui::split::VerticalSplit;
+use gds::ui::{disclosure::DisclosureIcon, sidebar::*};
+use gds::{i18n::t, ui::button::Button};
+use gds_uim::el;
+use gpui_kit::{
+    assets::IconName,
+    component::{ActiveTheme, Sizable, button::ButtonVariants},
+    prelude::*,
+};
+
+pub(in crate::pages::workspace) const MIN_TABS_HEIGHT: f32 = 94.;
+pub(in crate::pages::workspace) const MIN_DEVICES_HEIGHT: f32 = 108.;
+const HEADER_HEIGHT: f32 = 34.;
+const LOCATION_HEADER_HEIGHT: f32 = 28.;
+const GROUP_GAP: f32 = 6.;
+const ROW_GAP: f32 = 4.;
+const DEFAULT_DEVICE_ROWS: usize = 4;
+const DIVIDER_WIDTH: f32 = 1.;
+const HEADING_ICON_SIZE: f32 = 12.;
+const HEADING_PADDING: f32 = 8.;
+const COLLAPSED_ACTION_INSET: f32 = (tokens::COLLAPSED_SIDEBAR_WIDTH
+    - 2. * tokens::SIDEBAR_PADDING
+    - DIVIDER_WIDTH
+    - tokens::ICON_BUTTON_SIZE)
+    / 2.;
+
+pub(in crate::pages::workspace) struct State {
+    pub split: Entity<ui::split::State>,
+    pub collapsed: bool,
+    /// The host samples once before rendering any of its aligned columns.
+    pub presentation: SidebarPresentation,
+    pub regions: regions::State,
+}
+
+impl State {
+    pub(in crate::pages::workspace) fn new(
+        preferences: &configuration::Preferences,
+        cx: &mut App,
+    ) -> Self {
+        Self {
+            split: cx.new(|cx| {
+                ui::split::State::new(
+                    preferences.files.sidebar.tabs_height,
+                    MIN_TABS_HEIGHT,
+                    MIN_DEVICES_HEIGHT,
+                    cx,
+                )
+            }),
+            collapsed: false,
+            presentation: SidebarPresentation::default(),
+            regions: regions::State::new(cx),
+        }
+    }
+}
+
+impl Browser {
+    pub(in crate::pages::workspace) fn on_sidebar_split(
+        &mut self,
+        _: Entity<ui::split::State>,
+        event: &ui::split::Changed,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_preferences(
+            |preferences| {
+                preferences.files.sidebar.tabs_height = Some(event.0);
+            },
+            cx,
+        );
+    }
+
+    fn toggle_devices(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.sidebar.regions.volumes.contains_focused(window, cx);
+        self.edit_preferences(
+            |preferences| {
+                preferences.files.sidebar.volumes_collapsed =
+                    !preferences.files.sidebar.volumes_collapsed || focused;
+            },
+            cx,
+        );
+        if focused {
+            self.window.focus.focus(window, cx);
+        }
+    }
+
+    fn sidebar_heading_inset(&self) -> Pixels {
+        px(self.sidebar.presentation.interpolate(
+            HEADING_PADDING,
+            (tokens::COLLAPSED_SIDEBAR_WIDTH - DIVIDER_WIDTH - HEADING_ICON_SIZE) / 2.
+                - tokens::SIDEBAR_PADDING,
+        ))
+    }
+
+    fn device_heading(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let collapsed = self.settings.preferences.files.sidebar.volumes_collapsed
+            && !self.sidebar.regions.volumes.is_focused(window)
+            && !self.sidebar.regions.volumes.contains_focused(window, cx);
+        let on_click = cx.listener(Self::toggle_devices);
+        let heading = el! {
+            .div { flex; items_center; gap: GROUP_GAP.px; w_full; min_w_0;
+                overflow_hidden;
+            } [
+                .DisclosureIcon::default { # "volumes-disclosure"; expanded: $(!collapsed); size: HEADING_ICON_SIZE.px; },
+                .div { flex_1; min_w_0; overflow_hidden; opacity: $(self.sidebar.presentation.label_opacity()); } [cx.t!("volumes").SideBarSectionTitle::new],
+            ]
+        };
+        el! {
+            .SideBarSectionHeader::default { h: HEADER_HEIGHT.px } [
+                "volumes".Button::new { ghost; small; flex_1; min_w_0; justify_start; pl: $(self.sidebar_heading_inset());
+                    accessibility_label: t!(@cx, "volumes"); on_click: on_click;
+                    aria_expanded: $(!collapsed);
+                    @if (self.sidebar_collapsed()) tooltip: t!(@cx, "volumes"); @end;
+                } [heading],
+            ]
+        }
+        .into_any_element()
+    }
+
+    fn sidebar_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let cycle_targets = self.tab_cycle_targets();
+        let tabs: Vec<_> = self
+            .tabs
+            .items
+            .iter()
+            .enumerate()
+            .map(|(position, slot)| self.render_tab(slot, position, cycle_targets, window, cx))
+            .collect();
+        let on_new_tab = cx.listener(Self::click_command(Command::NewTab));
+        let content = el! {
+            .SideBarSection::default { size_full; min_h_0; px: tokens::SIDEBAR_PADDING.px; pt: GROUP_GAP.px } [
+                .SideBarSectionHeader::default { h: HEADER_HEIGHT.px;
+                    pr: $(px(self.sidebar.presentation.interpolate(0., COLLAPSED_ACTION_INSET)));
+                    overflow_hidden;
+                } [
+                    .div { flex_1; min_w_0; overflow_hidden; opacity: $(self.sidebar.presentation.label_opacity()); } [
+                        cx.t!("tabs").SideBarSectionTitle::new { px: tokens::SIDEBAR_SECTION_PADDING.px },
+                    ],
+                    "new-tab".IconButton::new { icon: IconName::Plus; label: t!(@cx, "new-tab");
+                        command: Command::NewTab; on_click: on_new_tab;
+                    },
+                ],
+                .SideBarSectionContent::default { # "vertical-tabs"; gap: ROW_GAP.px; flex_1; min_h_0; overflow_y_scroll;
+                    track_scroll: $&self.sidebar.regions.tabs_scroll;
+                } [..tabs],
+            ]
+        };
+        el! { ("tabs-region", $(&self.sidebar.regions.tabs), Command::FocusTabs, window, cx).region_surface {
+            aria_label: $(i18n::text("tabs", cx));
+            flex;
+            flex_col;
+            size_full;
+        } [
+            content,
+        ] }
+        .into_any_element()
+    }
+
+    fn toggle_locations(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.sidebar.regions.locations.is_focused(window)
+            || self.sidebar.regions.locations.contains_focused(window, cx);
+        self.edit_preferences(
+            |preferences| {
+                preferences.files.sidebar.locations_collapsed =
+                    !preferences.files.sidebar.locations_collapsed || focused;
+            },
+            cx,
+        );
+        if focused {
+            self.window.focus.focus(window, cx);
+        }
+    }
+
+    fn sidebar_locations(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let expanded = !self.settings.preferences.files.sidebar.locations_collapsed
+            || self.sidebar.regions.locations.is_focused(window)
+            || self.sidebar.regions.locations.contains_focused(window, cx);
+        let progress = motion::state_progress("files-locations", expanded, window, cx);
+        let on_toggle = cx.listener(Self::toggle_locations);
+        let heading = {
+            let label = el! {
+                .div { flex; items_center; gap: GROUP_GAP.px; w_full; min_w_0;
+                    overflow_hidden;
+                } [
+                    .DisclosureIcon::default { # "locations-disclosure"; expanded: expanded; size: HEADING_ICON_SIZE.px; },
+                    .div { flex_1; min_w_0; overflow_hidden; opacity: $(self.sidebar.presentation.label_opacity()); } [cx.t!("locations").SideBarSectionTitle::new],
+                ]
+            };
+            el! {
+                .SideBarSectionHeader::default { h: LOCATION_HEADER_HEIGHT.px; } [
+                    "locations-toggle".Button::new { ghost; small; flex_1; min_w_0; justify_start; pl: $(self.sidebar_heading_inset());
+                        accessibility_label: t!(@cx, "locations"); aria_expanded: expanded;
+                        on_click: on_toggle;
+                        @if (self.sidebar_collapsed()) tooltip: t!(@cx, "locations"); @end;
+                    } [label],
+                ]
+            }
+        };
+        let content = (progress > 0.).then(|| {
+            let locations = self.visible_location_targets()
+                .into_iter()
+                .map(|target| {
+                    let location = self.render_location(target, window, cx);
+                    el! { .div { flex_shrink_0; w_full; } [location] }
+                })
+                .collect::<Vec<_>>();
+            let location_count = locations.len();
+            el! {
+                .SideBarSectionContent::default { # "locations-list"; min_h_0; overflow_y_scroll;
+                    track_scroll: $&self.sidebar.regions.locations_scroll; gap: ROW_GAP.px;
+                    h: $((location_count as f32 * (tokens::SIDEBAR_ITEM_HEIGHT + ROW_GAP) - ROW_GAP) * progress).px;
+                } [..locations]
+            }
+        });
+        let section = el! {
+            .SideBarSection::default { # "sidebar-locations"; flex_shrink_1; min_h_0; overflow_hidden;
+                px: tokens::SIDEBAR_PADDING.px; pb: tokens::SIDEBAR_PADDING.px; gap: $(ROW_GAP * progress).px;
+            } [heading, ..content]
+        };
+        el! { ("locations-region", $(&self.sidebar.regions.locations), Command::FocusLocations, window, cx).region_surface {
+            aria_label: $(i18n::text("locations", cx));
+            flex;
+            flex_col;
+            w_full;
+            min_h_0;
+            flex_shrink_1;
+        } [
+            section,
+        ] }
+        .into_any_element()
+    }
+
+    pub(in crate::pages::workspace) fn sync_sidebar_split(&self, cx: &mut App) {
+        let show_volumes = self.settings.preferences.files.sidebar.show_volumes
+            || self.sidebar.regions.reveal_volumes;
+        if !show_volumes {
+            return;
+        }
+        let volumes = &self.devices.service.read(cx).snapshot.volumes;
+        let device_row_count = volumes.iter().filter(|volume| volume.visible).count();
+        let mounted_count = volumes
+            .iter()
+            .filter(|volume| volume.visible && !volume.mount_points.is_empty())
+            .count();
+        let default_bottom = device_row_count.min(DEFAULT_DEVICE_ROWS) as f32
+            * (tokens::SIDEBAR_ITEM_HEIGHT + ROW_GAP)
+            + mounted_count.min(DEFAULT_DEVICE_ROWS) as f32 * ui::capacity::EXTRA_ROW_HEIGHT
+            + HEADER_HEIGHT;
+        self.sidebar
+            .split
+            .update(cx, |state, _| state.default_bottom(default_bottom));
+    }
+
+    pub(in crate::pages::workspace) fn render_sidebar(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let tabs = self.sidebar_tabs(window, cx);
+        let locations = self.sidebar_locations(window, cx);
+        let show_volumes = self.settings.preferences.files.sidebar.show_volumes
+            || self.sidebar.regions.reveal_volumes;
+        let devices = if show_volumes {
+            self.render_device_groups(true, window, cx)
+        } else {
+            Vec::new()
+        };
+        let device_row_count = devices.len();
+        let expanded = !self.settings.preferences.files.sidebar.volumes_collapsed
+            || self.sidebar.regions.volumes.is_focused(window)
+            || self.sidebar.regions.volumes.contains_focused(window, cx);
+        let progress = motion::state_progress("files-volumes", expanded, window, cx);
+        let heading = self.device_heading(window, cx);
+        // A large terminal dock must not let the fixed locations consume every
+        // pixel of the tab strip. Locations scroll only when space is scarce.
+        let workspace_minimum = MIN_TABS_HEIGHT
+            + if show_volumes {
+                HEADER_HEIGHT
+                    + (MIN_DEVICES_HEIGHT + ui::split::DIVIDER_HEIGHT - HEADER_HEIGHT) * progress
+            } else {
+                0.
+            };
+        let workspace = if show_volumes {
+            let device_area = el! {
+                .SideBarSection::default { size_full; min_h_0; px: tokens::SIDEBAR_PADDING.px } [
+                    heading,
+                    @if (progress > 0.)
+                    .SideBarSectionContent::default { # "sidebar-devices"; flex_1; min_h_0; overflow_y_scroll;
+                        gap: ROW_GAP.px; pb: ROW_GAP.px;
+                        track_scroll: $&self.sidebar.regions.volumes_scroll;
+                    } [..devices,
+                        @if (device_row_count == 0)
+                            .div { px: GROUP_GAP.px; text_xs; truncate; text_color: $cx.theme().muted_foreground;
+                                opacity: $(self.sidebar.presentation.label_opacity());
+                            } [t!(@cx, "device-none")],
+                        @end,
+                    ],
+                    @end,
+                ]
+            }
+            .into_any_element();
+            let device_area = el! { ("volumes-region", $(&self.sidebar.regions.volumes), Command::FocusVolumes, window, cx).region_surface {
+                aria_label: $(i18n::text("volumes", cx));
+                flex;
+                flex_col;
+                size_full;
+            } [
+                device_area,
+            ] }
+            .into_any_element();
+            el! { $(self.sidebar.split.clone()).VerticalSplit::new {
+                top: tabs;
+                bottom_progress: progress;
+                collapsed_bottom_height: HEADER_HEIGHT;
+                bottom: device_area;
+                label: $(i18n::text("sidebar-resize", cx));
+            } }
+            .into_any_element()
+        } else {
+            el! {
+                .div { flex; flex_col; size_full; min_h_0 } [
+                    .div { flex_1; min_h_0; overflow_hidden } [tabs],
+                    @if (show_volumes)
+                        .div { flex_shrink_0; px: tokens::SIDEBAR_PADDING.px } [heading],
+                    @end,
+                ]
+            }
+            .into_any_element()
+        };
+        let state = if self.sidebar_collapsed() {
+            SidebarState::Collapsed
+        } else {
+            SidebarState::Expanded
+        };
+        el! {
+            .SideBar::default { # "file-sidebar-content"; state: state; presentation: $self.sidebar.presentation; pr: 1.0.px; } [
+                .SideBarContent::default { # "file-sidebar-workspace"; min_h: workspace_minimum.px; overflow_hidden } [workspace],
+                .SideBarFooter::default { flex_shrink_1; min_h_0; overflow_hidden } [locations],
+            ]
+        }
+        .into_any_element()
+    }
+}

@@ -1,0 +1,741 @@
+//! Trash browsing and recovery over the platform trash store.
+//!
+//! Every filesystem effect belongs to [`backend`]; this module owns the listing
+//! model, the id-based selection and the frozen target sets handed to
+//! destructive actions. A trashed record is selected by its opaque trash id,
+//! never by its original path: several records may share one original path, and
+//! an original path is display data rather than a current, deletable file.
+
+use crate::features::file_operations::history as operation_history;
+use crate::features::file_operations::recycle as backend;
+mod table;
+mod view;
+
+use std::{collections::HashSet, ffi::OsString, path::PathBuf, sync::Arc};
+
+use gds::{
+    i18n::{self, t},
+    ui::notifications,
+};
+use gpui_kit::component::table::TableState;
+use gpui_kit::*;
+
+use self::{
+    backend::{Action, Entry, Error, Outcome},
+    table::TrashTable,
+};
+use super::{Browser, Collection, selection::Motion};
+
+/// One toast slot for failed listings.
+pub(in crate::pages::workspace) struct LoadNotice;
+
+/// What a completed listing did to the visible model.
+pub(in crate::pages::workspace) enum Load {
+    /// A newer request replaced this one; ignore the result completely.
+    Stale,
+    Applied,
+    Failed(String),
+}
+
+#[derive(Clone, Default)]
+pub(in crate::pages::workspace) struct ViewState {
+    selected: HashSet<OsString>,
+    cursor: Option<OsString>,
+    anchor: Option<OsString>,
+    scroll_offset: f32,
+}
+
+pub(in crate::pages::workspace) struct State {
+    generation: u64,
+    loading: bool,
+    error: Option<String>,
+    entries: Arc<[Entry]>,
+    selected: HashSet<OsString>,
+    cursor: Option<OsString>,
+    anchor: Option<OsString>,
+    busy: bool,
+    task_paths: Vec<PathBuf>,
+    table: Entity<TableState<TrashTable>>,
+    supported: bool,
+}
+
+impl State {
+    pub(in crate::pages::workspace) fn new(
+        browser: WeakEntity<Browser>,
+        window: &mut Window,
+        cx: &mut Context<Browser>,
+    ) -> Self {
+        Self {
+            generation: 0,
+            loading: false,
+            error: None,
+            entries: Arc::from([]),
+            selected: HashSet::new(),
+            cursor: None,
+            anchor: None,
+            busy: false,
+            task_paths: Vec::new(),
+            table: TrashTable::make_state(browser, window, cx),
+            supported: backend::supported(),
+        }
+    }
+
+    pub(in crate::pages::workspace) fn view(&self, cx: &App) -> ViewState {
+        ViewState {
+            selected: self.selected.clone(),
+            cursor: self.cursor.clone(),
+            anchor: self.anchor.clone(),
+            scroll_offset: self
+                .table
+                .read(cx)
+                .vertical_scroll_handle
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y
+                .into(),
+        }
+    }
+    pub(in crate::pages::workspace) fn restore_view(&mut self, view: ViewState, cx: &App) {
+        self.selected = view.selected;
+        self.cursor = view.cursor;
+        self.anchor = view.anchor;
+        self.table
+            .read(cx)
+            .vertical_scroll_handle
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.), px(view.scroll_offset)));
+    }
+
+    pub(in crate::pages::workspace) fn rows(&self) -> &[Entry] {
+        &self.entries
+    }
+
+    pub(in crate::pages::workspace) fn is_loading(&self) -> bool {
+        self.loading
+    }
+
+    pub(in crate::pages::workspace) fn is_busy(&self) -> bool {
+        self.busy
+    }
+
+    pub(in crate::pages::workspace) fn task_paths(&self) -> &[PathBuf] {
+        &self.task_paths
+    }
+
+    /// Whether retrying a failed listing can help on this platform.
+    pub(in crate::pages::workspace) fn supported(&self) -> bool {
+        self.supported
+    }
+
+    pub(in crate::pages::workspace) fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    pub(in crate::pages::workspace) fn deselect(&mut self, id: &OsString) {
+        self.selected.remove(id);
+        if self.cursor.as_ref() == Some(id) {
+            self.cursor = None;
+        }
+        if self.anchor.as_ref() == Some(id) {
+            self.anchor = None;
+        }
+    }
+
+    pub(in crate::pages::workspace) fn selected_count(&self) -> usize {
+        self.selected.len()
+    }
+
+    pub(in crate::pages::workspace) fn selection(&self) -> HashSet<OsString> {
+        self.selected.clone()
+    }
+
+    pub(in crate::pages::workspace) fn scroll_handle(&self, cx: &App) -> UniformListScrollHandle {
+        self.table.read(cx).vertical_scroll_handle.clone()
+    }
+
+    /// Frozen entries in list order.
+    ///
+    /// Two records that share an original path stay two independent targets.
+    pub(in crate::pages::workspace) fn selected_entries(&self) -> Vec<Entry> {
+        self.entries
+            .iter()
+            .filter(|entry| self.selected.contains(&entry.id))
+            .cloned()
+            .collect()
+    }
+
+    fn index_of(&self, id: &OsString) -> Option<usize> {
+        self.entries.iter().position(|entry| &entry.id == id)
+    }
+
+    pub(in crate::pages::workspace) fn cursor_index(&self) -> Option<usize> {
+        self.cursor.as_ref().and_then(|id| self.index_of(id))
+    }
+
+    fn is_selected_at(&self, index: usize) -> bool {
+        self.entries
+            .get(index)
+            .is_some_and(|entry| self.selected.contains(&entry.id))
+    }
+
+    fn begin_load(&mut self) -> u64 {
+        self.generation += 1;
+        self.loading = true;
+        self.error = None;
+        self.generation
+    }
+
+    fn apply_load(&mut self, generation: u64, result: Result<Vec<Entry>, backend::Error>) -> Load {
+        if generation != self.generation {
+            return Load::Stale;
+        }
+        self.loading = false;
+        match result {
+            Ok(entries) => {
+                self.entries = entries.into();
+                self.error = None;
+                self.retain_existing_selection();
+                Load::Applied
+            }
+            Err(error) => {
+                let message = error.to_string();
+                // A failed refresh keeps the previous rows visible; only an
+                // empty list turns the failure into the whole content state.
+                if self.entries.is_empty() {
+                    self.error = Some(message.clone());
+                }
+                Load::Failed(message)
+            }
+        }
+    }
+
+    fn fail(&mut self, message: String) {
+        self.loading = false;
+        self.entries = Arc::from([]);
+        self.clear_selection();
+        self.error = Some(message);
+    }
+
+    pub(in crate::pages::workspace) fn clear_selection(&mut self) {
+        self.selected.clear();
+        self.cursor = None;
+        self.anchor = None;
+    }
+
+    fn retain_existing_selection(&mut self) {
+        let existing: HashSet<&OsString> = self.entries.iter().map(|entry| &entry.id).collect();
+        self.selected.retain(|id| existing.contains(id));
+        if self
+            .cursor
+            .as_ref()
+            .is_some_and(|id| !existing.contains(id))
+        {
+            self.cursor = None;
+        }
+        if self
+            .anchor
+            .as_ref()
+            .is_some_and(|id| !existing.contains(id))
+        {
+            self.anchor = None;
+        }
+    }
+
+    fn set_busy(&mut self, busy: bool) {
+        self.busy = busy;
+    }
+
+    fn select(&mut self, index: usize, modifiers: Modifiers) {
+        let Some(entry) = self.entries.get(index) else {
+            return;
+        };
+        let id = entry.id.clone();
+        if modifiers.shift {
+            let anchor = self.anchor.clone().unwrap_or_else(|| id.clone());
+            let anchor_index = self.index_of(&anchor).unwrap_or(index);
+            let (start, end) = (anchor_index.min(index), anchor_index.max(index));
+            self.selected = self.entries[start..=end]
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect();
+            self.anchor = Some(anchor);
+        } else if modifiers.control || modifiers.platform {
+            if !self.selected.remove(&id) {
+                self.selected.insert(id.clone());
+            }
+            self.anchor = Some(id.clone());
+        } else {
+            self.selected.clear();
+            self.selected.insert(id.clone());
+            self.anchor = Some(id.clone());
+        }
+        self.cursor = Some(id);
+    }
+
+    fn select_all(&mut self) {
+        self.selected = self.entries.iter().map(|entry| entry.id.clone()).collect();
+        if self.cursor.is_none() {
+            self.cursor = self.entries.first().map(|entry| entry.id.clone());
+        }
+        self.anchor = self.cursor.clone();
+    }
+}
+
+impl Browser {
+    pub(in crate::pages::workspace) fn trash_selection_menu(
+        &self,
+        menu: gpui_kit::component::menu::PopupMenu,
+        cx: &Context<Self>,
+    ) -> gpui_kit::component::menu::PopupMenu {
+        view::entry_menu(self, menu, cx)
+    }
+
+    pub(in crate::pages::workspace) fn load_trash(&mut self, cx: &mut Context<Self>) {
+        if !backend::supported() {
+            self.collections
+                .trash
+                .fail(i18n::text("recycle-unsupported", cx).to_string());
+            cx.notify();
+            return;
+        }
+        let generation = self.collections.trash.begin_load();
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking_named("Read trash contents", backend::list);
+        cx.spawn(async move |this, cx| {
+            let result = work
+                .await
+                .map_err(backend::Error::from)
+                .and_then(std::convert::identity);
+            if let Err(error) = this.update(cx, |this, cx| {
+                match this.collections.trash.apply_load(generation, result) {
+                    Load::Stale => {}
+                    Load::Applied => cx.notify(),
+                    Load::Failed(message) => {
+                        notifications::Report::new(
+                            notifications::Level::Error,
+                            i18n::text("recycle-load-failed", cx),
+                        )
+                        .detail(message)
+                        .replacing::<LoadNotice>()
+                        .show(cx);
+                        cx.notify();
+                    }
+                }
+            }) {
+                tracing::warn!("Trash listing arrived after the window closed: {error}");
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(in crate::pages::workspace) fn refresh_trash(&mut self, cx: &mut Context<Self>) {
+        self.load_trash(cx);
+    }
+
+    pub(in crate::pages::workspace) fn select_trash(
+        &mut self,
+        index: usize,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        self.collections.trash.select(index, modifiers);
+        cx.notify();
+    }
+
+    pub(in crate::pages::workspace) fn trash_select_all(&mut self, cx: &mut Context<Self>) {
+        if self.collection() != Some(Collection::Trash) {
+            return;
+        }
+        self.collections.trash.select_all();
+        cx.notify();
+    }
+
+    pub(in crate::pages::workspace) fn select_trash_row_for_menu(&mut self, index: usize) {
+        if !self.collections.trash.is_selected_at(index) {
+            self.collections.trash.select(index, Modifiers::default());
+        }
+    }
+
+    pub(in crate::pages::workspace) fn restore_selected_trash(&mut self, cx: &mut Context<Self>) {
+        let entries = self.collections.trash.selected_entries();
+        self.start_trash_operation(Action::Restore, entries, cx);
+    }
+
+    pub(in crate::pages::workspace) fn request_trash_purge(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entries = self.collections.trash.selected_entries();
+        self.confirm_purge_entries(entries, window, cx);
+    }
+
+    pub(in crate::pages::workspace) fn confirm_purge_entries(
+        &mut self,
+        entries: Vec<Entry>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.collections.trash.is_busy() || entries.is_empty() {
+            return;
+        }
+        view::Confirmation::open(
+            cx.entity().downgrade(),
+            view::Intent::PurgeSelection,
+            entries,
+            window,
+        );
+        cx.notify();
+    }
+
+    pub(in crate::pages::workspace) fn request_empty_trash(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.collections.trash.is_busy() {
+            return;
+        }
+        // Freeze exactly the rows the user is looking at; anything deleted into
+        // Trash after this point is not part of the confirmed request.
+        let entries = self.collections.trash.rows().to_vec();
+        if entries.is_empty() {
+            return;
+        }
+        view::Confirmation::open(
+            cx.entity().downgrade(),
+            view::Intent::EmptyTrash,
+            entries,
+            window,
+        );
+        cx.notify();
+    }
+
+    pub(in crate::pages::workspace) fn start_trash_operation(
+        &mut self,
+        action: Action,
+        entries: Vec<Entry>,
+        cx: &mut Context<Self>,
+    ) {
+        if entries.is_empty() || self.collections.trash.is_busy() || self.operations.in_progress {
+            return;
+        }
+        if matches!(action, Action::Restore)
+            && entries
+                .iter()
+                .any(|entry| !self.device_path_accepts_task(&entry.original_path, cx))
+        {
+            notifications::error(i18n::text("device-path-unavailable", cx), cx);
+            return;
+        }
+        self.collections.trash.set_busy(true);
+        self.collections.trash.task_paths = entries
+            .iter()
+            .map(|entry| entry.original_path.clone())
+            .collect();
+        let count = entries.len();
+        self.start_background_kind(
+            "trash",
+            i18n::count(action_labels(action).working, count, cx),
+            cx,
+        );
+        let cancel = self.background_tasks.read(cx).token("trash");
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking_named("Restore or purge trash", move || {
+                backend::perform_cancellable(action, entries, &cancel)
+            });
+        cx.spawn(async move |this, cx| {
+            let outcomes = work.await;
+            if let Err(error) = this.update(cx, |this, cx| match outcomes {
+                Ok(outcomes) => this.finish_trash_operation(action, outcomes, cx),
+                Err(error) => {
+                    this.collections.trash.set_busy(false);
+                    this.collections.trash.task_paths.clear();
+                    this.finish_background_kind(
+                        "trash",
+                        notifications::Report::new(notifications::Level::Error, error.to_string()),
+                        cx,
+                    );
+                }
+            }) {
+                tracing::warn!("Trash operation arrived after the window closed: {error}");
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_trash_operation(
+        &mut self,
+        action: Action,
+        outcomes: Vec<Outcome>,
+        cx: &mut Context<Self>,
+    ) {
+        self.collections.trash.set_busy(false);
+        self.collections.trash.task_paths.clear();
+        if matches!(action, Action::Restore) {
+            // A payload that already moved back belongs to its folder again
+            // even when the trash record cleanup failed afterwards.
+            let restored: Vec<PathBuf> = outcomes
+                .iter()
+                .filter(|outcome| Effect::of(outcome).moved())
+                .map(|outcome| outcome.original_path.clone())
+                .collect();
+            self.operations
+                .history
+                .record(operation_history::Entry::new(
+                    operation_history::Kind::Restore,
+                    outcomes
+                        .iter()
+                        .filter(|outcome| Effect::of(outcome).moved())
+                        .map(|outcome| operation_history::Step::undo_restore(&outcome.entry))
+                        .collect(),
+                ));
+            if !restored.is_empty() {
+                self.refresh_after_file_operation(&restored, cx);
+            }
+        }
+        if action == Action::Purge && outcomes.iter().any(|outcome| outcome.result.is_ok()) {
+            self.operations.history.clear();
+        }
+        let report = outcome_report(action, &outcomes, cx);
+        // Re-read the store instead of patching the list optimistically: both
+        // an untouched record and one whose cleanup failed must show up as the
+        // store really reports it.
+        self.load_trash(cx);
+        self.finish_background_kind("trash", report, cx);
+        cx.notify();
+    }
+
+    /// Move the Trash cursor one list motion.
+    ///
+    /// Returns whether the motion applied, so a caller can tell whether it
+    /// really moved the selection and should stop the key from travelling on.
+    pub(in crate::pages::workspace) fn move_trash_cursor(
+        &mut self,
+        motion: Motion,
+        extend: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.collection() != Some(Collection::Trash) {
+            return false;
+        }
+        let current = self.collections.trash.cursor_index();
+        let Some(index) = motion.target(current, self.collections.trash.rows().len()) else {
+            return false;
+        };
+        self.collections.trash.select(
+            index,
+            Modifiers {
+                shift: extend,
+                ..Default::default()
+            },
+        );
+        self.collections
+            .trash
+            .table
+            .update(cx, |table, cx| table.scroll_to_row(index, cx));
+        cx.notify();
+        true
+    }
+
+    pub(in crate::pages::workspace) fn on_trash_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.collection() != Some(Collection::Trash) || !self.list_keys_available(window, cx) {
+            return;
+        }
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.control || modifiers.alt || modifiers.platform {
+            return;
+        }
+        let Some(motion) = Motion::for_key(&event.keystroke.key) else {
+            return;
+        };
+        if self.move_trash_cursor(motion, modifiers.shift, cx) {
+            self.window.focus.focus(window, cx);
+            cx.stop_propagation();
+            window.prevent_default();
+        }
+    }
+
+    pub(in crate::pages::workspace) fn on_trash_restore(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.restore_selected_trash(cx);
+    }
+
+    pub(in crate::pages::workspace) fn on_trash_purge(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_trash_purge(window, cx);
+    }
+
+    pub(in crate::pages::workspace) fn on_trash_empty(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_empty_trash(window, cx);
+    }
+
+    pub(in crate::pages::workspace) fn on_trash_refresh(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.refresh_trash(cx);
+    }
+}
+
+/// What one attempted record did to its payload on disk.
+enum Effect {
+    /// The payload moved to its target and the record was cleaned up.
+    Done,
+    /// The payload moved, but its trash record was left behind.
+    RecordLeft,
+    /// The payload was untouched; the record stays in Trash.
+    Untouched,
+}
+
+impl Effect {
+    /// Classify one outcome. `RestoreIncomplete` and `PurgeIncomplete` mean the
+    /// payload already moved or was removed and only the record cleanup failed,
+    /// so they must not be reported as if the record were still intact.
+    fn of(outcome: &Outcome) -> Self {
+        match &outcome.result {
+            Ok(()) => Self::Done,
+            Err(Error::RestoreIncomplete { .. } | Error::PurgeIncomplete { .. }) => {
+                Self::RecordLeft
+            }
+            Err(_) => Self::Untouched,
+        }
+    }
+
+    /// Whether the payload already reached its target, cleanup aside.
+    fn moved(self) -> bool {
+        !matches!(self, Self::Untouched)
+    }
+}
+
+/// The result notice for one batch: a summary that only claims what the
+/// outcomes actually did, plus one detail line per record that was not clean.
+fn outcome_report(action: Action, outcomes: &[Outcome], cx: &App) -> notifications::Report {
+    let moved = outcomes
+        .iter()
+        .filter(|outcome| Effect::of(outcome).moved())
+        .count();
+    let record_left = outcomes
+        .iter()
+        .filter(|outcome| matches!(Effect::of(outcome), Effect::RecordLeft))
+        .count();
+    let untouched = outcomes.len() - moved;
+    let labels = action_labels(action);
+    let mut report = match (untouched, record_left) {
+        (0, 0) => notifications::Report::new(
+            notifications::Level::Success,
+            i18n::count(labels.done, moved, cx),
+        ),
+        // Every payload moved; only record cleanup is outstanding. Details name
+        // the records that were left behind.
+        (0, left) => notifications::Report::new(
+            notifications::Level::Error,
+            records_left_summary(action, moved, left, cx),
+        ),
+        // Mixed batches lead with the untouched records; the details still note
+        // any record whose cleanup failed.
+        _ => notifications::Report::new(
+            notifications::Level::Error,
+            partial_summary(action, moved, untouched, cx),
+        ),
+    };
+    for outcome in outcomes.iter().filter(|outcome| outcome.result.is_err()) {
+        if let Err(error) = &outcome.result {
+            let path = outcome
+                .original_path
+                .as_os_str()
+                .to_string_lossy()
+                .escape_debug()
+                .to_string();
+            report = report.detail(format!("{path}: {error}"));
+        }
+    }
+    report
+}
+
+fn records_left_summary(action: Action, moved: usize, left: usize, cx: &App) -> SharedString {
+    let count = moved as i64;
+    let records_left = left as i64;
+    match action {
+        Action::Restore => t!(
+            @cx,
+            "recycle-restore-records-left",
+            count = count,
+            records_left = records_left
+        ),
+        Action::Purge => t!(
+            @cx,
+            "recycle-purge-records-left",
+            count = count,
+            records_left = records_left
+        ),
+    }
+}
+
+fn partial_summary(action: Action, succeeded: usize, failed: usize, cx: &App) -> SharedString {
+    let succeeded = succeeded as i64;
+    let failed = failed as i64;
+    match action {
+        Action::Restore => t!(
+            @cx,
+            "recycle-restore-partial",
+            succeeded = succeeded,
+            failed = failed
+        ),
+        Action::Purge => t!(
+            @cx,
+            "recycle-purge-partial",
+            succeeded = succeeded,
+            failed = failed
+        ),
+    }
+}
+
+/// Fluent keys for one action's progress and result notices.
+struct Labels {
+    working: &'static str,
+    done: &'static str,
+}
+
+fn action_labels(action: Action) -> Labels {
+    match action {
+        Action::Restore => Labels {
+            working: "recycle-restore-working",
+            done: "recycle-restore-done",
+        },
+        Action::Purge => Labels {
+            working: "recycle-purge-working",
+            done: "recycle-purge-done",
+        },
+    }
+}

@@ -1,65 +1,19 @@
-use crate::entities::location::{Location, VolumeIdentity};
+pub(super) use crate::entities::location::{Collection, Location, LocationTarget, VolumeIdentity};
 use gds::appearance::tokens;
-mod background_tasks;
-mod breadcrumb;
-mod clipboard_status;
-mod columns;
-mod content;
-mod context_menu;
-#[cfg(target_os = "linux")]
-mod desktop_requests;
-mod devices;
-mod drag_drop;
-#[cfg(feature = "files-e2e")]
-pub(crate) mod e2e;
-mod entry_appearance;
-mod file_actions;
-mod file_icon;
-mod file_label;
-mod grid;
-mod handlers;
-mod history;
-mod loading;
-mod localization;
-mod locations;
-mod marquee;
-mod menu;
-mod motion;
-mod name_form;
-mod new_folder;
-mod pages;
-#[cfg(unix)]
-mod permissions;
-mod picker;
-mod place_pages;
-mod preview;
-mod recycle;
-mod regions;
-mod remote;
-mod rename;
-mod responsive;
-mod routing;
-mod selection;
-mod selection_status;
-mod settings;
-mod sidebar;
-mod sort;
-mod status;
-mod table;
-mod tabs;
-mod tag_editor;
-mod tags;
-mod terminal;
-mod toolbar;
-mod transfers;
-mod undo;
-mod view;
-mod watching;
-mod window;
+
+mod chrome;
+mod navigation;
+mod surfaces;
+mod workflows;
+
+pub(in crate::pages::workspace) use chrome::*;
+pub(in crate::pages::workspace) use navigation::*;
+pub(in crate::pages::workspace) use surfaces::*;
+pub(in crate::pages::workspace) use workflows::*;
 
 use gds::service::task_manager::Scope;
 use gds::service::task_manager::Task as IoTask;
-use std::{
+pub(super) use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -68,36 +22,15 @@ use crate::entities::location::volumes as storage;
 use crate::entities::preferences as configuration;
 use crate::shared::ui::actions::*;
 use gds::{i18n, service::desktop, ui, ui::notifications};
-use gpui_kit::component::WindowExt;
+pub(super) use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::*;
+pub(super) use gpui_kit::*;
 
 use crate::entities::file::directory::{self, ReadOptions};
-use crate::entities::file::{ViewMode, sorting};
-use crate::entities::location::navigation::{self, LoadOutcome, LoadRequest, Navigation};
+pub(super) use crate::entities::file::{ViewMode, sorting};
+use crate::entities::location::navigation::{LoadOutcome, LoadRequest, Navigation, resolve_input};
 use crate::entities::location::places::Places;
 use crate::shared::lib::clipboard as file_clipboard;
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Collection {
-    Tags,
-    Recent,
-    Favorites,
-    Network,
-    Trash,
-    Volumes,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum LocationTarget {
-    Tags,
-    Home,
-    Recent,
-    Favorites,
-    Volumes,
-    Network,
-    Trash,
-}
 
 pub struct NewWindowRequested(pub PathBuf);
 impl EventEmitter<NewWindowRequested> for Browser {}
@@ -114,20 +47,6 @@ pub struct LaunchOptions {
     pub picker: Option<crate::features::pick_files::Options>,
 }
 
-impl Collection {
-    fn from_location(location: &Location) -> Option<Self> {
-        match location {
-            Location::Tags(_) => Some(Self::Tags),
-            Location::Recent => Some(Self::Recent),
-            Location::Favorites => Some(Self::Favorites),
-            Location::Network => Some(Self::Network),
-            Location::Trash => Some(Self::Trash),
-            Location::Volumes => Some(Self::Volumes),
-            _ => None,
-        }
-    }
-}
-
 /// Toast slots that keep repeated reports of one origin from stacking.
 pub(crate) struct LoadNotice;
 pub(crate) struct OpenNotice;
@@ -140,29 +59,95 @@ pub(crate) struct RenameNotice;
 pub(crate) struct ColumnNotice;
 
 #[derive(Default)]
-struct ViewState {
-    selected: Vec<PathBuf>,
-    place: Option<Location>,
-    scroll_offset: f32,
-    filter: String,
-    trash: recycle::ViewState,
-    volume: Option<storage::VolumeId>,
+enum CollectionView {
+    #[default]
+    None,
+    Place(Location),
+    Trash(recycle::ViewState),
+    Volume(storage::VolumeId),
 }
 
-struct OpenTab {
-    tags: Option<Result<tags::Contents, String>>,
-    tags_load: Option<Task<()>>,
-    watch: Option<watching::Watch>,
-    remote: Option<remote::Directory>,
-    remote_load: Option<Task<()>>,
-    id: u64,
-    needs_refresh: bool,
-    navigation: Navigation<ViewState>,
+#[derive(Default)]
+pub(super) struct ViewState {
+    pub(super) selected: Vec<PathBuf>,
+    scroll_offset: f32,
     filter: String,
-    visible: Arc<[usize]>,
-    table_rows: Arc<[directory::Entry]>,
+    collection: CollectionView,
+}
+
+impl ViewState {
+    fn place(&self) -> Option<&Location> {
+        match &self.collection {
+            CollectionView::Place(location) => Some(location),
+            _ => None,
+        }
+    }
+
+    fn set_place(&mut self, location: Option<Location>) {
+        self.collection = match location {
+            Some(location) => CollectionView::Place(location),
+            None => CollectionView::None,
+        };
+    }
+
+    fn trash(&self) -> Option<&recycle::ViewState> {
+        match &self.collection {
+            CollectionView::Trash(trash) => Some(trash),
+            _ => None,
+        }
+    }
+
+    fn set_trash(&mut self, trash: recycle::ViewState) {
+        self.collection = CollectionView::Trash(trash);
+    }
+
+    fn volume(&self) -> Option<&storage::VolumeId> {
+        match &self.collection {
+            CollectionView::Volume(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    fn set_volume(&mut self, volume: Option<storage::VolumeId>) {
+        self.collection = match volume {
+            Some(id) => CollectionView::Volume(id),
+            None => CollectionView::None,
+        };
+    }
+}
+
+enum TabBackend {
+    Local {
+        watch: Option<watching::Watch>,
+        device: Option<devices::DeviceLocation>,
+    },
+    Tags {
+        contents: Option<Result<tags::Contents, String>>,
+        load: Option<Task<()>>,
+    },
+    Remote {
+        directory: Option<remote::Directory>,
+        load: Option<Task<()>>,
+    },
+}
+
+impl Default for TabBackend {
+    fn default() -> Self {
+        Self::Local {
+            watch: None,
+            device: None,
+        }
+    }
+}
+
+pub(super) struct OpenTab {
+    pub(super) id: u64,
+    needs_refresh: bool,
+    pub(super) navigation: Navigation<ViewState>,
+    backend: TabBackend,
+    pub(super) table_rows: Arc<[directory::Entry]>,
     scroll: UniformListScrollHandle,
-    view_mode: ViewMode,
+    pub(super) view_mode: ViewMode,
     grid: grid::Geometry,
     pending_selection: Option<PathBuf>,
     pending_reveal: Option<Vec<PathBuf>>,
@@ -171,26 +156,25 @@ struct OpenTab {
     cursor: Option<PathBuf>,
     sort: sorting::Sort,
     pinned: bool,
-    device: Option<devices::DeviceLocation>,
     /// The picker's type-filter projection for this tab, if this window is a
     /// picker. It is applied together with the name filter so a directory read
     /// never replaces the narrowed list with the unfiltered one.
     picker: Option<picker::Projection>,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(in crate::pages::workspace) struct TabCycleTargets {
+    pub(in crate::pages::workspace) previous: Option<u64>,
+    pub(in crate::pages::workspace) next: Option<u64>,
+}
+
 impl OpenTab {
     fn new(id: u64, location: Location, path: Option<PathBuf>, pinned: bool) -> Self {
         Self {
-            tags: None,
-            tags_load: None,
-            watch: None,
-            remote: None,
-            remote_load: None,
             id,
             navigation: Navigation::new(location, path),
             needs_refresh: false,
-            filter: String::new(),
-            visible: Arc::from([]),
+            backend: TabBackend::default(),
             table_rows: Arc::from([]),
             scroll: UniformListScrollHandle::new(),
             view_mode: ViewMode::default(),
@@ -202,7 +186,6 @@ impl OpenTab {
             cursor: None,
             sort: sorting::Sort::default(),
             pinned,
-            device: None,
             picker: None,
         }
     }
@@ -215,6 +198,121 @@ impl OpenTab {
     }
     fn is_loading(&self) -> bool {
         self.navigation.is_loading()
+    }
+    fn filter(&self) -> &str {
+        &self.navigation.view().filter
+    }
+    fn set_filter(&mut self, filter: impl Into<String>) {
+        self.navigation.view_mut().filter = filter.into();
+    }
+    fn clear_filter(&mut self) {
+        self.navigation.view_mut().filter.clear();
+    }
+    fn watch(&self) -> Option<&watching::Watch> {
+        match &self.backend {
+            TabBackend::Local { watch, .. } => watch.as_ref(),
+            _ => None,
+        }
+    }
+    fn set_watch(&mut self, next: Option<watching::Watch>) {
+        match &mut self.backend {
+            TabBackend::Local { watch, .. } => *watch = next,
+            _ if next.is_some() => {
+                self.backend = TabBackend::Local {
+                    watch: next,
+                    device: None,
+                };
+            }
+            _ => {}
+        }
+    }
+    fn device(&self) -> Option<&devices::DeviceLocation> {
+        match &self.backend {
+            TabBackend::Local { device, .. } => device.as_ref(),
+            _ => None,
+        }
+    }
+    fn device_mut(&mut self) -> Option<&mut devices::DeviceLocation> {
+        match &mut self.backend {
+            TabBackend::Local { device, .. } => device.as_mut(),
+            _ => None,
+        }
+    }
+    fn set_device(&mut self, next: Option<devices::DeviceLocation>) {
+        let watch = match &mut self.backend {
+            TabBackend::Local { watch, .. } => watch.take(),
+            _ => None,
+        };
+        self.backend = TabBackend::Local {
+            watch,
+            device: next,
+        };
+    }
+    fn tags(&self) -> Option<&Result<tags::Contents, String>> {
+        match &self.backend {
+            TabBackend::Tags { contents, .. } => contents.as_ref(),
+            _ => None,
+        }
+    }
+    fn set_tags(&mut self, next: Option<Result<tags::Contents, String>>) {
+        match &mut self.backend {
+            TabBackend::Tags { contents, .. } => *contents = next,
+            _ if next.is_some() => {
+                self.backend = TabBackend::Tags {
+                    contents: next,
+                    load: None,
+                };
+            }
+            _ => {}
+        }
+    }
+    fn set_tags_load(&mut self, next: Option<Task<()>>) {
+        match &mut self.backend {
+            TabBackend::Tags { load, .. } => *load = next,
+            _ if next.is_some() => {
+                self.backend = TabBackend::Tags {
+                    contents: None,
+                    load: next,
+                };
+            }
+            _ => {}
+        }
+    }
+    fn remote(&self) -> Option<&remote::Directory> {
+        match &self.backend {
+            TabBackend::Remote { directory, .. } => directory.as_ref(),
+            _ => None,
+        }
+    }
+    fn set_remote(&mut self, next: Option<remote::Directory>) {
+        match &mut self.backend {
+            TabBackend::Remote { directory, .. } => *directory = next,
+            _ if next.is_some() => {
+                self.backend = TabBackend::Remote {
+                    directory: next,
+                    load: None,
+                };
+            }
+            _ => {}
+        }
+    }
+    fn set_remote_load(&mut self, next: Option<Task<()>>) {
+        match &mut self.backend {
+            TabBackend::Remote { load, .. } => *load = next,
+            _ if next.is_some() => {
+                self.backend = TabBackend::Remote {
+                    directory: None,
+                    load: next,
+                };
+            }
+            _ => {}
+        }
+    }
+    fn clear_async_loads(&mut self) {
+        match &mut self.backend {
+            TabBackend::Tags { load, .. } | TabBackend::Remote { load, .. } => *load = None,
+            TabBackend::Local { .. } => {}
+        }
     }
     fn title(&self, cx: &App) -> String {
         self.path()
@@ -229,15 +327,13 @@ impl OpenTab {
 
     fn refresh_visible(&mut self) {
         if !self.files_available() {
-            self.visible = Arc::from([]);
             self.table_rows = Arc::from([]);
             return;
         }
         let pending = self.pending_selection.take();
-        let filter = self.filter.to_lowercase();
+        let filter = self.filter().to_lowercase();
         let picker = self.picker.clone();
         let Some(directory) = self.navigation.directory() else {
-            self.visible = Arc::from([]);
             self.table_rows = Arc::from([]);
             self.anchor = None;
             self.cursor = None;
@@ -257,7 +353,6 @@ impl OpenTab {
             .map(|&index| entries[index].clone())
             .collect::<Vec<_>>()
             .into();
-        self.visible = visible.into();
         let visible_paths: std::collections::HashSet<_> =
             self.table_rows.iter().map(|entry| &entry.path).collect();
         // Hidden search results must never remain implicit targets of a file operation.
@@ -321,7 +416,6 @@ impl OpenTab {
     fn save_scroll(&mut self) {
         let view = self.navigation.view_mut();
         view.scroll_offset = self.scroll.0.borrow().base_handle.offset().y.into();
-        view.filter = self.filter.clone();
     }
 
     fn restore_scroll(&self) {
@@ -335,14 +429,14 @@ impl OpenTab {
 
 /// The window composes feature-owned state; tab-local browsing stays in `OpenTab`.
 pub struct Browser {
-    window: window::State,
-    settings: settings::State,
+    pub(super) window: window::State,
+    pub(super) settings: settings::State,
     pages: gds::ui::page::stack::Stack<pages::Page>,
 
     locations: locations::State,
-    tabs: tabs::State,
+    pub(super) tabs: tabs::State,
     sidebar: sidebar::State,
-    toolbar: toolbar::State,
+    pub(super) toolbar: toolbar::State,
 
     files: content::State,
     collections: place_pages::State,
@@ -350,7 +444,7 @@ pub struct Browser {
     remote: remote::State,
 
     menus: menu::State,
-    operations: file_actions::State,
+    pub(super) operations: file_actions::State,
     background_tasks: Entity<background_tasks::State>,
     clipboard_details: Entity<clipboard_status::Details>,
     selection_details: Entity<selection_status::Details>,
@@ -429,10 +523,12 @@ impl Browser {
             this.open_tab(start, false, window, cx);
         }
         file_clipboard::refresh(cx);
+        this.sync_sidebar_presentation(window, cx);
+        this.sync_workspace_state(cx);
         this
     }
 
-    fn current_tab(&self) -> Option<&OpenTab> {
+    pub(super) fn current_tab(&self) -> Option<&OpenTab> {
         self.tab_slot(self.tabs.active_id)
     }
     fn current_tab_mut(&mut self) -> Option<&mut OpenTab> {
@@ -440,9 +536,9 @@ impl Browser {
     }
     fn collection(&self) -> Option<Collection> {
         self.current_tab()
-            .and_then(|tab| Collection::from_location(&tab.location()))
+            .and_then(|tab| tab.location().collection())
     }
-    fn active(&self) -> Option<&OpenTab> {
+    pub(super) fn active(&self) -> Option<&OpenTab> {
         self.current_tab().filter(|tab| tab.path().is_some())
     }
     fn active_mut(&mut self) -> Option<&mut OpenTab> {
@@ -459,7 +555,116 @@ impl Browser {
         self.sidebar.presentation.width()
     }
 
-    fn current_location(&self) -> Location {
+    fn content_width(&self) -> f32 {
+        let details = if self.details_visible() {
+            view::PREVIEW_WIDTH
+        } else {
+            0.
+        };
+        (self.window.layout.width - self.width() - view::TABLE_INSET * 2. - details).max(1.)
+    }
+
+    fn sync_sidebar_presentation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let state = if self.sidebar_collapsed() {
+            ui::sidebar::SidebarState::Collapsed
+        } else {
+            ui::sidebar::SidebarState::Expanded
+        };
+        self.sidebar.presentation =
+            ui::sidebar::SideBar::default()
+                .state(state)
+                .sample("files-sidebar-motion", window, cx);
+        self.settings.view.update(cx, |view, cx| {
+            view.set_sidebar_presentation(self.sidebar.presentation, cx)
+        });
+    }
+
+    fn sync_workspace_state(&mut self, cx: &mut Context<Self>) {
+        if !self.pages.is_empty() {
+            self.menus.open = None;
+        }
+        if !self.pages.is_empty() || self.collection().is_some() {
+            self.menus.sort = None;
+        }
+        if !self.pages.is_empty()
+            || self.collection().is_some()
+            || self.menus.is_any_open()
+            || self.picker.is_some()
+        {
+            self.discard_marquee();
+        }
+        let content_width = self.content_width();
+        let font_scale = f32::from(gds::appearance::typography::scaled(1., cx));
+        if self.pages.is_empty() {
+            let mode = self.view_mode();
+            let sort = columns::sort_for(&self.current_location(), &self.locations.places);
+            let is_collection = self.collection().is_some();
+            if let Some(slot) = self.current_tab_mut() {
+                if !is_collection && slot.sort != sort {
+                    slot.sort = sort;
+                    slot.refresh_visible();
+                }
+                let geometry = grid::Geometry::new(content_width, font_scale);
+                let reflow = slot.view_mode != mode
+                    || slot.grid.columns != geometry.columns
+                    || slot.grid.row_height != geometry.row_height;
+                slot.view_mode = mode;
+                slot.grid = geometry;
+                if !is_collection
+                    && reflow
+                    && let Some(index) = slot.cursor.as_ref().and_then(|path| {
+                        slot.table_rows.iter().position(|entry| &entry.path == path)
+                    })
+                {
+                    slot.scroll_to_entry(index);
+                }
+            }
+            match self.collection() {
+                None => {
+                    self.sync_preview(cx);
+                    if let Some(slot) = self
+                        .active()
+                        .filter(|slot| slot.navigation.directory().is_some())
+                    {
+                        let data = table::Data {
+                            rows: slot.table_rows.clone(),
+                            selected: slot.navigation.view().selected.clone(),
+                            sort: slot.sort,
+                            scroll: slot.scroll.clone(),
+                            content_width,
+                            layout: self.columns_layout(&self.current_location()).clone(),
+                            location: self.current_location(),
+                            widths: self.locations.places.column_widths(self.current_location()),
+                        };
+                        table::FileTable::sync_state(&self.files.table, data, cx);
+                    }
+                }
+                Some(
+                    collection @ (Collection::Recent | Collection::Favorites | Collection::Tags),
+                ) => {
+                    self.sync_preview(cx);
+                    if let Some(locations) = self.place_locations(collection)
+                        && let Some(table_state) = self.place_table(collection)
+                    {
+                        let selected = self.selected_place();
+                        place_pages::table::LocationTable::sync(
+                            table_state,
+                            locations,
+                            selected,
+                            content_width,
+                            cx,
+                        );
+                    }
+                }
+                Some(Collection::Network | Collection::Trash | Collection::Volumes) => {}
+            }
+        }
+        self.sync_sidebar_split(cx);
+        self.sync_terminal_cwd(cx);
+        self.drain_device_removals(cx);
+    }
+
+    pub(super) fn current_location(&self) -> Location {
         self.current_tab()
             .map_or_else(|| Location::from(&self.locations.home), OpenTab::location)
     }
@@ -475,7 +680,7 @@ impl Browser {
         self.collection() != Some(Collection::Tags)
             || self
                 .current_tab()
-                .and_then(|slot| slot.tags.as_ref())
+                .and_then(|slot| slot.tags())
                 .and_then(|result| result.as_ref().ok())
                 .is_some_and(|contents| !contents.entries.is_empty())
     }
@@ -489,7 +694,7 @@ impl Browser {
                 .details_visible(self.current_location())
     }
 
-    fn current_path(&self) -> Option<PathBuf> {
+    pub(super) fn current_path(&self) -> Option<PathBuf> {
         self.active().and_then(OpenTab::path).map(Path::to_path_buf)
     }
 
@@ -499,7 +704,7 @@ impl Browser {
             .map(|picker| picker.session.projection())
     }
 
-    fn open_tab(
+    pub(super) fn open_tab(
         &mut self,
         path: PathBuf,
         pinned: bool,
@@ -530,12 +735,12 @@ impl Browser {
         let id = self.tabs.next_id;
         self.tabs.next_id += 1;
         let mut slot = OpenTab::new(id, resolved.location, resolved.path, pinned);
-        slot.device = resolved.device;
+        slot.set_device(resolved.device);
         slot.picker = self.picker_projection();
         self.tabs.items.push(slot);
         self.tabs.active_id = id;
         self.pages.clear();
-        self.toolbar.path.editing = false;
+        self.toolbar.finish_path_edit();
         self.sidebar
             .regions
             .tabs_scroll
@@ -551,8 +756,7 @@ impl Browser {
     fn start_request(&mut self, id: u64, request: LoadRequest, cx: &mut Context<Self>) {
         self.watch_directory(id, request.path(), cx);
         if let Some(slot) = self.tab_slot_mut(id) {
-            slot.remote_load = None;
-            slot.tags_load = None;
+            slot.clear_async_loads();
         }
         match crate::entities::location::scheme::browse(request.location()) {
             crate::entities::location::scheme::Browse::Tags(address) => {
@@ -616,17 +820,10 @@ impl Browser {
         match slot.navigation.finish_load(request, result) {
             Ok(LoadOutcome::Stale) => return,
             Ok(LoadOutcome::Applied) => {
-                if !matches!(request.location(), Location::Tags(_)) {
-                    slot.tags = None;
-                }
-                if !matches!(request.location(), Location::Remote(_)) {
-                    slot.remote = None;
-                }
                 if let Some(directory) = slot.navigation.directory() {
                     report_directory_warnings(directory, cx);
                 }
-                slot.device = expected;
-                slot.filter = slot.navigation.view().filter.clone();
+                slot.set_device(expected);
                 slot.anchor = None;
                 slot.sort = columns::sort_for(&slot.location(), &self.locations.places);
                 slot.refresh_visible();
@@ -649,10 +846,11 @@ impl Browser {
             .map(Path::to_path_buf);
         self.watch_directory(id, watched_path.as_deref(), cx);
         if id == self.tabs.active_id {
-            self.toolbar.filter.sync_pending = true;
+            self.request_filter_sync(cx);
             self.enter_location(cx);
         }
         self.finish_pending_refresh(id, cx);
+        self.sync_workspace_state(cx);
         cx.notify();
     }
 
@@ -679,7 +877,7 @@ impl Browser {
     fn navigate_location(&mut self, id: u64, location: Location, cx: &mut Context<Self>) {
         if self
             .tab_slot(id)
-            .and_then(|s| s.remote.as_ref())
+            .and_then(|s| s.remote())
             .and_then(|r| r.view.as_ref())
             .is_some_and(|v| v.read(cx).busy())
         {
@@ -696,7 +894,7 @@ impl Browser {
             .navigation
             .prepare_open(resolved.location, resolved.path, options);
         if id == self.tabs.active_id {
-            self.toolbar.path.editing = false;
+            self.toolbar.finish_path_edit();
         }
         self.start_request(id, request, cx);
         file_clipboard::refresh(cx);
@@ -710,35 +908,39 @@ impl Browser {
     }
 
     fn cycle_tab(&mut self, backwards: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let (previous, next) = self.tab_cycle_targets();
-        let target = if backwards { previous } else { next };
+        let targets = self.tab_cycle_targets();
+        let target = if backwards {
+            targets.previous
+        } else {
+            targets.next
+        };
         if let Some(id) = target {
             self.switch_tab(id, window, cx);
         }
     }
 
-    /// The tabs the page-cycle keys land on, as `(previous, next)`.
+    /// The tabs the page-cycle keys land on.
     ///
     /// The strip order is the cycle order, pinned tabs first, and both ends
     /// connect. A row advertises exactly this target, so a hint never names a
     /// tab the press would not really switch to.
-    fn tab_cycle_targets(&self) -> (Option<u64>, Option<u64>) {
+    fn tab_cycle_targets(&self) -> TabCycleTargets {
         if !self.pages.is_empty() {
-            return (None, None);
+            return TabCycleTargets::default();
         }
         let ids: Vec<u64> = self.tabs.items.iter().map(|tab| tab.id).collect();
-        (
-            cycle_neighbour(&ids, self.tabs.active_id, true),
-            cycle_neighbour(&ids, self.tabs.active_id, false),
-        )
+        TabCycleTargets {
+            previous: cycle_neighbour(&ids, self.tabs.active_id, true),
+            next: cycle_neighbour(&ids, self.tabs.active_id, false),
+        }
     }
 
     /// Whether the close controls are revealed by the held modifier.
     ///
     /// Only the Ctrl group counts: Alt alone, and the Ctrl+Alt mix that AltGr
     /// reports, keep the close controls hidden just as they keep Ctrl hints off.
-    fn revealing_tab_close(&self) -> bool {
-        self.window.held_modifier == Some(ui::HeldModifier::Ctrl)
+    fn revealing_tab_close(window: &Window) -> bool {
+        Self::current_held_modifier(window) == Some(ui::HeldModifier::Ctrl)
     }
 
     /// The modifier group the window holds right now, or none while it is out of
@@ -757,7 +959,7 @@ impl Browser {
         self.save_tab_view(self.tabs.active_id, cx);
         self.tabs.active_id = id;
         self.pages.clear();
-        self.toolbar.path.editing = false;
+        self.toolbar.finish_path_edit();
         if let Some(index) = self.tabs.items.iter().position(|slot| slot.id == id) {
             self.sidebar.regions.tabs_scroll.scroll_to_item(index);
         }
@@ -765,6 +967,7 @@ impl Browser {
         self.refresh_if_hidden_changed(cx);
         self.enter_location(cx);
         file_clipboard::refresh(cx);
+        self.sync_workspace_state(cx);
 
         self.window.focus.focus(window, cx);
         cx.notify();
@@ -809,7 +1012,7 @@ impl Browser {
         } else if was_active {
             self.tabs.active_id = self.tabs.items[index.min(self.tabs.items.len() - 1)].id;
         }
-        self.toolbar.path.editing = false;
+        self.toolbar.finish_path_edit();
         self.sync_filter_input(window, cx);
         self.window.focus.focus(window, cx);
         self.sync_pinned();
@@ -1078,25 +1281,7 @@ impl Browser {
         }
         // Window actions can win their bindings before popup key listeners.
         // Close the controlled menu before handling its chosen command.
-        if self.menus.open.is_some() && command != Command::Menu {
-            self.menus.open = None;
-            self.window.focus.focus(window, cx);
-            if command == Command::Cancel {
-                self.window.focus.focus(window, cx);
-                cx.notify();
-                return;
-            }
-        }
-        if self.menus.context.is_some() && command != Command::ContextMenu {
-            self.menus.context = None;
-            self.window.focus.focus(window, cx);
-            if command == Command::Cancel {
-                cx.notify();
-                return;
-            }
-        }
-        if self.menus.sort.is_some() && command != Command::Sort {
-            self.menus.sort = None;
+        if self.menus.dismiss_for_command(command) {
             self.window.focus.focus(window, cx);
             if command == Command::Cancel {
                 cx.notify();
@@ -1166,17 +1351,10 @@ impl Browser {
             }
             Command::Help => self.show_page(pages::Page::Help, window, cx),
             Command::Settings => {
-                // Leaving the file workspace unmounts the menu, so take focus
-                // back from it before its handle disappears.
-                if self.menus.open.is_some() {
-                    self.menus.open = None;
-                    self.window.focus.focus(window, cx);
-                }
-
                 // The content region is about to unmount. Keep window actions
                 // reachable until a settings control takes focus.
                 self.show_page(pages::Page::Settings, window, cx);
-                self.toolbar.path.editing = false;
+                self.toolbar.finish_path_edit();
                 self.settings.view.update(cx, |view, cx| {
                     view.set_preferences(self.settings.preferences.clone(), window, cx);
                     view.refresh_themes(window, cx);
@@ -1220,20 +1398,16 @@ impl Browser {
             Command::Sidebar => {
                 if !self.window.layout.compact {
                     self.sidebar.collapsed = !self.sidebar.collapsed;
+                    self.sync_sidebar_presentation(window, cx);
                 }
             }
             Command::Terminal => self.toggle_terminal(window, cx),
             Command::EditLocation => {
-                self.toolbar.path.editing = true;
                 let path = self
                     .current_path()
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_else(|| self.current_location().display_address());
-                self.toolbar.path.input.update(cx, |input, cx| {
-                    input.set_value(path, window, cx);
-                    input.focus(window, cx);
-                    input.select_all(window, cx);
-                });
+                self.toolbar.start_path_edit(path, window, cx);
             }
             Command::Back | Command::Forward | Command::Parent => {
                 self.navigate_history(command, cx)
@@ -1526,7 +1700,7 @@ impl Browser {
                         return;
                     }
 
-                    self.toolbar.path.editing = false;
+                    self.toolbar.finish_path_edit();
                     self.pages.clear();
                     // Copy contents remain available after Escape.
                     file_clipboard::refresh(cx);
@@ -1593,12 +1767,10 @@ fn report_directory_warnings(snapshot: &directory::DirectorySnapshot, cx: &mut A
 }
 
 /// Report that preferences could not be applied or saved.
-fn report_settings_failure(message_id: &str, error: impl std::fmt::Display, cx: &mut App) {
-    let mut arguments = fluent_bundle::FluentArgs::new();
-    arguments.set("error", error.to_string());
+fn report_settings_failure(error: impl std::fmt::Display, cx: &mut App) {
     notifications::Report::new(
         notifications::Level::Error,
-        i18n::format(message_id, Some(&arguments), cx),
+        i18n::t!(@cx, "settings-apply-failed", error = error.to_string()),
     )
     .replacing::<SettingsNotice>()
     .show(cx);

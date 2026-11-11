@@ -103,11 +103,9 @@ impl Files<'_> {
             .preferences()
             .initialize(config.preferences.clone())?;
         cx.subscribe(&preferences, |_, event: &preferences::SaveFailed, cx| {
-            let mut arguments = fluent_bundle::FluentArgs::new();
-            arguments.set("error", event.0.clone());
             gds::ui::notifications::Report::new(
                 gds::ui::notifications::Level::Error,
-                gds::i18n::format("settings-save-failed", Some(&arguments), cx),
+                gds::i18n::t!(@cx, "settings-save-failed", error = event.0.clone()),
             )
             .replacing::<preferences::SaveFailed>()
             .show(cx);

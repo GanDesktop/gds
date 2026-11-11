@@ -1,7 +1,6 @@
 //! Files owns its application messages; GDS supplies Fluent and base messages.
 
 pub use gds::i18n::{Error, Language, text};
-#[allow(unused_imports)]
 pub(crate) use gds::t;
 use gpui_kit::App;
 

@@ -60,17 +60,12 @@ gpui_kit::actions!(
         FocusVolumes,
         FocusTabs,
         FocusContent,
-        SelectTab1,
-        SelectTab2,
-        SelectTab3,
-        SelectTab4,
-        SelectTab5,
-        SelectTab6,
-        SelectTab7,
-        SelectTab8,
-        SelectTab9,
     ]
 );
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = gds, no_json)]
+pub struct SelectTab(pub usize);
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
 pub const FILE_TABLE_CONTEXT: &str = "FilesFileTable";
@@ -506,19 +501,17 @@ fn file_table_bindings() -> [KeyBinding; 11] {
     ]
 }
 
+const ORDINAL_TAB_STROKES: [&str; 9] = [
+    "ctrl-1", "ctrl-2", "ctrl-3", "ctrl-4", "ctrl-5", "ctrl-6", "ctrl-7", "ctrl-8", "ctrl-9",
+];
+
 fn ordinal_bindings(cx: &App) -> Vec<KeyBinding> {
     let context = Some(WORKSPACE_CONTEXT);
-    vec![
-        action_binding("ctrl-1", Box::new(SelectTab1), context, cx),
-        action_binding("ctrl-2", Box::new(SelectTab2), context, cx),
-        action_binding("ctrl-3", Box::new(SelectTab3), context, cx),
-        action_binding("ctrl-4", Box::new(SelectTab4), context, cx),
-        action_binding("ctrl-5", Box::new(SelectTab5), context, cx),
-        action_binding("ctrl-6", Box::new(SelectTab6), context, cx),
-        action_binding("ctrl-7", Box::new(SelectTab7), context, cx),
-        action_binding("ctrl-8", Box::new(SelectTab8), context, cx),
-        action_binding("ctrl-9", Box::new(SelectTab9), context, cx),
-    ]
+    ORDINAL_TAB_STROKES
+        .into_iter()
+        .enumerate()
+        .map(|(index, stroke)| action_binding(stroke, Box::new(SelectTab(index)), context, cx))
+        .collect()
 }
 
 /// Terminal capabilities are shared, but their key choices belong to Files.
@@ -597,17 +590,6 @@ impl From<Command> for Shortcut {
 /// The strip is the cycle order, pinned tabs included; rows past the ninth have
 /// no key and therefore no hint.
 pub fn ordinal_shortcut(position: usize) -> Option<Shortcut> {
-    let action: Box<dyn Action> = match position {
-        0 => Box::new(SelectTab1),
-        1 => Box::new(SelectTab2),
-        2 => Box::new(SelectTab3),
-        3 => Box::new(SelectTab4),
-        4 => Box::new(SelectTab5),
-        5 => Box::new(SelectTab6),
-        6 => Box::new(SelectTab7),
-        7 => Box::new(SelectTab8),
-        8 => Box::new(SelectTab9),
-        _ => return None,
-    };
-    Some(Shortcut::new(action, Some(WORKSPACE_CONTEXT)))
+    (position < ORDINAL_TAB_STROKES.len())
+        .then(|| Shortcut::new(Box::new(SelectTab(position)), Some(WORKSPACE_CONTEXT)))
 }
