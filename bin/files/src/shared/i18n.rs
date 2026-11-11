@@ -1,8 +1,14 @@
 //! Files owns its application messages; GDS supplies Fluent and base messages.
 
 pub use gds::i18n::{Error, Language, text};
+#[allow(unused_imports)]
+pub(crate) use gds::t;
 use gpui_kit::App;
 
+/// Build a Fluent catalog combining suite messages with Files translations.
+///
+/// # Errors
+/// Returns an error if any bundled Fluent resource fails to parse or contains duplicate message IDs.
 pub fn prepare(language: Language) -> Result<gds::i18n::Catalog, Error> {
     let sources = match language {
         Language::English => [
@@ -29,18 +35,14 @@ pub fn prepare(language: Language) -> Result<gds::i18n::Catalog, Error> {
     gds::i18n::Catalog::new(language, &sources)
 }
 
+/// Install the Files and suite translation catalog into the application context.
+///
+/// # Errors
+/// Returns an error if any bundled Fluent resource fails to parse or contains duplicate message IDs.
 pub fn install(language: Language, cx: &mut App) -> Result<(), Error> {
     prepare(language)?.install(cx);
     Ok(())
 }
 
-#[cfg(all(test, feature = "gui-tests"))]
-#[gpui_kit::test]
-fn application_and_shared_catalogs_have_no_conflicting_keys(cx: &mut gpui_kit::TestAppContext) {
-    for language in [Language::English, Language::Chinese] {
-        cx.update(|cx| {
-            install(language, cx).expect("Files and shared messages must compose");
-            assert_ne!(text("logs-tab-tasks", cx).as_ref(), "logs-tab-tasks");
-        });
-    }
-}
+#[cfg(test)]
+mod tests;

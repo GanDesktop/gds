@@ -14,6 +14,8 @@ const FILE_TYPES: [&str; 4] = [GNOME_FILES, URI_LIST, KDE_CUT, CLIPBOARD_ID];
 pub(super) struct Clipboard;
 
 impl Clipboard {
+    /// # Errors
+    /// Reports unavailable or failed Wayland clipboard writes.
     pub(super) fn write_uris(uris: Vec<String>, cx: &App) -> Result<(), Error> {
         let formats = Formats {
             uri_list: (uris.join("\r\n") + "\r\n").into_bytes(),
@@ -24,6 +26,8 @@ impl Clipboard {
         Ok(())
     }
 
+    /// # Errors
+    /// The task reports Wayland clipboard read or URI decoding failures.
     pub(super) fn read_uris(cx: &mut App) -> Task<Result<Option<(Mode, Vec<String>)>, Error>> {
         let read = Self::offer(cx);
         cx.spawn(async move |_| {
@@ -36,6 +40,8 @@ impl Clipboard {
         })
     }
 
+    /// # Errors
+    /// Reports format encoding or Wayland clipboard publication failures.
     pub fn write(snapshot: &Snapshot, cx: &App) -> Result<Snapshot, Error> {
         let formats = Formats::encode(snapshot)?;
         let mut written = Formats::decode_uris(&formats.uri_list, snapshot.mode)?;
@@ -65,6 +71,8 @@ impl Clipboard {
         entries
     }
 
+    /// # Errors
+    /// The task reports Wayland clipboard read failures.
     fn offer(cx: &App) -> Task<Result<Option<ClipboardMimeOffer>, ClipboardAccessError>> {
         // All representations come from one offer; no reconnecting between formats.
         cx.read_clipboard_mime(FILE_TYPES.map(str::to_owned).into(), MAX_PAYLOAD_BYTES)
@@ -78,6 +86,8 @@ impl Clipboard {
             .map(|entry| entry.bytes.as_slice())
     }
 
+    /// # Errors
+    /// Rejects malformed copy/cut markers or invalid URI lists.
     fn decode_uris(offer: &ClipboardMimeOffer) -> Result<Option<(Mode, Vec<String>)>, Error> {
         if let Some(bytes) = Self::bytes(offer, GNOME_FILES) {
             let text =
@@ -90,7 +100,7 @@ impl Clipboard {
                 "cut" => Mode::Cut,
                 _ => return Err(Error::InvalidPayload("invalid copy intent".into())),
             };
-            return Ok(Some((mode, super::parse_uri_list(uris)?)));
+            return Ok(Some((mode, Formats::parse_uri_list(uris)?)));
         }
         let Some(bytes) = Self::bytes(offer, URI_LIST) else {
             return Ok(None);
@@ -100,9 +110,11 @@ impl Clipboard {
             .transpose()?
             .unwrap_or(Mode::Copy);
         let text = std::str::from_utf8(bytes).map_err(|e| Error::InvalidPayload(e.to_string()))?;
-        Ok(Some((mode, super::parse_uri_list(text)?)))
+        Ok(Some((mode, Formats::parse_uri_list(text)?)))
     }
 
+    /// # Errors
+    /// Rejects malformed GNOME/KDE file offers or invalid clipboard identities.
     fn decode(offer: &ClipboardMimeOffer) -> Result<Option<Snapshot>, Error> {
         let mut snapshot = if let Some(bytes) = Self::bytes(offer, GNOME_FILES) {
             Formats::decode_gnome(bytes)?
@@ -122,6 +134,8 @@ impl Clipboard {
         Ok(Some(snapshot))
     }
 
+    /// # Errors
+    /// The task reports Wayland clipboard read or payload decoding failures.
     pub fn read(cx: &mut App) -> Task<Result<Option<Snapshot>, Error>> {
         let read = Self::offer(cx);
         cx.spawn(async move |_| {
@@ -134,6 +148,8 @@ impl Clipboard {
         })
     }
 
+    /// # Errors
+    /// The task reports Wayland clipboard read, encoding or publication failures.
     pub fn remove_paths(
         expected: Snapshot,
         removed: Vec<PathBuf>,

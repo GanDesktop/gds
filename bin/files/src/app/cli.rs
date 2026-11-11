@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[command(
     name = "gds-files",
     version,
-    about = "A native GPUI file browser for Linux / Niri."
+    about = "A native GPUI file browser for Linux + Wayland."
 )]
 #[command(group(ArgGroup::new("picker_mode").args(["pick_file", "pick_directory", "portal_request"])))]
 #[command(

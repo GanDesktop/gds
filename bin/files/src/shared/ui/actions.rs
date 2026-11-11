@@ -140,7 +140,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 51] = [
         Self::Menu,
         Self::Settings,
         Self::Help,
@@ -191,6 +191,7 @@ impl Command {
         Self::FocusNotifications,
         Self::CloseNotification,
         Self::CloseAllNotifications,
+        Self::Cancel,
     ];
 
     pub fn label_id(self) -> &'static str {
@@ -409,6 +410,15 @@ impl Command {
             _ => &[],
         }
     }
+
+    fn key_binding(
+        self,
+        stroke: &'static str,
+        context: Option<&'static str>,
+        cx: &App,
+    ) -> KeyBinding {
+        action_binding(stroke, self.action(), context, cx)
+    }
 }
 
 pub fn register(cx: &mut App) {
@@ -425,26 +435,25 @@ fn bindings(cx: &App) -> Vec<KeyBinding> {
             .compatibility_strokes()
             .iter()
             .copied()
-            .map(move |stroke| binding(stroke, command, command.context(), cx))
+            .map(move |stroke| command.key_binding(stroke, command.context(), cx))
     });
     let primary = Command::ALL
         .into_iter()
-        .chain([Command::Cancel])
-        .map(|command| binding(command.default_stroke(), command, command.context(), cx));
+        .map(|command| command.key_binding(command.default_stroke(), command.context(), cx));
     // The same cycle keys navigate settings pages in their own context.
     let settings = [
         (Command::NextTab, "ctrl-tab"),
         (Command::PreviousTab, "ctrl-shift-tab"),
     ]
     .into_iter()
-    .map(|(command, stroke)| binding(stroke, command, Some(SETTINGS_CONTEXT), cx));
+    .map(|(command, stroke)| command.key_binding(stroke, Some(SETTINGS_CONTEXT), cx));
     compatibility
         .chain(primary)
         .chain(settings)
         .chain(["Settings", "Help"].into_iter().flat_map(|context| {
             ["alt-left", "ctrl-w"]
                 .into_iter()
-                .map(move |stroke| binding(stroke, Command::Cancel, Some(context), cx))
+                .map(move |stroke| Command::Cancel.key_binding(stroke, Some(context), cx))
         }))
         .chain(ordinal_bindings(cx))
         .chain(terminal_bindings())
@@ -534,15 +543,6 @@ fn terminal_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("up", PreviousTerminal, Some(TERMINAL_TABS_CONTEXT)),
         KeyBinding::new("enter", FocusTerminal, Some(TERMINAL_TABS_CONTEXT)),
     ]
-}
-
-fn binding(
-    stroke: &'static str,
-    command: Command,
-    context: Option<&'static str>,
-    cx: &App,
-) -> KeyBinding {
-    action_binding(stroke, command.action(), context, cx)
 }
 
 fn action_binding(

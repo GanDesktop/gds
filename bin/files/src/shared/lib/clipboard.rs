@@ -16,7 +16,9 @@ use std::{
 };
 
 use gpui_kit::{App, Task};
+use protocol::Formats;
 use serde::{Deserialize, Serialize};
+use state::Cache;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -171,8 +173,10 @@ impl Bridge {
     /// # Errors
     /// Reports invalid URI lists or an unavailable clipboard provider.
     pub fn write_uris(&self, uris: Vec<String>, cx: &mut App) -> Task<Result<(), Error>> {
-        let checked = parse_uri_list(&uris.join("\n"));
-        let copyable = checked.as_ref().is_ok_and(|uris| copyable_uris(uris));
+        let checked = Formats::parse_uri_list(&uris.join("\n"));
+        let copyable = checked
+            .as_ref()
+            .is_ok_and(|uris| Formats::copyable_uris(uris));
         let write = match self.backend {
             #[cfg(target_os = "linux")]
             Backend::Wayland => {
@@ -191,14 +195,15 @@ impl Bridge {
         cx.spawn(async move |cx| {
             write.await?;
             cx.update(|cx| {
-                cx.default_global::<state::Cache>()
-                    .record_uri_copy(copyable);
+                cx.default_global::<Cache>().record_uri_copy(copyable);
                 cx.refresh_windows();
             });
             Ok(())
         })
     }
 
+    /// # Errors
+    /// The task reports malformed URI lists or clipboard access failures.
     pub fn read_uris(&self, cx: &mut App) -> Task<Result<Option<(Mode, Vec<String>)>, Error>> {
         match self.backend {
             #[cfg(target_os = "linux")]
@@ -208,6 +213,7 @@ impl Bridge {
             )),
         }
     }
+
     pub fn new(cx: &App) -> Self {
         #[cfg(target_os = "linux")]
         if cx.supports_clipboard_mime() {
@@ -284,6 +290,8 @@ impl Bridge {
         }
     }
 
+    /// # Errors
+    /// The task reports clipboard read or publication failures.
     fn remove_cut_paths(
         &self,
         snapshot: Snapshot,
@@ -301,57 +309,23 @@ impl Bridge {
     }
 }
 
-fn parse_uri_list(text: &str) -> Result<Vec<String>, Error> {
-    if text.len() > protocol::MAX_PAYLOAD_BYTES {
-        return Err(Error::TooLarge);
-    }
-    let uris = text
-        .lines()
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(|line| {
-            let uri = url::Url::parse(line).map_err(|e| Error::InvalidPayload(e.to_string()))?;
-            if uri.password().is_some() {
-                return Err(Error::InvalidPayload(
-                    "passwords are not allowed in file URIs".into(),
-                ));
-            }
-            Ok(uri.to_string())
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
-    if uris.is_empty() {
-        return Err(Error::InvalidPayload("empty URI list".into()));
-    }
-    Ok(uris)
-}
-
-fn copyable_uris(uris: &[String]) -> bool {
-    !uris.is_empty()
-        && uris.iter().all(|uri| {
-            gds::service::remote::Address::parse(uri).is_ok()
-                || url::Url::parse(uri).is_ok_and(|uri| uri.to_file_path().is_ok())
-        })
-}
-
 /// Whether `path` is one of the sources of the current in-application cut.
 ///
 /// This reads only the cached intent; no clipboard or filesystem I/O happens
 /// during rendering. The cache changes only when a clipboard operation
 /// completes or [`refresh`] validates it.
 pub fn is_cut(path: &Path, cx: &App) -> bool {
-    cx.try_global::<state::Cache>()
-        .is_some_and(|cache| cache.is_cut(path))
+    Cache::is_cut_in(path, cx)
 }
 
 /// Last known file contents, shared by all windows without clipboard I/O in render.
 pub fn current(cx: &App) -> Option<Arc<Snapshot>> {
-    cx.try_global::<state::Cache>()
-        .and_then(state::Cache::current)
+    Cache::current_in(cx)
 }
 
 /// Whether the last validated offer contains local files or copyable remote URIs.
 pub fn can_paste(cx: &App) -> bool {
-    cx.try_global::<state::Cache>()
-        .is_some_and(state::Cache::can_paste)
+    Cache::can_paste_in(cx)
 }
 
 /// Re-read file contents on activation or returning from a file interaction.
@@ -360,48 +334,12 @@ pub fn can_paste(cx: &App) -> bool {
 /// it never polls. One read is in flight at a time, and a read that started
 /// before a newer copy/cut cannot replace that newer intent.
 pub fn refresh(cx: &mut App) {
-    let Some(generation) = cx.default_global::<state::Cache>().begin_refresh() else {
-        return;
-    };
-    let bridge = Bridge::new(cx);
-    let read = bridge.read(cx);
-    cx.spawn(async move |cx| {
-        let current = read.await;
-        let (current, remote_copy) = match current {
-            Ok(None) | Err(Error::InvalidUri(_)) => {
-                match cx.update(|cx| bridge.read_uris(cx)).await {
-                    Ok(offer) => {
-                        let copyable = offer
-                            .is_some_and(|(mode, uris)| mode == Mode::Copy && copyable_uris(&uris));
-                        (Ok(None), copyable)
-                    }
-                    Err(error) => (Err(error), false),
-                }
-            }
-            result => (result, false),
-        };
-        let changed = cx.update(|cx| {
-            cx.default_global::<state::Cache>()
-                .reconcile(generation, current, remote_copy)
-        });
-        if changed {
-            cx.update(|cx| cx.refresh_windows());
-        }
-    })
-    .detach();
+    Cache::refresh(cx);
 }
 
 /// Forget file contents when a known text or other payload replaces them.
 pub fn clear(cx: &mut App) {
-    let changed = {
-        let cache = cx.default_global::<state::Cache>();
-        let had_files = cache.can_paste();
-        cache.clear();
-        had_files
-    };
-    if changed {
-        cx.refresh_windows();
-    }
+    Cache::clear_in(cx);
 }
 
 /// Cancel an owned cut, clearing the platform offer only while it still matches.
@@ -411,38 +349,17 @@ pub fn clear(cx: &mut App) {
 /// # Errors
 /// The task reports clipboard access or update failures.
 pub fn cancel_cut(cx: &mut App) -> Option<Task<Result<(), Error>>> {
-    current(cx).filter(|snapshot| snapshot.can_cancel())?;
-    let Some(expected) = cx.default_global::<state::Cache>().begin_cancel() else {
-        return Some(Task::ready(Ok(())));
-    };
-    let cleanup =
-        Bridge::new(cx).remove_cut_paths(expected.as_ref().clone(), expected.paths.clone(), cx);
-    Some(cx.spawn(async move |cx| {
-        let result = cleanup.await;
-        cx.update(|cx| {
-            cx.default_global::<state::Cache>()
-                .finish_cancel(&expected, result.is_ok());
-            refresh(cx);
-            cx.refresh_windows();
-        });
-        result
-    }))
+    Cache::cancel_cut(cx)
 }
 
 /// Record a clipboard write only after it actually succeeded.
 pub(crate) fn note_clipboard_write(written: &Snapshot, cx: &mut App) {
-    cx.default_global::<state::Cache>().record_write(written);
-    cx.refresh_windows();
+    Cache::note_write(written, cx);
 }
 
 /// Drop the sources a cut paste moved, keeping any entry it did not move.
 pub(crate) fn note_cut_paste(pasted: &Snapshot, succeeded: &[PathBuf], cx: &mut App) {
-    if pasted.mode != Mode::Cut || succeeded.is_empty() {
-        return;
-    }
-    cx.default_global::<state::Cache>()
-        .note_pasted(pasted, succeeded);
-    cx.refresh_windows();
+    Cache::note_cut_paste(pasted, succeeded, cx);
 }
 
 #[cfg(test)]

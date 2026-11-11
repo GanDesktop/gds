@@ -42,7 +42,7 @@ impl Clipboard {
             return Ok(None);
         }
         item.text()
-            .map(|text| super::parse_uri_list(&text).map(|uris| (Mode::Copy, uris)))
+            .map(|text| Formats::parse_uri_list(&text).map(|uris| (Mode::Copy, uris)))
             .transpose()
     }
 
@@ -74,6 +74,8 @@ impl Clipboard {
         Self::remove_paths(expected, succeeded, false, cx)
     }
 
+    /// # Errors
+    /// The task reports platform read or metadata encoding failures.
     pub fn remove_paths(
         expected: Snapshot,
         succeeded: Vec<PathBuf>,

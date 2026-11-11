@@ -69,6 +69,7 @@ class Capture:
         self.preferences = tomllib.loads((config / 'gds/app/files/settings.toml').read_text())
         self.dbus = Path(shutil.which('dbus-run-session')).resolve()
         self.dbus_config = self.dbus.parent.parent / 'share/dbus-1/session.conf'
+        self.bash = str(Path(shutil.which('bash') or '/bin/bash').resolve())
         self.proc = self.window = self.recorder = None
         self.keyboard = UInput({ecodes.EV_KEY: list(range(ecodes.KEY_ESC, ecodes.KEY_MICMUTE + 1))},
                                name='gds-readme-recording')
@@ -108,7 +109,7 @@ class Capture:
             'font': {**self.preferences.get('font', {}), **overrides.get('font', {})},
             'files': {'show_hidden': False, 'terminal_content_height': 300.0},
             'files.sidebar': {'show_volumes': False, 'locations_collapsed': False},
-            'terminal': {'shell': '/run/current-system/sw/bin/bash', 'shell_args': ['--noprofile', '--norc'],
+            'terminal': {'shell': self.bash, 'shell_args': ['--noprofile', '--norc'],
                          'login_shell': False, 'font_family': 'monospace', 'font_size': 15.0},
         }
         lines = ['language = "english"', 'time_format = "relative"',
@@ -150,7 +151,7 @@ class Capture:
         env = {**os.environ, 'XDG_CONFIG_HOME': str(root / 'config'),
                'XDG_STATE_HOME': str(root / 'state'), 'PS1': 'Workspace $ ',
                'LANG': 'en_US.UTF-8', 'LC_ALL': 'en_US.UTF-8', 'LANGUAGE': 'en_US',
-               'SHELL': '/run/current-system/sw/bin/bash'}
+               'SHELL': self.bash}
         env.pop('NO_COLOR', None)
         command = [str(self.dbus), f'--config-file={self.dbus_config}', '--', 'gds-files']
         if picker:
@@ -418,7 +419,7 @@ def main():
     args = parser.parse_args()
     if 'terminal' in (args.scene or SCENES) and not shutil.which('fastfetch'):
         parser.error('The terminal scene requires fastfetch')
-    for tool in ('gds-files', 'niri', 'dms', 'wtype', 'wl-paste', 'dbus-run-session',
+    for tool in ('bash', 'gds-files', 'niri', 'dms', 'wtype', 'wl-paste', 'dbus-run-session',
                  'ffmpeg', args.grim, args.recorder):
         if not shutil.which(tool):
             parser.error(f'Required executable not found: {tool}')
