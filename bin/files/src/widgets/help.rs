@@ -3,7 +3,7 @@ use crate::shared::ui::actions::{
 };
 use gds::ui::Shortcut;
 use gds::{
-    i18n::text,
+    i18n::{t, text},
     ui::{
         dialog::DialogCommand,
         help::{HelpPage, ShortcutHeading, ShortcutRow, ShortcutSection},
@@ -128,18 +128,18 @@ impl RenderOnce for FilesHelp {
                             ($(text(command.label_id(), cx)), $*command).ShortcutRow::new
                         })),
                         @if (*title == "help-tabs")
-                            ($(text("help-select-tab", cx)), $(ordinal_shortcut(0).expect("first tab binding"))).ShortcutRow::new {
+                            ($(t!(@cx, "help-select-tab")), $(ordinal_shortcut(0).expect("first tab binding"))).ShortcutRow::new {
                                 range: $(ordinal_shortcut(8).expect("ninth tab binding"));
                             },
                         @end,
                         @if (*title == "help-terminal")
-                            ($(text("files-terminal-new", cx)), $(Shortcut::new(Box::new(NewTerminal), Some(TERMINAL_TABS_CONTEXT)))).ShortcutRow::new,
-                            ($(text("files-terminal-end", cx)), $(Shortcut::new(Box::new(CloseTerminal), Some(TERMINAL_TABS_CONTEXT)))).ShortcutRow::new,
+                            ($(t!(@cx, "files-terminal-new")), $(Shortcut::new(Box::new(NewTerminal), Some(TERMINAL_TABS_CONTEXT)))).ShortcutRow::new,
+                            ($(t!(@cx, "files-terminal-end")), $(Shortcut::new(Box::new(CloseTerminal), Some(TERMINAL_TABS_CONTEXT)))).ShortcutRow::new,
                         @end,
                     ]
                 })),
                 .ShortcutSection::default [
-                    .ShortcutHeading::default [$text("help-dialogs", cx)],
+                    .ShortcutHeading::default [$(t!(@cx, "help-dialogs"))],
                     ..$(DialogCommand::ALL.into_iter().map(|command| el! {
                         ($(text(command.label_id(), cx)), $(command.shortcut())).ShortcutRow::new
                     })),

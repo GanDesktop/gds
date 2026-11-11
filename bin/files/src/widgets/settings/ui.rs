@@ -7,6 +7,8 @@ use gds::ui::terminal::PreferencesEditor as TerminalEditor;
 mod controls;
 mod pages;
 mod tags;
+#[cfg(test)]
+mod tests;
 
 pub use pages::Page;
 
@@ -24,7 +26,8 @@ use gpui_kit::{
 
 use gds::{
     appearance::{theme, tokens::SIDEBAR_PADDING, typography},
-    i18n::text,
+    i18n::{t, text},
+    service::task_manager::{Owner, Scope},
     ui::{Frame, NavItem, Shortcut, sidebar::SidebarPresentation},
 };
 
@@ -35,6 +38,7 @@ pub enum Event {
 }
 
 pub struct View {
+    tasks: Owner,
     tags: tags::Controls,
     preferences: Preferences,
     sidebar: SidebarPresentation,
@@ -47,6 +51,7 @@ pub struct View {
     system_theme_available: bool,
     custom: ChoiceControl<std::path::PathBuf>,
     themes: Vec<theme::provider::custom::Entry>,
+    theme_scan: Option<Task<()>>,
     builtin: ChoiceControl<theme::BuiltinTheme>,
     mode: ChoiceControl<theme::ModePreference>,
     content_opacity: NumberControl,
@@ -69,15 +74,13 @@ impl View {
     pub fn new(
         preferences: Preferences,
         sidebar: SidebarPresentation,
-        tasks: gds::service::task_manager::Scope,
+        tasks: Scope,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let tasks = tasks.named_child("Settings");
         let general = cx.new(|cx| PreferencesEditor::new(preferences.clone(), window, cx));
-        let themes = theme::provider::custom::catalog().unwrap_or_else(|error| {
-            tracing::warn!(%error, "cannot list user themes");
-            Vec::new()
-        });
+        let themes = Vec::new();
         let custom_path = match &preferences.appearance.source {
             theme::Source::Custom(path) => path.clone(),
             _ => std::path::PathBuf::new(),
@@ -140,22 +143,15 @@ impl View {
             cx.subscribe_in(&builtin.state, window, Self::on_builtin_confirm),
             cx.subscribe_in(&font, window, Self::on_font_edited),
         ];
-        for (field, state) in [
-            (Field::ContentOpacity, content_opacity.state.clone()),
-            (Field::SidebarOpacity, sidebar_opacity.state.clone()),
-        ] {
-            subscriptions.push(cx.subscribe_in(&state, window, Self::on_slider_change(field)));
-            // Kit accessibility increments notify the state without a Change event.
-            subscriptions.push(cx.observe_in(&state, window, Self::on_slider_notify(field)));
-        }
+        let initial_commands = preferences.tags.commands.clone();
         let mut view = Self {
+            tasks,
             tags: tags::Controls {
                 editor: tag_editor,
-                tasks,
-                checked: None,
-                error: None,
-                pending: false,
-                task: None,
+                state: tags::CheckState::Failed {
+                    commands: initial_commands,
+                    error: String::new(),
+                },
             },
             preferences,
             sidebar,
@@ -166,25 +162,48 @@ impl View {
             system_theme_available,
             custom,
             themes,
+            theme_scan: None,
             builtin,
             mode,
             content_opacity,
             sidebar_opacity,
             font,
             terminal,
-            _subscriptions: subscriptions,
+            _subscriptions: Vec::new(),
         };
+        for field in Field::NUMBERS {
+            let state = view.number_control(field).state.clone();
+            subscriptions.push(cx.subscribe_in(&state, window, Self::on_slider_change(field)));
+            // Kit accessibility increments notify the state without a Change event.
+            subscriptions.push(cx.observe_in(&state, window, Self::on_slider_notify(field)));
+        }
+        view._subscriptions = subscriptions;
+        view.refresh_themes(window, cx);
         view.probe_tags(cx);
         view
     }
 
     pub fn refresh_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.system_theme_available = theme::Source::system_available(cx.window_appearance());
-        match theme::provider::custom::catalog() {
-            Ok(themes) => self.themes = themes,
-            Err(error) => tracing::warn!(%error, "cannot list user themes"),
-        }
         self.sync_controls(window, cx);
+        let work = self
+            .tasks
+            .spawn_blocking_named("Scan user themes", theme::provider::custom::catalog);
+        self.theme_scan = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.theme_scan = None;
+                match result {
+                    Ok(Ok(themes)) => {
+                        this.themes = themes;
+                        this.sync_controls(window, cx);
+                        cx.notify();
+                    }
+                    Ok(Err(error)) => tracing::warn!(%error, "cannot list user themes"),
+                    Err(error) => tracing::warn!(%error, "user theme scan cancelled"),
+                }
+            });
+        }));
         cx.notify();
     }
 
@@ -454,54 +473,17 @@ impl View {
         }
     }
 
-    fn on_rounded_corners_changed(
-        &mut self,
-        checked: &bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.change(window, cx, |preferences| {
-            Field::replace(&mut preferences.appearance.rounded_corners, *checked)
-        });
-    }
-
-    fn on_animations_changed(
-        &mut self,
-        checked: &bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.change(window, cx, |preferences| {
-            Field::replace(&mut preferences.animations_enabled, Some(*checked))
-        });
-    }
-
-    fn on_hidden_changed(&mut self, checked: &bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.change(window, cx, |preferences| {
-            Field::replace(&mut preferences.files.show_hidden, *checked)
-        });
-    }
-
-    fn on_auto_focus_search_changed(
-        &mut self,
-        checked: &bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.change(window, cx, |preferences| {
-            Field::replace(&mut preferences.files.auto_focus_search, *checked)
-        });
-    }
-
-    fn on_sidebar_volumes_changed(
-        &mut self,
-        checked: &bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.change(window, cx, |preferences| {
-            Field::replace(&mut preferences.files.sidebar.show_volumes, *checked)
-        });
+    fn on_toggle_change(
+        field: Field,
+    ) -> impl Fn(&mut Self, &bool, &mut Window, &mut Context<Self>) {
+        move |view, checked, window, cx| {
+            if field == Field::TagsEnabled && *checked && !view.tags_available() {
+                return;
+            }
+            view.change(window, cx, |preferences| {
+                field.set_bool(preferences, *checked)
+            });
+        }
     }
 
     fn on_reset(field: Field) -> impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) {

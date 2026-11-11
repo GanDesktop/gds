@@ -1,54 +1,61 @@
 use super::*;
 use crate::entities::tags::{Commands, CommandsEditor};
 use gds::ui::button::Button;
-use gds::ui::settings::*;
-use gpui_kit::component::switch::Switch;
+use gds::ui::settings::form;
 use gpui_kit::{base::Disableable, component::Sizable};
+
+pub(super) enum CheckState {
+    Checking { commands: Commands, _task: Task<()> },
+    Ready(Commands),
+    Failed { commands: Commands, error: String },
+}
 
 pub(super) struct Controls {
     pub editor: Entity<CommandsEditor>,
-    pub tasks: gds::service::task_manager::Scope,
-    pub checked: Option<Commands>,
-    pub error: Option<String>,
-    pub pending: bool,
-    pub task: Option<Task<()>>,
+    pub state: CheckState,
 }
 
 impl View {
     pub fn tags_available(&self) -> bool {
-        !self.tags.pending
-            && self.tags.error.is_none()
-            && self.tags.checked.as_ref() == Some(&self.preferences.tags.commands)
+        matches!(
+            &self.tags.state,
+            CheckState::Ready(checked) if *checked == self.preferences.tags.commands
+        )
     }
 
     pub(super) fn probe_tags(&mut self, cx: &mut Context<Self>) {
-        self.tags.pending = true;
-        self.tags.error = None;
         let commands = self.preferences.tags.commands.clone();
         let work_commands = commands.clone();
         let work = gds::service::task_manager::Task::cancel_on_drop(
-            self.tags
-                .tasks
-                .spawn_named("Check tag backend", async move {
-                    crate::entities::tags::connect(&work_commands).await
-                }),
+            self.tasks.spawn_named("Check tag backend", async move {
+                crate::entities::tags::connect(&work_commands).await
+            }),
         );
-        self.tags.task = Some(cx.spawn(async move |this, cx| {
+        let probe_commands = commands.clone();
+        let task = cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                if this.preferences.tags.commands != commands {
+                if this.preferences.tags.commands != probe_commands {
                     return;
                 }
-                this.tags.checked = Some(commands);
-                this.tags.pending = false;
-                this.tags.error = match result {
-                    Ok(Ok(_)) => None,
-                    Ok(Err(e)) => Some(e),
-                    Err(e) => Some(e.to_string()),
+                this.tags.state = match result {
+                    Ok(Ok(_)) => CheckState::Ready(probe_commands),
+                    Ok(Err(error)) => CheckState::Failed {
+                        commands: probe_commands,
+                        error: error.to_string(),
+                    },
+                    Err(error) => CheckState::Failed {
+                        commands: probe_commands,
+                        error: error.to_string(),
+                    },
                 };
                 cx.notify();
             });
-        }));
+        });
+        self.tags.state = CheckState::Checking {
+            commands,
+            _task: task,
+        };
         cx.notify();
     }
 
@@ -62,8 +69,8 @@ impl View {
         if event.value == self.preferences.tags.commands {
             return;
         }
-        self.change(window, cx, |p| {
-            p.tags.commands = event.value.clone();
+        self.change(window, cx, |preferences| {
+            preferences.tags.commands = event.value.clone();
             true
         });
         self.probe_tags(cx);
@@ -72,41 +79,45 @@ impl View {
     pub(super) fn render_tags_settings(&self, cx: &mut Context<Self>) -> Div {
         let available = self.tags_available();
         let enabled = self.preferences.tags.enabled;
-        let status = if self.tags.pending {
-            text("tags-checking", cx)
-        } else if available {
-            text("tags-ready", cx)
-        } else {
-            self.tags
-                .error
-                .clone()
-                .unwrap_or_else(|| text("tags-unavailable", cx).to_string())
-                .into()
+        let pending = matches!(
+            &self.tags.state,
+            CheckState::Checking { commands, .. } if *commands == self.preferences.tags.commands
+        );
+        let status: SharedString = match &self.tags.state {
+            CheckState::Checking { commands, .. }
+                if *commands == self.preferences.tags.commands =>
+            {
+                t!(@cx, "tags-checking")
+            }
+            CheckState::Checking { .. } => t!(@cx, "tags-unavailable"),
+            CheckState::Ready(checked) if *checked == self.preferences.tags.commands => {
+                t!(@cx, "tags-ready")
+            }
+            CheckState::Ready(_) => t!(@cx, "tags-unavailable"),
+            CheckState::Failed { commands, error }
+                if *commands == self.preferences.tags.commands =>
+            {
+                error.clone().into()
+            }
+            CheckState::Failed { .. } => t!(@cx, "tags-unavailable"),
         };
+        let enabled_row = self.toggle_row(Field::TagsEnabled, !available && !enabled, cx);
+        let detect_label = t!(@cx, "tags-detect");
+        let on_detect = cx.listener(Self::on_detect_tags);
         el! { .div { flex; flex_col; gap_3; mt_4; } [
-            .SettingRow::default [
-                .SettingLabel::default [$(text("tags-enabled", cx))],
-                .SettingActions::default [
-                    .SettingControl::default [
-                        "tags-enabled".Switch::new {
-                            checked: enabled; disabled: $(!available && !enabled);
-                            accessibility_label: $(text("tags-enabled", cx));
-                            on_change: $(cx.listener(|this, value: &bool, window, cx| {
-                                if *value && !this.tags_available() { return; }
-                                this.change(window, cx, |p| { p.tags.enabled = *value; true });
-                            }));
-                        },
-                    ],
-                ],
-            ],
+            enabled_row,
             .div { flex; items_start; gap_3; } [
-                .div { flex_1; min_w_0; text_sm; whitespace_normal;
+                .div {
+                    flex_1; min_w_0; text_sm; whitespace_normal;
                     text_color: $(cx.theme().muted_foreground);
                 } [status],
-                "tags-detect".Button::new { label: $(text("tags-detect", cx)); small;
-                    flex_shrink_0; disabled: $self.tags.pending;
-                    tooltip: $(text("tags-detect", cx));
-                    on_click: $(cx.listener(Self::on_detect_tags));
+                "tags-detect".Button::new {
+                    label: $(detect_label.clone());
+                    small;
+                    flex_shrink_0;
+                    disabled: pending;
+                    tooltip: detect_label;
+                    on_click: on_detect;
                 },
             ],
             $(self.tags.editor.clone()),
