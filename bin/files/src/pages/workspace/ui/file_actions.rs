@@ -409,16 +409,23 @@ impl Browser {
         let count = request.batch.paths().len();
         self.start_background(i18n::count(kind.progress_label(), count, cx), cx);
         let cancel = self.background_tasks.read(cx).token("files");
-        let work = gds::ui::task_manager::scope(cx)
-            .track_named(
-                "File operation",
-                gds::task_manager::Execution::GpuiBackground,
-                async move { request.batch.execute_cancellable(kind, &cancel) },
-            )
-            .expect("file operation accepted");
-        let work = cx.background_executor().spawn(work);
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking(move || request.batch.execute_cancellable(kind, &cancel));
         cx.spawn(async move |this, cx| {
-            let report = work.await;
+            let report = match work.await {
+                Ok(report) => report,
+                Err(error) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.operations.in_progress = false;
+                        this.operations.paths.clear();
+                        this.finish_background(notifications::Report::new(
+                            notifications::Level::Error, error.to_string()), cx);
+                    });
+                    return;
+                }
+            };
             for item in report.failed_items() {
                 if let Err(error) = &item.result {
                     tracing::warn!("File operation {kind:?} failed for {}: {error}", item.path.display());

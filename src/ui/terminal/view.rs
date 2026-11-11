@@ -50,7 +50,7 @@ impl View {
         let mut updates = session.updates();
         let task = cx.spawn(async move |view, cx| {
             loop {
-                if *updates.borrow_and_update() {
+                if *updates.borrow() {
                     break;
                 }
                 if updates.changed().await.is_err() {

@@ -310,7 +310,8 @@ impl Browser {
     }
 
     fn render_navigation(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let has_parent = crate::entities::scheme::parent(&self.current_location()).is_some()
+        let has_parent = crate::entities::location::scheme::parent(&self.current_location())
+            .is_some()
             || self
                 .active()
                 .and_then(OpenTab::path)
@@ -810,10 +811,14 @@ impl Browser {
         {
             return self.render_location_loading(&location, cx);
         }
-        match crate::entities::scheme::browse(&self.current_location()) {
-            crate::entities::scheme::Browse::Remote(_) => return self.render_remote(window, cx),
-            crate::entities::scheme::Browse::Tags(_) => return self.render_tags(window, cx),
-            crate::entities::scheme::Browse::Location => (),
+        match crate::entities::location::scheme::browse(&self.current_location()) {
+            crate::entities::location::scheme::Browse::Remote(_) => {
+                return self.render_remote(window, cx);
+            }
+            crate::entities::location::scheme::Browse::Tags(_) => {
+                return self.render_tags(window, cx);
+            }
+            crate::entities::location::scheme::Browse::Location => (),
         }
         if let Some(collection) = self.collection() {
             return self.render_collection(collection, window, cx);

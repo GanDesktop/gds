@@ -392,13 +392,14 @@ impl Browser {
     /// Recheck every pending source off the UI thread, then present the next
     /// conflict or commit the flow.
     fn inspect_paste(&mut self, paste: Paste, window: &mut Window, cx: &mut Context<Self>) {
-        let work = cx
-            .background_executor()
-            .spawn(async move { paste.inspect() });
+        let work = self.window.tasks.spawn_blocking(move || paste.inspect());
         cx.spawn_in(window, async move |this, cx| {
             let inspection = work.await;
-            let _ = this.update_in(cx, |browser, window, cx| {
-                browser.present_conflicts(inspection, window, cx);
+            let _ = this.update_in(cx, |browser, window, cx| match inspection {
+                Ok(inspection) => browser.present_conflicts(inspection, window, cx),
+                Err(error) => {
+                    browser.fail_paste(error.to_string(), notifications::Level::Error, cx)
+                }
             });
         })
         .detach();
@@ -435,18 +436,15 @@ impl Browser {
         };
         self.start_background(i18n::count("transfer-working", count, cx), cx);
         let cancel = self.background_tasks.read(cx).token("files");
-        let work = gds::ui::task_manager::scope(cx)
-            .track_named(
-                "File transfer",
-                gds::task_manager::Execution::GpuiBackground,
-                async move { batch.execute_cancellable(cancel) },
-            )
-            .expect("paste accepted");
-        let work = cx.background_executor().spawn(work);
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking(move || batch.execute_cancellable(cancel));
         cx.spawn_in(window, async move |this, cx| {
             let report = work.await;
-            let _ = this.update_in(cx, |browser, window, cx| {
-                browser.finish_pass(paste, report, window, cx);
+            let _ = this.update_in(cx, |browser, window, cx| match report {
+                Ok(report) => browser.finish_pass(paste, report, window, cx),
+                Err(error) => browser.abort_paste(paste, error.to_string(), window, cx),
             });
         })
         .detach();

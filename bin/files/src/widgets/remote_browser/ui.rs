@@ -1,14 +1,14 @@
+use crate::shared::ui::actions::Command;
+use gds::app::AppExt as _;
 mod actions;
 mod name_prompt;
 mod table;
 
 use crate::{
-    features::{
-        connect_server::Connector,
-        file_operations::{commands::Command, remote as operations},
-    },
+    features::{connect_server::Connector, file_operations::remote as operations},
     shared::i18n,
 };
+use gds::service::task_manager::Scope;
 use gds::ui::IconButton;
 use gds::ui::field::input as input_field;
 use gds::{
@@ -28,11 +28,10 @@ use gpui_kit::{
     *,
 };
 use std::path::PathBuf;
-use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct Options {
-    pub runtime: Handle,
+    pub tasks: Scope,
     pub session: Session,
     pub listing: Listing,
     pub connector: Entity<Connector>,
@@ -88,7 +87,7 @@ impl View {
             compact: false,
             task: None,
             progress_task: None,
-            cancel: gds::ui::task_manager::scope(cx).token().child_token(),
+            cancel: cx.gds().tasks().scope().token().child_token(),
             busy: false,
             cancellable: false,
             progress: Default::default(),

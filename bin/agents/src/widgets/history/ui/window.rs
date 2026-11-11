@@ -1,4 +1,5 @@
 //! One independent history window per daemon, with its own connection lifetime.
+use gds::app::AppExt as _;
 
 use super::*;
 use crate::shared::i18n::tr;
@@ -42,7 +43,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 /// # Errors
-/// Reports an unavailable network runtime or native window creation failure.
+/// Reports a native window creation failure.
 pub(crate) fn open(request: OpenRequest, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     if let Some(handle) = crate::features::navigation::show_history(request.clone(), cx)? {
         return Ok(handle);
@@ -50,11 +51,8 @@ pub(crate) fn open(request: OpenRequest, cx: &mut App) -> anyhow::Result<WindowH
     if let Some(handle) = reopen(request.clone(), cx) {
         return Ok(handle);
     }
-    let scope = gds::ui::task_manager::scope(cx);
-    let service = cx
-        .try_global::<crate::entities::agent::catalog::Service>()
-        .ok_or_else(|| anyhow::anyhow!(tr!("agent-history-unavailable")))?;
-    let (connection, events) = Connection::new(request.server.clone(), service.runtime(), &scope);
+    let scope = cx.gds().tasks().scope();
+    let (connection, events) = Connection::new(request.server.clone(), &scope);
     open_connected(request, connection, events, cx)
 }
 
@@ -63,11 +61,8 @@ pub(crate) fn content(
     window: &mut Window,
     cx: &mut App,
 ) -> anyhow::Result<Entity<Browser>> {
-    let scope = gds::ui::task_manager::scope(cx);
-    let service = cx
-        .try_global::<crate::entities::agent::catalog::Service>()
-        .ok_or_else(|| anyhow::anyhow!(tr!("agent-history-unavailable")))?;
-    let (connection, events) = Connection::new(request.server.clone(), service.runtime(), &scope);
+    let scope = cx.gds().tasks().scope();
+    let (connection, events) = Connection::new(request.server.clone(), &scope);
     Ok(connected_content(request, connection, events, window, cx))
 }
 

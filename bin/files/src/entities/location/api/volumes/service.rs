@@ -1,8 +1,9 @@
+use gds::service::task_manager::Scope;
 use std::{collections::HashMap, time::Instant};
 
+use gds::service::task_manager::Task as IoTask;
 use gpui_kit::*;
-use tokio::{runtime::Handle, sync::mpsc};
-use tokio_util::task::AbortOnDropHandle;
+use tokio::sync::mpsc;
 
 use super::*;
 
@@ -22,27 +23,37 @@ pub struct Service {
     busy: HashMap<VolumeId, Vec<std::path::PathBuf>>,
     last_observation: Instant,
     usage: super::usage::UsageCache,
-    runtime: Handle,
+    tasks: Scope,
     _updates: Task<()>,
 }
 
 impl Service {
-    pub fn shared(runtime: Handle, cx: &mut App) -> Entity<Self> {
-        if let Some(service) = cx.try_global::<SharedService>() {
-            return service.0.clone();
-        }
-        let service = cx.new(|cx| Self::new(runtime, cx));
+    pub fn initialize(tasks: Scope, cx: &mut App) -> Entity<Self> {
+        assert!(
+            !cx.has_global::<SharedService>(),
+            "volumes already initialized"
+        );
+        let service = cx.new(|cx| Self::new(tasks, cx));
         cx.set_global(SharedService(service.clone()));
         service
     }
 
-    fn new(runtime: Handle, cx: &mut Context<Self>) -> Self {
+    pub fn get(cx: &App) -> Entity<Self> {
+        cx.global::<SharedService>().0.clone()
+    }
+
+    fn new(tasks: Scope, cx: &mut Context<Self>) -> Self {
         let last_observation = Instant::now();
         let (sender, mut receiver) = mpsc::channel(16);
         #[cfg(target_os = "linux")]
-        let watcher = runtime.spawn(super::linux::watch(sender));
+        let watcher = {
+            let cancel = tasks.token();
+            tasks.spawn(async move {
+                tokio::select! { _ = cancel.cancelled() => {}, _ = super::linux::watch(sender) => {} }
+            })
+        };
         #[cfg(not(target_os = "linux"))]
-        let watcher = runtime.spawn(async move {
+        let watcher = tasks.spawn(async move {
             let _ = sender
                 .send(Observation {
                     started: Instant::now(),
@@ -50,7 +61,7 @@ impl Service {
                 })
                 .await;
         });
-        let watcher = AbortOnDropHandle::new(watcher);
+        let watcher = IoTask::cancel_on_drop(watcher);
         let updates = cx.spawn(async move |this, cx| {
             while let Some(observation) = receiver.recv().await {
                 if this
@@ -83,7 +94,7 @@ impl Service {
             busy: HashMap::new(),
             last_observation,
             usage: super::usage::UsageCache::default(),
-            runtime,
+            tasks,
             _updates: updates,
         }
     }
@@ -105,7 +116,7 @@ impl Service {
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.discovering = true;
         let started = Instant::now();
-        let work = AbortOnDropHandle::new(self.runtime.spawn(async {
+        let work = IoTask::cancel_on_drop(self.tasks.spawn_cancellable(async {
             #[cfg(target_os = "linux")]
             {
                 super::linux::refresh().await
@@ -131,11 +142,12 @@ impl Service {
     fn sample_capacity(&mut self, cx: &mut Context<Self>) {
         for request in self.usage.requests(&self.snapshot, Instant::now()) {
             let worker_request = request.clone();
-            let work = cx
-                .background_executor()
-                .spawn(async move { worker_request.read() });
+            let work = self.tasks.spawn_blocking(move || worker_request.read());
             cx.spawn(async move |this, cx| {
-                let result = work.await;
+                let result = work
+                    .await
+                    .map_err(|error| super::usage::ReadError::Io(std::io::Error::other(error)))
+                    .and_then(std::convert::identity);
                 let _ = this.update(cx, |service, cx| {
                     if service.usage.finish(request, result, Instant::now()) {
                         cx.notify();
@@ -214,7 +226,7 @@ impl Service {
         }
         cx.notify();
         let expected = self.snapshot.clone();
-        let work = AbortOnDropHandle::new(self.runtime.spawn(async move {
+        let work = IoTask::cancel_on_drop(self.tasks.spawn(async move {
             #[cfg(target_os = "linux")]
             {
                 let result = super::linux::operate(expected, action).await;

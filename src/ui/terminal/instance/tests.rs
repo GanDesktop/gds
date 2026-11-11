@@ -1,5 +1,6 @@
 use super::{Preferences, Terminal};
 use crate::appearance::theme;
+use gds::app::AppExt as _;
 use gpui_kit::{AppContext, TestAppContext, px, size};
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,7 @@ fn installed_themes_reach_starting_and_hidden_terminals_without_paint(cx: &mut T
     let directory = tempfile::tempdir().expect("terminal query directory");
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
         theme::apply(&theme::Appearance::default(), cx).expect("initial theme");
     });
     let shell = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
@@ -45,13 +47,8 @@ dd bs=1 count=25 of=second.reply 2>/dev/null
     let terminal = terminal.expect("hidden terminal");
     let first = install(theme::ModePreference::Light, cx);
     cx.run_until_parked();
-    let session = cx.update(|cx| {
-        terminal
-            .read(cx)
-            .service
-            .session()
-            .expect("background launch completed")
-    });
+    let ready = cx.update(|cx| terminal.read(cx).service.ready());
+    let session = futures_lite::future::block_on(ready).expect("background launch completed");
     session.write(b"go\n").expect("first query");
     assert_reply(directory.path(), "first", &first);
     let second = install(theme::ModePreference::Dark, cx);

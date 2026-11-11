@@ -455,18 +455,22 @@ impl Session {
     ///
     /// # Errors
     /// Returns a validation, shell resolution, PTY, or worker creation error.
-    pub fn spawn(options: SpawnOptions) -> Result<Self, Error> {
+    pub fn spawn(
+        tasks: &crate::service::task_manager::Scope,
+        options: SpawnOptions,
+    ) -> Result<Self, Error> {
         let palette = QueryPalette::new(options.palette);
-        Self::spawn_with_palette(options, palette)
+        Self::spawn_with_palette(tasks, options, palette)
     }
 
     pub(crate) fn spawn_with_palette(
+        tasks: &crate::service::task_manager::Scope,
         options: SpawnOptions,
         palette: QueryPalette,
     ) -> Result<Self, Error> {
         #[cfg(not(unix))]
         {
-            let _ = (options, palette);
+            let _ = (tasks, options, palette);
             Err(Error::UnsupportedPlatform)
         }
         #[cfg(unix)]
@@ -506,9 +510,12 @@ impl Session {
             }
             let worker_shared = shared.clone();
             // Backend::drop also reaps if thread creation fails after spawning.
-            std::thread::Builder::new()
-                .name("gds-terminal-io".into())
-                .spawn(move || backend.run(worker_shared))
+            let worker_tasks = tasks.clone();
+            tasks
+                .spawn_thread(
+                    std::thread::Builder::new().name("gds-terminal-io".into()),
+                    move || backend.run(worker_shared, worker_tasks),
+                )
                 .map_err(anyhow::Error::from)?;
             Ok(Self(Arc::new(Handle { shared })))
         }

@@ -54,14 +54,14 @@ pub fn set_animations_enabled(enabled: bool, cx: &mut App) {
 /// Follow the Settings Portal using the application's existing Tokio runtime.
 /// Without a portal, retain the last system reading (initially no reduction).
 /// Other platforms use Kit's synchronous reading at startup and on re-enabling.
-pub fn follow_system(runtime: &tokio::runtime::Handle, cx: &mut App) {
+pub fn follow_system(tasks: &crate::service::task_manager::Scope, cx: &mut App) {
     init(cx);
     if cx.global::<Policy>().following || cx.is_test() {
         return;
     }
     cx.global_mut::<Policy>().following = true;
     #[cfg(target_os = "linux")]
-    portal::follow(runtime, cx);
+    portal::follow(tasks, cx);
     #[cfg(not(target_os = "linux"))]
     let _ = runtime;
 }

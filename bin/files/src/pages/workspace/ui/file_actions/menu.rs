@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::features::file_operations::commands::Command;
+use crate::shared::ui::actions::Command;
 use gds::{i18n, service::desktop, ui::menu, ui::notifications};
 use gds_uim::el;
 use gpui_kit::assets::IconName;

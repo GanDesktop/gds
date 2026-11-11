@@ -83,7 +83,11 @@ fn authentication_keeps_its_service_after_management_switches(cx: &mut TestAppCo
     second.tls.as_mut().expect("TLS").private_key = "/certs/second.key".into();
     let (window, _) = empty_panel(cx);
     cx.update_window(window.into(), |_, window, cx| {
-        check::init(first.clone(), runtime.handle().clone(), cx);
+        check::init(
+            first.clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            cx,
+        );
         let panel = Authentication::new(
             AgentSpec::embedded(),
             Status::Installed(String::new()),
@@ -91,7 +95,11 @@ fn authentication_keeps_its_service_after_management_switches(cx: &mut TestAppCo
             window.window_handle(),
             cx.try_global::<check::Service>().cloned(),
         );
-        check::init(second.clone(), runtime.handle().clone(), cx);
+        check::init(
+            second.clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            cx,
+        );
         assert_eq!(
             panel.service.as_ref().expect("pinned service").address(),
             first

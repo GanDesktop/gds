@@ -395,7 +395,7 @@ impl Browser {
         let single_selection = self
             .picker
             .as_ref()
-            .is_some_and(|picker| !picker.allows_multiple());
+            .is_some_and(|picker| !picker.session.allows_multiple());
         let Some(slot) = self.active_mut() else {
             return;
         };
@@ -453,7 +453,7 @@ impl Browser {
         if self
             .picker
             .as_ref()
-            .is_some_and(|picker| !picker.allows_multiple())
+            .is_some_and(|picker| !picker.session.allows_multiple())
         {
             return;
         }
@@ -465,7 +465,7 @@ impl Browser {
             self.active().map(|slot| {
                 slot.table_rows
                     .iter()
-                    .filter(|entry| picker.accepts_entry(entry))
+                    .filter(|entry| picker.session.accepts_entry(entry))
                     .map(|entry| entry.path.clone())
                     .collect()
             })

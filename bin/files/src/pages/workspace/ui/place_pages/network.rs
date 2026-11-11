@@ -12,6 +12,8 @@ pub(in super::super) struct State {
 
 #[derive(Debug, thiserror::Error)]
 pub(in super::super) enum Error {
+    #[error(transparent)]
+    Task(#[from] gds::service::task_manager::Error),
     #[error("cannot read network locations at {path}: {source}")]
     Read {
         path: PathBuf,

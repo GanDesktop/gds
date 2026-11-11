@@ -1,10 +1,12 @@
 //! Creating one folder inside a captured destination directory.
 
-use crate::features::file_operations::history as operation_history;
+use crate::features::file_operations::{
+    history as operation_history,
+    new_folder::{Error, Request},
+};
 use std::{
     cell::Cell,
     ffi::{OsStr, OsString},
-    fs, io,
     path::PathBuf,
     rc::Rc,
 };
@@ -22,52 +24,6 @@ use super::name_form::NameForm;
 use crate::features::file_operations::names;
 
 const DIALOG_WIDTH: f32 = 480.;
-
-#[derive(Debug, thiserror::Error)]
-enum Error {
-    #[error("operation cancelled")]
-    Cancelled,
-    #[error(transparent)]
-    Name(#[from] names::NameError),
-    #[error("an item named {name} already exists in {directory}")]
-    Exists { directory: PathBuf, name: String },
-    #[error("cannot create {path}: {source}")]
-    Filesystem {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-}
-
-struct Request {
-    directory: PathBuf,
-    name: OsString,
-}
-
-impl Request {
-    /// Create the directory without ever replacing an existing entry; `mkdir`
-    /// itself refuses an occupied name, so a target created after the dialog
-    /// was confirmed is reported instead of reused.
-    ///
-    /// # Errors
-    /// Rejects invalid leaf names and reports an occupied name or a filesystem
-    /// failure.
-    fn execute(self) -> Result<PathBuf, Error> {
-        names::validate(&self.name)?;
-        let destination = self.directory.join(&self.name);
-        match fs::create_dir(&destination) {
-            Ok(()) => Ok(destination),
-            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => Err(Error::Exists {
-                directory: self.directory,
-                name: self.name.to_string_lossy().escape_debug().to_string(),
-            }),
-            Err(source) => Err(Error::Filesystem {
-                path: destination,
-                source,
-            }),
-        }
-    }
-}
 
 struct NewFolderDialog {
     browser: WeakEntity<Browser>,
@@ -210,7 +166,7 @@ impl Browser {
         // Suggesting a name probes the destination; a slow or network mount
         // must not block the UI while the dialog is being prepared.
         let directory = destination.clone();
-        let work = cx.background_executor().spawn(async move {
+        let work = self.window.tasks.spawn_blocking(move || {
             names::free_name(
                 &directory,
                 OsStr::new(&default),
@@ -218,7 +174,10 @@ impl Browser {
             )
         });
         cx.spawn_in(window, async move |this, cx| {
-            let suggested = work.await;
+            let suggested = work
+                .await
+                .map_err(names::Error::from)
+                .and_then(std::convert::identity);
             if let Err(closed) = this.update_in(cx, |browser, window, cx| {
                 browser.open_new_folder(origin_tab, destination, suggested, window, cx);
             }) {
@@ -268,15 +227,12 @@ impl Browser {
         }
         self.start_background(i18n::text("new-folder-working", cx), cx);
         let cancel = self.background_tasks.read(cx).token("files");
-        let work = cx.background_executor().spawn(async move {
-            if cancel.is_cancelled() {
-                Err(Error::Cancelled)
-            } else {
-                request.execute()
-            }
-        });
+        let work = request.spawn(&self.window.tasks, cancel);
         cx.spawn(async move |this, cx| {
-            let result = work.await;
+            let result = work
+                .await
+                .map_err(Error::from)
+                .and_then(std::convert::identity);
             if let Err(closed) = this.update(cx, |this, cx| {
                 this.finish_new_folder(origin_tab, result, cx)
             }) {

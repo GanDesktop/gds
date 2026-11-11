@@ -32,7 +32,7 @@ pub(crate) fn manage(target: Target, cx: &mut App) {
         return;
     };
     if service.address() != target {
-        crate::entities::agent::init(target, service.runtime().clone(), cx);
+        crate::entities::agent::init(target, service.tasks().clone(), cx);
         cx.update_global::<crate::entities::agent::Changes, _>(|changes, _| {
             changes.target = None;
             changes.select = None;

@@ -1,11 +1,10 @@
-//! Persisted Files preferences and their application to the current window.
+//! Persisted Files preferences and their editor schema.
 
 use gds::{
     appearance::{theme, typography},
     i18n::Language,
     ui::time,
 };
-use gpui_kit::App;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -56,59 +55,8 @@ pub struct Preferences {
     pub terminal_enabled: Option<bool>,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ApplyError {
-    #[error(transparent)]
-    Theme(#[from] theme::Error),
-    #[error(transparent)]
-    Language(#[from] crate::shared::i18n::Error),
-    #[error(transparent)]
-    Typography(#[from] typography::Error),
-}
-
 impl Preferences {
     pub fn terminal_enabled(&self) -> bool {
         self.terminal_enabled.unwrap_or(true)
-    }
-
-    /// Apply shared presentation changes to an initialized application.
-    /// Application-specific values are handled by the caller.
-    ///
-    /// # Errors
-    /// Reports invalid theme/material/font values, unavailable palette data or
-    /// invalid translations.
-    pub fn apply_shared(&self, previous: &Self, cx: &mut App) -> Result<(), ApplyError> {
-        let appearance = &self.appearance;
-        let old_appearance = &previous.appearance;
-        if appearance.source != old_appearance.source
-            || appearance.mode != old_appearance.mode
-            || (appearance.source == theme::Source::Builtin
-                && appearance.builtin != old_appearance.builtin)
-        {
-            theme::apply(appearance, cx)?;
-        } else if appearance.content_opacity != old_appearance.content_opacity
-            || appearance.sidebar_opacity != old_appearance.sidebar_opacity
-        {
-            theme::update_opacity(appearance.content_opacity, appearance.sidebar_opacity, cx)?;
-        }
-        if appearance.rounded_corners != old_appearance.rounded_corners {
-            theme::update_window_corners(appearance.rounded_corners, cx);
-        }
-        if self.font != previous.font {
-            typography::install(&self.font, cx)?;
-        }
-        if self.language != previous.language {
-            crate::shared::i18n::install(self.language.unwrap_or_else(Language::detect), cx)?;
-        }
-        if self.time_format != previous.time_format {
-            time::apply(self.time_format, cx);
-        }
-        if self.animations_enabled != previous.animations_enabled {
-            gds::appearance::motion::set_animations_enabled(
-                self.animations_enabled.unwrap_or(true),
-                cx,
-            );
-        }
-        Ok(())
     }
 }

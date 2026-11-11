@@ -425,14 +425,27 @@ impl Browser {
             .collect();
         self.start_background(i18n::count("transfer-working", count, cx), cx);
         let cancel = self.background_tasks.read(cx).token("files");
-        let work = cx
-            .background_executor()
-            .spawn(async move { batch.execute_cancellable(cancel) });
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking(move || batch.execute_cancellable(cancel));
         cx.spawn(async move |this, cx| {
             let report = work.await;
             if let Err(closed) = this.update(cx, |this, cx| {
                 this.operations.in_progress = false;
-                this.finish_transfer(report, None, cx);
+                match report {
+                    Ok(report) => this.finish_transfer(report, None, cx),
+                    Err(error) => {
+                        this.operations.paths.clear();
+                        this.finish_background(
+                            notifications::Report::new(
+                                notifications::Level::Error,
+                                error.to_string(),
+                            ),
+                            cx,
+                        );
+                    }
+                }
             }) {
                 tracing::warn!("Drop result arrived after the view closed: {closed}");
             }

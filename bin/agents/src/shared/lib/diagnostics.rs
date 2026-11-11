@@ -1,7 +1,7 @@
 //! User notices and the current process's frontend diagnostic log.
 
 pub(crate) use gds::service::logs as log;
-pub(crate) use gds::ui::logs::{install as init, store};
+pub(crate) use gds::ui::logs::store;
 use gds::ui::notifications::surface;
 
 #[cfg(all(test, feature = "gui-tests"))]

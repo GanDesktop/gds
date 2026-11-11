@@ -35,7 +35,9 @@ bin/
 
 ## 任务与退出生命周期
 
-UI 与服务负责资源所有权，`gds::task_manager` 负责跨 GPUI、Tokio、线程和子进程的取消与完成追踪。新应用通过 `gds::ui::task_manager` 接入窗口关闭、显式退出和 Unix 信号；先关闭原生窗口，再等待服务清理，最后退出应用。
+UI 与服务负责资源所有权，`gds::service::task_manager` 负责跨 GPUI、Tokio、线程和子进程的取消与完成追踪。新应用导入 `gds::app::AppExt`，通过 `cx.gds().tasks()` 接入窗口关闭、显式退出和 Unix 信号；先关闭原生窗口，再等待服务清理，最后退出应用。
+
+应用在 GPUI 启动入口调用 `cx.gds().initialize(supervisor.scope(), logs)`，统一安装任务管理、外观基础和可选日志收集器，在服务和视图启动前固定追踪开关。Files 通过应用内 `FilesExt` 提供 `cx.gds().files()` 访问器，具体初始化方法位于 `Files::initialize`，配置仅作为输入。trait 只声明访问入口；访问器借用上下文，不持有服务，也不在获取时初始化。独立任务服务可通过 `cx.gds().tasks().init(scope)` 安装，`cx.gds().tasks().scope()` 只读取已安装的服务；日志窗口不再参与任务服务初始化。`ui::task_manager` 只通过只读 `Inspector` 展示快照，关闭日志时不创建 Inspector、任务视图或刷新计时器。
 
 新增后台工作时，先确定所属作用域、取消策略和完成条件，再选择执行器。涉及进程、设备或持久化的任务必须登记完成；仅用于 UI 更新的任务可以随其拥有者释放。具体 API、服务示例和测试约定见[任务所有权与应用退出](development/task-manager.md)。
 
@@ -102,7 +104,8 @@ cargo build --bins --features files,agents,portal
 | `file-tags` | `desktop` 的可选标签能力：`user.xdg.tags` 读写与复制保留；`files` 显式启用 |
 | `storage` | Toasty / SQLite 存储 |
 | `logs` | 本进程日志服务 |
-| `task-manager` | 任务作用域、取消与完成追踪，以及可选的诊断快照 |
+| `task-manager` | `service::task_manager` 的任务作用域、取消与完成追踪，以及可选的诊断快照；不依赖 GPUI |
+| `app` | App 上下文中的任务服务绑定与退出协调；不依赖 `ui` |
 | `terminal` | PTY 与终端模型 |
 | `file-inspection` | 按需读取文件内容元信息、生成缩略图与标准磁盘缓存 |
 | `remote` | SFTP / SMB 文件服务 |
@@ -249,7 +252,9 @@ src/
 
 `service` 提供运行时能力，其接口使用普通 Rust 类型、原生协议模型和异步通道；服务代码不引用 `ui` 或 GPUI 类型。组件可以将服务状态映射为界面，并把鼠标、键盘和 IME 转换为服务操作。`persistence` 提供配置文件的原子读写与冲突检测；`service::storage` 提供 SQLite 应用数据存储，应用定义自己的表结构与迁移 SQL。
 
-GPUI 与 Tokio 的执行器独立。Files 和 Agents 的启动层直接创建并持有原生 `tokio::runtime::Runtime`，直到 UI 主循环和退出钩子完成；后台 I/O 服务显式接收 `tokio::runtime::Handle` 并调用 `handle.spawn`。`cx.spawn` 在 GPUI 前台接收结果、更新界面，`cx.background_executor().spawn` 用于普通后台工作。需要随持有者销毁而取消的 Tokio 任务使用 `tokio-util::AbortOnDropHandle`；任务异常通过原生 `JoinHandle` 结果处理。没有全局 runtime 查找或通用 spawn 包装。
+GPUI 与 Tokio 的执行器独立。Files、Agents 和 Nixes 的启动层持有 `service::task_manager::Supervisor`，TM 内部独占 Tokio Runtime；服务接收 `Scope`，通过 `spawn`、`spawn_cancellable`、`spawn_blocking` 和 `spawn_thread` 派生任务，不保存或查找 Runtime Handle。`Task<T>` 上报任务准入和执行错误；普通任务在句柄释放后继续受 TM 追踪，可丢弃的 I/O 显式选择取消策略。GPUI 前台负责等待结果和更新界面，纯界面任务继续使用 GPUI 所有权。原生工作线程通过作用域驱动异步 I/O，不另建运行时。
+
+Files 的启动顺序集中在 `app/startup.rs`：`launch` 读取配置并建立日志和 TM；GPUI 回调中的 `Application::start` 绑定 TM 与退出处理，再通过 `Services::start` 启动桌面集成与存储，随后在主线程调用 `Services::start_ui` 安装界面服务与初始窗口，标记就绪，最后进入桌面请求监听。`startup/ui.rs` 只实现 UI 初始化，`DesktopIntegration::listen` 只消费请求；GPUI 事件循环在异步启动期间保持响应。配置区分 Browser、Picker 与 Service 模式。桌面集成从属于应用。`cx.gds().tasks().ready(keep_alive)` 标记就绪；启动中不因无窗口退出，Service 模式持续保活。显式退出先关闭窗口，再由 TM 关闭任务准入、通知取消并等待清理，最后退出 GPUI。
 
 卷监听通过容量为 16 的 `tokio::sync::mpsc` 向 GPUI 发送 `Observation`。这个通道的普通异步收发不依赖 Tokio 上下文，GPUI 前台可以直接等待 `receiver.recv()`。GPUI 接收任务持有监听句柄，销毁时取消监听；监听拥有唯一发送端，发送端关闭并排空缓冲后，接收任务检查监听的执行结果并报告异常。监听期间的 D-Bus 错误仍通过 `Observation` 报告。
 
@@ -261,7 +266,7 @@ GPUI 与 Tokio 的执行器独立。Files 和 Agents 的启动层直接创建并
 
 Files 的 UDisks2 连接、设备操作、重连计时器以及 OpenURI 请求在这个 Tokio runtime 中运行。zbus 5.19 同时编译两种后端时，会根据连接创建时的 Tokio 环境选择后端。GPUI 自身依赖 ashpd 的 `async-io` feature，且 ashpd 不允许同时开启 `tokio` feature；应用通过 ashpd 官方 `OpenFileRequest::connection` 接口注入在 Tokio 中创建的 zbus 连接，避免复用框架可能已在其它执行器初始化的全局 Portal 连接。框架内部仍保留其原有依赖配置。相关机制见 [zbus 运行时文档](https://docs.rs/zbus/5.19.0/zbus/#special-tokio-support) 和 [GPUI 前台／后台执行器说明](https://zed.dev/blog/zed-decoded-async-rust)。
 
-SQLite 入口为 `gds::service::storage::Options`：应用通过 `Options::new(migrations).models(models!(...)).open(path)` 注册模型并打开数据库，返回 Toasty 原生 `Db`（转导出为 `Database`）。Toasty 管理连接池、连接任务、请求队列与事务，本地库的池容量为 1，句柄克隆共享该连接。应用使用 `Model` 派生生成的强类型查询、更新和 upsert 接口；原生 `Json<T>` 字段负责结构化数据的编解码。裸 SQL 留给 SQLite 初始化配置和迁移。数据库操作在应用持有的多线程 Tokio runtime 中运行，GPUI 只等待结果并更新界面。Toasty 的 SQLite 驱动底层仍使用同步 rusqlite，由其连接任务执行。
+SQLite 入口为 `gds::service::storage::Options`：应用通过 `Options::new(migrations).models(models!(...)).open(&tasks, path)` 注册模型并打开数据库，返回 Toasty 原生 `Db`（转导出为 `Database`）。Toasty 管理连接池、连接任务、请求队列与事务，本地库的池容量为 1，句柄克隆共享该连接。应用使用 `Model` 派生生成的强类型查询、更新和 upsert 接口；原生 `Json<T>` 字段负责结构化数据的编解码。裸 SQL 留给 SQLite 初始化配置和迁移。数据库操作在 TM 持有的多线程 Tokio runtime 中运行，GPUI 只等待结果并更新界面。Toasty 的 SQLite 驱动底层仍使用同步 rusqlite，由其连接任务执行。
 
 Files 的 `location/model/address` 定义与页签无关的位置身份：普通目录、最近访问、收藏、网络、回收站、卷列表，以及卷身份加卷内相对路径。`location/api/places/record` 保存位置记录和视图设置；Toasty 模型显式声明 `key_kind`、`key_identity`、`key_path` 三列组成主键，位置类型使用原生 `Embed` 枚举，路径保留非 UTF-8 OS 数据。`view_settings` 按位置保存列布局、以列身份索引的逻辑像素列宽、排序方式、详情栏开关和列表／网格模式；应用默认值也保存在这张表。页签只承载位置的浏览过程，设置不依赖页签 ID。侧栏位置在当前页签导航，特殊位置沿用相同的位置身份和视图设置。Agents 的 `session/api/connection/cache/record` 定义缓存会话、页面与事件模型，快照和事件保留各自的业务类型；页面起始游标单独存列，供覆盖页面查询使用。缓存写入按实际新增事件和替换页面更新会话的字节预算，重复写入不重复计数，淘汰按最近访问顺序执行。
 
@@ -271,11 +276,11 @@ Files 的 `location/model/address` 定义与页签无关的位置身份：普通
 
 默认 WAL、外键约束及 5 秒忙等待；Agents 缓存保留 DELETE journal 和 FULL auto-vacuum。文件准备使用 Tokio 文件 API，服务创建私有数据库文件，不修改已有目录权限。配置文件继续使用 TOML，缩略图继续使用 freedesktop 标准 PNG 缓存。参考 [Toasty 原生迁移管理](https://tokio-rs.github.io/toasty/0.11.0/guide/schema-management.html)、[SQLite 驱动](https://tokio-rs.github.io/toasty/0.11.0/guide/sqlite.html)和[事务接口](https://tokio-rs.github.io/toasty/0.11.0/guide/transactions.html)。
 
-终端服务入口为 `gds::service::terminal`，界面入口为 `gds::ui::terminal`。服务的 `Terminal::prepare(options)` 返回终端句柄和阻塞启动任务 `Launch`；调用方在后台执行 `launch.run()`，随后可等待 `terminal.ready()`，通过 `Session` 读写、resize、观察状态或订阅合并后的更新通知。`shutdown()` 在调用时请求停止，其 future 等待尚未完成的启动及最终 PTY 清理；最后一个所有者释放时也请求清理。启动任务不会持有进程所有者，等待启动的 future 也不会阻止最后一个所有者释放。
+终端服务入口为 `gds::service::terminal`，界面入口为 `gds::ui::terminal`。服务的 `Terminal::prepare(scope, options)` 返回终端句柄和阻塞启动任务 `Launch`；调用方在后台执行 `launch.run()`，随后可等待 `terminal.ready()`，通过 `Session` 读写、resize、观察状态或订阅合并后的更新通知。`shutdown()` 在调用时请求停止，其 future 等待尚未完成的启动及最终 PTY 清理；最后一个所有者释放时也请求清理。启动任务不会持有进程所有者，等待启动的 future 也不会阻止最后一个所有者释放。
 
 Backend reuse decisions and retained host policy are documented in [Terminal backend boundary](development/terminal-backend.md); terminal color ownership and live updates are documented in [Terminal appearance contract](development/terminal-theme.md).
 
-GUI 适配器负责把主题调色板和网格尺寸传给服务；GPUI `Keystroke` / `Modifiers` 在 UI 边界转换为服务自己的输入类型。字体、选区绘制、焦点、IME 和窗口状态留在 `ui/terminal`。应用负责安装退出钩子调用 `gds::service::terminal::shutdown_all()`；`gds::ui::terminal::init(cx)` 只注册终端输入上下文的 Tab 行为，其他快捷键和标签页归应用。
+GUI 适配器负责把主题调色板和网格尺寸传给服务；GPUI `Keystroke` / `Modifiers` 在 UI 边界转换为服务自己的输入类型。字体、选区绘制、焦点、IME 和窗口状态留在 `ui/terminal`。TM 根作用域取消会通知终端停止，并等待 PTY 回收；`gds::ui::terminal::init(cx)` 只注册终端输入上下文的 Tab 行为，其他快捷键和标签页归应用。
 
 公共界面组件仍通过 `gds::ui::sidebar`、`gds::ui::page`、`gds::ui::settings` 等显式入口使用；实现按视觉职责分组，入口不暴露组件内部文件。外观入口为 `gds::appearance::{theme, typography}`，视觉默认值为 `gds::appearance::tokens`，存储机制为 `gds::persistence`。
 
@@ -303,7 +308,11 @@ gds-agents --enable-logs --compact
 
 公共 `Frame`、导航条目、键帽与设置控件都在公共库中；Files 专属渲染与具名事件处理器留在二进制模块。明显归属对象的构造、状态同步和呈现方法放在对应 `impl` 中。一次性原生显示检查脚本和数据放在临时目录，不保留到项目；常驻测试只覆盖关键工作流与非显然行为。
 
-Files 的 `pages/workspace/ui::Browser` 按功能组合窗口状态。`window` 管理窗口资源、焦点和订阅；`locations`、`tabs`、`sidebar`、`toolbar` 分别管理位置持久化、标签集合、侧栏区域和输入；`content`、`place_pages`、`devices`、`remote` 保存对应内容的呈现与加载状态；设置、菜单、文件操作、终端及选择器各归所属模块。组内继续按功能收拢，例如 `toolbar` 的地址与名称筛选输入、`place_pages/network` 的网络位置视图、`devices` 的卷呈现。各组的构造与同步代码留在同名 UI 子模块，`Browser::new` 负责组装和启动；这些状态仍属于工作区页面，沿用 `<module>.rs` 配合 `<module>/`，不扩大切片公开接口。单个标签的导航、选择和滚动仍由 `OpenTab` 持有，终端会话保持窗口级生命周期。
+Files 的应用层先安装 TM、位置存储、配置服务、卷监听和主题热更新，再创建窗口并开始处理桌面请求。页面读取已经安装的服务，不通过 `shared()` 隐式启动全局服务。位置存储统一登记各窗口的待保存队列，在应用退出时完成清理；窗口只持有自己的位置快照。
+
+`pages/workspace/ui::Browser` 负责窗口状态组合、事件路由和呈现。文件修改及其校验归 `features/file_operations`；重命名、新建目录、复制、拖放和回收站操作通过 TM 执行。选择器的筛选与选择规则归 `features/pick_files::Session`，页面保存输入控件、菜单和焦点。目录观察和快照合并归 `entities/file`，页面负责将结果应用到对应导航版本并更新视图。地址协议归 `entities/location/scheme`，标签后端通过 `location/x/tags` 使用地址类型。跨功能的 action 声明和快捷键元数据放在 `shared/ui/actions`，由应用启动注册、页面处理。
+
+Files 的配置通过 `cx.gds().preferences()` 访问。服务先校验全部呈现变更，再一次性应用并发布 `Current`；窗口观察该快照，只同步本地呈现。局部交互通过 `edit` 修改最新快照，避免以窗口旧副本覆盖其他变更。持久化由 TM 管理的后台队列串行执行；保存失败保留已经发布的内存状态并报告错误，退出等待已接受的写入完成。
 
 ### UIM 写法
 

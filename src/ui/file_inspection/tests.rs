@@ -1,10 +1,12 @@
 use super::{Cache, Request, Source, State};
 use crate::service::file_inspection::Kind;
+use gds::app::AppExt as _;
 use gpui_kit::{AppContext, TestAppContext};
 use std::sync::Arc;
 
 #[gpui_kit::test]
 fn cached_images_are_shared_and_replacing_a_file_requests_a_new_preview(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.gds().tasks().init_test(false));
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("thumbnail directory");
     let path = directory.path().join("photo.png");
@@ -88,6 +90,7 @@ fn cached_images_are_shared_and_replacing_a_file_requests_a_new_preview(cx: &mut
 
 #[gpui_kit::test]
 fn paging_keeps_previous_previews_ready(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.gds().tasks().init_test(false));
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("thumbnail directory");
     let pages: Vec<Vec<Source>> = (0..3)
@@ -159,6 +162,7 @@ fn paging_keeps_previous_previews_ready(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn metadata_requested_during_thumbnail_loading_is_completed_and_reused(cx: &mut TestAppContext) {
     use crate::service::file_inspection::{FileFacts, Metadata};
+    cx.update(|cx| cx.gds().tasks().init_test(false));
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("inspection directory");
     let path = directory.path().join("photo.png");
@@ -205,6 +209,7 @@ fn metadata_requested_during_thumbnail_loading_is_completed_and_reused(cx: &mut 
 
 #[gpui_kit::test]
 fn thumbnail_failure_keeps_readable_metadata(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.gds().tasks().init_test(false));
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("inspection directory");
     let path = directory.path().join("truncated.png");

@@ -14,36 +14,11 @@ impl State {
     pub(super) fn new(
         home: PathBuf,
         places: Result<Places, crate::entities::location::places::Error>,
-        runtime: &Handle,
-        cx: &mut App,
     ) -> Self {
         let (places, load_error) = match places {
             Ok(places) => (places, None),
             Err(error) => (Places::default(), Some(error.to_string())),
         };
-        if let Some(shutdown) = places.shutdown() {
-            let runtime = runtime.clone();
-            let scope = gds::ui::task_manager::scope(cx);
-            let cancel = scope.token();
-            let cleanup = scope
-                .track_named(
-                    "Save pending places on exit",
-                    gds::task_manager::Execution::GpuiBackground,
-                    async move {
-                        cancel.cancelled().await;
-                        if let Err(error) = runtime
-                            .spawn(async move { shutdown.run().await })
-                            .await
-                            .map_err(crate::entities::location::places::Error::from)
-                            .and_then(std::convert::identity)
-                        {
-                            tracing::error!(%error, "Cannot save Files state during shutdown");
-                        }
-                    },
-                )
-                .expect("application storage scope is open");
-            cx.background_executor().spawn(cleanup).detach();
-        }
         Self {
             home,
             pinned_locations: places.pinned.clone(),
@@ -89,7 +64,7 @@ impl Browser {
             return;
         };
         self.locations.saving = true;
-        let work = self.window.runtime.spawn(async move { save.run().await });
+        let work = self.window.tasks.spawn(async move { save.run().await });
         cx.spawn(async move |this, cx| {
             let result = work
                 .await

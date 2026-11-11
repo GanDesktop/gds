@@ -1,4 +1,5 @@
 //! File-operation history belongs to the window, across folders and file tabs.
+use gds::app::AppExt as _;
 
 use super::*;
 use crate::features::file_operations::history::{Direction, Report};
@@ -82,11 +83,11 @@ impl Browser {
         self.window.focus.focus(window, cx);
         self.start_background(label, cx);
         let cancel = self.background_tasks.read(cx).token("files");
-        let work = gds::ui::task_manager::scope(cx)
-            .spawn_blocking(&self.window.runtime, move || {
-                entry.execute_cancellable(&cancel)
-            })
-            .expect("undo accepted");
+        let work = cx
+            .gds()
+            .tasks()
+            .scope()
+            .spawn_blocking(move || entry.execute_cancellable(&cancel));
         cx.spawn(async move |this, cx| {
             let result = work.await;
             if let Err(error) = this.update(cx, |this, cx| {

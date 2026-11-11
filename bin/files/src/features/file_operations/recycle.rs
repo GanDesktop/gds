@@ -72,6 +72,8 @@ pub struct Outcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Task(#[from] gds::service::task_manager::Error),
     #[error("operation cancelled")]
     Cancelled,
     #[error(

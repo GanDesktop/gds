@@ -64,25 +64,26 @@ impl Browser {
         event: &ui::split::Changed,
         cx: &mut Context<Self>,
     ) {
-        self.settings.preferences.files.sidebar.tabs_height = Some(event.0);
-        self.save_sidebar(cx);
-    }
-
-    fn save_sidebar(&mut self, cx: &mut Context<Self>) {
-        if let Err(error) = configuration::save(&self.settings.preferences, cx) {
-            report_settings_failure("settings-save-failed", &error, cx);
-        }
-        cx.notify();
+        self.edit_preferences(
+            |preferences| {
+                preferences.files.sidebar.tabs_height = Some(event.0);
+            },
+            cx,
+        );
     }
 
     fn toggle_devices(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let focused = self.sidebar.regions.volumes.contains_focused(window, cx);
-        self.settings.preferences.files.sidebar.volumes_collapsed =
-            !self.settings.preferences.files.sidebar.volumes_collapsed || focused;
+        self.edit_preferences(
+            |preferences| {
+                preferences.files.sidebar.volumes_collapsed =
+                    !preferences.files.sidebar.volumes_collapsed || focused;
+            },
+            cx,
+        );
         if focused {
             self.window.focus.focus(window, cx);
         }
-        self.save_sidebar(cx);
     }
 
     fn sidebar_heading_inset(&self) -> Pixels {
@@ -160,12 +161,16 @@ impl Browser {
     fn toggle_locations(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let focused = self.sidebar.regions.locations.is_focused(window)
             || self.sidebar.regions.locations.contains_focused(window, cx);
-        self.settings.preferences.files.sidebar.locations_collapsed =
-            !self.settings.preferences.files.sidebar.locations_collapsed || focused;
+        self.edit_preferences(
+            |preferences| {
+                preferences.files.sidebar.locations_collapsed =
+                    !preferences.files.sidebar.locations_collapsed || focused;
+            },
+            cx,
+        );
         if focused {
             self.window.focus.focus(window, cx);
         }
-        self.save_sidebar(cx);
     }
 
     fn sidebar_locations(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {

@@ -89,10 +89,33 @@ impl Registry {
     }
 }
 
+/// Read-only diagnostic access. It cannot spawn, cancel, or retain application work.
+#[derive(Clone)]
+pub struct Inspector {
+    registry: Weak<Mutex<Option<Registry>>>,
+}
+
 impl Scope {
+    pub fn inspector(&self) -> Option<Inspector> {
+        self.inspection_enabled().then(|| Inspector {
+            registry: Arc::downgrade(&self.admission),
+        })
+    }
+
     /// Snapshot metadata only; dead scopes and completed work are not retained.
     pub fn snapshot(&self) -> Snapshot {
-        let mut admission = self.admission.lock().unwrap_or_else(|e| e.into_inner());
+        self.inspector()
+            .map_or_else(Snapshot::default, |inspector| inspector.snapshot())
+    }
+}
+
+impl Inspector {
+    /// Returns an empty snapshot after the application's task service is released.
+    pub fn snapshot(&self) -> Snapshot {
+        let Some(registry) = self.registry.upgrade() else {
+            return Snapshot::default();
+        };
+        let mut admission = registry.lock().unwrap_or_else(|e| e.into_inner());
         let Some(registry) = admission.as_mut() else {
             return Snapshot::default();
         };

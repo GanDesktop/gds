@@ -4,7 +4,6 @@ use gds::ui::DialogActions;
 use gds_uim::el;
 use gpui_kit::component::WindowExt;
 use tokio::sync::watch;
-use tokio_util::task::AbortOnDropHandle;
 
 impl View {
     pub(super) fn name_prompt(
@@ -115,7 +114,7 @@ impl View {
         self.busy = true;
         self.cancellable = false;
         self.message = None;
-        let work = AbortOnDropHandle::new(self.options.runtime.spawn(work));
+        let work = self.options.tasks.spawn(work);
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -223,9 +222,15 @@ impl View {
         if self.busy || sources.is_empty() {
             return;
         }
-        self.cancel = gds::ui::task_manager::scope(cx).token().child_token();
+        self.cancel = cx.gds().tasks().scope().token().child_token();
         let (sender, receiver) = watch::channel(Default::default());
-        let work = operations::copy(sources, target, self.cancel.clone(), sender);
+        let work = operations::copy(
+            self.options.tasks.clone(),
+            sources,
+            target,
+            self.cancel.clone(),
+            sender,
+        );
         self.run_job(work, receiver, open, cx);
     }
 
@@ -243,7 +248,7 @@ impl View {
             } };
             let on_ok = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
                 let _ = view.update(cx, |view, cx| {
-                    view.cancel = gds::ui::task_manager::scope(cx).token().child_token();
+                    view.cancel = cx.gds().tasks().scope().token().child_token();
                     let (sender, receiver) = watch::channel(Default::default());
                     let work = operations::delete(sources.clone(), view.cancel.clone(), sender);
                     view.run_job(work, receiver, None, cx);
@@ -288,9 +293,7 @@ impl View {
             }
         }));
         // Cancellation completes protocol close/cleanup before the Tokio task is dropped.
-        let work = gds::ui::task_manager::scope(cx)
-            .spawn(&self.options.runtime, work)
-            .expect("remote operation accepted");
+        let work = cx.gds().tasks().scope().spawn(work);
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -327,7 +330,7 @@ impl View {
 
     fn open_download(&self, path: PathBuf, cx: &mut Context<Self>) {
         let desktop = self.options.desktop.clone();
-        let work = self.options.runtime.spawn(async move {
+        let work = self.options.tasks.spawn(async move {
             desktop
                 .open_file(&path, desktop::OpenMode::DefaultApplication)
                 .await

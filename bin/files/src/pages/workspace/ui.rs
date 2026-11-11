@@ -57,16 +57,16 @@ mod view;
 mod watching;
 mod window;
 
+use gds::service::task_manager::Scope;
+use gds::service::task_manager::Task as IoTask;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::runtime::Handle;
-use tokio_util::task::AbortOnDropHandle;
 
 use crate::entities::location::volumes as storage;
 use crate::entities::preferences as configuration;
-use crate::features::file_operations::commands::*;
+use crate::shared::ui::actions::*;
 use gds::{i18n, service::desktop, ui, ui::notifications};
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -103,7 +103,7 @@ pub struct NewWindowRequested(pub PathBuf);
 impl EventEmitter<NewWindowRequested> for Browser {}
 
 pub struct LaunchOptions {
-    pub runtime: Handle,
+    pub tasks: Scope,
     pub places: Result<Places, crate::entities::location::places::Error>,
     pub start: PathBuf,
     pub home: PathBuf,
@@ -362,7 +362,7 @@ pub struct Browser {
 impl Browser {
     pub fn new(options: LaunchOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let LaunchOptions {
-            runtime,
+            tasks,
             places,
             start,
             home,
@@ -379,21 +379,21 @@ impl Browser {
         // Root plugins are captured when this window's root is created, which
         // happens after the view is built, so the hint layer is installed here.
         ui::keytips::install(cx);
-        let host = window::State::new(runtime.clone(), window, cx);
-        let settings = settings::State::new(preferences, runtime.clone(), window, cx);
+        let host = window::State::new(tasks.clone(), window, cx);
+        let settings = settings::State::new(preferences, tasks.clone(), window, cx);
         let mut this = Self {
-            locations: locations::State::new(home, places, &host.runtime, cx),
+            locations: locations::State::new(home, places),
             tabs: tabs::State::default(),
             sidebar: sidebar::State::new(&settings.preferences, cx),
             toolbar: toolbar::State::new(window, cx),
             files: content::State::new(window, cx),
             collections: place_pages::State::new(window, cx),
-            devices: devices::State::new(host.runtime.clone(), window, cx),
-            remote: remote::State::new(host.runtime.clone(), cx),
+            devices: devices::State::new(window, cx),
+            remote: remote::State::new(host.tasks.clone(), cx),
             menus: menu::State::default(),
             operations: file_actions::State::new(window, cx),
             background_tasks: cx.new(|_| background_tasks::State::default()),
-            clipboard_details: cx.new(|_| clipboard_status::Details::new(host.runtime.clone())),
+            clipboard_details: cx.new(|_| clipboard_status::Details::new(host.tasks.clone())),
             selection_details: {
                 let browser = cx.entity();
                 cx.new(|cx| selection_status::Details::new(browser, cx))
@@ -494,7 +494,9 @@ impl Browser {
     }
 
     fn picker_projection(&self) -> Option<picker::Projection> {
-        self.picker.as_ref().map(picker::State::projection)
+        self.picker
+            .as_ref()
+            .map(|picker| picker.session.projection())
     }
 
     fn open_tab(
@@ -552,16 +554,16 @@ impl Browser {
             slot.remote_load = None;
             slot.tags_load = None;
         }
-        match crate::entities::scheme::browse(request.location()) {
-            crate::entities::scheme::Browse::Tags(address) => {
+        match crate::entities::location::scheme::browse(request.location()) {
+            crate::entities::location::scheme::Browse::Tags(address) => {
                 self.load_tags(id, request.clone(), address.clone(), cx);
                 return;
             }
-            crate::entities::scheme::Browse::Remote(address) => {
+            crate::entities::location::scheme::Browse::Remote(address) => {
                 self.load_remote(id, request.clone(), address.clone(), cx);
                 return;
             }
-            crate::entities::scheme::Browse::Location => (),
+            crate::entities::location::scheme::Browse::Location => (),
         }
         self.remote.requests.remove(&id);
         let expected = self.resolve_location(request.location(), cx).device;
@@ -570,9 +572,12 @@ impl Browser {
             return;
         }
         let worker = request.clone();
-        let work = cx.background_executor().spawn(async move { worker.load() });
+        let work = self.window.tasks.spawn_blocking(move || worker.load());
         cx.spawn(async move |this, cx| {
-            let result = work.await;
+            let result = work
+                .await
+                .map_err(directory::Error::from)
+                .and_then(std::convert::identity);
             if let Err(error) = this.update(cx, |this, cx| {
                 this.finish_request(id, &request, result, expected, cx)
             }) {
@@ -864,7 +869,7 @@ impl Browser {
         let target_tab = self.tabs.active_id;
         let worker_path = path.clone();
         let desktop = self.window.desktop.clone();
-        let work = AbortOnDropHandle::new(self.window.runtime.spawn(async move {
+        let work = IoTask::cancel_on_drop(self.window.tasks.spawn_cancellable(async move {
             let metadata =
                 tokio::fs::metadata(&worker_path)
                     .await
@@ -912,11 +917,16 @@ impl Browser {
             return;
         }
         let desktop = self.window.desktop.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { desktop.open_terminal(&path) });
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking(move || desktop.open_terminal(&path));
         cx.spawn(async move |this, cx| {
-            if let Err(error) = work.await {
+            if let Err(error) = work
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result.map_err(|error| error.to_string()))
+            {
                 if let Err(closed) = this.update(cx, |_, cx| {
                     notifications::Report::new(notifications::Level::Error, error.to_string())
                         .replacing::<TerminalNotice>()
@@ -1421,9 +1431,12 @@ impl Browser {
                 self.run_volume_command(command, window, cx);
             }
             Command::Hidden => {
-                let mut preferences = self.settings.preferences.clone();
-                preferences.files.show_hidden = !preferences.files.show_hidden;
-                self.apply_preferences(preferences, window, cx);
+                self.edit_preferences(
+                    |preferences| {
+                        preferences.files.show_hidden = !preferences.files.show_hidden;
+                    },
+                    cx,
+                );
             }
             Command::Open => {
                 if self.sidebar.regions.sidebar_focused(window, cx) {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::shared::i18n::tr;
+use gds::app::AppExt as _;
 use gpui_kit::{TestAppContext, WindowHandle, component::Root, px, size, test::TestWindowExt};
 
 #[test]
@@ -31,6 +32,7 @@ pub(super) fn setup(
     std::fs::write(&path, "{}").expect("settings");
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
         crate::shared::config::init(Some(path), cx);
         crate::shared::lib::appearance::init(cx);
         crate::app::init(cx);
@@ -132,7 +134,7 @@ fn discovery_is_read_only_until_add_and_never_retargets(cx: &mut TestAppContext)
     cx.update(|cx| {
         cx.set_global(crate::entities::agent::catalog::Service::new(
             remote.clone(),
-            runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
         ))
     });
     let endpoint = Target::Local.resolved().expect("default endpoint");

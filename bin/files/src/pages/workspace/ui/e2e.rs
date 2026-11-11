@@ -494,12 +494,12 @@ impl Session {
                 .expect("semantic artifact");
             })
             .expect("native window");
-        let runtime = self
+        let tasks = self
             .cx
-            .update(|cx| self.browser.read(cx).window.runtime.clone());
+            .update(|cx| self.browser.read(cx).window.tasks.clone());
         let capture =
             std::env::var_os("GDS_E2E_SCREENSHOT").expect("compositor screenshot command");
-        let output = runtime
+        let output = tasks
             .spawn(async move {
                 tokio::process::Command::new(capture)
                     .current_dir(directory)

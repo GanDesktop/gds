@@ -1,5 +1,6 @@
 //! Deleting a virtual tag changes associations through its backend, never file targets.
 use super::*;
+use gds::app::AppExt as _;
 use gds::ui::DialogActions;
 use gpui_kit::assets::IconName;
 
@@ -72,14 +73,12 @@ impl Browser {
         }
         self.operations.in_progress = true;
         let commands = self.settings.preferences.tags.commands.clone();
-        let work = gds::ui::task_manager::scope(cx)
-            .spawn(&self.window.runtime, async move {
-                crate::entities::tags::connect(&commands)
-                    .await?
-                    .delete_tag(address.tag())
-                    .await
-            })
-            .expect("tag mutation accepted");
+        let work = cx.gds().tasks().scope().spawn(async move {
+            crate::entities::tags::connect(&commands)
+                .await?
+                .delete_tag(address.tag())
+                .await
+        });
         cx.spawn(async move |this, cx| {
             let result = work
                 .await

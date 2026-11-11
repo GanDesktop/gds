@@ -83,7 +83,10 @@ async fn check_file(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-pub(super) async fn lock(path: &Path) -> Result<std::fs::File, Error> {
+pub(super) async fn lock(
+    tasks: &crate::service::task_manager::Scope,
+    path: &Path,
+) -> Result<std::fs::File, Error> {
     let mut name = path.as_os_str().to_owned();
     name.push(".lock");
     let path = Path::new(&name);
@@ -95,12 +98,13 @@ pub(super) async fn lock(path: &Path) -> Result<std::fs::File, Error> {
     let file = open.open(path).await?.into_std().await;
     // MigrationSet reads applied IDs before executing migrations. Serialize
     // initialization across processes; closing this file releases the lock.
-    let file = tokio::task::spawn_blocking(move || {
-        file.lock()?;
-        Ok::<_, io::Error>(file)
-    })
-    .await
-    .map_err(io::Error::other)??;
+    let file = tasks
+        .spawn_blocking(move || {
+            file.lock()?;
+            Ok::<_, io::Error>(file)
+        })
+        .await
+        .map_err(io::Error::other)??;
     Ok(file)
 }
 

@@ -1,10 +1,12 @@
-use super::*;
+use super::super as directory;
+use notify::EventKind;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 const MAX_PATHS: usize = 256;
 
 #[derive(Default)]
-pub(super) struct Changes {
+pub(crate) struct Changes {
     paths: HashSet<PathBuf>,
     full: bool,
 }

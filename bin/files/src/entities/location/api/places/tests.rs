@@ -26,7 +26,13 @@ async fn migrate_directory_pins_and_persist_ordered_abstract_locations() {
     let local = Address::from(Path::new("/existing-pin"));
     let mut old = Options::new(PREVIOUS)
         .models(models!(Location, SavedLocation, ViewSettings))
-        .open(&path)
+        .open(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            ),
+            &path,
+        )
         .await
         .unwrap();
     Location::upsert_by_kind_and_path(
@@ -38,7 +44,12 @@ async fn migrate_directory_pins_and_persist_ordered_abstract_locations() {
     .await
     .unwrap();
     drop(old);
-    let store = Store::open_at(&path).await.unwrap();
+    let store = Store::open_at(
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
+        &path,
+    )
+    .await
+    .unwrap();
     assert_eq!(store.read().await.unwrap().pinned, vec![local.clone()]);
     let tags = Address::from_uri("tags:/工作/设计").unwrap();
     let remote = Address::from_uri("sftp://user@example.com/home/user").unwrap();
@@ -66,7 +77,12 @@ async fn migrate_directory_pins_and_persist_ordered_abstract_locations() {
         .await
         .unwrap();
     drop(store);
-    let store = Store::open_at(&path).await.unwrap();
+    let store = Store::open_at(
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
+        &path,
+    )
+    .await
+    .unwrap();
     assert_eq!(store.read().await.unwrap().pinned, expected);
     store
         .save(vec![Change::Pin {

@@ -1,6 +1,7 @@
 use super::View;
 use crate::service::terminal::{Session, SpawnOptions};
 use crate::ui::terminal::Preferences;
+use gds::app::AppExt as _;
 use gpui_kit::{
     AppContext, Context, Entity, FocusHandle, IntoElement, KeyBinding, Render, TestAppContext,
     Window, actions, component::Root, div, prelude::*, px, size, test::TestWindowExt,
@@ -45,6 +46,7 @@ impl Render for Host {
 fn single_terminal_respects_its_hosts_key_map(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
         crate::ui::terminal::init(cx);
         crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
         // The host, not the reusable terminal, chooses all these bindings.
@@ -59,11 +61,15 @@ fn single_terminal_respects_its_hosts_key_map(cx: &mut TestAppContext) {
             KeyBinding::new("f6", ReturnToHost, Some("TerminalFocusTest > GdsTerminal")),
         ]);
     });
-    let session = Session::spawn(SpawnOptions {
-        cwd: std::env::temp_dir(),
-        args: vec!["-c".into(), "exit 0".into()],
-        ..SpawnOptions::default()
-    })
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: std::env::temp_dir(),
+            args: vec!["-c".into(), "exit 0".into()],
+            ..SpawnOptions::default()
+        },
+    )
     .expect("local shell for terminal focus test");
     let mut host = None;
     let window = cx.open_window(size(px(800.), px(480.)), |window, cx| {
@@ -134,10 +140,12 @@ fn screen(session: &Session) -> String {
 fn tab_routes_to_pty_and_outside_terminal_traversal_still_works(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
         crate::ui::terminal::init(cx);
         crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
     });
-    let session = Session::spawn(SpawnOptions {
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(&tasks, SpawnOptions {
         cwd: std::env::temp_dir(),
         args: vec!["-c".into(),
             "stty -echo -icanon min 1 time 0; printf '\\033]0;ready\\007'; dd bs=1 count=4 2>/dev/null | od -An -tx1".into()],
@@ -198,6 +206,7 @@ fn tab_routes_to_pty_and_outside_terminal_traversal_still_works(cx: &mut TestApp
 fn tab_completes_a_filename_in_a_real_interactive_shell(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
         crate::ui::terminal::init(cx);
         crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
     });
@@ -224,12 +233,16 @@ fn tab_completes_a_filename_in_a_real_interactive_shell(cx: &mut TestAppContext)
         "COMPLETION_SUCCEEDED\n",
     )
     .expect("completion fixture");
-    let session = Session::spawn(SpawnOptions {
-        cwd: directory.path().to_owned(),
-        shell: Some(bash),
-        args: vec!["--noprofile".into(), "--norc".into(), "-i".into()],
-        ..SpawnOptions::default()
-    })
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: directory.path().to_owned(),
+            shell: Some(bash),
+            args: vec!["--noprofile".into(), "--norc".into(), "-i".into()],
+            ..SpawnOptions::default()
+        },
+    )
     .expect("interactive bash for completion");
     session
         .write(b"PS1=''; stty -echo; bind '\"\\C-i\": complete'; printf '\\033]0;ready\\007'\r")
@@ -260,14 +273,19 @@ fn tab_completes_a_filename_in_a_real_interactive_shell(cx: &mut TestAppContext)
 fn changing_terminal_typography_updates_existing_grid_metrics(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
         crate::ui::terminal::init(cx);
         crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
     });
-    let session = Session::spawn(SpawnOptions {
-        cwd: std::env::temp_dir(),
-        args: vec!["-c".into(), "exit 0".into()],
-        ..SpawnOptions::default()
-    })
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: std::env::temp_dir(),
+            args: vec!["-c".into(), "exit 0".into()],
+            ..SpawnOptions::default()
+        },
+    )
     .expect("local shell for typography test");
     let mut terminal = None;
     let window = cx.open_window(size(px(800.), px(480.)), |window, cx| {

@@ -301,11 +301,12 @@ impl Browser {
             return;
         }
         let generation = self.collections.trash.begin_load();
-        let work = cx
-            .background_executor()
-            .spawn(async move { backend::list() });
+        let work = self.window.tasks.spawn_blocking(backend::list);
         cx.spawn(async move |this, cx| {
-            let result = work.await;
+            let result = work
+                .await
+                .map_err(backend::Error::from)
+                .and_then(std::convert::identity);
             if let Err(error) = this.update(cx, |this, cx| {
                 match this.collections.trash.apply_load(generation, result) {
                     Load::Stale => {}
@@ -433,18 +434,23 @@ impl Browser {
             cx,
         );
         let cancel = self.background_tasks.read(cx).token("trash");
-        let work = gds::ui::task_manager::scope(cx)
-            .track_named(
-                "Trash operation",
-                gds::task_manager::Execution::GpuiBackground,
-                async move { backend::perform_cancellable(action, entries, &cancel) },
-            )
-            .expect("trash operation accepted");
-        let work = cx.background_executor().spawn(work);
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking(move || backend::perform_cancellable(action, entries, &cancel));
         cx.spawn(async move |this, cx| {
             let outcomes = work.await;
-            if let Err(error) = this.update(cx, |this, cx| {
-                this.finish_trash_operation(action, outcomes, cx)
+            if let Err(error) = this.update(cx, |this, cx| match outcomes {
+                Ok(outcomes) => this.finish_trash_operation(action, outcomes, cx),
+                Err(error) => {
+                    this.collections.trash.set_busy(false);
+                    this.collections.trash.task_paths.clear();
+                    this.finish_background_kind(
+                        "trash",
+                        notifications::Report::new(notifications::Level::Error, error.to_string()),
+                        cx,
+                    );
+                }
             }) {
                 tracing::warn!("Trash operation arrived after the window closed: {error}");
             }

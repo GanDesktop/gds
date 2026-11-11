@@ -393,13 +393,13 @@ impl Host {
                 let launch = cx
                     .try_global::<super::Launch>()
                     .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("The workspace runtime is unavailable"))?;
+                    .ok_or_else(|| anyhow::anyhow!("The workspace task service is unavailable"))?;
                 let view = cx.new(|cx| {
                     Workspace::new(
                         target.clone(),
                         launch.cwd,
                         compact,
-                        &launch.runtime,
+                        &launch.tasks,
                         window,
                         cx,
                     )

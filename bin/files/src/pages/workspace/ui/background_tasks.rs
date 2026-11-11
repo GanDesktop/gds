@@ -1,6 +1,7 @@
 //! Window-owned running operations shown by the footer and its click popover.
 use super::*;
 use super::{file_icon::FileIcon, file_label::FileLabel, status::*};
+use gds::app::AppExt as _;
 use gds::ui::IconButton;
 use gds_uim::el;
 use gpui_kit::{assets::IconName, prelude::*};
@@ -106,7 +107,7 @@ impl Browser {
                 state.items.push(Item {
                     key: key.into(),
                     label,
-                    cancel: gds::ui::task_manager::scope(cx).token().child_token(),
+                    cancel: cx.gds().tasks().scope().token().child_token(),
                 });
             }
             cx.notify();

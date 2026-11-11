@@ -4,7 +4,7 @@
 use gds::ui::ListSurface;
 use std::{cell::RefCell, rc::Rc};
 
-use crate::features::file_operations::commands::Command;
+use crate::shared::ui::actions::Command;
 use gds::ui::page::*;
 use gds::{
     appearance::tokens::DataListStyle,

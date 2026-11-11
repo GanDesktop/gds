@@ -4,6 +4,24 @@ use anyhow::Context as _;
 use directories::BaseDirs;
 use std::path::PathBuf;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Mode {
+    Browser,
+    Picker,
+    #[cfg(target_os = "linux")]
+    Service,
+}
+
+impl Mode {
+    pub fn keep_alive(self) -> bool {
+        match self {
+            Self::Browser | Self::Picker => false,
+            #[cfg(target_os = "linux")]
+            Self::Service => true,
+        }
+    }
+}
+
 pub(super) struct Config {
     pub home: PathBuf,
     pub state_path: PathBuf,
@@ -12,8 +30,7 @@ pub(super) struct Config {
     pub preferences: configuration::Preferences,
     pub startup_error: Option<String>,
     pub enable_logs: bool,
-    #[cfg(target_os = "linux")]
-    pub dbus_service: bool,
+    pub mode: Mode,
 }
 
 impl Config {
@@ -60,6 +77,20 @@ impl Config {
                 Some(error.to_string()),
             ),
         };
+        let mode = if picker_options.is_some() {
+            Mode::Picker
+        } else {
+            #[cfg(target_os = "linux")]
+            if arguments.dbus_service {
+                Mode::Service
+            } else {
+                Mode::Browser
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                Mode::Browser
+            }
+        };
         Ok(Self {
             home,
             state_path,
@@ -68,8 +99,7 @@ impl Config {
             preferences,
             startup_error,
             enable_logs: arguments.enable_logs,
-            #[cfg(target_os = "linux")]
-            dbus_service: arguments.dbus_service,
+            mode,
         })
     }
 

@@ -1,4 +1,5 @@
 use crate::shared::i18n::tr;
+use gds::app::AppExt as _;
 use gds_uim::el;
 mod activity;
 mod agent;
@@ -205,12 +206,11 @@ impl Workspace {
         server: Target,
         cwd: PathBuf,
         compact: bool,
-        runtime: &tokio::runtime::Handle,
+        tasks: &gds::service::task_manager::Scope,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (connection, events) =
-            Connection::new(server.clone(), runtime, &gds::ui::task_manager::scope(cx));
+        let (connection, events) = Connection::new(server.clone(), tasks);
         let store = navigation::restore::Store::discover(&server);
         let mut view = Self::with_connection(connection, events, server, cwd, compact, window, cx);
         view.attach_restore(store);

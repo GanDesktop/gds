@@ -4,7 +4,13 @@ use std::task::{Context, Poll, Waker};
 
 #[test]
 fn shutdown_waits_for_inflight_startup_and_is_idempotent() {
-    let (terminal, launch) = Terminal::prepare(SpawnOptions::default());
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
+    let (terminal, launch) = Terminal::prepare(tasks.clone(), SpawnOptions::default());
     assert_eq!(terminal.status(), Status::Starting);
     let mut first = terminal.shutdown();
     let mut second = terminal.shutdown();
@@ -22,7 +28,13 @@ fn shutdown_waits_for_inflight_startup_and_is_idempotent() {
 
 #[test]
 fn cancelled_startup_finishes_without_a_window_or_process() {
-    let (terminal, launch) = Terminal::prepare(SpawnOptions::default());
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
+    let (terminal, launch) = Terminal::prepare(tasks.clone(), SpawnOptions::default());
     let ready = terminal.ready();
     let shutdown = terminal.shutdown();
     launch.run();
@@ -49,8 +61,14 @@ fn options(cwd: std::path::PathBuf) -> SpawnOptions {
 #[cfg(unix)]
 #[test]
 fn service_runs_input_and_reports_exit_without_a_window() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("service working directory");
-    let (terminal, launch) = Terminal::prepare(options(directory.path().to_owned()));
+    let (terminal, launch) = Terminal::prepare(tasks.clone(), options(directory.path().to_owned()));
     launch.run();
     let session = futures_lite::future::block_on(terminal.ready()).expect("ready session");
     assert_eq!(terminal.cwd(), directory.path());
@@ -77,6 +95,12 @@ fn service_runs_input_and_reports_exit_without_a_window() {
 #[cfg(unix)]
 #[test]
 fn theme_queries_follow_updates_before_launch_and_without_a_view() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     use alacritty_terminal::{term::color::COUNT, vte::ansi::Rgb};
     let directory = tempfile::tempdir().expect("query working directory");
     let mut options = options(directory.path().to_owned());
@@ -91,7 +115,7 @@ dd bs=1 count=76 of=live.reply 2>/dev/null
 : > live.done
 "
     .into();
-    let (terminal, launch) = Terminal::prepare(options);
+    let (terminal, launch) = Terminal::prepare(tasks.clone(), options);
     // The launch already exists, but the native process has not started yet.
     terminal.set_palette(
         [Rgb {
@@ -139,10 +163,34 @@ fn wait_for_file(path: &std::path::Path) {
 #[cfg(unix)]
 #[test]
 fn startup_waiters_do_not_keep_the_process_owner_alive() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("service working directory");
-    let (terminal, launch) = Terminal::prepare(options(directory.path().to_owned()));
+    let (terminal, launch) = Terminal::prepare(tasks.clone(), options(directory.path().to_owned()));
     let ready = terminal.ready();
     drop(terminal);
     launch.run();
     assert!(futures_lite::future::block_on(ready).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn application_shutdown_reaps_terminal_with_the_service_still_retained() {
+    let supervisor = crate::service::task_manager::Supervisor::new(false).expect("executor");
+    let tasks = supervisor.scope();
+    let directory = tempfile::tempdir().expect("terminal directory");
+    let (terminal, launch) = Terminal::prepare(tasks.clone(), options(directory.path().to_owned()));
+    tasks.spawn_blocking(move || launch.run());
+    let session = supervisor
+        .block_on(terminal.ready())
+        .unwrap()
+        .expect("session");
+    futures_lite::future::block_on(tasks.shutdown());
+    futures_lite::future::block_on(terminal.shutdown());
+    assert_eq!(terminal.status(), Status::Closed);
+    assert!(!session.is_running());
 }

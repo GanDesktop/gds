@@ -7,7 +7,7 @@ impl Service {
         save: Option<pb::SaveAcpConfigurationRequest>,
     ) -> impl Future<Output = Result<pb::AcpConfiguration, String>> + use<> {
         let server = self.server.clone();
-        let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
+        let task = IoTask::cancel_on_drop(self.tasks.spawn(async move {
             tokio::time::timeout(CATALOG_TIMEOUT, async {
                 let mut client = Client::connect_options(&server)
                     .await

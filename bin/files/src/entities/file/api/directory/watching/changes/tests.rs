@@ -1,4 +1,5 @@
 use super::*;
+use directory::ReadOptions;
 #[::core::prelude::v1::test]
 fn external_xattr_change_updates_metadata_without_changing_file_mtime() {
     let root = tempfile::tempdir().unwrap();

@@ -32,6 +32,7 @@ impl Store {
     /// # Errors
     /// Reports unsafe paths, database or migration failures.
     pub(super) async fn open(
+        tasks: &gds::service::task_manager::Scope,
         path: &Path,
         options: &ConnectionOptions,
         limit: u64,
@@ -43,7 +44,7 @@ impl Store {
             ..Options::new(MIGRATIONS)
         }
         .models(models!(record::Session, record::Page, record::Event))
-        .open(path)
+        .open(tasks, path)
         .await?;
         let store = Self {
             db,

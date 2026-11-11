@@ -1,20 +1,21 @@
-//! HTTP transport for GPUI-managed assets, sharing the GUI's network runtime.
+//! HTTP transport for GPUI-managed assets, using the application task supervisor.
 
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result};
 use futures::future::BoxFuture;
+use gds::service::task_manager::Scope;
 use gpui_kit::http_client::{
     AsyncBody, HttpClient, Request, RequestTimeout, Response, Url, http::HeaderValue,
 };
 use reqwest_client::ReqwestClient;
-use tokio::runtime::Handle;
 
 const USER_AGENT: &str = concat!("gds/agents/", env!("CARGO_PKG_VERSION"));
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct AssetClient {
     inner: ReqwestClient,
+    tasks: Scope,
 }
 
 impl HttpClient for AssetClient {
@@ -37,7 +38,9 @@ impl HttpClient for AssetClient {
                 .extensions_mut()
                 .insert(RequestTimeout(REQUEST_TIMEOUT));
         }
-        self.inner.send(request)
+        let work = self.inner.send(request);
+        let task = self.tasks.spawn_cancellable(work).cancel_on_drop();
+        Box::pin(async move { task.await? })
     }
 }
 
@@ -45,13 +48,16 @@ impl HttpClient for AssetClient {
 ///
 /// # Errors
 /// Returns an error if HTTP or TLS client configuration cannot be initialized.
-pub(crate) fn client(runtime: &Handle) -> Result<Arc<dyn HttpClient>> {
-    // The adapter captures the current handle; it can then be polled by GPUI
-    // without creating a second Tokio runtime.
-    let _entered = runtime.enter();
-    // A request deadline is created on Tokio and also bounds body reads.
-    // A per-read idle timer would require Tokio context while GPUI polls the body.
-    let inner = ReqwestClient::proxy_and_user_agent(None, USER_AGENT)
-        .context("cannot initialize the GUI asset HTTP client")?;
-    Ok(Arc::new(AssetClient { inner }))
+pub(crate) async fn client(tasks: &Scope) -> Result<Arc<dyn HttpClient>> {
+    // The transport captures Tokio context while constructed by the supervisor.
+    let inner = tasks
+        .spawn(async {
+            ReqwestClient::proxy_and_user_agent(None, USER_AGENT)
+                .context("cannot initialize the GUI asset HTTP client")
+        })
+        .await??;
+    Ok(Arc::new(AssetClient {
+        inner,
+        tasks: tasks.clone(),
+    }))
 }

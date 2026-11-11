@@ -33,18 +33,16 @@ fn dropping_owner_cancels_only_its_subtree() {
 
 #[tokio::test]
 async fn cancellation_does_not_abort_cleanup_and_detached_tasks_are_waited() {
-    let root = Scope::default();
+    let root = Scope::with_handle(tokio::runtime::Handle::current(), false);
     let owner = root.child();
     let cancel = owner.token();
     let (release, ready) = tokio::sync::oneshot::channel();
     let (finished, done) = tokio::sync::oneshot::channel();
-    let handle = owner
-        .spawn(&tokio::runtime::Handle::current(), async move {
-            cancel.cancelled().await;
-            ready.await.unwrap();
-            finished.send(()).unwrap();
-        })
-        .unwrap();
+    let handle = owner.spawn(async move {
+        cancel.cancelled().await;
+        ready.await.unwrap();
+        finished.send(()).unwrap();
+    });
     drop(handle);
     root.cancel();
     let mut shutdown = Box::pin(root.shutdown());
@@ -60,7 +58,7 @@ async fn cancellation_does_not_abort_cleanup_and_detached_tasks_are_waited() {
 
 #[tokio::test]
 async fn threads_and_blocking_jobs_share_the_root_barrier() {
-    let root = Scope::default();
+    let root = Scope::with_handle(tokio::runtime::Handle::current(), false);
     let (send, receive) = std::sync::mpsc::channel();
     let thread = root
         .spawn_thread(std::thread::Builder::new(), move || {
@@ -68,11 +66,7 @@ async fn threads_and_blocking_jobs_share_the_root_barrier() {
         })
         .unwrap();
     let (release, ready) = std::sync::mpsc::channel();
-    let work = root
-        .spawn_blocking(&tokio::runtime::Handle::current(), move || {
-            ready.recv().unwrap()
-        })
-        .unwrap();
+    let work = root.spawn_blocking(move || ready.recv().unwrap());
     root.cancel();
     send.send(()).unwrap();
     thread.join().unwrap();
@@ -93,7 +87,7 @@ fn cancelled_child_is_killed_and_reaped_before_completion() {
     let child = std::process::Command::new("sleep")
         .arg("30")
         .spawn()
-        .unwrap();
+        .expect("sleep process");
     let pid = child.id();
     let cancel = CancellationToken::new();
     cancel.cancel();
@@ -127,17 +121,15 @@ async fn async_process_captures_output_and_reaps_cancelled_child() {
     assert_eq!(output.stderr, b"err");
 
     let directory = tempfile::tempdir().unwrap();
-    let root = Scope::default();
+    let root = Scope::with_handle(tokio::runtime::Handle::current(), false);
     let cancel = root.token();
     let mut command = tokio::process::Command::new("sh");
     command
         .current_dir(directory.path())
         .args(["-c", "echo $$ > pid; exec sleep 30"]);
-    let task = root
-        .spawn(&tokio::runtime::Handle::current(), async move {
-            process::output(&mut command, &cancel, std::time::Duration::from_secs(5)).await
-        })
-        .unwrap();
+    let task = root.spawn(async move {
+        process::output(&mut command, &cancel, std::time::Duration::from_secs(5)).await
+    });
     let pid = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if let Ok(text) = std::fs::read_to_string(directory.path().join("pid"))
@@ -157,4 +149,35 @@ async fn async_process_captures_output_and_reaps_cancelled_child() {
     );
     #[cfg(target_os = "linux")]
     assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+}
+
+#[test]
+fn bound_executor_runs_without_an_ambient_runtime_and_rejects_late_work() {
+    let supervisor = Supervisor::new(false).expect("executor");
+    let root = supervisor.scope();
+    let task = root.spawn(async { 42 });
+    assert_eq!(supervisor.block_on(task).unwrap().unwrap(), 42);
+    root.cancel();
+    let task = root.spawn(async { panic!("closed scope must never poll new work") });
+    let mut task = Box::pin(task);
+    assert!(matches!(
+        task.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Err(Error::Closed(_)))
+    ));
+    let blocking = root.spawn_blocking(|| panic!("closed scope must never execute new work"));
+    let mut blocking = Box::pin(blocking);
+    assert!(matches!(
+        blocking
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Err(Error::Closed(_)))
+    ));
+}
+
+#[tokio::test]
+async fn retained_disposable_task_does_not_prevent_shutdown() {
+    let root = Scope::with_handle(tokio::runtime::Handle::current(), false);
+    let task = root.spawn_cancellable(std::future::pending::<()>());
+    root.shutdown().await;
+    assert!(matches!(task.await, Err(Error::Closed(_))));
 }

@@ -55,7 +55,6 @@ impl Global for OpenWindow {}
 /// Install the collector created before the application's background tasks start.
 pub fn install(store: Store, cx: &mut App) {
     cx.set_global(Records(store));
-    crate::ui::task_manager::init(cx);
 }
 
 pub fn is_enabled(cx: &App) -> bool {

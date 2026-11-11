@@ -206,3 +206,6 @@ impl Report {
         self.items.iter().filter(|item| item.result.is_err())
     }
 }
+
+pub(crate) mod new_folder;
+pub(crate) mod rename;

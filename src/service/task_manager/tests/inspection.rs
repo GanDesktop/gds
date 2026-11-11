@@ -14,6 +14,7 @@ fn diagnostics_are_opt_in_but_shutdown_still_waits_for_cleanup() {
         .register_named(UnusedLabel, Execution::Thread)
         .unwrap();
     assert!(!owner.inspection_enabled());
+    assert!(root.inspector().is_none());
     assert!(root.admission.lock().unwrap().is_none());
     assert!(completion.inspection.is_none());
     assert!(root.snapshot().scopes.is_empty());
@@ -86,16 +87,11 @@ fn registration_site_and_unpolled_future_drop_are_visible() {
 
 #[tokio::test]
 async fn executor_adapters_report_kind_until_completion() {
-    let root = Scope::new(true);
-    let runtime = tokio::runtime::Handle::current();
+    let root = Scope::with_handle(tokio::runtime::Handle::current(), true);
     let cancel = root.token();
-    let asynchronous = root
-        .spawn(&runtime, async move { cancel.cancelled().await })
-        .unwrap();
+    let asynchronous = root.spawn(async move { cancel.cancelled().await });
     let (send, receive) = std::sync::mpsc::channel();
-    let blocking = root
-        .spawn_blocking(&runtime, move || receive.recv().unwrap())
-        .unwrap();
+    let blocking = root.spawn_blocking(move || receive.recv().unwrap());
     let (stop, stopped) = std::sync::mpsc::channel();
     let thread = root
         .spawn_thread(std::thread::Builder::new(), move || stopped.recv().unwrap())
@@ -124,4 +120,18 @@ async fn executor_adapters_report_kind_until_completion() {
     thread.join().unwrap();
     root.shutdown().await;
     assert!(root.snapshot().tasks.is_empty());
+}
+
+#[test]
+fn inspector_does_not_retain_the_service_or_its_scopes() {
+    let root = Scope::new(true);
+    let inspector = root.inspector().expect("inspection enabled");
+    let owner = root.child();
+    let completion = owner.register().unwrap();
+    drop(owner);
+    drop(root);
+    assert_eq!(inspector.snapshot().tasks.len(), 1);
+    drop(completion);
+    assert!(inspector.snapshot().scopes.is_empty());
+    assert!(inspector.snapshot().tasks.is_empty());
 }

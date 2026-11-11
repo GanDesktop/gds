@@ -58,6 +58,7 @@ required-features = ["nixes"]
 # capability that owns them; every feature enables the packages its own code
 # uses directly.
 default = []
+app = ["task-manager", "dep:gpui-kit", "dep:tracing"]
 task-manager = ["dep:tokio", "dep:tokio-util", "dep:thiserror", "dep:nix"]
 desktop-protocol = ["dep:serde"]
 persistence = ["dep:thiserror", "dep:tempfile", "dep:nix"]
@@ -69,6 +70,7 @@ desktop = [
 ]
 file-tags = ["desktop", "dep:rustix"]
 storage = [
+    "task-manager",
     "dep:toasty", "dep:toasty-driver-sqlite", "dep:toasty-core",
     "dep:tokio", "dep:thiserror", "dep:nix",
 ]
@@ -90,12 +92,14 @@ remote = [
     "dep:percent-encoding",
 ]
 appearance = [
+    "task-manager",
     "watch", "dep:gpui-kit", "dep:font-kit", "dep:directories", "dep:tracing",
     "dep:serde", "dep:serde_json", "dep:thiserror", "dep:toml", "dep:rust-ini",
     "dep:zbus", "dep:futures-lite",
 ]
 i18n = ["dep:fluent-bundle", "dep:gpui-kit", "dep:serde", "dep:thiserror", "dep:unic-langid"]
 ui = [
+    "app",
     "appearance", "i18n", "persistence", "logs", "terminal", "file-inspection",
     "dep:gds-settings-derive", "dep:gds-uim", "dep:gpui", "dep:anyhow",
     "dep:unicode-segmentation", "dep:unicode-width", "dep:chrono", "dep:serde_json",

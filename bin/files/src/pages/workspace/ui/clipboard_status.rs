@@ -7,17 +7,17 @@ use gpui_kit::{assets::IconName, prelude::*};
 
 pub(super) struct Details {
     busy: bool,
-    runtime: tokio::runtime::Handle,
+    tasks: gds::service::task_manager::Scope,
     paths: Vec<PathBuf>,
     icons: std::collections::HashMap<PathBuf, FileIcon>,
     loading: Option<Task<()>>,
 }
 
 impl Details {
-    pub(super) fn new(runtime: tokio::runtime::Handle) -> Self {
+    pub(super) fn new(tasks: gds::service::task_manager::Scope) -> Self {
         Self {
             busy: false,
-            runtime,
+            tasks,
             paths: Vec::new(),
             icons: Default::default(),
             loading: None,
@@ -30,7 +30,7 @@ impl Details {
         }
         self.paths = paths.clone();
         self.icons.retain(|path, _| paths.contains(path));
-        let work = self.runtime.spawn_blocking(move || {
+        let work = self.tasks.spawn_blocking(move || {
             let icons = paths
                 .iter()
                 .map(|path| {

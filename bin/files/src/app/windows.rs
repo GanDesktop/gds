@@ -1,10 +1,11 @@
 //! Application-owned Files windows and desktop request routing.
-use crate::entities::{location::places::Storage, preferences as configuration};
+use crate::entities::{location::places::Storage, preferences::PreferencesExt as _};
 use crate::pages::workspace::{Browser, LaunchOptions, NewWindowRequested};
 use crate::shared::i18n;
+use gds::app::AppExt as _;
+use gds::service::task_manager::Scope;
 use gpui_kit::*;
 use std::{path::PathBuf, sync::Arc};
-use tokio::runtime::Handle;
 
 struct Manager {
     _windows: Entity<Windows>,
@@ -12,7 +13,7 @@ struct Manager {
 impl Global for Manager {}
 
 pub(super) struct Windows {
-    runtime: Handle,
+    tasks: Scope,
     home: PathBuf,
     storage: Arc<Storage>,
     windows: Vec<(AnyWindowHandle, WeakEntity<Browser>)>,
@@ -20,13 +21,13 @@ pub(super) struct Windows {
 
 impl Windows {
     pub(super) fn install(
-        runtime: Handle,
+        tasks: Scope,
         home: PathBuf,
         storage: Arc<Storage>,
         cx: &mut App,
     ) -> Entity<Self> {
         let manager = cx.new(|_| Self {
-            runtime,
+            tasks,
             home,
             storage,
             windows: Vec::new(),
@@ -42,6 +43,7 @@ impl Windows {
         launch: LaunchOptions,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<(AnyWindowHandle, Entity<Browser>)> {
+        anyhow::ensure!(!cx.gds().tasks().is_shutting_down(), "Files is closing");
         let picking = launch.picker.is_some();
         let dimensions = gds::ui::window::fit_size(gds::ui::window::initial_size(), cx);
         let options = WindowOptions {
@@ -87,13 +89,14 @@ impl Windows {
                     tracing::warn!(parent = %request.parent_window, %error, "cannot associate chooser with its parent");
                 }
             }
+            gds::appearance::theme::Observer::attach(window, cx);
             cx.new(|cx| Browser::new(launch, window, cx))
         })?;
         if picking {
             let picker_window = window.window_id();
             cx.on_window_closed(move |cx, closed| {
                 if closed == picker_window {
-                    cx.quit();
+                    cx.gds().tasks().request_quit();
                 }
             })
             .detach();
@@ -110,17 +113,21 @@ impl Windows {
     }
 
     fn request(&mut self, start: PathBuf, command: Option<DesktopCommand>, cx: &mut Context<Self>) {
-        let runtime = self.runtime.clone();
+        let tasks = self.tasks.clone();
         let home = self.home.clone();
         let storage = self.storage.clone();
-        let work = runtime.spawn(async move { storage.load().await });
+        let storage_tasks = tasks.clone();
+        let work = tasks.spawn(async move { storage.load(&storage_tasks).await });
         cx.spawn(async move |this, cx| {
             let places = work.await.unwrap_or_else(|error| Err(error.into()));
             if let Err(error) = this.update(cx, |this, cx| {
-                let preferences = configuration::current(cx);
+                if cx.gds().tasks().is_shutting_down() {
+                    return;
+                }
+                let preferences = cx.gds().preferences().current();
                 let result = this.open(
                     LaunchOptions {
-                        runtime,
+                        tasks,
                         places,
                         start,
                         home,

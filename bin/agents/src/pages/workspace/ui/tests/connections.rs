@@ -16,9 +16,13 @@ fn footer_switches_backends_in_place_and_restores_drafts(cx: &mut TestAppContext
         .build()
         .expect("runtime");
     cx.update(|cx| {
-        crate::entities::agent::init(old.clone(), runtime.handle().clone(), cx);
+        crate::entities::agent::init(
+            old.clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            cx,
+        );
         crate::pages::workspace::windows::init_windows(
-            runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
             "/unused".into(),
             false,
             cx,

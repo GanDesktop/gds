@@ -53,7 +53,7 @@ pub(super) fn load(
                 Error::Io(error)
             }
         })?;
-    let mut child = crate::task_manager::process::ChildGuard::new(child);
+    let mut child = crate::service::task_manager::process::ChildGuard::new(child);
     let status = child.wait(cancel, TIMEOUT).map_err(|error| {
         if error.kind() == std::io::ErrorKind::TimedOut {
             Error::VideoTimeout

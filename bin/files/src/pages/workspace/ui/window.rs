@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) struct State {
     pub handle: AnyWindowHandle,
-    pub runtime: Handle,
+    pub tasks: Scope,
     pub desktop: desktop::Desktop,
 
     pub root_focus: FocusHandle,
@@ -16,12 +16,12 @@ pub(super) struct State {
 }
 
 impl State {
-    pub(super) fn new(runtime: Handle, window: &mut Window, cx: &mut App) -> Self {
+    pub(super) fn new(tasks: Scope, window: &mut Window, cx: &mut App) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         Self {
             handle: window.window_handle(),
-            runtime,
+            tasks,
             desktop: desktop::Desktop::default(),
             root_focus: cx.focus_handle(),
             focus,

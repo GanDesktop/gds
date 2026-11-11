@@ -45,7 +45,7 @@ impl Baloo {
             );
         }
         self.check().await?;
-        let uri = crate::entities::scheme::TagAddress::new(tag)?.uri();
+        let uri = crate::entities::location::x::tags::TagAddress::new(tag)?.uri();
         let names = run(&self.kio, &["ls", &uri]).await?;
         let mut listing = Listing::default();
         for name in names.lines().filter(|s| !matches!(*s, "" | "." | "..")) {
@@ -54,7 +54,7 @@ impl Baloo {
             } else {
                 format!("{tag}/{name}")
             };
-            let child_uri = crate::entities::scheme::TagAddress::new(&child)?.uri();
+            let child_uri = crate::entities::location::x::tags::TagAddress::new(&child)?.uri();
             let stat = run(&self.kio, &["stat", &child_uri]).await?;
             if let Some(path) = field(&stat, "LOCAL_PATH") {
                 let path = PathBuf::from(path);
@@ -86,7 +86,7 @@ impl TagIndex for Baloo {
             if tag.is_empty() || tag.contains('"') {
                 return Err("Cannot delete the tag root or a tag containing a double quote".into());
             }
-            let address = crate::entities::scheme::TagAddress::new(tag)?;
+            let address = crate::entities::location::x::tags::TagAddress::new(tag)?;
             self.check().await?;
             // KIO's tags worker removes associations recursively, as in Dolphin.
             run(&self.kio, &["remove", &address.uri()]).await?;

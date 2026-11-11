@@ -68,7 +68,7 @@ impl Location {
     /// # Errors
     /// Rejects unsupported schemes, malformed addresses and invalid volume-relative paths.
     pub(crate) fn from_uri(input: &str) -> Result<Self, Error> {
-        crate::entities::scheme::parse(input)
+        crate::entities::location::scheme::parse(input)
     }
 
     pub(crate) fn from_builtin_uri(input: &str) -> Result<Self, Error> {

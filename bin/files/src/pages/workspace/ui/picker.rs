@@ -15,7 +15,6 @@ use gpui_kit::component::{
 };
 
 mod save;
-use std::sync::Arc;
 
 use gds::ui::{self, Shortcut, button::Button};
 use gds_uim::el;
@@ -28,7 +27,6 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 
-use super::directory::{Entry, EntryKind, LinkStatus};
 use super::*;
 
 gpui_kit::actions!(
@@ -84,90 +82,20 @@ pub(super) fn cancel_shortcut() -> Shortcut {
     Shortcut::new(Box::new(PickerCancel), Some(PICKER_CONTEXT))
 }
 
-/// The visible file projection of one filter group.
-///
-/// Every tab keeps a copy so a directory read projects its fresh entries
-/// through the same filter instead of replacing a narrowed list with the whole
-/// folder.
-#[derive(Clone)]
-pub(super) struct Projection {
-    options: Arc<crate::features::pick_files::Options>,
-    active_filter: usize,
-}
-
-impl Projection {
-    /// Whether an entry belongs in the list: every folder stays visible and
-    /// navigable, files have to match the active group.
-    pub(super) fn keeps(&self, entry: &Entry) -> bool {
-        Self::is_directory(entry)
-            || (!self.options.directory
-                && self.options.matches_type(
-                    self.active_filter,
-                    &entry.path,
-                    entry
-                        .details
-                        .display_content()
-                        .and_then(|content| content.mime.as_deref()),
-                ))
-    }
-
-    /// Whether the active group narrows files at all.
-    pub(super) fn narrows(&self) -> bool {
-        self.options
-            .filters
-            .get(self.active_filter)
-            .is_some_and(|filter| filter.label.is_some())
-    }
-
-    /// Whether an entry is a folder, following a link only for navigation.
-    pub(super) fn is_directory(entry: &Entry) -> bool {
-        match entry.kind {
-            EntryKind::Directory => true,
-            EntryKind::SymbolicLink => entry.details.target.as_ref().is_some_and(|target| {
-                target.status == LinkStatus::Resolved && target.kind == EntryKind::Directory
-            }),
-            _ => false,
-        }
-    }
-}
+pub(super) use crate::features::pick_files::Projection;
+use crate::features::pick_files::Session;
 
 /// One picker session.
 pub(super) struct State {
-    options: Arc<crate::features::pick_files::Options>,
-    active_filter: usize,
-    read_only: bool,
+    pub session: Session,
     filter_menu_open: bool,
-    /// Set once the selection is being written and the window is closing, so a
-    /// second confirm can neither print twice nor reopen anything.
-    completing: bool,
     name: Option<Entity<InputState>>,
     original_name: Option<std::ffi::OsString>,
     pending_name: Option<std::ffi::OsString>,
-    choices: Vec<chooser::Choice>,
     _name_subscription: Option<Subscription>,
 }
 
 impl State {
-    pub(super) fn allows_multiple(&self) -> bool {
-        self.options.multiple
-    }
-
-    pub(super) fn accepts_entry(&self, entry: &Entry) -> bool {
-        if self.options.directory {
-            Projection::is_directory(entry)
-        } else {
-            !Projection::is_directory(entry)
-                && self.options.matches_type(
-                    self.active_filter,
-                    &entry.path,
-                    entry
-                        .details
-                        .display_content()
-                        .and_then(|content| content.mime.as_deref()),
-                )
-        }
-    }
-
     pub(super) fn new(
         options: crate::features::pick_files::Options,
         window: &mut Window,
@@ -229,51 +157,22 @@ impl State {
             }
         }
 
-        let choices = request
-            .map(|request| request.choices.clone())
-            .unwrap_or_default();
         Self {
             name,
             original_name,
-            choices,
             pending_name: None,
             _name_subscription: subscription,
-            read_only: options.read_only,
             filter_menu_open: false,
-            options: Arc::new(options),
-            active_filter: 0,
-            completing: false,
+            session: Session::new(options),
         }
-    }
-
-    pub(super) fn projection(&self) -> Projection {
-        Projection {
-            options: Arc::clone(&self.options),
-            active_filter: self.active_filter,
-        }
-    }
-
-    fn filters(&self) -> &[crate::features::pick_files::Filter] {
-        &self.options.filters
     }
 
     fn filter_label(&self, index: usize, cx: &App) -> SharedString {
-        self.filters()
+        self.session
+            .filters()
             .get(index)
             .and_then(|filter| filter.label.clone())
             .map_or_else(|| i18n::text("picker-all-files", cx), |label| label.into())
-    }
-
-    fn matches(&self, path: &Path) -> bool {
-        self.options.matches(self.active_filter, path)
-    }
-
-    fn select_filter(&mut self, index: usize) -> bool {
-        if index == self.active_filter || index >= self.filters().len() {
-            return false;
-        }
-        self.active_filter = index;
-        true
     }
 }
 
@@ -285,7 +184,7 @@ impl Browser {
     ) -> bool {
         self.picker
             .as_ref()
-            .is_some_and(|picker| !picker.completing && !picker.filter_menu_open)
+            .is_some_and(|picker| !picker.session.completing && !picker.filter_menu_open)
             && self.pages.is_empty()
             && self.menus.open.is_none()
             && !self.toolbar.path.editing
@@ -314,9 +213,9 @@ impl Browser {
         if let Some(picker) = self
             .picker
             .as_ref()
-            .filter(|picker| !picker.options.directory)
+            .filter(|picker| !picker.session.options.directory)
         {
-            self.set_picker_read_only(!picker.read_only, cx);
+            self.set_picker_read_only(!picker.session.read_only, cx);
         }
     }
 
@@ -329,12 +228,13 @@ impl Browser {
         if !self.picker_actions_available(window, cx) {
             return;
         }
-        if let Some(picker) = self
-            .picker
-            .as_ref()
-            .filter(|picker| !picker.options.directory && picker.filters().len() > 1)
-        {
-            self.set_picker_filter((picker.active_filter + 1) % picker.filters().len(), cx);
+        if let Some(picker) = self.picker.as_ref().filter(|picker| {
+            !picker.session.options.directory && picker.session.filters().len() > 1
+        }) {
+            self.set_picker_filter(
+                (picker.session.active_filter + 1) % picker.session.filters().len(),
+                cx,
+            );
         }
     }
 
@@ -342,7 +242,7 @@ impl Browser {
     /// current folder; pending navigation must never confirm the old location.
     fn picker_candidates(&self, cx: &App) -> Option<Vec<PathBuf>> {
         let picker = self.picker.as_ref()?;
-        if picker.completing {
+        if picker.session.completing {
             return None;
         }
         let slot = self.active()?;
@@ -356,12 +256,12 @@ impl Browser {
             return crate::features::pick_files::Options::valid_name(&name)
                 .then(|| vec![path.join(name)]);
         }
-        if picker.options.directory {
+        if picker.session.options.directory {
             let selected = &tab.view().selected;
             if selected.is_empty() {
                 return Some(vec![tab.path()?.to_path_buf()]);
             }
-            if !picker.options.multiple && selected.len() > 1 {
+            if !picker.session.options.multiple && selected.len() > 1 {
                 return None;
             }
             return selected
@@ -374,7 +274,7 @@ impl Browser {
                 .then(|| selected.clone());
         }
         let selected = &tab.view().selected;
-        if selected.is_empty() || (!picker.options.multiple && selected.len() > 1) {
+        if selected.is_empty() || (!picker.session.options.multiple && selected.len() > 1) {
             return None;
         }
         selected
@@ -382,7 +282,7 @@ impl Browser {
             .all(|path| {
                 slot.table_rows
                     .iter()
-                    .any(|entry| entry.path == *path && picker.accepts_entry(entry))
+                    .any(|entry| entry.path == *path && picker.session.accepts_entry(entry))
             })
             .then(|| selected.clone())
     }
@@ -391,17 +291,17 @@ impl Browser {
         let Some(picker) = self.picker.as_ref() else {
             return;
         };
-        if index >= picker.filters().len() {
+        if index >= picker.session.filters().len() {
             return;
         }
         let projection = {
             let Some(picker) = self.picker.as_mut() else {
                 return;
             };
-            if !picker.select_filter(index) {
+            if !picker.session.select_filter(index) {
                 return;
             }
-            picker.projection()
+            picker.session.projection()
         };
         self.reproject_picker(&projection);
         cx.notify();
@@ -409,8 +309,8 @@ impl Browser {
 
     pub(super) fn set_picker_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
         let changed = self.picker.as_mut().is_some_and(|picker| {
-            let changed = picker.read_only != read_only;
-            picker.read_only = read_only;
+            let changed = picker.session.read_only != read_only;
+            picker.session.read_only = read_only;
             changed
         });
         if changed {
@@ -470,11 +370,11 @@ impl Browser {
             return;
         }
         let (read_only, filter_index, directory, multiple) = match self.picker.as_ref() {
-            Some(picker) if !picker.completing => (
-                picker.read_only,
-                picker.active_filter,
-                picker.options.directory,
-                picker.options.multiple,
+            Some(picker) if !picker.session.completing => (
+                picker.session.read_only,
+                picker.session.active_filter,
+                picker.session.options.directory,
+                picker.session.options.multiple,
             ),
             _ => return,
         };
@@ -483,7 +383,12 @@ impl Browser {
                 && paths.len() != 1
                 && !self.picker.as_ref().is_some_and(|picker| {
                     matches!(
-                        picker.options.portal.as_ref().map(|request| &request.mode),
+                        picker
+                            .session
+                            .options
+                            .portal
+                            .as_ref()
+                            .map(|request| &request.mode),
                         Some(Mode::SaveFiles { .. })
                     )
                 }))
@@ -502,7 +407,7 @@ impl Browser {
         let saving = self
             .picker
             .as_ref()
-            .is_some_and(|picker| picker.options.is_save());
+            .is_some_and(|picker| picker.session.options.is_save());
         for path in &paths {
             if saving {
                 if path.is_dir() || !path.parent().is_some_and(|parent| parent.is_dir()) {
@@ -535,7 +440,10 @@ impl Browser {
                 && !self.picker.as_ref().is_some_and(|picker| {
                     self.active()
                         .and_then(|slot| slot.table_rows.iter().find(|entry| entry.path == *path))
-                        .map_or_else(|| picker.matches(path), |entry| picker.accepts_entry(entry))
+                        .map_or_else(
+                            || picker.session.matches(path),
+                            |entry| picker.session.accepts_entry(entry),
+                        )
                 })
             {
                 self.picker_notice("picker-filter-mismatch", None, cx);
@@ -545,7 +453,7 @@ impl Browser {
         let written = if let Some(picker) = self
             .picker
             .as_ref()
-            .filter(|picker| picker.options.portal.is_some())
+            .filter(|picker| picker.session.options.portal.is_some())
         {
             let result = chooser::Result {
                 paths: paths
@@ -555,6 +463,7 @@ impl Browser {
                 filter_index,
                 read_only,
                 choices: picker
+                    .session
                     .choices
                     .iter()
                     .map(|choice| (choice.id.clone(), choice.selected.clone()))
@@ -580,7 +489,7 @@ impl Browser {
         let Some(picker) = self.picker.as_ref() else {
             return;
         };
-        if picker.completing {
+        if picker.session.completing {
             return;
         }
         self.mark_picker_complete();
@@ -590,7 +499,7 @@ impl Browser {
 
     fn mark_picker_complete(&mut self) {
         if let Some(picker) = self.picker.as_mut() {
-            picker.completing = true;
+            picker.session.completing = true;
         }
     }
 
@@ -616,7 +525,7 @@ impl Browser {
         if self
             .picker
             .as_ref()
-            .is_some_and(|picker| picker.options.is_save())
+            .is_some_and(|picker| picker.session.options.is_save())
         {
             self.confirm_save(paths, window, cx);
         } else {
@@ -685,13 +594,13 @@ impl Browser {
         let Some(picker) = self.picker.as_ref() else {
             return el! { .div }.into_any_element();
         };
-        let labels: Vec<SharedString> = (0..picker.filters().len())
+        let labels: Vec<SharedString> = (0..picker.session.filters().len())
             .map(|index| picker.filter_label(index, cx))
             .collect();
-        let active_filter = picker.active_filter;
-        let completion_blocked = picker.completing;
-        let read_only = picker.read_only;
-        let directory = picker.options.directory;
+        let active_filter = picker.session.active_filter;
+        let completion_blocked = picker.session.completing;
+        let read_only = picker.session.read_only;
+        let directory = picker.session.options.directory;
         let view = cx.entity().downgrade();
 
         let next_filter_shortcut = Shortcut::new(Box::new(PickerNextFilter), Some(PICKER_CONTEXT));
@@ -699,17 +608,17 @@ impl Browser {
         let filter = el! { "picker-filter".Button::new {
             small;
             label: $(picker.filter_label(active_filter, cx));
-            when: $(picker.filters().len() > 1), $(|button| {
+            when: $(picker.session.filters().len() > 1), $(|button| {
                 button.tooltip_with_action(
                     i18n::text("picker-next-filter", cx),
                     &PickerNextFilter,
                     Some(PICKER_CONTEXT),
                 )
             });
-            when: $(picker.filters().len() <= 1), $(|button| {
+            when: $(picker.session.filters().len() <= 1), $(|button| {
                 button.tooltip(i18n::text("picker-file-type", cx))
             });
-            when: $(available && picker.filters().len() > 1), $(|button| {
+            when: $(available && picker.session.filters().len() > 1), $(|button| {
                 button.shortcut(next_filter_shortcut)
             });
             dropdown_caret: true;
@@ -779,8 +688,9 @@ impl Browser {
 
         // Disabled decisions do not advertise a shortcut.
         let enabled = available && !completion_blocked && self.picker_candidates(cx).is_some();
-        let saving = picker.options.is_save();
+        let saving = picker.session.options.is_save();
         let custom_label = picker
+            .session
             .options
             .portal
             .as_ref()

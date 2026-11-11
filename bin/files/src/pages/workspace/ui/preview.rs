@@ -5,6 +5,8 @@
 //! the file's own path is not repeated here. A symlink's target is different
 //! information and is shown as its own row.
 
+use gds::app::AppExt as _;
+
 mod info;
 mod metadata;
 use metadata::{MetadataRow, MetadataTags};
@@ -139,11 +141,14 @@ impl View {
             return;
         }
         let path = item.entry.path.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { gds::service::file_tags::read(&path).map_err(|e| e.to_string()) });
+        let work = cx.gds().tasks().scope().spawn_blocking(move || {
+            gds::service::file_tags::read(&path).map_err(|e| e.to_string())
+        });
         self.tags_task = Some(cx.spawn(async move |this, cx| {
-            let result = work.await;
+            let result = work
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(std::convert::identity);
             let _ = this.update(cx, |this, cx| {
                 this.tags = Some(result);
                 cx.notify();
@@ -514,11 +519,15 @@ impl Browser {
         else {
             return;
         };
-        let work = cx
-            .background_executor()
-            .spawn(async move { Entry::inspect(&path) });
+        let work = self
+            .window
+            .tasks
+            .spawn_blocking(move || Entry::inspect(&path));
         self.collections.preview_task = Some(cx.spawn(async move |this, cx| {
-            let entry = work.await;
+            let entry = work
+                .await
+                .map_err(std::io::Error::other)
+                .and_then(std::convert::identity);
             let _ = this.update(cx, |this, cx| {
                 if let Ok(entry) = entry {
                     this.files

@@ -79,6 +79,7 @@ async fn late_tool_update_refreshes_dependencies_before_exposing_the_update() {
 
 async fn cache(path: &std::path::Path) -> crate::entities::session::connection::cache::Cache {
     crate::entities::session::connection::cache::Cache::open_at(
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
         path,
         &Target::default(),
         8 * 1024 * 1024,
@@ -167,8 +168,10 @@ async fn reopening_disk_history_attaches_without_loading_history_again() {
         .expect("store");
     drop(disk);
     fixture.history_requests.lock().expect("requests").clear();
-    let (store, writer) =
-        crate::entities::session::connection::history::Store::new(Some(cache(&path).await));
+    let (store, writer) = crate::entities::session::connection::history::Store::new(
+        Some(cache(&path).await),
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
+    );
     let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
     let task = tokio::spawn(
         crate::entities::session::connection::permissions::watch_cached(
@@ -230,7 +233,10 @@ async fn cached_history_is_visible_before_the_permission_connection_finishes() {
         .store_window(&window(&fixture).await)
         .await
         .expect("store");
-    let (store, writer) = crate::entities::session::connection::history::Store::new(Some(cache));
+    let (store, writer) = crate::entities::session::connection::history::Store::new(
+        Some(cache),
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
+    );
     let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
     let task = tokio::spawn(
         crate::entities::session::connection::permissions::watch_cached(
@@ -325,7 +331,13 @@ async fn older_page_is_cache_first_and_keeps_the_requested_epoch() {
 async fn hot_resume_uses_cursor_without_a_duplicate_snapshot() {
     for cursor in [280, 300] {
         let fixture = fixture(Scenario::Window).await;
-        let (store, writer) = crate::entities::session::connection::history::Store::new(None);
+        let (store, writer) = crate::entities::session::connection::history::Store::new(
+            None,
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            ),
+        );
         let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
         let task = tokio::spawn(watch_cached(
             fixture.client.clone(),
@@ -368,8 +380,10 @@ async fn shutdown_flushes_events_and_forget_cannot_be_undone_by_pending_writes()
     let path = directory.path().join("private/history.sqlite");
     let cache = cache(&path).await;
     let initial = window(&fixture).await;
-    let (store, writer) =
-        crate::entities::session::connection::history::Store::new(Some(cache.clone()));
+    let (store, writer) = crate::entities::session::connection::history::Store::new(
+        Some(cache.clone()),
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
+    );
     store.window(&initial).await;
     let event = Event::new(
         fixture.session,
@@ -391,8 +405,10 @@ async fn shutdown_flushes_events_and_forget_cannot_be_undone_by_pending_writes()
             .cursor,
         301
     );
-    let (store, writer) =
-        crate::entities::session::connection::history::Store::new(Some(cache.clone()));
+    let (store, writer) = crate::entities::session::connection::history::Store::new(
+        Some(cache.clone()),
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
+    );
     store.forget(fixture.session).await;
     store.window(&initial).await;
     store.event(&event).await;

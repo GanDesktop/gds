@@ -58,7 +58,7 @@ impl Browser {
             return;
         }
         let value = input.read(cx).value();
-        if crate::entities::scheme::recognizes(&value) {
+        if crate::entities::location::scheme::recognizes(&value) {
             match Location::from_uri(&value) {
                 Ok(Location::Directory(path)) => {
                     self.navigate(PathBuf::from(path), cx);

@@ -151,12 +151,18 @@ pub fn install_resources(
     application: &[&str],
     cx: &mut App,
 ) -> Result<(), Error> {
-    let mut catalog = Catalog::new(language, application)?;
-    catalog.bundle.set_use_isolating(false);
-    gpui_kit::component::set_locale(language.locale());
-    cx.set_global(Messages(catalog));
-    cx.refresh_windows();
+    Catalog::new(language, application)?.install(cx);
     Ok(())
+}
+
+impl Catalog {
+    /// Install a fully parsed catalog without introducing another fallible step.
+    pub fn install(mut self, cx: &mut App) {
+        self.bundle.set_use_isolating(false);
+        gpui_kit::component::set_locale(self.language.locale());
+        cx.set_global(Messages(self));
+        cx.refresh_windows();
+    }
 }
 
 pub fn text(id: &str, cx: &App) -> SharedString {

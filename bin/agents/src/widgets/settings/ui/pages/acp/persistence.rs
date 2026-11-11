@@ -2,6 +2,7 @@
 use super::*;
 use crate::shared::i18n::tr;
 use futures::FutureExt;
+use gds::app::AppExt as _;
 
 pub(super) type PendingWrite = futures::future::Shared<Task<()>>;
 
@@ -139,9 +140,9 @@ impl Page {
         self.feedback = Feedback::Idle;
         // Keep accepted writes alive after window close, tied to their original server.
         let page = cx.entity();
-        let Ok(completion) = gds::ui::task_manager::scope(cx).register_named(
+        let Ok(completion) = cx.gds().tasks().scope().register_named(
             "ACP settings write",
-            gds::task_manager::Execution::Supervisor,
+            gds::service::task_manager::Execution::Supervisor,
         ) else {
             return;
         };

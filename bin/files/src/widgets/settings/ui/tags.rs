@@ -7,7 +7,7 @@ use gpui_kit::{base::Disableable, component::Sizable};
 
 pub(super) struct Controls {
     pub editor: Entity<CommandsEditor>,
-    pub runtime: tokio::runtime::Handle,
+    pub tasks: gds::service::task_manager::Scope,
     pub checked: Option<Commands>,
     pub error: Option<String>,
     pub pending: bool,
@@ -26,9 +26,9 @@ impl View {
         self.tags.error = None;
         let commands = self.preferences.tags.commands.clone();
         let work_commands = commands.clone();
-        let work = tokio_util::task::AbortOnDropHandle::new(
+        let work = gds::service::task_manager::Task::cancel_on_drop(
             self.tags
-                .runtime
+                .tasks
                 .spawn(async move { crate::entities::tags::connect(&work_commands).await }),
         );
         self.tags.task = Some(cx.spawn(async move |this, cx| {

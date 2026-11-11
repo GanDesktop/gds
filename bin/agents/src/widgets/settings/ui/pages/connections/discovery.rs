@@ -1,7 +1,7 @@
 use super::*;
 use bas::service::Target;
+use gds::service::task_manager::Task as IoTask;
 use std::time::Duration;
-use tokio_util::task::AbortOnDropHandle;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 pub(super) const LOCAL_NAME: &str = "Local";
@@ -40,8 +40,8 @@ impl Page {
             self.begin_scan(std::future::ready(Err(())), window, cx);
             return;
         };
-        // Only borrow the application's runtime, never its target or credentials.
-        let task = AbortOnDropHandle::new(service.runtime().spawn(probe(Target::Local)));
+        // Only borrow the application's tasks, never its target or credentials.
+        let task = IoTask::cancel_on_drop(service.tasks().spawn_cancellable(probe(Target::Local)));
         self.begin_scan(async move { task.await.unwrap_or(Err(())) }, window, cx);
     }
 

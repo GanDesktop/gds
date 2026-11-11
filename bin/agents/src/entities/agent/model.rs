@@ -21,11 +21,11 @@ impl gpui_kit::Global for Changes {}
 
 pub(crate) fn init(
     server: bas::service::tls::ConnectionOptions,
-    runtime: tokio::runtime::Handle,
+    tasks: gds::service::task_manager::Scope,
     cx: &mut gpui_kit::App,
 ) {
-    check::init(server.clone(), runtime.clone(), cx);
-    catalog::init(server, runtime, cx);
+    check::init(server.clone(), tasks.clone(), cx);
+    catalog::init(server, tasks, cx);
     if !cx.has_global::<Changes>() {
         cx.set_global(Changes::default());
     }

@@ -2,6 +2,7 @@
 use crate::service::file_inspection::{
     Error, Field, Inspection, Metadata, Request, Source, Thumbnail,
 };
+use gds::app::AppExt as _;
 use gpui_kit::*;
 use std::{
     collections::{HashMap, VecDeque},
@@ -104,7 +105,7 @@ struct Entry {
 
 #[derive(Default)]
 pub struct Cache {
-    scope: Option<crate::task_manager::Owner>,
+    scope: Option<crate::service::task_manager::Owner>,
     entries: HashMap<Source, Entry>,
     pending: VecDeque<Source>,
     running: usize,
@@ -124,7 +125,7 @@ impl Cache {
         cx: &mut Context<Self>,
     ) -> Snapshot {
         if self.scope.is_none() {
-            self.scope = Some(crate::ui::task_manager::scope(cx).named_child("File previews"));
+            self.scope = Some(cx.gds().tasks().scope().named_child("File previews"));
         }
         if self.clock == 0 {
             cx.on_release(|cache, cx| {
@@ -214,9 +215,11 @@ impl Cache {
             let work = async move {
                 Snapshot::from_inspection(work_source.load_cancellable(request, &cancel))
             };
-            let Ok(work) =
-                scope.track_named(&label, crate::task_manager::Execution::GpuiBackground, work)
-            else {
+            let Ok(work) = scope.track_named(
+                &label,
+                crate::service::task_manager::Execution::GpuiBackground,
+                work,
+            ) else {
                 self.running -= 1;
                 return;
             };

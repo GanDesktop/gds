@@ -23,7 +23,7 @@ type Opened = Box<dyn FnOnce(bas::model::Workspace, &mut App)>;
 pub(crate) fn open(
     target: ConnectionOptions,
     local: bool,
-    runtime: tokio::runtime::Handle,
+    tasks: gds::service::task_manager::Scope,
     opened: impl FnOnce(bas::model::Workspace, &mut App) + 'static,
     window: &mut Window,
     cx: &mut App,
@@ -33,7 +33,7 @@ pub(crate) fn open(
             Service {
                 target,
                 local,
-                runtime,
+                tasks,
             },
             Box::new(opened),
             window,

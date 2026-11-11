@@ -9,3 +9,6 @@ pub(crate) use model::address::{Location, ViewScope, VolumeIdentity};
 pub(crate) use model::view::{ColumnWidths, ViewSettings};
 
 pub(crate) use model::navigation;
+
+pub(crate) mod scheme;
+pub(crate) mod x;

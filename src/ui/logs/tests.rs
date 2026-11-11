@@ -4,11 +4,15 @@ use gpui_kit::{WeakEntity, WindowHandle};
 use window::{HEIGHT, MIN_HEIGHT, MIN_WIDTH, OpenWindow};
 
 mod navigation;
+mod tasks;
 
 #[gpui_kit::test]
 fn disabled_logging_has_no_store_window_or_shortcut(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
+        let scope = cx.gds().tasks().scope();
+        cx.gds().initialize(scope, None);
+        assert!(cx.gds().tasks().inspector().is_none());
         crate::i18n::install(crate::i18n::Language::Chinese, cx).expect("translations");
         init(Options::default(), cx);
         assert!(!is_enabled(cx));
@@ -34,6 +38,7 @@ fn disabled_logging_has_no_store_window_or_shortcut(cx: &mut TestAppContext) {
     cx.update(|cx| {
         assert!(!cx.has_global::<OpenWindow>());
         assert!(store(cx).is_none());
+        cx.gds().tasks().init_test(true);
         install(Store::new(), cx);
         init(Options::default(), cx);
     });
@@ -45,7 +50,9 @@ fn disabled_logging_has_no_store_window_or_shortcut(cx: &mut TestAppContext) {
 
 pub(super) fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Root>, WeakEntity<Viewer>, Store) {
     cx.update(|cx| {
-        gpui_kit::init(cx);
+        cx.gds().tasks().init_test(true);
+        let scope = cx.gds().tasks().scope();
+        cx.gds().initialize(scope, Some(Store::new()));
         crate::i18n::install(crate::i18n::Language::Chinese, cx).expect("translations");
         crate::appearance::theme::apply(
             &crate::appearance::theme::Appearance {
@@ -55,7 +62,6 @@ pub(super) fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Root>, WeakEntit
             cx,
         )
         .expect("theme");
-        install(Store::new(), cx);
         init(Options::default(), cx);
         let store = store(cx).expect("fixture collector");
         let handle = open(cx).expect("log window");
@@ -337,6 +343,7 @@ fn shift_l_opens_logs_but_shift_d_does_not(cx: &mut TestAppContext) {
             cx,
         )
         .expect("theme");
+        cx.gds().tasks().init_test(true);
         install(Store::new(), cx);
         init(Options::default(), cx);
     });
@@ -421,4 +428,22 @@ fn singleton_close_reopen_retains_store_and_releases_viewer(cx: &mut TestAppCont
             .update(cx, |view, _| assert_eq!(view.snapshot.entries.len(), 2))
             .expect("new viewer");
     });
+}
+
+#[gpui_kit::test]
+fn log_viewer_does_not_enable_task_inspection(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.gds().tasks().init_test(false));
+    let (handle, viewer, _) = fixture(cx);
+    let root = cx.update(|cx| cx.gds().tasks().scope());
+    let completion = root.register().unwrap();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("tasks-panel").is_none());
+        assert!(window.try_find(1usize).is_none());
+        assert!(viewer.upgrade().unwrap().read(cx).tasks.is_none());
+        assert!(cx.gds().tasks().inspector().is_none());
+    })
+    .unwrap();
+    assert!(root.snapshot().tasks.is_empty());
+    drop(completion);
 }

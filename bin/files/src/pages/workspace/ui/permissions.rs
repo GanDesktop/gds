@@ -1,4 +1,5 @@
 //! A staged permission editor; only Save writes to the filesystem.
+use gds::app::AppExt as _;
 
 use super::Browser;
 use crate::features::file_operations::permissions;
@@ -24,13 +25,13 @@ struct Editor {
     recursive: bool,
     browser: WeakEntity<Browser>,
     origin_tab: u64,
-    runtime: tokio::runtime::Handle,
+    tasks: gds::service::task_manager::Scope,
 }
 
 impl Editor {
     fn load(&mut self, cx: &mut Context<Self>) {
         let path = self.path.clone();
-        let work = self.runtime.spawn_blocking(move || {
+        let work = self.tasks.spawn_blocking(move || {
             let mode = permissions::read(&path)?;
             let is_directory = std::fs::symlink_metadata(&path)?.is_dir();
             Ok::<_, permissions::Error>((mode, is_directory))
@@ -67,11 +68,11 @@ impl Editor {
         self.error = None;
         let path = self.path.clone();
         let recursive = self.recursive;
-        let work = gds::ui::task_manager::scope(cx)
-            .spawn_blocking(&self.runtime, move || {
-                permissions::apply(&path, mode, recursive)
-            })
-            .expect("application accepts file operations");
+        let work = cx
+            .gds()
+            .tasks()
+            .scope()
+            .spawn_blocking(move || permissions::apply(&path, mode, recursive));
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -230,7 +231,7 @@ impl Browser {
         self.operations.in_progress = true;
         self.operations.paths = vec![path.clone()];
         let browser = cx.entity().downgrade();
-        let runtime = self.window.runtime.clone();
+        let tasks = self.window.tasks.clone();
         let origin_tab = self.tabs.active_id;
         let editor = cx.new(|cx| {
             let mut editor = Editor {
@@ -242,7 +243,7 @@ impl Browser {
                 recursive: false,
                 browser: browser.clone(),
                 origin_tab,
-                runtime,
+                tasks,
             };
             editor.load(cx);
             editor

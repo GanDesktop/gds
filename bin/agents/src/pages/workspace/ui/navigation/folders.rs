@@ -196,9 +196,9 @@ impl Workspace {
             .read(cx)
             .matching(&target)
             .is_some_and(|profile| profile.local);
-        let runtime = cx
+        let tasks = cx
             .global::<crate::entities::agent::catalog::Service>()
-            .runtime()
+            .tasks()
             .clone();
         let owner = cx.entity().downgrade();
         let parent = self.window.handle;
@@ -206,7 +206,7 @@ impl Workspace {
         let launch = crate::features::workspace_launch::open(
             target,
             local,
-            runtime,
+            tasks,
             move |workspace, cx| {
                 let _ = parent.update(cx, |_, window, cx| {
                     let _ = owner.update(cx, |this, cx| {

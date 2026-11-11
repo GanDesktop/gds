@@ -3,7 +3,7 @@
 pub use gds::i18n::{Error, Language, text};
 use gpui_kit::App;
 
-pub fn install(language: Language, cx: &mut App) -> Result<(), Error> {
+pub fn prepare(language: Language) -> Result<gds::i18n::Catalog, Error> {
     let sources = match language {
         Language::English => [
             include_str!("i18n/assets/en-US/app.ftl"),
@@ -26,7 +26,12 @@ pub fn install(language: Language, cx: &mut App) -> Result<(), Error> {
             include_str!("i18n/assets/zh-CN/network.ftl"),
         ],
     };
-    gds::i18n::install_resources(language, &sources, cx)
+    gds::i18n::Catalog::new(language, &sources)
+}
+
+pub fn install(language: Language, cx: &mut App) -> Result<(), Error> {
+    prepare(language)?.install(cx);
+    Ok(())
 }
 
 #[cfg(all(test, feature = "gui-tests"))]

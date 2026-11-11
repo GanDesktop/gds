@@ -16,7 +16,11 @@ fn profiles_persist_selection_without_overwriting_cli_override_or_other_sections
         .build()
         .unwrap();
     cx.update(|cx| {
-        crate::entities::agent::init(Target::default(), runtime.handle().clone(), cx);
+        crate::entities::agent::init(
+            Target::default(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            cx,
+        );
         let profiles = cx.new(|_| Profiles::new(store.clone()));
         profiles.update(cx, |profiles, cx| {
             assert_eq!(
@@ -99,8 +103,17 @@ fn opening_a_registered_backend_window_does_not_retarget_management_or_replay_se
     let a = Target::default();
     let b: Target = bas::service::Target::Pipe("another-backend".into()).into();
     cx.update(|cx| {
-        crate::entities::agent::init(b.clone(), runtime.handle().clone(), cx);
-        init_windows(runtime.handle().clone(), "/unused".into(), false, cx);
+        crate::entities::agent::init(
+            b.clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            cx,
+        );
+        init_windows(
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            "/unused".into(),
+            false,
+            cx,
+        );
         register(a.clone(), first, cx);
         register(b.clone(), second, cx);
         cx.update_global::<crate::entities::agent::Changes, _>(|changes, _| {

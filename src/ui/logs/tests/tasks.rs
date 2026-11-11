@@ -1,5 +1,7 @@
-use super::super::tests::{deliver, fixture};
 use super::*;
+use super::{deliver, fixture};
+use crate::service::task_manager::Execution;
+use crate::ui::task_manager::REFRESH;
 use gpui_kit::{TestAppContext, test::TestWindowExt};
 
 fn tick(cx: &mut TestAppContext) {
@@ -11,7 +13,7 @@ fn tick(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn tasks_show_cancellation_until_cleanup_and_preserve_log_state(cx: &mut TestAppContext) {
     let (handle, viewer, store) = fixture(cx);
-    let root = cx.update(crate::ui::task_manager::scope);
+    let root = cx.update(|cx| cx.gds().tasks().scope());
     let owner = root.named_child("Terminal");
     let completion = owner
         .register_named("PTY cleanup", Execution::GpuiBackground)
@@ -53,7 +55,14 @@ fn tasks_show_cancellation_until_cleanup_and_preserve_log_state(cx: &mut TestApp
         assert!(window.find("tasks-detail").visible());
         viewer
             .update(cx, |view, cx| {
-                assert!(view.tasks.read(cx).focus.is_focused(window))
+                assert!(
+                    view.tasks
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .focus
+                        .is_focused(window)
+                )
             })
             .unwrap();
     })
@@ -89,7 +98,7 @@ fn tasks_show_cancellation_until_cleanup_and_preserve_log_state(cx: &mut TestApp
                 assert_eq!(view.query, "matching");
                 assert_eq!(view.selected, Some(log));
                 assert_eq!(view.visible.len(), 2);
-                assert!(view.tasks.read(cx).updates.is_none());
+                assert!(!view.tasks.as_ref().unwrap().read(cx).is_active());
             })
             .unwrap();
     })
@@ -99,10 +108,19 @@ fn tasks_show_cancellation_until_cleanup_and_preserve_log_state(cx: &mut TestApp
 #[gpui_kit::test]
 fn hiding_and_closing_inspector_never_cancels_work(cx: &mut TestAppContext) {
     let (handle, viewer, _) = fixture(cx);
-    let root = cx.update(crate::ui::task_manager::scope);
+    let root = cx.update(|cx| cx.gds().tasks().scope());
     let owner = root.named_child("Preview");
     let completion = owner.register_named("Decode", Execution::Blocking).unwrap();
-    let tasks = cx.update(|cx| viewer.upgrade().unwrap().read(cx).tasks.downgrade());
+    let tasks = cx.update(|cx| {
+        viewer
+            .upgrade()
+            .unwrap()
+            .read(cx)
+            .tasks
+            .as_ref()
+            .unwrap()
+            .downgrade()
+    });
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         window.click(1usize, cx);
@@ -111,7 +129,7 @@ fn hiding_and_closing_inspector_never_cancels_work(cx: &mut TestAppContext) {
         window.render_frame(cx);
         viewer
             .update(cx, |view, cx| {
-                assert!(view.tasks.read(cx).updates.is_none())
+                assert!(!view.tasks.as_ref().unwrap().read(cx).is_active())
             })
             .unwrap();
         window.click(1usize, cx);
@@ -124,7 +142,14 @@ fn hiding_and_closing_inspector_never_cancels_work(cx: &mut TestAppContext) {
         window.render_frame(cx);
         viewer
             .update(cx, |view, cx| {
-                assert!(view.tasks.read(cx).focus.is_focused(window))
+                assert!(
+                    view.tasks
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .focus
+                        .is_focused(window)
+                )
             })
             .unwrap();
         window.press(
@@ -149,7 +174,7 @@ fn hiding_and_closing_inspector_never_cancels_work(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn long_task_names_keep_columns_and_details_inside_small_window(cx: &mut TestAppContext) {
     let (handle, _, _) = fixture(cx);
-    let root = cx.update(crate::ui::task_manager::scope);
+    let root = cx.update(|cx| cx.gds().tasks().scope());
     let owner = root.named_child("Preview / ".repeat(100));
     let _completion = owner
         .register_named("目录/".repeat(200), Execution::Thread)

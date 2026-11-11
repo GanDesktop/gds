@@ -207,8 +207,9 @@ impl Browser {
             Command::Back => slot.navigation.history_index().checked_sub(1),
             Command::Forward => Some(slot.navigation.history_index() + 1),
             Command::Parent => {
-                let location = crate::entities::scheme::parent(slot.navigation.location())
-                    .or_else(|| slot.path().and_then(Path::parent).map(Location::from));
+                let location =
+                    crate::entities::location::scheme::parent(slot.navigation.location())
+                        .or_else(|| slot.path().and_then(Path::parent).map(Location::from));
                 if let Some(location) = location {
                     self.navigate_location(self.tabs.active_id, location, cx);
                 }
@@ -335,7 +336,7 @@ impl LocationTarget {
     pub(super) fn location(self, home: &Path) -> Location {
         match self {
             Self::Tags => Location::Tags(
-                crate::entities::scheme::TagAddress::new("").expect("root tag address"),
+                crate::entities::location::scheme::TagAddress::new("").expect("root tag address"),
             ),
             Self::Home => Location::from(home),
             Self::Recent => Location::Recent,

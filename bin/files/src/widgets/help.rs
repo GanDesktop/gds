@@ -1,4 +1,4 @@
-use crate::features::file_operations::commands::{
+use crate::shared::ui::actions::{
     CloseTerminal, Command, NewTerminal, TERMINAL_TABS_CONTEXT, ordinal_shortcut,
 };
 use gds::ui::Shortcut;

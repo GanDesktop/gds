@@ -42,7 +42,7 @@ fn setup(cx: &mut TestAppContext) {
         // Layout assertions target the settled card. One-shot entrance animations
         // use wall time rather than the test executor's clock.
         gds::appearance::motion::set_animations_enabled(false, cx);
-        init(Store::new(), cx);
+        gds::ui::logs::install(Store::new(), cx);
     });
 }
 

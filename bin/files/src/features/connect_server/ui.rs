@@ -3,6 +3,8 @@ use super::model::Intent;
 use form::Form;
 
 use crate::shared::i18n;
+use gds::service::task_manager::Scope;
+use gds::service::task_manager::Task as IoTask;
 use gds::{
     service::remote::{Address, ConnectOptions, Credentials, HostKeyChallenge, Session},
     ui::{
@@ -19,9 +21,7 @@ use std::{
     collections::HashMap,
     rc::Rc,
 };
-use tokio::runtime::Handle;
 use tokio::sync::mpsc;
-use tokio_util::task::AbortOnDropHandle;
 
 pub(crate) struct Connected {
     pub tab: u64,
@@ -44,7 +44,7 @@ pub(crate) struct Pending {
 }
 
 pub(crate) struct Connector {
-    runtime: Handle,
+    tasks: Scope,
     sessions: HashMap<String, Connection>,
     task: Option<Task<()>>,
     challenges: Option<Task<()>>,
@@ -55,9 +55,9 @@ impl EventEmitter<Connected> for Connector {}
 impl EventEmitter<Failed> for Connector {}
 
 impl Connector {
-    pub(crate) fn new(runtime: Handle) -> Self {
+    pub(crate) fn new(tasks: Scope) -> Self {
         Self {
-            runtime,
+            tasks,
             sessions: HashMap::new(),
             task: None,
             challenges: None,
@@ -186,7 +186,7 @@ impl Connector {
             }
         }));
         let destination = address.clone();
-        let work = AbortOnDropHandle::new(self.runtime.spawn(async move {
+        let work = IoTask::cancel_on_drop(self.tasks.spawn_cancellable(async move {
             let session = Session::connect(
                 &destination,
                 ConnectOptions {
@@ -289,7 +289,7 @@ impl Connector {
         if let Some(connection) = self.sessions.remove(&address.connection_key()) {
             let session = connection.session;
             let work =
-                AbortOnDropHandle::new(self.runtime.spawn(async move { session.close().await }));
+                IoTask::cancel_on_drop(self.tasks.spawn(async move { session.close().await }));
             cx.spawn(async move |_, cx| match work.await {
                 Ok(Ok(())) => (),
                 Ok(Err(error)) => {

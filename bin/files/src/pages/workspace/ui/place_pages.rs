@@ -79,7 +79,7 @@ impl Browser {
                     .tags
                     .iter()
                     .filter_map(|name| {
-                        crate::entities::scheme::TagAddress::new(name)
+                        crate::entities::location::scheme::TagAddress::new(name)
                             .ok()
                             .map(Location::Tags)
                     })
@@ -177,9 +177,12 @@ impl Browser {
         }
         self.collections.network.discovery.loading = true;
         self.collections.network.discovery.error = None;
-        let work = cx.background_executor().spawn(async { network::read() });
+        let work = self.window.tasks.spawn_blocking(network::read);
         cx.spawn(async move |this, cx| {
-            let result = work.await;
+            let result = work
+                .await
+                .map_err(network::Error::from)
+                .and_then(std::convert::identity);
             let _ =
                 this.update(cx, |browser, cx| {
                     browser.collections.network.discovery.loading = false;
@@ -219,7 +222,7 @@ impl Browser {
         let Some(work) = self.locations.places.reload() else {
             return;
         };
-        let work = AbortOnDropHandle::new(self.window.runtime.spawn(work));
+        let work = IoTask::cancel_on_drop(self.window.tasks.spawn_cancellable(work));
         self.collections.favorites.loading = true;
         let previous = self.locations.places.favorites.clone();
         cx.spawn(async move |this, cx| {

@@ -1,4 +1,5 @@
 use clap::Parser;
+use gds::app::AppExt as _;
 use gds::appearance::{theme, typography};
 use gpui_kit::*;
 
@@ -17,20 +18,17 @@ struct Arguments {
 
 pub fn run() -> anyhow::Result<()> {
     let args = Arguments::parse();
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()?;
-    let handle = runtime.handle().clone();
+    let supervisor = gds::service::task_manager::Supervisor::new(args.enable_logs)?;
+    let tasks = supervisor.scope();
     let logs = gds::service::logs::init_tracing("warn", args.enable_logs)?;
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
-            gds::appearance::init(cx);
+            cx.gds().initialize(tasks.clone(), logs);
             cx.set_app_identity("io.github.GanDesktop.GdsNixes", "GDS Nixes");
             if let Err(error) = crate::shared::i18n::install(cx) {
                 eprintln!("{error}");
-                cx.quit();
+                cx.gds().tasks().request_quit();
                 return;
             }
             if let Err(error) = theme::apply(&theme::Appearance::default(), cx) {
@@ -39,8 +37,7 @@ pub fn run() -> anyhow::Result<()> {
             if let Err(error) = typography::install(&typography::Preferences::default(), cx) {
                 eprintln!("{error}");
             }
-            if let Some(logs) = logs {
-                gds::ui::logs::install(logs, cx);
+            if gds::ui::logs::is_enabled(cx) {
                 gds::ui::logs::init(
                     gds::ui::logs::Options {
                         app_id: Some("io.github.GanDesktop.GdsNixes".into()),
@@ -50,13 +47,15 @@ pub fn run() -> anyhow::Result<()> {
                     cx,
                 );
             }
-            gds::ui::task_manager::init(cx);
             #[cfg(unix)]
-            gds::ui::task_manager::signals(&handle, gds::ui::task_manager::request_quit, cx);
+            cx.gds()
+                .tasks()
+                .signals(|cx| cx.gds().tasks().request_quit());
             cx.on_window_closed(|cx, _| {
-                gds::ui::task_manager::quit_when_idle(cx);
+                cx.gds().tasks().quit_when_idle();
             })
             .detach();
+            cx.gds().tasks().ready(false);
             let options = WindowOptions {
                 app_id: Some("io.github.GanDesktop.GdsNixes".into()),
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -69,10 +68,10 @@ pub fn run() -> anyhow::Result<()> {
             };
             if let Err(error) = gpui_kit::open_window(options, cx, move |window, cx| {
                 window.set_window_title("GDS Nixes");
-                cx.new(|cx| crate::pages::home::HomePage::new(handle, args.flake, window, cx))
+                cx.new(|cx| crate::pages::home::HomePage::new(tasks, args.flake, window, cx))
             }) {
                 eprintln!("{error}");
-                cx.quit();
+                cx.gds().tasks().request_quit();
             }
         });
     Ok(())

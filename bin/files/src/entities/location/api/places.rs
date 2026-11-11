@@ -47,7 +47,7 @@ pub(crate) enum Error {
     #[error(transparent)]
     Database(#[from] toasty::Error),
     #[error(transparent)]
-    Task(#[from] tokio::task::JoinError),
+    Task(#[from] gds::service::task_manager::Error),
     #[error("invalid places data: {0}")]
     Data(#[from] serde_json::Error),
 }
@@ -60,10 +60,13 @@ pub(crate) struct Store {
 impl Store {
     /// # Errors
     /// Reports database or migration failures.
-    pub(crate) async fn open_at(path: &Path) -> Result<Self, Error> {
+    pub(crate) async fn open_at(
+        tasks: &gds::service::task_manager::Scope,
+        path: &Path,
+    ) -> Result<Self, Error> {
         let mut db = Options::new(MIGRATIONS)
             .models(models!(Location, SavedLocation, ViewSettings))
-            .open(path)
+            .open(tasks, path)
             .await?;
         let mut tx = db
             .transaction_builder()

@@ -94,14 +94,19 @@ impl Backend {
         self
     }
 
-    pub(crate) fn run(mut self, shared: Arc<Shared>) {
+    pub(crate) fn run(mut self, shared: Arc<Shared>, tasks: crate::service::task_manager::Scope) {
         let mut parser = Processor::new();
-        // A current-thread driver stays on the existing worker; the UI needs no runtime.
-        let result = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(anyhow::Error::from)
-            .and_then(|runtime| runtime.block_on(self.io_loop(&shared, &mut parser)));
+        let cancel = tasks.token();
+        let result = match tasks.block_on(async {
+            tokio::select! {
+                _ = cancel.cancelled() => Ok(None),
+                result = self.io_loop(&shared, &mut parser) => result,
+            }
+        }) {
+            Ok(result) => result,
+            Err(crate::service::task_manager::Error::Closed(_)) => Ok(None),
+            Err(error) => Err(error.into()),
+        };
         if let Err(error) = &result {
             shared.state.fail(error);
         }

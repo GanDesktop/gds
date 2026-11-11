@@ -1,6 +1,7 @@
 use super::*;
 use crate::shared::config::ConnectionProfile;
 use bas::service::Target;
+use gds::app::AppExt as _;
 use gpui_kit::{TestAppContext, component::Root, size, test::TestWindowExt};
 
 #[gpui_kit::test]
@@ -16,6 +17,7 @@ fn settings_group_by_owner_and_keep_conversation_behavior_out_of_appearance_rese
     .expect("frontend preferences");
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
         crate::shared::config::init(Some(path.clone()), cx);
         crate::shared::lib::appearance::init(cx);
         crate::app::init(cx);
@@ -74,10 +76,15 @@ fn check_footer_without_copy(cx: &mut TestAppContext, message: String) {
         .expect("runtime");
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
         crate::shared::config::init(Some(path), cx);
         crate::shared::lib::appearance::init(cx);
         crate::app::init(cx);
-        crate::entities::agent::init(Target::Local.into(), runtime.handle().clone(), cx);
+        crate::entities::agent::init(
+            Target::Local.into(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            cx,
+        );
     });
     let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
         let settings = cx.new(|cx| {
@@ -129,10 +136,15 @@ fn frontend_connections_and_backend_switching_are_distinct_settings_scopes(
         .unwrap();
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
         crate::shared::config::init(Some(path.clone()), cx);
         crate::shared::lib::appearance::init(cx);
         crate::app::init(cx);
-        crate::entities::agent::init(Target::Local.into(), runtime.handle().clone(), cx);
+        crate::entities::agent::init(
+            Target::Local.into(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            cx,
+        );
     });
     let mut entity = None;
     let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {

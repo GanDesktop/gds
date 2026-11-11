@@ -229,7 +229,7 @@ impl Authentication {
                     match result {
                         Ok(plan) if service.address().is_local() => {
                             self.message = tr!("auth-terminal-open").into();
-                            let request = service::terminal(&service.runtime(), plan);
+                            let request = service::terminal(&service.tasks(), plan);
                             let generation = self.generation;
                             self._terminal = Some(cx.spawn(async move |view, cx| {
                                 let result = request.await;

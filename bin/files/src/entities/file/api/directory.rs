@@ -1,3 +1,5 @@
+mod watching;
+pub(crate) use watching::Watching;
 mod children;
 mod content;
 mod details;
@@ -75,6 +77,8 @@ pub struct DirectorySnapshot {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Task(#[from] gds::service::task_manager::Error),
     #[error("cannot determine the working directory: {source}")]
     WorkingDirectory {
         #[source]

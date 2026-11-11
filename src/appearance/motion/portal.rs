@@ -1,7 +1,8 @@
+use crate::service::task_manager::{Scope, Task as IoTask};
 use futures_lite::StreamExt as _;
 use gpui_kit::{App, Global, Task};
 use std::collections::HashMap;
-use tokio::{runtime::Handle, sync::watch, task::JoinHandle};
+use tokio::sync::watch;
 use zbus::zvariant::OwnedValue;
 
 #[cfg(all(test, feature = "gui-tests"))]
@@ -13,7 +14,7 @@ const KEY: &str = "reduced-motion";
 type Settings = HashMap<String, HashMap<String, OwnedValue>>;
 
 struct Watch {
-    io: JoinHandle<()>,
+    io: IoTask<()>,
     _updates: Task<()>,
 }
 impl Global for Watch {}
@@ -23,19 +24,18 @@ impl Drop for Watch {
     }
 }
 
-pub(super) fn follow(runtime: &Handle, cx: &mut App) {
+pub(super) fn follow(tasks: &Scope, cx: &mut App) {
     let (sender, mut receiver) = watch::channel(None);
-    let io = runtime.spawn(async move {
-        if let Err(error) = listen(sender).await {
+    let cancel = tasks.token();
+    let io = tasks.spawn(async move {
+        let result = tokio::select! {
+            _ = cancel.cancelled() => return,
+            result = listen(sender) => result,
+        };
+        if let Err(error) = result {
             tracing::warn!(%error, "motion portal unavailable; keeping the last system preference");
         }
     });
-    let abort = io.abort_handle();
-    cx.on_app_quit(move |_| {
-        abort.abort();
-        async {}
-    })
-    .detach();
     let updates = cx.spawn(async move |cx| {
         while receiver.changed().await.is_ok() {
             let reduced = *receiver.borrow_and_update();

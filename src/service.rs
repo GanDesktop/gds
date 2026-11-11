@@ -11,5 +11,7 @@ pub mod logs;
 pub mod remote;
 #[cfg(feature = "storage")]
 pub mod storage;
+#[cfg(feature = "task-manager")]
+pub mod task_manager;
 #[cfg(feature = "terminal")]
 pub mod terminal;

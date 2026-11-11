@@ -2,6 +2,7 @@
 use super::{Event, INPUT_CONTEXT, Preferences, view::View};
 use crate::service::terminal::{self as service, Shutdown, SpawnOptions, Status};
 use crate::{appearance::theme, i18n};
+use gds::app::AppExt as _;
 use gpui_kit::{prelude::*, *};
 use std::path::{Path, PathBuf};
 use tokio::sync::watch;
@@ -11,7 +12,7 @@ mod tests;
 
 /// One terminal surface; the service owns startup, process state and cleanup.
 pub struct Terminal {
-    scope: crate::task_manager::Owner,
+    scope: crate::service::task_manager::Owner,
     service: service::Terminal,
     preferences: Preferences,
     focus: FocusHandle,
@@ -39,30 +40,22 @@ impl Terminal {
             scrollback: preferences.scrollback_lines,
             palette: Some(super::view::palette::Palette::new(cx).query_colors()),
         };
-        let (service, launch) = service::Terminal::prepare(options);
-        let scope = crate::ui::task_manager::scope(cx)
-            .named_child(format_args!("Terminal · {}", service.cwd().display()));
+        let scope = cx
+            .gds()
+            .tasks()
+            .scope()
+            .named_child(format_args!("Terminal · {}", options.cwd.display()));
+        let (service, launch) = service::Terminal::prepare((*scope).clone(), options);
         let cancel = scope.token();
         let cleanup_service = service.clone();
         let (finished, done) = watch::channel(false);
-        let cleanup = scope
-            .track_named(
-                "PTY session and cleanup",
-                crate::task_manager::Execution::GpuiBackground,
-                async move {
-                    cancel.cancelled().await;
-                    cleanup_service.shutdown().await;
-                    finished.send_replace(true);
-                },
-            )
-            .expect("terminal scope is open");
-        cx.background_executor().spawn(cleanup).detach();
+        scope.spawn(async move {
+            cancel.cancelled().await;
+            cleanup_service.shutdown().await;
+            finished.send_replace(true);
+        });
         let ready = service.ready();
-        cx.background_executor()
-            .spawn(async move {
-                launch.run();
-            })
-            .detach();
+        scope.spawn_blocking(move || launch.run());
         cx.spawn_in(window, async move |terminal, cx| {
             let session = ready.await;
             let _ = terminal.update_in(cx, |this, window, cx| {

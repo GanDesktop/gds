@@ -39,7 +39,16 @@ fn options(migrations: MigrationSet) -> Options {
 async fn native_migrations_upgrade_once_and_preserve_records() {
     let root = tempfile::tempdir().expect("fixture");
     let path = root.path().join("app.sqlite");
-    let mut db = options(INITIAL).open(&path).await.expect("initialize");
+    let mut db = options(INITIAL)
+        .open(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            ),
+            &path,
+        )
+        .await
+        .expect("initialize");
     create!(Record {
         id: 1,
         value: "keep"
@@ -47,7 +56,16 @@ async fn native_migrations_upgrade_once_and_preserve_records() {
     .exec(&mut db)
     .await
     .expect("saved record");
-    let mut upgraded = options(UPGRADED).open(&path).await.expect("upgrade");
+    let mut upgraded = options(UPGRADED)
+        .open(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            ),
+            &path,
+        )
+        .await
+        .expect("upgrade");
     let row = Record::filter_by_id(1)
         .one()
         .exec(&mut upgraded)
@@ -63,7 +81,13 @@ async fn native_migrations_upgrade_once_and_preserve_records() {
         2
     );
     let mut reopened = options(UPGRADED)
-        .open(&path)
+        .open(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            ),
+            &path,
+        )
         .await
         .expect("skip completed migrations");
     assert_eq!(
@@ -80,7 +104,16 @@ async fn native_migrations_upgrade_once_and_preserve_records() {
 async fn failed_migration_rolls_back_rows_schema_and_tracking() {
     let root = tempfile::tempdir().expect("fixture");
     let path = root.path().join("app.sqlite");
-    let mut db = options(INITIAL).open(&path).await.expect("initial schema");
+    let mut db = options(INITIAL)
+        .open(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            ),
+            &path,
+        )
+        .await
+        .expect("initial schema");
     const BROKEN: MigrationSet = MigrationSet::new(&[
         INITIAL_MIGRATION,
         MigrationFile::new(
@@ -89,11 +122,28 @@ async fn failed_migration_rolls_back_rows_schema_and_tracking() {
             "INSERT INTO records VALUES (1, 'rolled back');\n-- #[toasty::breakpoint]\nCREATE TABLE extra(value);\n-- #[toasty::breakpoint]\nINSERT INTO missing VALUES (1);",
         ),
     ]);
-    assert!(options(BROKEN).open(&path).await.is_err());
+    assert!(
+        options(BROKEN)
+            .open(
+                &gds::service::task_manager::Scope::with_handle(
+                    tokio::runtime::Handle::current(),
+                    false
+                ),
+                &path
+            )
+            .await
+            .is_err()
+    );
     assert_eq!(Record::all().count().exec(&mut db).await.expect("rows"), 0);
     assert!(Extra::all().exec(&mut db).await.is_err());
     let db = options(UPGRADED)
-        .open(&path)
+        .open(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            ),
+            &path,
+        )
         .await
         .expect("failed migration was not recorded");
     assert_eq!(
@@ -164,7 +214,16 @@ async fn concurrent_first_open_and_writers_serialize_without_lost_updates() {
         let barrier = barrier.clone();
         workers.spawn(async move {
             barrier.wait().await;
-            let mut db = options(INITIAL).open(path).await.expect("concurrent open");
+            let mut db = options(INITIAL)
+                .open(
+                    &gds::service::task_manager::Scope::with_handle(
+                        tokio::runtime::Handle::current(),
+                        false,
+                    ),
+                    path,
+                )
+                .await
+                .expect("concurrent open");
             for value in 0..10 {
                 write_record(&mut db, id * 10_i64 + value, value.to_string()).await;
             }
@@ -173,7 +232,16 @@ async fn concurrent_first_open_and_writers_serialize_without_lost_updates() {
     while let Some(worker) = workers.join_next().await {
         worker.expect("writer");
     }
-    let mut db = options(INITIAL).open(&path).await.expect("read");
+    let mut db = options(INITIAL)
+        .open(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            ),
+            &path,
+        )
+        .await
+        .expect("read");
     assert_eq!(
         Record::all().count().exec(&mut db).await.expect("count"),
         40
@@ -189,9 +257,26 @@ async fn failed_first_migration_can_be_retried_without_resetting_the_database() 
         "001-records.sql",
         "CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n-- #[toasty::breakpoint]\nINSERT INTO missing VALUES (1);",
     )]);
-    assert!(options(BROKEN).open(&path).await.is_err());
+    assert!(
+        options(BROKEN)
+            .open(
+                &gds::service::task_manager::Scope::with_handle(
+                    tokio::runtime::Handle::current(),
+                    false
+                ),
+                &path
+            )
+            .await
+            .is_err()
+    );
     let mut db = options(INITIAL)
-        .open(&path)
+        .open(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            ),
+            &path,
+        )
         .await
         .expect("retry initialization");
     create!(Record {
@@ -201,7 +286,16 @@ async fn failed_first_migration_can_be_retried_without_resetting_the_database() 
     .exec(&mut db)
     .await
     .expect("usable database");
-    let mut reopened = options(INITIAL).open(&path).await.expect("reopen");
+    let mut reopened = options(INITIAL)
+        .open(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            ),
+            &path,
+        )
+        .await
+        .expect("reopen");
     assert_eq!(
         Record::all()
             .count()

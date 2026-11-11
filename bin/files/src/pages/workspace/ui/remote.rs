@@ -12,9 +12,9 @@ pub(super) struct State {
 }
 
 impl State {
-    pub(super) fn new(runtime: Handle, cx: &mut App) -> Self {
+    pub(super) fn new(tasks: Scope, cx: &mut App) -> Self {
         Self {
-            connector: cx.new(|_| connect_server::Connector::new(runtime)),
+            connector: cx.new(|_| connect_server::Connector::new(tasks)),
             requests: std::collections::HashMap::new(),
         }
     }
@@ -77,10 +77,13 @@ impl Browser {
         self.operations.remote_paste_cancel = Some(cancel.clone());
         let (updates, _) = tokio::sync::watch::channel(Default::default());
         let target = operations::Resource::Local(destination.clone());
-        let work = self
-            .window
-            .runtime
-            .spawn(operations::copy(sources, target, cancel, updates));
+        let work = self.window.tasks.spawn(operations::copy(
+            self.window.tasks.clone(),
+            sources,
+            target,
+            cancel,
+            updates,
+        ));
         cx.spawn(async move |this, cx| {
             let report = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -270,10 +273,10 @@ impl Browser {
         };
         let worker_address = address.clone();
         let worker_session = session.clone();
-        let work = AbortOnDropHandle::new(
+        let work = IoTask::cancel_on_drop(
             self.window
-                .runtime
-                .spawn(async move { worker_session.list(&worker_address).await }),
+                .tasks
+                .spawn_cancellable(async move { worker_session.list(&worker_address).await }),
         );
         let task = cx.spawn(async move |this, cx| {
             let result = work
@@ -332,7 +335,7 @@ impl Browser {
                 .places
                 .is_favorite(Location::Remote(remote.listing.address.clone()));
             let options = remote_browser::Options {
-                runtime: self.window.runtime.clone(),
+                tasks: self.window.tasks.clone(),
                 session: remote.session.clone(),
                 listing: remote.listing.clone(),
                 connector: self.remote.connector.clone(),

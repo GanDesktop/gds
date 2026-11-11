@@ -17,16 +17,29 @@ pub struct HotReload {
 impl HotReload {
     pub fn shared(appearance: Appearance, window: &mut Window, cx: &mut App) -> Entity<Self> {
         Observer::attach(window, cx);
+        Self::initialize(appearance, cx)
+    }
+
+    /// Install the application's palette watcher before creating its windows.
+    pub fn initialize(appearance: Appearance, cx: &mut App) -> Entity<Self> {
         if let Some(shared) = cx.try_global::<Shared>() {
             return shared.0.clone();
         }
-        let reload = cx.new(|cx| Self::new(appearance, window, cx));
+        let reload = cx.new(|cx| Self::start(appearance, cx));
         cx.set_global(Shared(reload.clone()));
         reload
     }
 
+    pub fn get(cx: &App) -> Entity<Self> {
+        cx.global::<Shared>().0.clone()
+    }
+
     pub fn new(appearance: Appearance, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Observer::attach(window, cx);
+        Self::start(appearance, cx)
+    }
+
+    fn start(appearance: Appearance, cx: &mut Context<Self>) -> Self {
         let observer = Observer::shared(cx);
         let changes = cx.subscribe(&observer, |this, _, change, cx| {
             if matches!(change, Change::Files)
@@ -54,6 +67,10 @@ impl HotReload {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.configure(appearance, cx);
+    }
+
+    pub fn configure(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
         let reload = self.appearance.source != appearance.source
             || self.appearance.mode != appearance.mode
             || (appearance.source == Source::Builtin

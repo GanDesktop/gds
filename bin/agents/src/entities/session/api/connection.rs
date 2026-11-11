@@ -8,10 +8,10 @@ use bas::{
     model::*,
     service::{Client, HistoryOverview, HistoryWindow, pb, tls::ConnectionOptions as Target},
 };
+use gds::service::task_manager::{Group, Scope, Task as IoTask};
 use tokio::{
-    runtime::Handle,
     sync::{Notify, mpsc},
-    task::{AbortHandle, JoinHandle, JoinSet},
+    task::AbortHandle,
 };
 use tonic::Code;
 
@@ -294,51 +294,48 @@ pub(crate) enum StreamState {
 }
 
 pub(crate) struct Connection {
-    scope: Option<gds::task_manager::Owner>,
+    scope: Option<gds::service::task_manager::Owner>,
     commands: mpsc::UnboundedSender<Command>,
-    task: Option<JoinHandle<()>>,
+    task: Option<IoTask<()>>,
 }
 
 impl Connection {
     pub fn new(
         server: Target,
-        runtime: &Handle,
-        parent: &gds::task_manager::Scope,
+        parent: &gds::service::task_manager::Scope,
     ) -> (Self, mpsc::Receiver<Update>) {
         let (commands, receiver) = mpsc::unbounded_channel();
         let (updates, events) = mpsc::channel(EVENT_CAPACITY);
         let scope = parent.named_child("Agent connection / history");
-        let cancel = scope.token();
-        let task = scope
-            .spawn(runtime, async move {
-                let channel = match server.channel_lazy(REQUEST_TIMEOUT) {
-                    Ok(channel) => channel,
-                    Err(error) => {
-                        let _ = updates
-                            .send(Update::Catalog(Err(Failure::from(anyhow::Error::from(
-                                error,
-                            )))))
-                            .await;
-                        return;
-                    }
-                };
-                let cache = match cache::Cache::open(&server).await {
-                    Ok(cache) => Some(cache),
-                    Err(error) => {
-                        tracing::warn!(%error, "History cache unavailable");
-                        None
-                    }
-                };
-                run_cached_scoped(
-                    Client::new(channel).with_payload_limit(),
-                    receiver,
-                    updates,
-                    cache,
-                    cancel,
-                )
-                .await;
-            })
-            .expect("connection scope is open");
+        let worker = (*scope).clone();
+        let task = scope.spawn(async move {
+            let channel = match server.channel_lazy(REQUEST_TIMEOUT) {
+                Ok(channel) => channel,
+                Err(error) => {
+                    let _ = updates
+                        .send(Update::Catalog(Err(Failure::from(anyhow::Error::from(
+                            error,
+                        )))))
+                        .await;
+                    return;
+                }
+            };
+            let cache = match cache::Cache::open(&worker, &server).await {
+                Ok(cache) => Some(cache),
+                Err(error) => {
+                    tracing::warn!(%error, "History cache unavailable");
+                    None
+                }
+            };
+            run_cached_scoped(
+                Client::new(channel).with_payload_limit(),
+                receiver,
+                updates,
+                cache,
+                worker,
+            )
+            .await;
+        });
         (
             Self {
                 scope: Some(scope),
@@ -382,7 +379,7 @@ async fn run_cached(
         commands,
         updates,
         cache,
-        tokio_util::sync::CancellationToken::new(),
+        Scope::with_handle(tokio::runtime::Handle::current(), false),
     )
     .await;
 }
@@ -392,12 +389,13 @@ async fn run_cached_scoped(
     mut commands: mpsc::UnboundedReceiver<Command>,
     updates: mpsc::Sender<Update>,
     cache: Option<cache::Cache>,
-    cancel: tokio_util::sync::CancellationToken,
+    scope: Scope,
 ) {
+    let cancel = scope.token();
     let protocol = protocol::Pool::default();
-    let (history, writer) = history::Store::new(cache);
+    let (history, writer) = history::Store::new(cache, &scope);
     let refresh = Arc::new(Notify::new());
-    let mut tasks = JoinSet::new();
+    let mut tasks = Group::new(scope);
     tasks.spawn(catalog_loop(
         client.clone(),
         updates.clone(),
@@ -414,12 +412,12 @@ async fn run_cached_scoped(
                     Command::Watch { session, epoch } => {
                         if let Some(task) = attachment.take() { task.abort(); }
                         history.flush().await;
-                        attachment = Some(tasks.spawn(permissions::watch_cached(protocol.clone(), client.clone(), updates.clone(), session, epoch, None, history.clone())));
+                        attachment = tasks.spawn(permissions::watch_cached(protocol.clone(), client.clone(), updates.clone(), session, epoch, None, history.clone()));
                     }
                     Command::Resume { session, epoch, cursor } => {
                         if let Some(task) = attachment.take() { task.abort(); }
                         history.flush().await;
-                        attachment = Some(tasks.spawn(permissions::watch_cached(protocol.clone(), client.clone(), updates.clone(), session, epoch, Some(cursor), history.clone())));
+                        attachment = tasks.spawn(permissions::watch_cached(protocol.clone(), client.clone(), updates.clone(), session, epoch, Some(cursor), history.clone()));
                     }
                     Command::OlderHistory { session, epoch, before } => {
                         let history = history.clone();

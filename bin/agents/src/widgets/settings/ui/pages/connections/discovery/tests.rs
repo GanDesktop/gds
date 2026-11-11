@@ -1,5 +1,6 @@
 use super::super::check::tests::ProbeService;
 use super::*;
+use tokio_util::task::AbortOnDropHandle;
 
 #[tokio::test]
 async fn private_ipc_probe_requires_a_bas_rpc_and_has_no_fallback() {

@@ -1,16 +1,11 @@
 //! Coalesce filesystem events and reconcile entries without restarting navigation.
-mod changes;
 mod presentation;
 use super::*;
-use changes::Changes;
-use notify::{EventKind, RecursiveMode, Watcher};
-use std::sync::{Arc, Mutex};
 
 const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
 
 pub(super) struct Watch {
     path: PathBuf,
-    _watcher: notify::RecommendedWatcher,
     _events: Task<()>,
 }
 
@@ -24,19 +19,17 @@ impl Browser {
         }
         slot.watch = None;
         let Some(path) = path else { return };
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let pending = Arc::new(Mutex::new(Changes::default()));
-        let watcher = match subscribe(path, sender, pending.clone()) {
+        let mut watcher = match directory::Watching::new(path) {
             Ok(watcher) => watcher,
             Err(error) => {
                 tracing::warn!(%error, path = %path.display(), "cannot watch directory");
                 return;
             }
         };
-        let runtime = self.window.runtime.clone();
+        let tasks = self.window.tasks.clone();
         let events = cx.spawn(async move |this, cx| {
-            while receiver.recv().await.is_some() {
-                if runtime
+            while watcher.changed().await {
+                if tasks
                     .spawn(async { tokio::time::sleep(DEBOUNCE).await })
                     .await
                     .is_err()
@@ -54,7 +47,7 @@ impl Browser {
                     if !loading {
                         break;
                     }
-                    if runtime
+                    if tasks
                         .spawn(async { tokio::time::sleep(DEBOUNCE).await })
                         .await
                         .is_err()
@@ -62,8 +55,7 @@ impl Browser {
                         return;
                     }
                 }
-                while receiver.try_recv().is_ok() {}
-                let changes = std::mem::take(&mut *pending.lock().expect("watch changes lock"));
+                let changes = watcher.take_changes();
                 let Ok(snapshot) = this.update(cx, |this, _| {
                     let slot = this.tab_slot(id)?;
                     Some((
@@ -76,8 +68,11 @@ impl Browser {
                 let Some((revision, snapshot)) = snapshot else {
                     continue;
                 };
-                let work = cx.background_spawn(async move { changes.apply(snapshot) });
-                let result = work.await;
+                let work = tasks.spawn_blocking(move || changes.apply(snapshot));
+                let result = work
+                    .await
+                    .map_err(directory::Error::from)
+                    .and_then(std::convert::identity);
                 if this
                     .update(cx, |this, cx| match result {
                         Ok(snapshot) => this.apply_watch_snapshot(id, revision, snapshot, cx),
@@ -92,7 +87,6 @@ impl Browser {
         if let Some(slot) = self.tab_slot_mut(id) {
             slot.watch = Some(Watch {
                 path: path.to_owned(),
-                _watcher: watcher,
                 _events: events,
             });
         }
@@ -147,26 +141,4 @@ impl Browser {
             cx.notify();
         }
     }
-}
-
-fn subscribe(
-    path: &Path,
-    sender: tokio::sync::mpsc::Sender<()>,
-    pending: Arc<Mutex<Changes>>,
-) -> notify::Result<notify::RecommendedWatcher> {
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        match event {
-            Ok(event) if !matches!(event.kind, EventKind::Access(_)) => {
-                pending.lock().expect("watch changes lock").push(event);
-            }
-            Err(error) => {
-                tracing::warn!(%error, "directory watch failed; requesting rescan");
-                pending.lock().expect("watch changes lock").rescan();
-            }
-            _ => return,
-        }
-        let _ = sender.try_send(());
-    })?;
-    watcher.watch(path, RecursiveMode::NonRecursive)?;
-    Ok(watcher)
 }

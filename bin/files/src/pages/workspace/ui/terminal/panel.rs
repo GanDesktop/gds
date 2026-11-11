@@ -26,7 +26,7 @@ use gpui_kit::{
     *,
 };
 
-use crate::features::file_operations::commands::{
+use crate::shared::ui::actions::{
     CloseTerminal, FocusTerminal, NewTerminal, NextTerminal, PreviousTerminal, RenameTerminal,
     TERMINAL_TABS_CONTEXT,
 };

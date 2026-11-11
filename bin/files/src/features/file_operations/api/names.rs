@@ -42,6 +42,8 @@ impl NameError {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
+    Task(#[from] gds::service::task_manager::Error),
+    #[error(transparent)]
     Name(#[from] NameError),
     #[error("cannot inspect {path}: {source}")]
     Filesystem {

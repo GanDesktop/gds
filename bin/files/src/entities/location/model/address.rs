@@ -8,7 +8,7 @@ use std::{
 /// A content location, independent of the tab or sidebar entry presenting it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Location {
-    Tags(crate::entities::scheme::TagAddress),
+    Tags(crate::entities::location::scheme::TagAddress),
     Directory(OsString),
     Remote(gds::service::remote::Address),
     Recent,

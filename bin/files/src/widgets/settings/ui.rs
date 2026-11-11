@@ -1,7 +1,7 @@
 //! A native settings workspace and the preferences of the current application.
 
 use crate::entities::preferences::{Preferences, PreferencesEditor};
-use crate::features::file_operations::commands::{Command, SETTINGS_CONTEXT};
+use crate::shared::ui::actions::{Command, SETTINGS_CONTEXT};
 use gds::appearance::typography::PreferencesEditor as FontEditor;
 use gds::ui::terminal::PreferencesEditor as TerminalEditor;
 mod controls;
@@ -69,7 +69,7 @@ impl View {
     pub fn new(
         preferences: Preferences,
         sidebar: SidebarPresentation,
-        runtime: tokio::runtime::Handle,
+        tasks: gds::service::task_manager::Scope,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -151,7 +151,7 @@ impl View {
         let mut view = Self {
             tags: tags::Controls {
                 editor: tag_editor,
-                runtime,
+                tasks,
                 checked: None,
                 error: None,
                 pending: false,

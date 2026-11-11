@@ -62,7 +62,7 @@ impl Browser {
             .iter()
             .flat_map(|target| target.selection.iter().cloned())
             .collect::<Vec<_>>();
-        let work = cx.background_executor().spawn(async move {
+        let work = self.window.tasks.spawn_blocking(move || {
             paths
                 .into_iter()
                 .map(|path| {
@@ -74,6 +74,13 @@ impl Browser {
         cx.spawn(async move |this, cx| {
             let entries = work.await;
             if let Err(error) = this.update(cx, |this, cx| {
+                let entries = match entries {
+                    Ok(entries) => entries,
+                    Err(error) => {
+                        notifications::error(error.to_string(), cx);
+                        return;
+                    }
+                };
                 for (path, result) in entries {
                     let entry = match result {
                         Ok(entry) => entry,

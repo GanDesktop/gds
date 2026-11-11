@@ -1,4 +1,5 @@
 use super::Panel;
+use gds::app::AppExt as _;
 use gpui_kit::{AppContext, TestAppContext, px, size};
 
 #[gpui_kit::test]
@@ -6,6 +7,7 @@ async fn closing_a_tab_removes_it_before_its_terminal_finishes(cx: &mut TestAppC
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
         crate::shared::i18n::install(gds::i18n::Language::English, cx).unwrap();
         gds::appearance::theme::apply(&Default::default(), cx).unwrap();
     });

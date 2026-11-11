@@ -26,9 +26,9 @@ pub(super) struct State {
 }
 
 impl State {
-    pub(super) fn new(runtime: Handle, window: &mut Window, cx: &mut Context<Browser>) -> Self {
+    pub(super) fn new(window: &mut Window, cx: &mut Context<Browser>) -> Self {
         Self {
-            service: storage::Service::shared(runtime, cx),
+            service: storage::Service::get(cx),
             table: table::VolumeTable::make_state(cx.entity().downgrade(), window, cx),
             defaults: std::collections::HashMap::new(),
             pending_removals: Vec::new(),
@@ -280,18 +280,19 @@ impl Browser {
             return;
         }
         if let Some(identity) = &id.stable {
-            self.settings
-                .preferences
-                .files
-                .volume_mount_points
-                .insert(identity.clone(), root);
-            if let Err(error) = configuration::save(&self.settings.preferences, cx) {
-                report_settings_failure("settings-save-failed", error, cx);
-            }
+            self.edit_preferences(
+                |preferences| {
+                    preferences
+                        .files
+                        .volume_mount_points
+                        .insert(identity.clone(), root);
+                },
+                cx,
+            );
         } else {
             self.devices.defaults.insert(id.clone(), root);
+            self.refresh_mounted_volume(id, cx);
         }
-        self.refresh_mounted_volume(id, cx);
         cx.notify();
     }
 

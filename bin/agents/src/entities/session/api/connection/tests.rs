@@ -1,4 +1,5 @@
 use std::{pin::Pin, sync::Mutex};
+use tokio::task::JoinHandle;
 
 use futures::Stream;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -959,7 +960,8 @@ async fn run(
 }
 
 async fn watch(client: Client, updates: mpsc::Sender<Update>, session: SessionId, epoch: u64) {
-    let (store, _) = super::history::Store::new(None);
+    let (store, _) =
+        super::history::Store::new(None, &gds::service::task_manager::Scope::default());
     watch_cached(client, updates, session, epoch, None, store).await;
 }
 

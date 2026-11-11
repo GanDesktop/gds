@@ -100,18 +100,18 @@ impl Workspace {
         {
             return;
         }
-        let Some(runtime) = cx
+        let Some(tasks) = cx
             .try_global::<crate::entities::agent::catalog::Service>()
-            .map(|service| service.runtime().clone())
+            .map(|service| service.tasks().clone())
         else {
             return;
         };
         let catalog = crate::entities::agent::catalog::Service::new(
             self.backend.server.clone(),
-            runtime.clone(),
+            tasks.clone(),
         );
         let service =
-            crate::entities::agent::check::Service::new(self.backend.server.clone(), runtime);
+            crate::entities::agent::check::Service::new(self.backend.server.clone(), tasks);
         let path = crate::shared::config::store(cx).path().to_owned();
         let epoch = self.selected.epoch;
         self.window.output_open = true;

@@ -1,4 +1,5 @@
 //! Application startup, route assembly and shutdown.
+use gds::app::AppExt as _;
 pub(crate) mod cli;
 mod startup;
 pub(crate) use startup::run;
@@ -18,7 +19,6 @@ pub(crate) fn init(cx: &mut App) {
     cx.set_global(ActionsRegistered);
     gds::ui::actions::register(cx);
     gds::ui::terminal::init(cx);
-    gds::ui::task_manager::init(cx);
     cx.on_app_quit(|_| async { gds::service::terminal::shutdown_all().await })
         .detach();
     crate::shared::config::terminal::init(cx);
@@ -81,8 +81,8 @@ pub(crate) fn request_quit(cx: &mut App) {
     cx.set_global(QuitPending);
     settings::window::flush_pending(cx);
     let closed = crate::pages::workspace::windows::close_all(cx);
-    gds::ui::task_manager::retain_until_quit(closed, cx);
-    gds::ui::task_manager::quit_when_idle(cx);
+    cx.gds().tasks().retain_until_quit(closed);
+    cx.gds().tasks().request_quit();
 }
 
 #[cfg(all(test, feature = "gui-tests"))]

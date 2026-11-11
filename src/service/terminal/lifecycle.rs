@@ -82,6 +82,7 @@ pub struct Terminal(Arc<Handle>);
 
 /// A blocking startup job. Run on a background executor; dropping it cancels startup.
 pub struct Launch {
+    tasks: crate::service::task_manager::Scope,
     state: Arc<State>,
     options: Option<SpawnOptions>,
 }
@@ -93,7 +94,7 @@ impl Launch {
             return;
         }
         let options = self.options.take().expect("a launch is consumed only once");
-        let result = Session::spawn_with_palette(options, self.state.palette.clone());
+        let result = Session::spawn_with_palette(&self.tasks, options, self.state.palette.clone());
         let mut state = lock(&self.state.lifecycle);
         state.phase = match result {
             Ok(session) => {
@@ -122,7 +123,10 @@ impl Drop for Launch {
 
 impl Terminal {
     /// Prepare ownership before scheduling the native launch on a background executor.
-    pub fn prepare(options: SpawnOptions) -> (Self, Launch) {
+    pub fn prepare(
+        tasks: crate::service::task_manager::Scope,
+        options: SpawnOptions,
+    ) -> (Self, Launch) {
         let (ready, _) = watch::channel(false);
         let state = Arc::new(State {
             lifecycle: Mutex::new(Lifecycle {
@@ -140,6 +144,7 @@ impl Terminal {
         (
             terminal,
             Launch {
+                tasks,
                 state,
                 options: Some(options),
             },

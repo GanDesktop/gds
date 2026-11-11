@@ -395,10 +395,12 @@ impl Browser {
         event: &ui::split::Changed,
         cx: &mut Context<Self>,
     ) {
-        self.settings.preferences.files.terminal_content_height = Some(event.0);
-        if let Err(error) = configuration::save(&self.settings.preferences, cx) {
-            report_settings_failure("settings-save-failed", &error, cx);
-        }
+        self.edit_preferences(
+            |preferences| {
+                preferences.files.terminal_content_height = Some(event.0);
+            },
+            cx,
+        );
     }
 
     pub(super) fn apply_terminal_preferences(&self, cx: &mut Context<Self>) {

@@ -21,6 +21,7 @@ pub(crate) struct Report {
 }
 
 struct Work {
+    tasks: gds::service::task_manager::Scope,
     cancel: CancellationToken,
     updates: watch::Sender<Progress>,
     progress: Progress,
@@ -33,12 +34,14 @@ enum Reservation {
 
 /// Copy each root to an exclusive staging entry and publish without replacing targets.
 pub(crate) async fn copy(
+    tasks: gds::service::task_manager::Scope,
     sources: Vec<Resource>,
     destination: Resource,
     cancel: CancellationToken,
     updates: watch::Sender<Progress>,
 ) -> Report {
     let mut work = Work {
+        tasks,
         cancel,
         updates,
         progress: Progress::default(),
@@ -136,7 +139,9 @@ impl Work {
                     mode: super::super::transfer::Mode::Move,
                 })
                 .map_err(|e| Error::Failed(e.to_string()))?;
-                let result = tokio::task::spawn_blocking(move || batch.execute())
+                let result = self
+                    .tasks
+                    .spawn_blocking(move || batch.execute())
                     .await
                     .map_err(|e| Error::Failed(e.to_string()))?;
                 if let Some(item) = result.items.into_iter().find(|item| item.result.is_err()) {

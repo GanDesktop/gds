@@ -1,4 +1,5 @@
 //! Single-file associations. Save applies the user's delta to freshly read tags.
+use gds::app::AppExt as _;
 mod history;
 use super::*;
 use gds::ui::button::Button;
@@ -26,12 +27,12 @@ struct Editor {
     error: Option<String>,
     saving: bool,
     browser: WeakEntity<Browser>,
-    runtime: Handle,
+    tasks: Scope,
 }
 impl Editor {
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let path = self.path.clone();
-        let work = self.runtime.spawn_blocking(move || {
+        let work = self.tasks.spawn_blocking(move || {
             let metadata = std::fs::symlink_metadata(&path)?;
             if !metadata.is_file() && !metadata.is_dir() {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Tags can only be edited on local files and directories; open the symbolic link target first"));
@@ -177,11 +178,11 @@ impl Editor {
         let edited = self.history.current.tags.clone();
         let path = self.path.clone();
         self.saving = true;
-        let work = gds::ui::task_manager::scope(cx)
-            .spawn_blocking(&self.runtime, move || {
-                file_tags::apply_edit(&path, &original, &edited)
-            })
-            .expect("application accepts file operations");
+        let work = cx
+            .gds()
+            .tasks()
+            .scope()
+            .spawn_blocking(move || file_tags::apply_edit(&path, &original, &edited));
         cx.spawn_in(window, async move |this, cx| {
             let result = work
                 .await
@@ -288,7 +289,7 @@ impl Browser {
             return;
         }
         let browser = cx.entity().downgrade();
-        let runtime = self.window.runtime.clone();
+        let tasks = self.window.tasks.clone();
         let editor = cx.new(|cx| {
             cx.bind_keys([
                 KeyBinding::new("ctrl-z", Undo, Some("TagEditor")),
@@ -326,7 +327,7 @@ impl Browser {
                 error: None,
                 saving: false,
                 browser,
-                runtime,
+                tasks,
             }
         });
         window.on_next_frame(move |window, cx| {
