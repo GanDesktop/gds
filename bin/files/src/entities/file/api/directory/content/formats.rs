@@ -1,7 +1,10 @@
 //! Embedded MIME categories and short display names.
 use super::ContentCategory;
 use serde::Deserialize;
-use std::{collections::HashMap, sync::LazyLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
 const CONFIG: &str = include_str!("assets/mime-types.toml");
 
@@ -11,9 +14,19 @@ static FORMATS: LazyLock<HashMap<String, Format>> = LazyLock::new(|| {
         .formats
         .into_iter()
         .flat_map(|rule| {
-            rule.mimes
-                .into_iter()
-                .map(move |mime| (mime, rule.format.clone()))
+            let name = rule.name.map(Arc::<str>::from);
+            let category = rule.category;
+            rule.mimes.into_iter().map(move |mime| {
+                let interned_mime = Arc::<str>::from(mime.as_str());
+                (
+                    mime,
+                    Format {
+                        category,
+                        name: name.clone(),
+                        mime: interned_mime,
+                    },
+                )
+            })
         })
         .collect()
 });
@@ -26,14 +39,15 @@ struct Config {
 #[derive(Deserialize)]
 struct Rule {
     mimes: Vec<String>,
-    #[serde(flatten)]
-    format: Format,
+    category: ContentCategory,
+    name: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
 pub(super) struct Format {
     pub category: ContentCategory,
-    pub name: Option<String>,
+    pub name: Option<Arc<str>>,
+    pub mime: Arc<str>,
 }
 
 impl Format {

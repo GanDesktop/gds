@@ -1,5 +1,5 @@
 //! File formats transported by GPUI on the focused window's core Wayland connection.
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use gpui_kit::{App, ClipboardAccessError, ClipboardMime, ClipboardMimeOffer, Task};
 
@@ -151,7 +151,7 @@ impl Clipboard {
     /// # Errors
     /// The task reports Wayland clipboard read, encoding or publication failures.
     pub fn remove_paths(
-        expected: Snapshot,
+        expected: Arc<Snapshot>,
         removed: Vec<PathBuf>,
         explicit: bool,
         cx: &mut App,

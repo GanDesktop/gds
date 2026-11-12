@@ -281,7 +281,7 @@ impl Render for Editor {
             @if (self.original.is_some())
                 .div { # "tag-editor-field"; flex; flex_wrap; items_center; gap: 6.0.px; p: 6.0.px; min_h: 38.0.px; max_h: 180.0.px;
                     overflow_y_scroll; border_1; rounded: $(cx.theme().radius);
-                    bg: $(gds::appearance::theme::Colors::current(cx).content);
+                    bg: $(cx.gds_ro().appearance().theme().colors().content);
                     border_color: $(if focused { cx.theme().primary } else { cx.theme().input });
                     cursor_text;
                     on_click: $(cx.listener(|this, _, window, cx| {

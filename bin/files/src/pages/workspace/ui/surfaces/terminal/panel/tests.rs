@@ -8,9 +8,14 @@ async fn closing_a_tab_removes_it_before_its_terminal_finishes(cx: &mut TestAppC
     cx.update(|cx| {
         gpui_kit::init(cx);
         cx.gds().tasks().init_test(false);
-        crate::shared::i18n::install(gds::i18n::Language::English, cx)
-            .expect("install English translations");
-        gds::appearance::theme::apply(&Default::default(), cx).expect("apply default theme");
+        let catalog = crate::shared::i18n::prepare(gds::i18n::Language::English)
+            .expect("prepare English translations");
+        cx.gds().i18n().install_catalog(catalog);
+        cx.gds()
+            .appearance()
+            .theme()
+            .apply(&Default::default())
+            .expect("apply default theme");
     });
     let directory = tempfile::tempdir().expect("create temporary working directory");
     let mut panel = None;

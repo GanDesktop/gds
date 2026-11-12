@@ -115,7 +115,6 @@ impl Browser {
             slot.navigation.view_mut().set_place(None);
         }
         self.save_places(cx);
-        self.sync_workspace_state(cx);
         cx.notify();
     }
 

@@ -38,7 +38,7 @@
 - 按父目录组合选中请求，复用已有窗口与目录页签，并传递调用方的 `StartupId` 窗口激活信息。
 - `programs.gds-files.fileManager1.enable` 显式安装 D-Bus 激活入口（`gds-files --dbus-service`），与选择器模式分离，并在已有其他 provider 占用总线名时明确报告。
 
-入口：[`bin/files/src/app/startup.rs`](../../../../../bin/files/src/app/startup.rs)、[`bin/files/src/app/cli.rs`](../../../../../bin/files/src/app/cli.rs)、[`bin/files/src/pages/workspace/ui.rs`](../../../../../bin/files/src/pages/workspace/ui.rs)、[`packaging/nix/apps/files/`](../../../../../packaging/nix/apps/files/)。规范：[File Manager D-Bus Interface](https://wiki.freedesktop.org/www/Specifications/file-manager-interface/)。
+入口：[`bin/files/src/app.rs`](../../../../../bin/files/src/app.rs)、[`bin/files/src/app/desktop.rs`](../../../../../bin/files/src/app/desktop.rs)、[`bin/files/src/app/cli.rs`](../../../../../bin/files/src/app/cli.rs)、[`bin/files/src/pages/workspace/ui.rs`](../../../../../bin/files/src/pages/workspace/ui.rs)、[`packaging/nix/apps/files/`](../../../../../packaging/nix/apps/files/)。规范：[File Manager D-Bus Interface](https://wiki.freedesktop.org/www/Specifications/file-manager-interface/)。
 
 ## 桌面互操作验证
 

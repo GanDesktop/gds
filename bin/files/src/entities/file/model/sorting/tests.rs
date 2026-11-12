@@ -1,19 +1,17 @@
+use super::super::columns::{Column, Layout};
 use super::{Direction, Key, Sort};
 use crate::entities::file::directory::{Entry, EntryDetails, EntryKind};
 use std::{ffi::OsString, path::PathBuf};
 
 fn entry(name: impl Into<OsString>, path: &str) -> Entry {
-    let name = name.into();
-    Entry {
-        display_name: name.to_string_lossy().into_owned(),
-        name,
-        path: PathBuf::from(path),
-        kind: EntryKind::File,
-        size: Some(7),
-        modified: None,
-        is_hidden: false,
-        details: EntryDetails::default(),
-    }
+    Entry::new(
+        PathBuf::from(path),
+        name.into(),
+        EntryKind::File,
+        Some(7),
+        None,
+        EntryDetails::default(),
+    )
 }
 
 // Identical metadata, identical display strings and duplicated entries cannot
@@ -54,4 +52,58 @@ fn non_utf8_names_with_identical_display_labels_remain_distinct() {
     let mut indices = vec![0, 1];
     Sort::default().sort_indices(&entries, &mut indices);
     assert_eq!(indices, [1, 0]);
+}
+
+#[test]
+fn legacy_sort_and_layout_deserialize_into_canonical_kebab_case() {
+    let name_sort: Sort = serde_json::from_str(r#"{"key":"Name","direction":"Ascending"}"#)
+        .expect("deserialize legacy Name sort");
+    assert_eq!(
+        name_sort,
+        Sort {
+            key: Key::Name,
+            direction: Direction::Ascending,
+        }
+    );
+    assert_eq!(
+        serde_json::to_string(&name_sort).expect("serialize canonical Name sort"),
+        r#"{"key":"name","direction":"Ascending"}"#
+    );
+
+    let detailed_sort: Sort =
+        serde_json::from_str(r#"{"key":"DetailedType","direction":"Descending"}"#)
+            .expect("deserialize legacy DetailedType sort");
+    assert_eq!(
+        detailed_sort,
+        Sort {
+            key: Key::DetailedType,
+            direction: Direction::Descending,
+        }
+    );
+    assert_eq!(
+        serde_json::to_string(&detailed_sort).expect("serialize canonical DetailedType sort"),
+        r#"{"key":"detailed-type","direction":"Descending"}"#
+    );
+
+    let snake_sort: Sort =
+        serde_json::from_str(r#"{"key":"detailed_type","direction":"descending"}"#)
+            .expect("deserialize snake_case sort aliases");
+    assert_eq!(snake_sort, detailed_sort);
+
+    let layout: Layout =
+        serde_json::from_str(r#"["Modified","DetailedType","UnknownColumn","Permissions"]"#)
+            .expect("deserialize legacy PascalCase layout");
+    assert_eq!(
+        layout.columns(),
+        &[
+            Column::Name,
+            Column::Modified,
+            Column::DetailedType,
+            Column::Permissions,
+        ]
+    );
+    assert_eq!(
+        serde_json::to_string(&layout).expect("serialize canonical layout"),
+        r#"["name","modified","detailed-type","permissions"]"#
+    );
 }

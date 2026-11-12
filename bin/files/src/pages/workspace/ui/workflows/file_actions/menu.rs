@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use crate::shared::app::FilesExt as _;
 use crate::shared::ui::actions::Command;
+use gds::app::AppExt as _;
 use gds::{i18n, service::desktop, ui::menu, ui::notifications};
 use gds_uim::el;
 use gpui_kit::assets::IconName;
@@ -51,7 +53,7 @@ impl MenuAction {
             Self::Copy | Self::Cut | Self::Trash | Self::DeletePermanent => available && idle,
             Self::Paste => {
                 idle && browser.device_path_accepts_task(&selection.directory, cx)
-                    && crate::shared::lib::clipboard::can_paste(cx)
+                    && cx.gds_ro().files().clipboard().can_paste()
             }
             #[cfg(unix)]
             Self::Permissions => available && idle && selection.paths.len() == 1,
@@ -160,7 +162,7 @@ impl DirectoryAction {
             && browser.active().is_some_and(|slot| !slot.is_loading());
         match self {
             Self::NewFolder => available && idle,
-            Self::Paste => available && idle && crate::shared::lib::clipboard::can_paste(cx),
+            Self::Paste => available && idle && cx.gds_ro().files().clipboard().can_paste(),
             Self::InternalTerminal => {
                 available
                     && browser.picker.is_none()

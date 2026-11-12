@@ -129,3 +129,205 @@ fn inspection_preserves_root_names_and_listing_filters_hidden_entries() {
     assert_eq!(entry.name, filesystem_root.as_os_str());
     assert_eq!(entry.kind, EntryKind::Directory);
 }
+
+#[test]
+fn filter_matching_handles_empty_ascii_and_unicode_case_folding() {
+    let ascii = Entry::new(
+        PathBuf::from("/tmp/ReadMe.MD"),
+        OsString::from("ReadMe.MD"),
+        EntryKind::File,
+        Some(12),
+        None,
+        EntryDetails::default(),
+    );
+    assert!(ascii.matches_filter(""));
+    assert!(ascii.matches_filter("readme"));
+    assert!(ascii.matches_filter("me.md"));
+    assert!(!ascii.matches_filter("cargo"));
+
+    let unicode = Entry::new(
+        PathBuf::from("/tmp/Übersicht_Файл.txt"),
+        OsString::from("Übersicht_Файл.txt"),
+        EntryKind::File,
+        Some(24),
+        None,
+        EntryDetails::default(),
+    );
+    assert!(unicode.matches_filter(""));
+    assert!(unicode.matches_filter("übersicht"));
+    assert!(unicode.matches_filter("файл"));
+    assert!(!unicode.matches_filter("missing"));
+}
+
+#[test]
+fn entry_for_path_finds_directories_and_files_in_canonical_order() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    let dir_a = root.path().join("alpha-dir");
+    let dir_b = root.path().join("zeta-dir");
+    let file_a = root.path().join("alpha.txt");
+    let file_b = root.path().join("zeta.txt");
+    fs::create_dir(&dir_a).expect("create alpha-dir");
+    fs::create_dir(&dir_b).expect("create zeta-dir");
+    fs::write(&file_a, "a").expect("write alpha.txt");
+    fs::write(&file_b, "b").expect("write zeta.txt");
+
+    let snapshot =
+        read_directory(root.path(), ReadOptions::default()).expect("read directory snapshot");
+    assert_eq!(
+        snapshot.entry_for_path(&dir_a).map(|entry| entry.kind),
+        Some(EntryKind::Directory)
+    );
+    assert_eq!(
+        snapshot.entry_for_path(&dir_b).map(|entry| entry.kind),
+        Some(EntryKind::Directory)
+    );
+    assert_eq!(
+        snapshot.entry_for_path(&file_a).map(|entry| entry.kind),
+        Some(EntryKind::File)
+    );
+    assert_eq!(
+        snapshot.entry_for_path(&file_b).map(|entry| entry.kind),
+        Some(EntryKind::File)
+    );
+    assert!(
+        snapshot
+            .entry_for_path(&root.path().join("absent"))
+            .is_none()
+    );
+}
+
+#[test]
+fn base_read_skips_secondary_probes_and_honors_cancellation() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    let folder = root.path().join("folder");
+    fs::create_dir(&folder).expect("create folder");
+    fs::write(folder.join("child.txt"), "child").expect("write child");
+
+    let known_file = root.path().join("lib.rs");
+    fs::write(&known_file, "pub fn main() {}\n").expect("write known file");
+
+    let unknown_file = root.path().join(" mystery-blob");
+    fs::write(&unknown_file, b"\x89PNG\r\n\x1a\nheader").expect("write unknown-name file");
+
+    let cancel = CancellationToken::new();
+    let snapshot = read_directory_base(root.path(), ReadOptions::default(), &cancel)
+        .expect("read base directory snapshot");
+
+    let folder_entry = snapshot.entry_for_path(&folder).expect("folder entry");
+    assert_eq!(folder_entry.details.children, None);
+    assert!(folder_entry.needs_enrichment(EnrichmentNeed {
+        children: true,
+        ..EnrichmentNeed::default()
+    }));
+
+    let known_entry = snapshot
+        .entry_for_path(&known_file)
+        .expect("known file entry");
+    assert_eq!(
+        known_entry
+            .details
+            .content
+            .as_ref()
+            .and_then(|content| content.mime.as_deref()),
+        Some("text/rust")
+    );
+    assert!(!known_entry.needs_enrichment(EnrichmentNeed {
+        content: true,
+        ..EnrichmentNeed::default()
+    }));
+
+    let unknown_entry = snapshot
+        .entry_for_path(&unknown_file)
+        .expect("unknown file entry");
+    assert_eq!(unknown_entry.details.content, None);
+    assert!(unknown_entry.needs_enrichment(EnrichmentNeed {
+        content: true,
+        ..EnrichmentNeed::default()
+    }));
+
+    cancel.cancel();
+    let error = read_directory_base(root.path(), ReadOptions::default(), &cancel)
+        .expect_err("cancelled base read must fail");
+    assert!(error.is_cancelled());
+}
+
+#[test]
+fn enrichment_prioritizes_viewport_bounds_budget_and_marks_unreadable_entries_probed() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    (0..DEFAULT_PROBE_BUDGET + 10).for_each(|index| {
+        let dir = root.path().join(format!("dir-{index:04}"));
+        fs::create_dir(&dir).expect("create numbered directory");
+    });
+    let priority_dir = root.path().join("z-priority-dir");
+    fs::create_dir(&priority_dir).expect("create priority directory");
+    fs::write(priority_dir.join("inside.txt"), "1").expect("write priority child");
+
+    let cancel = CancellationToken::new();
+    let base = Arc::new(
+        read_directory_base(root.path(), ReadOptions::default(), &cancel)
+            .expect("read base snapshot"),
+    );
+
+    let bounded_need = EnrichmentNeed {
+        children: true,
+        content: false,
+        symlinks: false,
+        full_budget: false,
+    };
+    let planned = plan_enrichment(&base, std::slice::from_ref(&priority_dir), bounded_need);
+    assert_eq!(planned.len(), 1 + DEFAULT_PROBE_BUDGET);
+    assert_eq!(planned[0].path, priority_dir);
+
+    let full_need = EnrichmentNeed {
+        full_budget: true,
+        ..bounded_need
+    };
+    let all_planned = plan_enrichment(&base, std::slice::from_ref(&priority_dir), full_need);
+    assert_eq!(all_planned.len(), DEFAULT_PROBE_BUDGET + 11);
+
+    let probed =
+        probe_batch(&planned[..1], bounded_need, &cancel).expect("probe priority directory");
+    let (merged, changed_visible) =
+        merge_enriched(&base, &probed).expect("merge priority directory update");
+    assert!(changed_visible);
+    assert_eq!(
+        merged
+            .entry_for_path(&priority_dir)
+            .and_then(|entry| entry.details.children),
+        Some(ChildCount {
+            count: 1,
+            truncated: false,
+        })
+    );
+
+    // A directory whose child count cannot be read stays `None` in the UI,
+    // records `children_probed = true`, and is not re-planned on subsequent passes.
+    let vanished_dir = root.path().join("dir-0000");
+    fs::remove_dir(&vanished_dir).expect("remove directory before child probe");
+    let vanished_entry = merged
+        .entry_for_path(&vanished_dir)
+        .expect("vanished directory still in snapshot")
+        .clone();
+    let vanished_probed = probe_batch(std::slice::from_ref(&vanished_entry), bounded_need, &cancel)
+        .expect("probe vanished directory");
+    let (merged_after_vanished, vanished_visible_change) =
+        merge_enriched(&merged, &vanished_probed).expect("merge vanished directory probe state");
+    assert!(!vanished_visible_change);
+    let updated_vanished = merged_after_vanished
+        .entry_for_path(&vanished_dir)
+        .expect("vanished entry after merge");
+    assert_eq!(updated_vanished.details.children, None);
+    assert!(!updated_vanished.needs_enrichment(bounded_need));
+    assert!(
+        plan_enrichment(
+            &merged_after_vanished,
+            std::slice::from_ref(&vanished_dir),
+            EnrichmentNeed {
+                children: true,
+                ..EnrichmentNeed::default()
+            },
+        )
+        .iter()
+        .all(|entry| entry.path != vanished_dir)
+    );
+}

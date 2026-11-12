@@ -134,8 +134,8 @@ impl Geometry {
 struct SelectionCache {
     tab: Option<u64>,
     rows: Arc<[directory::Entry]>,
-    selected: Vec<PathBuf>,
-    drag: Rc<DragSnapshot>,
+    selected: Selection<PathBuf>,
+    drag: DragSnapshot,
 }
 
 impl SelectionCache {
@@ -143,24 +143,21 @@ impl SelectionCache {
         &mut self,
         tab: u64,
         rows: &Arc<[directory::Entry]>,
-        selected: &[PathBuf],
-    ) -> Rc<DragSnapshot> {
-        if self.tab != Some(tab)
-            || !Arc::ptr_eq(&self.rows, rows)
-            || self.selected.as_slice() != selected
-        {
+        selected: &Selection<PathBuf>,
+    ) -> DragSnapshot {
+        if self.tab != Some(tab) || !Arc::ptr_eq(&self.rows, rows) || self.selected != *selected {
             self.tab = Some(tab);
             self.rows = Arc::clone(rows);
-            self.selected = selected.to_vec();
-            self.drag = Rc::new(DragSnapshot::new(rows, selected));
+            self.selected = selected.clone();
+            self.drag = DragSnapshot::new(rows, selected);
         }
-        Rc::clone(&self.drag)
+        self.drag.clone()
     }
 }
 
 struct Data {
     rows: Arc<[directory::Entry]>,
-    drag: Rc<DragSnapshot>,
+    drag: DragSnapshot,
     geometry: Geometry,
 }
 
@@ -275,6 +272,7 @@ impl Browser {
                 .base_handle
                 .set_offset(point(px(0.), px(0.)));
         }
+        self.schedule_enrichment(self.tabs.active_id, cx);
         self.window.focus.focus(window, cx);
         cx.notify();
     }
@@ -303,6 +301,11 @@ impl Browser {
                 let drag = cache.update(cx, |cache, _| {
                     cache.snapshot(tab, &rows, &slot.navigation.view().selected)
                 });
+                let start_item = (range.start * geometry.columns).min(rows.len());
+                let end_item = (range.end * geometry.columns).min(rows.len());
+                if start_item < end_item {
+                    this.request_viewport_enrichment(&rows[start_item..end_item], cx);
+                }
                 let data = Data {
                     rows: rows.clone(),
                     drag,
@@ -371,7 +374,7 @@ impl Browser {
         let target = path.clone();
         let browser = cx.entity().downgrade();
         let on_click = cx.listener(move |this, event: &ClickEvent, window, cx| {
-            file_clipboard::refresh(cx);
+            cx.gds().files().clipboard().refresh();
             let Some(index) = this.active().and_then(|slot| {
                 slot.table_rows
                     .iter()
@@ -420,17 +423,20 @@ impl Browser {
             }
         };
         tile = tile
-            .on_drag(data.drag.drag_for(entry), move |drag, offset, _, cx| {
-                let mut content = content.clone();
-                content.appearance = content.appearance.preview();
-                content.selection = if selected { 1. } else { 0. };
-                DragPreview::new(
-                    drag,
-                    offset,
-                    move |_, cx| content.render(None, None, cx).into_any_element(),
-                    cx,
-                )
-            })
+            .on_drag(
+                data.drag.drag_for_row(entry, selected),
+                move |drag, offset, _, cx| {
+                    let mut content = content.clone();
+                    content.appearance = content.appearance.preview();
+                    content.selection = if selected { 1. } else { 0. };
+                    DragPreview::new(
+                        drag,
+                        offset,
+                        move |_, cx| content.render(None, None, cx).into_any_element(),
+                        cx,
+                    )
+                },
+            )
             .external_drag_payload::<FileDrag>(|drag, _, _| Some(drag.external_payload()));
         if entry.kind == directory::EntryKind::Directory {
             tile = drag_drop::drop_target(tile, path, browser);

@@ -106,10 +106,11 @@ impl Snapshot {
         if self != current {
             return None;
         }
+        let removed: HashSet<&Path> = removed.iter().map(PathBuf::as_path).collect();
         let remaining: Vec<_> = self
             .paths
             .iter()
-            .filter(|path| !removed.contains(path))
+            .filter(|path| !removed.contains(path.as_path()))
             .cloned()
             .collect();
         (remaining.len() != self.paths.len()).then_some(remaining)
@@ -121,11 +122,11 @@ impl Snapshot {
         if self.mode != Mode::Cut || !self.identity.is_owned() || self != current {
             return None;
         }
-        let completed: HashSet<_> = succeeded.iter().collect();
+        let completed: HashSet<&Path> = succeeded.iter().map(PathBuf::as_path).collect();
         let remaining: Vec<_> = self
             .paths
             .iter()
-            .filter(|path| !completed.contains(path))
+            .filter(|path| !completed.contains(path.as_path()))
             .cloned()
             .collect();
         (remaining.len() != self.paths.len()).then_some(remaining)
@@ -163,7 +164,7 @@ enum Backend {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Bridge {
+pub(super) struct Bridge {
     backend: Backend,
 }
 
@@ -172,7 +173,7 @@ const REMOTE_URI_METADATA: &str = "gds-remote-uris";
 impl Bridge {
     /// # Errors
     /// Reports invalid URI lists or an unavailable clipboard provider.
-    pub fn write_uris(&self, uris: Vec<String>, cx: &mut App) -> Task<Result<(), Error>> {
+    fn write_uris(&self, uris: Vec<String>, cx: &mut App) -> Task<Result<(), Error>> {
         let checked = Formats::parse_uri_list(&uris.join("\n"));
         let copyable = checked
             .as_ref()
@@ -204,7 +205,7 @@ impl Bridge {
 
     /// # Errors
     /// The task reports malformed URI lists or clipboard access failures.
-    pub fn read_uris(&self, cx: &mut App) -> Task<Result<Option<(Mode, Vec<String>)>, Error>> {
+    fn read_uris(&self, cx: &mut App) -> Task<Result<Option<(Mode, Vec<String>)>, Error>> {
         match self.backend {
             #[cfg(target_os = "linux")]
             Backend::Wayland => wayland::Clipboard::read_uris(cx),
@@ -214,7 +215,7 @@ impl Bridge {
         }
     }
 
-    pub fn new(cx: &App) -> Self {
+    fn new(cx: &App) -> Self {
         #[cfg(target_os = "linux")]
         if cx.supports_clipboard_mime() {
             return Self {
@@ -230,7 +231,7 @@ impl Bridge {
     ///
     /// # Errors
     /// The task reports invalid paths, encoding or unavailable clipboard protocols.
-    pub fn write(
+    fn write(
         &self,
         mode: Mode,
         paths: Vec<PathBuf>,
@@ -250,7 +251,7 @@ impl Bridge {
     ///
     /// # Errors
     /// The task reports malformed, non-local or inaccessible file clipboard data.
-    pub fn read(&self, cx: &mut App) -> Task<Result<Option<Snapshot>, Error>> {
+    fn read(&self, cx: &mut App) -> Task<Result<Option<Snapshot>, Error>> {
         match self.backend {
             #[cfg(target_os = "linux")]
             Backend::Wayland => wayland::Clipboard::read(cx),
@@ -264,7 +265,7 @@ impl Bridge {
     ///
     /// # Errors
     /// The task reports clipboard access or update failures; filesystem results are unaffected.
-    pub fn finish_cut(
+    fn finish_cut(
         &self,
         snapshot: Snapshot,
         succeeded: Vec<PathBuf>,
@@ -277,9 +278,9 @@ impl Bridge {
     ///
     /// # Errors
     /// Reports clipboard read or publication failures.
-    pub fn remove_path(
+    fn remove_path(
         &self,
-        snapshot: Snapshot,
+        snapshot: Arc<Snapshot>,
         path: PathBuf,
         cx: &mut App,
     ) -> Task<Result<(), Error>> {
@@ -301,6 +302,7 @@ impl Bridge {
         if !snapshot.can_cancel() || paths.is_empty() {
             return Task::ready(Ok(()));
         }
+        let snapshot = Arc::new(snapshot);
         match self.backend {
             #[cfg(target_os = "linux")]
             Backend::Wayland => wayland::Clipboard::remove_paths(snapshot, paths, false, cx),
@@ -309,57 +311,132 @@ impl Bridge {
     }
 }
 
-/// Whether `path` is one of the sources of the current in-application cut.
-///
-/// This reads only the cached intent; no clipboard or filesystem I/O happens
-/// during rendering. The cache changes only when a clipboard operation
-/// completes or [`refresh`] validates it.
-pub fn is_cut(path: &Path, cx: &App) -> bool {
-    Cache::is_cut_in(path, cx)
+#[derive(Clone, Copy)]
+pub(crate) struct Accessor<C> {
+    cx: C,
 }
 
-/// Last known file contents, shared by all windows without clipboard I/O in render.
-pub fn current(cx: &App) -> Option<Arc<Snapshot>> {
-    Cache::current_in(cx)
+impl<C> crate::shared::app::Files<C> {
+    pub(crate) fn clipboard(self) -> Accessor<C> {
+        Accessor {
+            cx: self.into_inner(),
+        }
+    }
 }
 
-/// Whether the last validated offer contains local files or copyable remote URIs.
-pub fn can_paste(cx: &App) -> bool {
-    Cache::can_paste_in(cx)
+impl<C: std::ops::Deref<Target = App>> Accessor<C> {
+    /// Whether `path` is one of the sources of the current in-application cut.
+    ///
+    /// This reads only the cached intent; no clipboard or filesystem I/O happens
+    /// during rendering. The cache changes only when a clipboard operation
+    /// completes or [`Self::refresh`] validates it.
+    pub(crate) fn is_cut(&self, path: &Path) -> bool {
+        Cache::is_cut_in(path, &self.cx)
+    }
+
+    /// Last known file contents, shared by all windows without clipboard I/O in render.
+    pub(crate) fn current(&self) -> Option<Arc<Snapshot>> {
+        Cache::current_in(&self.cx)
+    }
+
+    /// Whether the last validated offer contains local files or copyable remote URIs.
+    pub(crate) fn can_paste(&self) -> bool {
+        Cache::can_paste_in(&self.cx)
+    }
 }
 
-/// Re-read file contents on activation or returning from a file interaction.
-///
-/// Callers invoke this on window activation or on a returning file-row click;
-/// it never polls. One read is in flight at a time, and a read that started
-/// before a newer copy/cut cannot replace that newer intent.
-pub fn refresh(cx: &mut App) {
-    Cache::refresh(cx);
-}
+impl Accessor<&mut App> {
+    /// Re-read file contents on activation or returning from a file interaction.
+    ///
+    /// Callers invoke this on window activation or on a returning file-row click;
+    /// it never polls. One read is in flight at a time, and a read that started
+    /// before a newer copy/cut cannot replace that newer intent.
+    pub(crate) fn refresh(&mut self) {
+        Cache::refresh(self.cx);
+    }
 
-/// Forget file contents when a known text or other payload replaces them.
-pub fn clear(cx: &mut App) {
-    Cache::clear_in(cx);
-}
+    /// Forget file contents when a known text or other payload replaces them.
+    pub(crate) fn clear(&mut self) {
+        Cache::clear_in(self.cx);
+    }
 
-/// Cancel an owned cut, clearing the platform offer only while it still matches.
-/// A later clipboard write is preserved. Repeated Escape presses share the
-/// pending cancellation; errors leave the cut visible and available to retry.
-///
-/// # Errors
-/// The task reports clipboard access or update failures.
-pub fn cancel_cut(cx: &mut App) -> Option<Task<Result<(), Error>>> {
-    Cache::cancel_cut(cx)
-}
+    /// Cancel an owned cut, clearing the platform offer only while it still matches.
+    /// A later clipboard write is preserved. Repeated Escape presses share the
+    /// pending cancellation; errors leave the cut visible and available to retry.
+    ///
+    /// # Errors
+    /// The task reports clipboard access or update failures.
+    pub(crate) fn cancel_cut(&mut self) -> Option<Task<Result<(), Error>>> {
+        Cache::cancel_cut(self.cx)
+    }
 
-/// Record a clipboard write only after it actually succeeded.
-pub(crate) fn note_clipboard_write(written: &Snapshot, cx: &mut App) {
-    Cache::note_write(written, cx);
-}
+    /// Publish from the GPUI thread using the focused window's selection serial.
+    ///
+    /// # Errors
+    /// The task reports invalid paths, encoding or unavailable clipboard protocols.
+    pub(crate) fn write(
+        &mut self,
+        mode: Mode,
+        paths: Vec<PathBuf>,
+    ) -> Task<Result<Snapshot, Error>> {
+        Bridge::new(self.cx).write(mode, paths, self.cx)
+    }
 
-/// Drop the sources a cut paste moved, keeping any entry it did not move.
-pub(crate) fn note_cut_paste(pasted: &Snapshot, succeeded: &[PathBuf], cx: &mut App) {
-    Cache::note_cut_paste(pasted, succeeded, cx);
+    /// Read supported file clipboard formats, never infer files from ordinary text.
+    ///
+    /// # Errors
+    /// The task reports malformed, non-local or inaccessible file clipboard data.
+    pub(crate) fn read(&mut self) -> Task<Result<Option<Snapshot>, Error>> {
+        Bridge::new(self.cx).read(self.cx)
+    }
+
+    /// # Errors
+    /// Reports invalid URI lists or an unavailable clipboard provider.
+    pub(crate) fn write_uris(&mut self, uris: Vec<String>) -> Task<Result<(), Error>> {
+        Bridge::new(self.cx).write_uris(uris, self.cx)
+    }
+
+    /// # Errors
+    /// The task reports malformed URI lists or clipboard access failures.
+    pub(crate) fn read_uris(&mut self) -> Task<Result<Option<(Mode, Vec<String>)>, Error>> {
+        Bridge::new(self.cx).read_uris(self.cx)
+    }
+
+    /// Remove completed cut entries only from an unchanged GDS-owned snapshot.
+    /// Foreign owners and newly copied contents are left untouched. Wayland cleanup
+    /// compares the captured offer revision immediately before publication.
+    ///
+    /// # Errors
+    /// The task reports clipboard access or update failures; filesystem results are unaffected.
+    pub(crate) fn finish_cut(
+        &mut self,
+        snapshot: Snapshot,
+        succeeded: Vec<PathBuf>,
+    ) -> Task<Result<(), Error>> {
+        Bridge::new(self.cx).finish_cut(snapshot, succeeded, self.cx)
+    }
+
+    /// Remove an explicitly chosen entry, only while the platform offer matches the displayed snapshot.
+    ///
+    /// # Errors
+    /// Reports clipboard read or publication failures.
+    pub(crate) fn remove_path(
+        &mut self,
+        snapshot: Arc<Snapshot>,
+        path: PathBuf,
+    ) -> Task<Result<(), Error>> {
+        Bridge::new(self.cx).remove_path(snapshot, path, self.cx)
+    }
+
+    /// Record a clipboard write only after it actually succeeded.
+    pub(crate) fn note_write(&mut self, written: &Snapshot) {
+        Cache::note_write(written, self.cx);
+    }
+
+    /// Drop the sources a cut paste moved, keeping any entry it did not move.
+    pub(crate) fn note_cut_paste(&mut self, pasted: &Snapshot, succeeded: &[PathBuf]) {
+        Cache::note_cut_paste(pasted, succeeded, self.cx);
+    }
 }
 
 #[cfg(test)]

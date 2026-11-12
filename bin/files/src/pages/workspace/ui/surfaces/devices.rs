@@ -28,7 +28,7 @@ pub(in crate::pages::workspace) struct State {
 impl State {
     pub(in crate::pages::workspace) fn new(window: &mut Window, cx: &mut Context<Browser>) -> Self {
         Self {
-            service: storage::Service::get(cx),
+            service: cx.gds_ro().files().volumes().service(),
             table: table::VolumeTable::make_state(cx.entity().downgrade(), window, cx),
             defaults: std::collections::HashMap::new(),
             pending_removals: Vec::new(),
@@ -137,6 +137,7 @@ impl Browser {
                 slot.needs_refresh = false;
                 slot.cursor = None;
                 slot.anchor = None;
+                slot.clear_async_loads();
                 {
                     let tab = &mut slot.navigation;
                     tab.cancel_pending();
@@ -145,7 +146,6 @@ impl Browser {
                 slot.refresh_visible();
             }
         }
-        self.sync_workspace_state(cx);
         cx.notify();
     }
 

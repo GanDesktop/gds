@@ -65,7 +65,7 @@ impl Browser {
         if matches!(event, InputEvent::Blur) {
             if self.toolbar.path.editing && !notifications::is_focused(window, cx) {
                 self.toolbar.finish_path_edit();
-                file_clipboard::refresh(cx);
+                cx.gds().files().clipboard().refresh();
                 cx.notify();
             }
             return;
@@ -97,7 +97,7 @@ impl Browser {
             Ok(path) => {
                 self.navigate(path, cx);
                 Self::restore_file_focus(cx.entity().downgrade(), self.tabs.active_id, window);
-                file_clipboard::refresh(cx);
+                cx.gds().files().clipboard().refresh();
             }
             Err(error) => {
                 notifications::Report::new(
@@ -120,7 +120,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         if matches!(event, InputEvent::Blur) {
-            file_clipboard::refresh(cx);
+            cx.gds().files().clipboard().refresh();
             return;
         }
         if !matches!(event, InputEvent::Change) {
@@ -131,15 +131,10 @@ impl Browser {
             slot.set_filter(value);
             slot.refresh_visible();
         }
-        self.sync_workspace_state(cx);
         cx.notify();
     }
 
-    pub(in crate::pages::workspace) fn sync_filter_input(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(in crate::pages::workspace) fn sync_filter_input(&self, window: &mut Window, cx: &mut App) {
         let filter = self
             .current_tab()
             .map(|tab| tab.filter().to_owned())
@@ -154,10 +149,9 @@ impl Browser {
 
     pub(in crate::pages::workspace) fn request_filter_sync(&mut self, cx: &mut Context<Self>) {
         let handle = self.window.handle;
-        let entity = cx.entity().downgrade();
         if handle
             .update(cx, |_, window, cx| {
-                let _ = entity.update(cx, |this, cx| this.sync_filter_input(window, cx));
+                self.sync_filter_input(window, cx);
             })
             .is_err()
         {

@@ -43,9 +43,12 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         let entity = cx.entity();
+        let preferences = cx.gds_ro().files().preferences().service();
         self.window.subscriptions = vec![
             cx.observe(&entity, |this, _, cx| this.sync_workspace_state(cx)),
-            cx.observe_global_in::<configuration::Current>(window, Self::sync_preferences),
+            cx.observe_in(&preferences, window, |this, _, window, cx| {
+                this.sync_preferences(window, cx)
+            }),
             cx.observe(&self.background_tasks, |_, _, cx| cx.notify()),
             cx.observe_window_bounds(window, Self::on_window_resize),
             cx.observe(&self.terminal.split, |_, _, cx| cx.notify()),
@@ -59,10 +62,10 @@ impl Browser {
             // Refresh both the footer contents and cut markers on activation.
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
-                    file_clipboard::refresh(cx);
+                    cx.gds().files().clipboard().refresh();
                 } else {
                     // Releases outside this window are never delivered here.
-                    ui::keytips::release(window, cx);
+                    cx.gds().ui().keytips().release(window);
                     this.cancel_marquee(cx);
                     drag_drop::cancel_tab_hover(cx);
                     if this.window.held_modifier.take().is_some() {

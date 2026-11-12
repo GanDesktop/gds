@@ -46,6 +46,27 @@ impl FileIcon {
         }
     }
 
+    /// Icon describing `path` without counting directory children or reading file headers.
+    pub(crate) fn for_path(path: &Path) -> Self {
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            return Self::plain(IconName::FileQuestionMark);
+        };
+        match EntryKind::from(metadata.file_type()) {
+            EntryKind::Directory => Self::plain(Self::directory_icon(path)),
+            EntryKind::File => {
+                let name = path.file_name().unwrap_or(path.as_os_str());
+                let content = ContentType::from_filename(name);
+                Self::for_content(content.as_ref())
+            }
+            EntryKind::SymbolicLink => {
+                let (target, _) = LinkTarget::from_path_base(path);
+                Self::for_link_target(path, &target)
+            }
+            EntryKind::Other => Self::plain(IconName::File),
+            EntryKind::Unknown => Self::plain(IconName::FileQuestionMark),
+        }
+    }
+
     /// Color follows the entry's category, independently of its chosen glyph.
     pub(crate) fn color(entry: &Entry, cx: &App) -> Hsla {
         let directory = entry.kind == EntryKind::Directory
@@ -116,6 +137,10 @@ impl FileIcon {
         let Some(target) = entry.details.target.as_ref() else {
             return Self::plain(IconName::Link);
         };
+        Self::for_link_target(&entry.path, target)
+    }
+
+    fn for_link_target(path: &Path, target: &LinkTarget) -> Self {
         match target {
             // A dangling link is the only state that shows the broken-chain icon.
             LinkTarget::Broken => Self::plain(IconName::Unlink),
@@ -124,7 +149,7 @@ impl FileIcon {
             LinkTarget::Unreachable => Self::badged(IconName::FileQuestionMark, IconName::Link),
             LinkTarget::Resolved { kind, content } => {
                 let base = match kind {
-                    EntryKind::Directory => Self::directory_icon(&entry.path),
+                    EntryKind::Directory => Self::directory_icon(path),
                     EntryKind::File => {
                         Self::category_icon(content.as_ref().map(|content| content.category))
                     }

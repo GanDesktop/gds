@@ -2,6 +2,7 @@
 
 pub(in crate::pages::workspace) use super::*;
 
+pub(in crate::pages::workspace) mod enrichment;
 pub(in crate::pages::workspace) mod handlers;
 pub(in crate::pages::workspace) mod localization;
 pub(in crate::pages::workspace) mod locations;

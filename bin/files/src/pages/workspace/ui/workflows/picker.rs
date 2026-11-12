@@ -254,6 +254,7 @@ impl Browser {
             return crate::features::pick_files::Options::valid_name(&name)
                 .then(|| vec![path.join(name)]);
         }
+        let directory = tab.directory()?;
         if picker.session.options.directory {
             let selected = &tab.view().selected;
             if selected.is_empty() {
@@ -265,11 +266,11 @@ impl Browser {
             return selected
                 .iter()
                 .all(|path| {
-                    slot.table_rows
-                        .iter()
-                        .any(|entry| entry.path == *path && Projection::is_directory(entry))
+                    directory
+                        .entry_for_path(path)
+                        .is_some_and(Projection::is_directory)
                 })
-                .then(|| selected.clone());
+                .then(|| selected.to_vec());
         }
         let selected = &tab.view().selected;
         if selected.is_empty() || (!picker.session.options.multiple && selected.len() > 1) {
@@ -278,11 +279,11 @@ impl Browser {
         selected
             .iter()
             .all(|path| {
-                slot.table_rows
-                    .iter()
-                    .any(|entry| entry.path == *path && picker.session.accepts_entry(entry))
+                directory
+                    .entry_for_path(path)
+                    .is_some_and(|entry| picker.session.accepts_entry(entry))
             })
-            .then(|| selected.clone())
+            .then(|| selected.to_vec())
     }
 
     pub(in crate::pages::workspace) fn set_picker_filter(
@@ -306,7 +307,7 @@ impl Browser {
             picker.session.projection()
         };
         self.reproject_picker(&projection);
-        self.sync_workspace_state(cx);
+        self.schedule_enrichment(self.tabs.active_id, cx);
         cx.notify();
     }
 

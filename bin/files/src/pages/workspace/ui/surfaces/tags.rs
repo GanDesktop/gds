@@ -91,7 +91,6 @@ impl Browser {
                 if let Some(slot) = this.tab_slot_mut(id) {
                     slot.set_tags(Some(result));
                 }
-                this.sync_workspace_state(cx);
                 cx.notify();
             });
         });

@@ -5,7 +5,13 @@
 //! File names take precedence; only unknown names need a bounded content probe.
 //! Detection never fails a directory listing.
 
-use std::{ffi::OsStr, fs::File, io::Read, path::Path, sync::LazyLock};
+use std::{
+    ffi::OsStr,
+    fs::File,
+    io::Read,
+    path::Path,
+    sync::{Arc, LazyLock},
+};
 use xdg_mime::SharedMimeInfo;
 
 mod formats;
@@ -17,6 +23,9 @@ use formats::Format;
 const HEADER_LEN: u64 = 8 * 1024;
 
 static MIME: LazyLock<SharedMimeInfo> = LazyLock::new(SharedMimeInfo::new);
+static TEXT_PLAIN_MIME: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("text/plain"));
+static OCTET_STREAM_MIME: LazyLock<Arc<str>> =
+    LazyLock::new(|| Arc::from("application/octet-stream"));
 
 impl ContentType {
     /// Detect the content type of a regular file.
@@ -24,20 +33,40 @@ impl ContentType {
     /// `name` is the name whose pattern is consulted; it is the target name for a
     /// symlink whose target is inspected.
     pub(super) fn detect(name: &OsStr, path: &Path) -> Option<Self> {
-        Self::detect_with_database(&MIME, name, path)
+        Self::detect_from_name(name).or_else(|| Self::detect_header(name, path))
     }
 
+    /// Detect the content type strictly from filename patterns in memory without disk I/O.
+    pub(super) fn detect_from_name(name: &OsStr) -> Option<Self> {
+        Self::detect_from_name_with_database(&MIME, name)
+    }
+
+    /// Detect the content type of an unknown-name file by reading its bounded header.
+    pub(super) fn detect_header(name: &OsStr, path: &Path) -> Option<Self> {
+        Self::detect_header_with_database(&MIME, name, path)
+    }
+
+    #[cfg(test)]
     fn detect_with_database(database: &SharedMimeInfo, name: &OsStr, path: &Path) -> Option<Self> {
-        if let Some(mime) = database
+        Self::detect_from_name_with_database(database, name)
+            .or_else(|| Self::detect_header_with_database(database, name, path))
+    }
+
+    fn detect_from_name_with_database(database: &SharedMimeInfo, name: &OsStr) -> Option<Self> {
+        let mime = database
             .get_mime_types_from_file_name(&name.to_string_lossy())
             .into_iter()
             .next()
             .map(|mime| database.unalias_mime_type(&mime).unwrap_or(mime))
-            .filter(|mime| mime.essence_str() != "application/octet-stream")
-        {
-            return Some(Self::from_mime(mime.essence_str(), Some(name)));
-        }
+            .filter(|mime| mime.essence_str() != "application/octet-stream")?;
+        Some(Self::from_mime(mime.essence_str(), Some(name)))
+    }
 
+    fn detect_header_with_database(
+        database: &SharedMimeInfo,
+        _name: &OsStr,
+        path: &Path,
+    ) -> Option<Self> {
         let header = Self::read_header(path)?;
         let sniffed = (!header.is_empty())
             .then(|| database.get_mime_type_for_data(&header))
@@ -51,7 +80,11 @@ impl ContentType {
 
     fn from_mime(mime: &str, name: Option<&OsStr>) -> Self {
         if let Some(format) = Format::for_mime(mime) {
-            return Self::new(format.category, format.name.as_deref(), Some(mime));
+            return Self {
+                category: format.category,
+                format: format.name.clone(),
+                mime: Some(format.mime.clone()),
+            };
         }
         let format = name
             .and_then(|name| Path::new(name).extension())
@@ -81,13 +114,17 @@ impl ContentType {
 
     fn text_or_binary(header: &[u8]) -> Self {
         if header.is_empty() || Self::looks_like_text(header) {
-            Self::new(ContentCategory::Text, None, Some("text/plain"))
+            Self {
+                category: ContentCategory::Text,
+                format: None,
+                mime: Some(TEXT_PLAIN_MIME.clone()),
+            }
         } else {
-            Self::new(
-                ContentCategory::Binary,
-                None,
-                Some("application/octet-stream"),
-            )
+            Self {
+                category: ContentCategory::Binary,
+                format: None,
+                mime: Some(OCTET_STREAM_MIME.clone()),
+            }
         }
     }
 

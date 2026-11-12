@@ -23,9 +23,11 @@ impl Browser {
         }
         if page == Page::Settings {
             let preferences = self.settings.preferences.clone();
-            self.settings
-                .view
-                .update(cx, |view, cx| view.set_preferences(preferences, window, cx));
+            let presentation = self.sidebar.presentation;
+            self.settings.view.update(cx, |view, cx| {
+                view.set_preferences(preferences, window, cx);
+                view.set_sidebar_presentation(presentation, cx);
+            });
         }
         self.pages.push(Entry {
             content: page,
@@ -37,7 +39,6 @@ impl Browser {
         self.menus.open = None;
         self.menus.sort = None;
         self.toolbar.finish_path_edit();
-        self.sync_sidebar_presentation(window, cx);
         self.window.root_focus.focus(window, cx);
         cx.notify();
     }

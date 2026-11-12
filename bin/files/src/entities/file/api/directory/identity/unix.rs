@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use nix::unistd::{Gid, Group, Uid, User, getegid, geteuid};
 
@@ -11,8 +11,8 @@ pub(crate) struct IdentityCache {
     egid: u32,
     /// Supplementary groups plus the effective group.
     groups: Vec<u32>,
-    user_names: HashMap<u32, Option<String>>,
-    group_names: HashMap<u32, Option<String>>,
+    user_names: HashMap<u32, Option<Arc<str>>>,
+    group_names: HashMap<u32, Option<Arc<str>>>,
 }
 
 impl Default for IdentityCache {
@@ -41,26 +41,26 @@ impl IdentityCache {
         uid == self.euid
     }
 
-    pub(crate) fn user_name(&mut self, uid: u32) -> Option<String> {
+    pub(crate) fn user_name(&mut self, uid: u32) -> Option<Arc<str>> {
         if let Some(name) = self.user_names.get(&uid) {
             return name.clone();
         }
         let name = User::from_uid(Uid::from_raw(uid))
             .ok()
             .flatten()
-            .map(|user| user.name);
+            .map(|user| Arc::<str>::from(user.name));
         self.user_names.insert(uid, name.clone());
         name
     }
 
-    pub(crate) fn group_name(&mut self, gid: u32) -> Option<String> {
+    pub(crate) fn group_name(&mut self, gid: u32) -> Option<Arc<str>> {
         if let Some(name) = self.group_names.get(&gid) {
             return name.clone();
         }
         let name = Group::from_gid(Gid::from_raw(gid))
             .ok()
             .flatten()
-            .map(|group| group.name);
+            .map(|group| Arc::<str>::from(group.name));
         self.group_names.insert(gid, name.clone());
         name
     }

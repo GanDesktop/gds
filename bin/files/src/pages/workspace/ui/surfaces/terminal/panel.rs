@@ -17,6 +17,7 @@ use crate::pages::workspace::ui::name_form::NameForm;
 use gds_uim::el;
 
 use gds::{
+    app::AppExt as _,
     i18n::{self, t},
     ui,
     ui::terminal::{self, Terminal},
@@ -534,13 +535,13 @@ impl Panel {
 
 impl Render for Panel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = gds::appearance::theme::Colors::current(cx);
+        let colors = cx.gds_ro().appearance().theme().colors();
         let tabs = el! {
             .div {
                 # "files-terminal-tabs"; test_support; w: $(self.sidebar.width()).px;
                 h_full; flex_shrink_0; flex; flex_col; overflow_y_scroll;
                 track_scroll: $&self.tabs_scroll; p: tokens::SIDEBAR_PADDING.px; gap_1;
-                bg: $(gds::appearance::theme::sidebar_background(cx));
+                bg: $(cx.gds_ro().appearance().theme().sidebar_background());
                 text_color: $(colors.sidebar_foreground); key_context: TERMINAL_TABS_CONTEXT;
                 track_focus: $&self.tabs_focus;
                 on_action: $(cx.listener(Self::on_next));
@@ -552,7 +553,7 @@ impl Render for Panel {
             Some(entry) => entry.terminal.clone().into_any_element(),
             None => el! {
                 .div {
-                    size_full; p_3; bg: $(gds::appearance::theme::content_background(cx));
+                    size_full; p_3; bg: $(cx.gds_ro().appearance().theme().content_background());
                     text_color: $(colors.muted_foreground);
                 } [$(i18n::text(if self.cwd.is_some() {
                     "files-terminal-empty"

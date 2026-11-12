@@ -383,7 +383,7 @@ fn rows(mut menu: PopupMenu, view: WeakEntity<Browser>, cx: &App) -> PopupMenu {
     menu = menu.separator();
     for entry in MenuEntry::ROWS
         .into_iter()
-        .filter(|entry| *entry != MenuEntry::Logs || gds::ui::logs::is_enabled(cx))
+        .filter(|entry| *entry != MenuEntry::Logs || cx.gds_ro().ui().logs().is_enabled())
     {
         let render = entry.render();
         let on_click = entry.on_click(view.clone());

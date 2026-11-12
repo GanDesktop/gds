@@ -6,7 +6,10 @@ mod tests;
 
 use crate::{
     features::{connect_server::Connector, file_operations::remote as operations},
-    shared::ui::actions::Command,
+    shared::{
+        lib::selection::{Selection, SelectionBacking},
+        ui::actions::Command,
+    },
 };
 use gds::{
     i18n::{t, text},
@@ -27,7 +30,7 @@ use gpui_kit::{
     },
     *,
 };
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct Options {
@@ -37,7 +40,7 @@ pub(crate) struct Options {
     pub connector: Entity<Connector>,
     pub desktop: desktop::Desktop,
     pub favorite: bool,
-    /// Retained for Wave 1 caller source-compatibility; filtering is driven via [`View::set_filter`].
+    /// Filter input state owned by the workspace toolbar; filtering is driven via [`View::set_filter`].
     #[allow(dead_code)]
     pub filter: Entity<gpui_kit::component::input::InputState>,
     pub focus: FocusHandle,
@@ -114,9 +117,11 @@ pub(crate) struct View {
     options: Options,
     tasks: Owner,
     table: Entity<TableState<table::Files>>,
-    rows: Vec<Entry>,
-    selected: Vec<Address>,
+    rows: Arc<[Entry]>,
+    row_backing: Option<Arc<SelectionBacking<Address>>>,
+    selected: Selection<Address>,
     anchor: Option<usize>,
+    cursor: Option<usize>,
     filter: String,
     show_hidden: bool,
     compact: bool,
@@ -137,8 +142,10 @@ impl View {
             tasks,
             table,
             rows,
-            selected: Vec::new(),
+            row_backing: None,
+            selected: Selection::new(),
             anchor: None,
+            cursor: None,
             filter: String::new(),
             show_hidden,
             compact: false,
@@ -149,16 +156,48 @@ impl View {
         view
     }
 
-    pub(super) fn filter_entries(entries: &[Entry], filter: &str, show_hidden: bool) -> Vec<Entry> {
-        let needle = filter.to_lowercase();
+    fn row_backing(&mut self) -> Arc<SelectionBacking<Address>> {
+        if let Some(backing) = &self.row_backing {
+            return Arc::clone(backing);
+        }
+        let backing =
+            SelectionBacking::from_items(self.rows.iter().map(|entry| entry.address.clone()));
+        self.row_backing = Some(Arc::clone(&backing));
+        backing
+    }
+
+    pub(super) fn filter_entries(
+        entries: &[Entry],
+        filter: &str,
+        show_hidden: bool,
+    ) -> Arc<[Entry]> {
+        let trimmed = filter.trim();
+        if trimmed.is_empty() {
+            return entries
+                .iter()
+                .filter(|entry| show_hidden || !entry.name.starts_with('.'))
+                .cloned()
+                .collect::<Vec<_>>()
+                .into();
+        }
+        let needle = trimmed.to_lowercase();
         entries
             .iter()
             .filter(|entry| {
                 (show_hidden || !entry.name.starts_with('.'))
-                    && (needle.is_empty() || entry.name.to_lowercase().contains(&needle))
+                    && if entry.name.is_ascii() && needle.is_ascii() {
+                        entry
+                            .name
+                            .as_bytes()
+                            .windows(needle.len())
+                            .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+                    } else {
+                        entry.name.to_lowercase().contains(&needle)
+                    }
             })
             .cloned()
-            .collect()
+            .collect::<Vec<_>>()
+            .into()
     }
 
     pub(crate) fn running_task(&self) -> Option<RunningTask> {
@@ -174,7 +213,7 @@ impl View {
         })
     }
 
-    /// Source-compatible adapter for `pages/workspace` during Wave 1.
+    /// Active transfer task summary and cancellation handle for the workspace status bar.
     pub(crate) fn background_task(&self) -> Option<(String, CancellationToken)> {
         self.running_task().map(|task| (task.label, task.cancel))
     }
@@ -184,13 +223,13 @@ impl View {
     }
 
     pub(crate) fn selected_addresses(&self) -> Vec<Address> {
-        self.selected.clone()
+        self.selected.to_vec()
     }
 
     pub(crate) fn deselect_address(&mut self, address: &Address, cx: &mut Context<Self>) {
-        self.selected.retain(|selected| selected != address);
-        self.sync_table(cx);
-        cx.notify();
+        if self.selected.remove(address) {
+            self.sync_table(cx);
+        }
     }
 
     pub(crate) fn item_counts(&self) -> Counts {
@@ -200,7 +239,7 @@ impl View {
         }
     }
 
-    /// Source-compatible adapter for `pages/workspace` during Wave 1.
+    /// Visible and selected entry counts as a tuple for the workspace status bar.
     pub(crate) fn counts(&self) -> (usize, usize) {
         let counts = self.item_counts();
         (counts.visible, counts.selected)
@@ -211,7 +250,7 @@ impl View {
     }
 
     pub(super) fn is_filtered(&self) -> bool {
-        !self.filter.is_empty()
+        !self.filter.trim().is_empty()
     }
 
     pub(crate) fn set_filter(&mut self, filter: String, show_hidden: bool, cx: &mut Context<Self>) {
@@ -221,25 +260,54 @@ impl View {
         self.filter = filter;
         self.show_hidden = show_hidden;
         self.anchor = None;
+        self.cursor = None;
+        self.row_backing = None;
         self.rows = Self::filter_entries(
             &self.options.listing.entries,
             &self.filter,
             self.show_hidden,
         );
-        self.selected
-            .retain(|address| self.rows.iter().any(|entry| entry.address == *address));
+        Self::retain_visible_selection(&self.rows, &mut self.selected);
         self.sync_table(cx);
     }
 
+    pub(super) fn retain_visible_selection(rows: &[Entry], selected: &mut Selection<Address>) {
+        let visible: HashSet<&Address> = rows.iter().map(|entry| &entry.address).collect();
+        // Hidden or filtered-out entries must not remain implicit targets of remote actions.
+        selected.retain(|address| visible.contains(address));
+    }
+
     fn sync_table(&self, cx: &mut Context<Self>) {
-        let rows = self.rows.clone();
+        let rows = Arc::clone(&self.rows);
         let selected = self.selected.clone();
         self.table.update(cx, |state, cx| {
-            state.delegate_mut().rows = rows;
-            state.delegate_mut().selected = selected;
-            state.refresh(cx);
+            Self::sync_table_state(state, rows, selected, cx);
         });
         cx.notify();
+    }
+
+    fn sync_table_state(
+        state: &mut TableState<table::Files>,
+        rows: Arc<[Entry]>,
+        selected: Selection<Address>,
+        cx: &mut Context<TableState<table::Files>>,
+    ) {
+        let delegate = state.delegate_mut();
+        let rows_changed = !Arc::ptr_eq(&delegate.rows, &rows);
+        let selection_changed = delegate.selected != selected;
+        if rows_changed {
+            delegate.rows = rows;
+        }
+        if selection_changed {
+            delegate.selected = selected;
+        }
+        // Refresh table state only when the row slice changes; selection-only updates
+        // notify the table in place without resetting scroll state or copying rows.
+        if rows_changed {
+            state.refresh(cx);
+        } else if selection_changed {
+            cx.notify();
+        }
     }
 
     pub(super) fn select(
@@ -250,30 +318,60 @@ impl View {
         cx: &mut Context<Self>,
     ) {
         self.options.focus.focus(window, cx);
-        let Some(entry) = self.rows.get(index).cloned() else {
-            return;
-        };
-        if window.modifiers().shift {
-            let anchor = self.anchor.unwrap_or(index);
-            self.selected = self.rows[anchor.min(index)..=anchor.max(index)]
-                .iter()
-                .map(|entry| entry.address.clone())
-                .collect();
-        } else if window.modifiers().control || window.modifiers().platform {
-            if self.selected.contains(&entry.address) {
-                self.selected.retain(|address| address != &entry.address);
-            } else {
-                self.selected.push(entry.address.clone());
-            }
-            self.anchor = Some(index);
+        let modifiers = window.modifiers();
+        let entry = if modifiers.shift {
+            let Some(entry) = self.rows.get(index).cloned() else {
+                return;
+            };
+            let start = self.anchor.unwrap_or(index);
+            let backing = self.row_backing();
+            self.selected
+                .set_range(&backing, start.min(index), start.max(index));
+            entry
         } else {
-            self.selected = vec![entry.address.clone()];
-            self.anchor = Some(index);
-        }
+            let Some(entry) = Self::apply_selection(
+                &self.rows,
+                &mut self.selected,
+                &mut self.anchor,
+                index,
+                false,
+                modifiers.control || modifiers.platform,
+            ) else {
+                return;
+            };
+            entry
+        };
+        self.cursor = Some(index);
         self.sync_table(cx);
         if event.click_count() == 2 {
             self.activate(entry, window, cx);
         }
+    }
+
+    pub(super) fn apply_selection(
+        rows: &[Entry],
+        selected: &mut Selection<Address>,
+        anchor: &mut Option<usize>,
+        index: usize,
+        shift: bool,
+        toggle: bool,
+    ) -> Option<Entry> {
+        let entry = rows.get(index)?.clone();
+        if shift {
+            let start = anchor.unwrap_or(index);
+            selected.replace(
+                rows[start.min(index)..=start.max(index)]
+                    .iter()
+                    .map(|item| item.address.clone()),
+            );
+        } else if toggle {
+            selected.toggle(entry.address.clone());
+            *anchor = Some(index);
+        } else {
+            selected.set_single(entry.address.clone());
+            *anchor = Some(index);
+        }
+        Some(entry)
     }
 
     fn activate(&mut self, entry: Entry, window: &mut Window, cx: &mut Context<Self>) {
@@ -347,15 +445,19 @@ impl View {
                 }
             }
             Command::SelectAll => {
-                self.selected = self
-                    .rows
-                    .iter()
-                    .map(|entry| entry.address.clone())
-                    .collect();
+                if self.rows.is_empty() {
+                    self.selected.clear();
+                } else {
+                    let last = self.rows.len() - 1;
+                    let backing = self.row_backing();
+                    self.selected.set_range(&backing, 0, last);
+                }
                 self.sync_table(cx);
             }
             Command::DeselectAll => {
                 self.selected.clear();
+                self.cursor = None;
+                self.anchor = None;
                 self.sync_table(cx);
             }
             Command::CopyPaths => {
@@ -392,10 +494,17 @@ impl View {
         if self.rows.is_empty() {
             return;
         }
-        let current = self
-            .selected
-            .last()
-            .and_then(|address| self.rows.iter().position(|entry| entry.address == *address));
+        let current = if let Some(index) = self.cursor
+            && self
+                .rows
+                .get(index)
+                .is_some_and(|entry| self.selected.contains(&entry.address))
+        {
+            Some(index)
+        } else {
+            let last = self.selected.last().cloned();
+            last.and_then(|address| self.row_backing().position(&address))
+        };
         let index = if edge {
             if delta < 0 { 0 } else { self.rows.len() - 1 }
         } else {
@@ -409,14 +518,15 @@ impl View {
         };
         if extend {
             let anchor = self.anchor.unwrap_or(index);
-            self.selected = self.rows[anchor.min(index)..=anchor.max(index)]
-                .iter()
-                .map(|entry| entry.address.clone())
-                .collect();
+            self.anchor = Some(anchor);
+            let backing = self.row_backing();
+            self.selected
+                .set_range(&backing, anchor.min(index), anchor.max(index));
         } else {
             self.anchor = Some(index);
-            self.selected = vec![self.rows[index].address.clone()];
+            self.selected.set_single(self.rows[index].address.clone());
         }
+        self.cursor = Some(index);
         self.table.update(cx, |state, cx| {
             state.scroll_to_row(index, cx);
         });
@@ -573,7 +683,7 @@ impl View {
     ) {
         match action {
             ToolbarAction::Upload => self.upload(window, cx),
-            ToolbarAction::Download => self.download(self.selected.clone(), false, window, cx),
+            ToolbarAction::Download => self.download(self.selected.to_vec(), false, window, cx),
             ToolbarAction::NewFolder => self.name_prompt(true, window, cx),
             ToolbarAction::Rename => self.name_prompt(false, window, cx),
             ToolbarAction::Delete => self.confirm_delete(window, cx),

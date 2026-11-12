@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use gpui_kit::{App, ClipboardEntry, ClipboardItem, ExternalPaths, Task};
 use serde::{Deserialize, Serialize};
@@ -67,7 +67,7 @@ impl Clipboard {
     /// # Errors
     /// The task reports platform read or metadata encoding failures.
     pub fn finish_cut(
-        expected: Snapshot,
+        expected: Arc<Snapshot>,
         succeeded: Vec<PathBuf>,
         cx: &mut App,
     ) -> Task<Result<(), Error>> {
@@ -77,7 +77,7 @@ impl Clipboard {
     /// # Errors
     /// The task reports platform read or metadata encoding failures.
     pub fn remove_paths(
-        expected: Snapshot,
+        expected: Arc<Snapshot>,
         succeeded: Vec<PathBuf>,
         explicit: bool,
         cx: &mut App,

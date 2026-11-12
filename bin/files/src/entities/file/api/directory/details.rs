@@ -4,7 +4,7 @@
 //! such a value as unknown instead of inventing one; in particular an entry whose
 //! metadata could not be read keeps its place in the listing with empty details.
 
-use std::{borrow::Cow, fs, time::SystemTime};
+use std::{borrow::Cow, fs, sync::Arc, time::SystemTime};
 
 use super::{ChildCount, EntryKind, identity::IdentityCache};
 
@@ -85,7 +85,7 @@ impl EntryDetails {
 pub struct Owner {
     pub uid: u32,
     /// Login name; `None` when the id has no database entry or lookup failed.
-    pub name: Option<String>,
+    pub name: Option<Arc<str>>,
     /// Compared against the effective user id of the process, not `$USER`.
     pub is_current_user: bool,
 }
@@ -105,7 +105,7 @@ impl Owner {
 pub struct Group {
     pub gid: u32,
     /// Group name; `None` when the id has no database entry or lookup failed.
-    pub name: Option<String>,
+    pub name: Option<Arc<str>>,
 }
 
 impl Group {
@@ -219,17 +219,17 @@ pub struct ContentType {
     pub category: ContentCategory,
     /// Format name shown verbatim by the interface, e.g. `PNG`, `Rust`, `MPEG-4`.
     /// `None` when only the broad category is known.
-    pub format: Option<String>,
+    pub format: Option<Arc<str>>,
     /// MIME type, used as the fallback label when no friendly name is known.
-    pub mime: Option<String>,
+    pub mime: Option<Arc<str>>,
 }
 
 impl ContentType {
     pub(super) fn new(category: ContentCategory, format: Option<&str>, mime: Option<&str>) -> Self {
         Self {
             category,
-            format: format.map(str::to_owned),
-            mime: mime.map(str::to_owned),
+            format: format.map(Arc::from),
+            mime: mime.map(Arc::from),
         }
     }
 

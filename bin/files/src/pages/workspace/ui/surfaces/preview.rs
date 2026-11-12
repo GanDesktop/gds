@@ -584,9 +584,7 @@ impl Browser {
         match selected.as_slice() {
             [] => Target::Empty,
             [path] => directory
-                .entries
-                .iter()
-                .find(|entry| entry.path == *path)
+                .entry_for_path(path)
                 .map_or(Target::Empty, |entry| Target::Item(Item::from_entry(entry))),
             paths => Target::Multiple(paths.len()),
         }

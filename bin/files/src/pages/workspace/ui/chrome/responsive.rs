@@ -73,9 +73,7 @@ impl Browser {
                     .preview
                     .update(cx, |preview, cx| preview.clear(cx));
             }
-            self.sync_sidebar_presentation(window, cx);
         }
-        self.sync_workspace_state(cx);
         cx.notify();
     }
 }

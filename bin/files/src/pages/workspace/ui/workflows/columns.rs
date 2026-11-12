@@ -887,7 +887,7 @@ impl Browser {
             slot.sort = sort;
             slot.refresh_visible();
         }
-        self.sync_workspace_state(cx);
+        self.schedule_enrichment(self.tabs.active_id, cx);
         cx.notify();
     }
 }

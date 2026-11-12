@@ -1,8 +1,9 @@
 use gds_uim::{component, el};
 use gpui_kit::{IntoElement, prelude::*, *};
 
-const LIST_WIDTH: f32 = 320.;
-const LIST_HEIGHT: f32 = 320.;
+pub(in crate::pages::workspace) const LIST_WIDTH: f32 = 320.;
+pub(in crate::pages::workspace) const LIST_HEIGHT: f32 = 320.;
+pub(in crate::pages::workspace) const LIST_PADDING: f32 = 4.;
 
 #[component]
 #[derive(Default, IntoElement)]

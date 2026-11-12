@@ -81,7 +81,9 @@ impl Browser {
                         tab.view_mut().selected.clear();
                     }
                     slot.cursor = None;
+                    slot.cursor_index = None;
                     slot.anchor = None;
+                    slot.anchor_index = None;
                 }
             }
         }
@@ -165,21 +167,17 @@ impl Browser {
             return;
         }
         if matches!(event.keystroke.key.as_str(), "pageup" | "pagedown") {
-            if let Some(slot) = self.active() {
+            let grid_mode = self.grid_mode();
+            if let Some(slot) = self.active_mut() {
                 let viewport = f32::from(slot.scroll.0.borrow().base_handle.bounds().size.height);
-                let (columns, row_height) = if self.grid_mode() {
+                let (columns, row_height) = if grid_mode {
                     (slot.grid.columns, slot.grid.row_height)
                 } else {
                     (1, gds::appearance::tokens::DataListStyle::ROW_HEIGHT)
                 };
                 let page_rows = (viewport / row_height).floor().max(1.) as usize;
                 let step = page_rows * columns;
-                let current = slot
-                    .cursor
-                    .as_ref()
-                    .or_else(|| slot.navigation.view().selected.last())
-                    .and_then(|path| slot.table_rows.iter().position(|entry| &entry.path == path))
-                    .unwrap_or(0);
+                let current = slot.resolve_cursor_or_selected_index().unwrap_or(0);
                 let count = slot.table_rows.len();
                 if count > 0 {
                     let index = if event.keystroke.key == "pageup" {
@@ -187,7 +185,7 @@ impl Browser {
                     } else {
                         (current + step).min(count - 1)
                     };
-                    self.select(index, modifiers, cx);
+                    self.select_row(index, modifiers);
                     if let Some(slot) = self.active() {
                         let scroll = &slot.scroll.0.borrow().base_handle;
                         let direction = if event.keystroke.key == "pageup" {
@@ -202,6 +200,7 @@ impl Browser {
                         scroll.set_offset(offset);
                     }
                     self.window.focus.focus(window, cx);
+                    cx.notify();
                 }
             }
             cx.stop_propagation();
@@ -209,15 +208,11 @@ impl Browser {
             return;
         }
         if self.grid_mode() {
-            let Some(slot) = self.active() else {
+            let Some(slot) = self.active_mut() else {
                 return;
             };
             let count = slot.table_rows.len();
-            let current = slot
-                .cursor
-                .as_ref()
-                .or_else(|| slot.navigation.view().selected.last())
-                .and_then(|path| slot.table_rows.iter().position(|entry| &entry.path == path));
+            let current = slot.resolve_cursor_or_selected_index();
             let target = if let Some(horizontal) = Motion::for_horizontal_key(&event.keystroke.key)
             {
                 horizontal.target(current, count)
@@ -229,11 +224,12 @@ impl Browser {
             let Some(index) = target else {
                 return;
             };
-            self.select(index, modifiers, cx);
+            self.select_row(index, modifiers);
             if let Some(slot) = self.active() {
                 slot.scroll_to_entry(index);
             }
             self.window.focus.focus(window, cx);
+            cx.notify();
             cx.stop_propagation();
             window.prevent_default();
             return;
@@ -253,25 +249,19 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(slot) = self.active() else {
+        let Some(slot) = self.active_mut() else {
             return;
         };
-        let selected = slot.navigation.view().selected.last();
-        let current = slot
-            .cursor
-            .as_ref()
-            .or(selected)
-            .and_then(|path| slot.table_rows.iter().position(|entry| &entry.path == path));
+        let current = slot.resolve_cursor_or_selected_index();
         let Some(index) = motion.target(current, slot.table_rows.len()) else {
             return;
         };
-        self.select(
+        self.select_row(
             index,
             Modifiers {
                 shift: extend,
                 ..Default::default()
             },
-            cx,
         );
         if let Some(slot) = self.active() {
             slot.scroll_to_entry(index);
@@ -323,7 +313,6 @@ impl Browser {
                     .view_mut()
                     .set_place(Some(locations[index].clone()));
                 slot.scroll_to_entry(index);
-                self.sync_workspace_state(cx);
                 cx.notify();
                 cx.stop_propagation();
                 window.prevent_default();
@@ -382,7 +371,6 @@ impl Browser {
                 .vertical_scroll_handle
                 .scroll_to_item(index, ScrollStrategy::Nearest);
         }
-        self.sync_workspace_state(cx);
         cx.notify();
         true
     }
@@ -419,61 +407,64 @@ impl Browser {
         modifiers: Modifiers,
         cx: &mut Context<Self>,
     ) {
+        if self.select_row(visible_index, modifiers) {
+            cx.notify();
+        }
+    }
+
+    fn select_row(&mut self, visible_index: usize, modifiers: Modifiers) -> bool {
         let single_selection = self
             .picker
             .as_ref()
             .is_some_and(|picker| !picker.session.allows_multiple());
         let Some(slot) = self.active_mut() else {
-            return;
+            return false;
         };
         let Some(path) = slot
             .table_rows
             .get(visible_index)
             .map(|entry| entry.path.clone())
         else {
-            return;
+            return false;
         };
         // Single-selection pickers replace the selection on every motion.
         if single_selection {
-            let tab = &mut slot.navigation;
-            tab.view_mut().selected = vec![path.clone()];
+            slot.navigation.view_mut().selected.set_single(path.clone());
             slot.anchor = Some(path.clone());
+            slot.anchor_index = Some(visible_index);
             slot.cursor = Some(path);
-            cx.notify();
-            return;
+            slot.cursor_index = Some(visible_index);
+            return true;
         }
-        let tab = &mut slot.navigation;
         if modifiers.shift {
-            let anchor_path = slot
-                .anchor
-                .clone()
-                .or_else(|| slot.cursor.clone())
-                .unwrap_or_else(|| path.clone());
             let anchor = slot
-                .table_rows
-                .iter()
-                .position(|entry| entry.path == anchor_path)
+                .resolve_anchor_index()
+                .or_else(|| slot.resolve_cursor_index())
                 .unwrap_or(visible_index);
-            tab.view_mut().selected = slot.table_rows
-                [anchor.min(visible_index)..=anchor.max(visible_index)]
-                .iter()
-                .map(|entry| entry.path.clone())
-                .collect();
-            slot.anchor = Some(anchor_path);
-        } else if modifiers.control || modifiers.platform {
-            let selected = &mut tab.view_mut().selected;
-            if selected.contains(&path) {
-                selected.retain(|selected| selected != &path);
-            } else {
-                selected.push(path.clone());
+            if slot.anchor_index != Some(anchor)
+                || slot.anchor.as_ref() != Some(&slot.table_rows[anchor].path)
+            {
+                slot.anchor = Some(slot.table_rows[anchor].path.clone());
+                slot.anchor_index = Some(anchor);
             }
+            let backing = slot.row_backing();
+            slot.navigation.view_mut().selected.set_range(
+                &backing,
+                anchor.min(visible_index),
+                anchor.max(visible_index),
+            );
+        } else if modifiers.control || modifiers.platform {
+            slot.navigation.view_mut().selected.toggle(path.clone());
             slot.anchor = Some(path.clone());
+            slot.anchor_index = Some(visible_index);
         } else {
-            tab.view_mut().selected = vec![path.clone()];
+            slot.navigation.view_mut().selected.set_single(path.clone());
             slot.anchor = Some(path.clone());
+            slot.anchor_index = Some(visible_index);
         }
         slot.cursor = Some(path);
-        cx.notify();
+        slot.cursor_index = Some(visible_index);
+        true
     }
 
     pub(in crate::pages::workspace) fn select_all_files(
@@ -504,19 +495,27 @@ impl Browser {
         let Some(slot) = self.active_mut() else {
             return;
         };
-        let tab = &mut slot.navigation;
-        tab.view_mut().selected = selectable.unwrap_or_else(|| {
-            slot.table_rows
-                .iter()
-                .map(|entry| entry.path.clone())
-                .collect()
-        });
+        if let Some(selectable) = selectable {
+            slot.navigation.view_mut().selected.replace(selectable);
+        } else if slot.table_rows.is_empty() {
+            slot.navigation.view_mut().selected.clear();
+        } else {
+            let last = slot.table_rows.len() - 1;
+            let backing = slot.row_backing();
+            slot.navigation
+                .view_mut()
+                .selected
+                .set_range(&backing, 0, last);
+        }
         if picker_mode {
-            slot.cursor = tab.view().selected.first().cloned();
+            slot.cursor = slot.navigation.view().selected.first().cloned();
+            slot.cursor_index = None;
         } else if slot.cursor.is_none() {
             slot.cursor = slot.table_rows.first().map(|entry| entry.path.clone());
+            slot.cursor_index = (!slot.table_rows.is_empty()).then_some(0);
         }
         slot.anchor = slot.cursor.clone();
+        slot.anchor_index = slot.cursor_index;
         cx.notify();
     }
 
@@ -534,15 +533,12 @@ impl Browser {
         }
         slot.sort = sort;
         slot.refresh_visible();
-        if let Some(index) = slot
-            .cursor
-            .as_ref()
-            .and_then(|path| slot.table_rows.iter().position(|entry| &entry.path == path))
-        {
+        if let Some(index) = slot.resolve_cursor_index() {
             slot.scroll_to_entry(index);
         }
         self.locations.places.set_sort(location, sort);
         self.save_places(cx);
+        self.schedule_enrichment(self.tabs.active_id, cx);
         cx.notify();
     }
 }

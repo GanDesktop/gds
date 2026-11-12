@@ -19,14 +19,13 @@ use crate::features::file_operations::{
 };
 use crate::shared::{
     i18n::t,
-    lib::clipboard::{self as file_clipboard, Bridge, Mode, Snapshot},
+    lib::clipboard::{self, Mode, Snapshot},
 };
 use conflict::ConflictDialog;
 
 /// UI context for one active paste flow across dialogs and transfer passes.
 struct Paste {
     origin_tab: u64,
-    clipboard: Bridge,
     snapshot: Snapshot,
     job: PasteJob,
 }
@@ -42,7 +41,7 @@ impl Browser {
         if self.operations.in_progress {
             return false;
         }
-        let Some(cancel) = file_clipboard::cancel_cut(cx) else {
+        let Some(cancel) = cx.gds().files().clipboard().cancel_cut() else {
             return false;
         };
         cx.spawn(async move |_, cx| {
@@ -78,14 +77,13 @@ impl Browser {
         }
         let count = paths.len();
         let mode = if cut { Mode::Cut } else { Mode::Copy };
-        let clipboard = Bridge::new(cx);
-        let write = clipboard.write(mode, paths, cx);
+        let write = cx.gds().files().clipboard().write(mode, paths);
         cx.spawn(async move |this, cx| {
             let result = write.await;
             if let Err(closed) = this.update(cx, |_, cx| {
                 match result {
                     Ok(snapshot) => {
-                        file_clipboard::note_clipboard_write(&snapshot, cx);
+                        cx.gds().files().clipboard().note_write(&snapshot);
                         notifications::Report::new(
                             notifications::Level::Success,
                             i18n::count(
@@ -127,8 +125,7 @@ impl Browser {
         {
             return;
         }
-        let clipboard = Bridge::new(cx);
-        let read = clipboard.read(cx);
+        let read = cx.gds().files().clipboard().read();
         let origin_tab = self.tabs.active_id;
         self.operations.in_progress = true;
         // Until the clipboard arrives, the source volumes are unknown.
@@ -136,11 +133,10 @@ impl Browser {
         self.start_background(i18n::text("paste-working", cx), cx);
         cx.spawn_in(window, async move |this, cx| {
             let result = read.await;
-            if matches!(
-                &result,
-                Ok(None) | Err(file_clipboard::Error::InvalidUri(_))
-            ) {
-                let Ok(read) = this.update_in(cx, |_, _, cx| clipboard.read_uris(cx)) else {
+            if matches!(&result, Ok(None) | Err(clipboard::Error::InvalidUri(_))) {
+                let Ok(read) =
+                    this.update_in(cx, |_, _, cx| cx.gds().files().clipboard().read_uris())
+                else {
                     return;
                 };
                 let uris = read.await;
@@ -175,7 +171,6 @@ impl Browser {
             let job = PasteJob::new(destination, mode, snapshot.paths.clone());
             let paste = Paste {
                 origin_tab,
-                clipboard,
                 snapshot,
                 job,
             };
@@ -333,17 +328,23 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         if paste.job.mode == transfer::Mode::Move && !paste.job.succeeded.is_empty() {
-            let clipboard = paste.clipboard;
             let snapshot = paste.snapshot.clone();
             let moved = paste.job.succeeded.clone();
-            let cleanup = clipboard.finish_cut(snapshot.clone(), moved.clone(), cx);
+            let cleanup = cx
+                .gds()
+                .files()
+                .clipboard()
+                .finish_cut(snapshot.clone(), moved.clone());
             cx.spawn_in(window, async move |this, cx| {
                 let clipboard_error = cleanup.await.err().map(|error| error.to_string());
                 let _ = this.update_in(cx, |browser, window, cx| {
-                    file_clipboard::note_cut_paste(&snapshot, &moved, cx);
+                    cx.gds()
+                        .files()
+                        .clipboard()
+                        .note_cut_paste(&snapshot, &moved);
                     // Verify the published remainder asynchronously; a replaced
                     // clipboard clears the markers instead of keeping them.
-                    file_clipboard::refresh(cx);
+                    cx.gds().files().clipboard().refresh();
                     browser.finish_paste(paste, clipboard_error, ending, window, cx);
                 });
             })

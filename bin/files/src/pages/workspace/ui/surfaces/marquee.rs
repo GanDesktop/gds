@@ -8,7 +8,7 @@
 //! a press that never crosses the threshold keeps its plain blank-click meaning.
 
 use gds_uim::el;
-use std::{cell::RefCell, collections::HashSet, path::PathBuf, rc::Rc};
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gds::appearance::tokens::DataListStyle;
 use gpui_kit::component::ActiveTheme;
@@ -31,7 +31,7 @@ struct Origin {
 /// Selection and cursor snapshot captured before the press cleared them.
 #[derive(Clone)]
 struct Baseline {
-    selection: Vec<PathBuf>,
+    selection: Selection<PathBuf>,
     cursor: Option<PathBuf>,
     anchor: Option<PathBuf>,
     /// Ctrl/Shift was held at the press: keep the starting selection and add.
@@ -320,7 +320,7 @@ impl Browser {
         let hits = self.marquee_hits(drag.rect(), bounds);
         let baseline = drag.baseline.clone();
         *self.files.marquee.drag.borrow_mut() = Some(drag);
-        self.marquee_write_selection(&hits, &baseline, cx);
+        self.marquee_write_selection(&hits, &baseline);
         cx.notify();
     }
 
@@ -389,48 +389,39 @@ impl Browser {
                 .collect();
         }
         let rows_top = viewport.origin.y + scroll_offset;
-        slot.table_rows
+        let first = ((f32::from(top - rows_top) / DataListStyle::ROW_HEIGHT)
+            .floor()
+            .max(0.) as usize)
+            .min(slot.table_rows.len());
+        let last = ((f32::from(bottom - rows_top) / DataListStyle::ROW_HEIGHT)
+            .ceil()
+            .max(0.) as usize)
+            .min(slot.table_rows.len());
+        slot.table_rows[first..last]
             .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| {
-                let row_top = rows_top + px(DataListStyle::ROW_HEIGHT * index as f32);
-                let row_bottom = row_top + px(DataListStyle::ROW_HEIGHT);
-                (row_top < bottom && row_bottom > top).then(|| entry.path.clone())
-            })
+            .map(|entry| entry.path.clone())
             .collect()
     }
 
     /// Write `hits` into the tab's own selection, the same paths copy, cut and
     /// delete read.
-    fn marquee_write_selection(
-        &mut self,
-        hits: &[PathBuf],
-        baseline: &Baseline,
-        cx: &mut Context<Self>,
-    ) {
+    fn marquee_write_selection(&mut self, hits: &[PathBuf], baseline: &Baseline) {
         let Some(slot) = self.active_mut() else {
             return;
         };
-        let mut selected = if baseline.merge {
-            baseline.selection.clone()
-        } else {
-            Vec::with_capacity(hits.len())
-        };
-        let mut seen: HashSet<PathBuf> = selected.iter().cloned().collect();
-        for path in hits {
-            if seen.insert(path.clone()) {
-                selected.push(path.clone());
+        if baseline.merge {
+            let mut next = baseline.selection.clone();
+            for path in hits {
+                next.insert(path.clone());
             }
+            if slot.navigation.view().selected != next {
+                slot.navigation.view_mut().selected = next;
+            }
+        } else if slot.navigation.view().selected != hits {
+            let mut next = Selection::new();
+            next.replace(hits.iter().cloned());
+            slot.navigation.view_mut().selected = next;
         }
-        let changed = {
-            let tab = &mut slot.navigation;
-            if tab.view().selected == selected {
-                false
-            } else {
-                tab.view_mut().selected = selected;
-                true
-            }
-        };
         if let Some(last) = hits.last() {
             slot.cursor = Some(last.clone());
             slot.anchor = if baseline.merge {
@@ -445,9 +436,6 @@ impl Browser {
         } else {
             slot.cursor = None;
             slot.anchor = None;
-        }
-        if changed {
-            cx.notify();
         }
     }
 

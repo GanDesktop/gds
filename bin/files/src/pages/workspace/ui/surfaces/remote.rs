@@ -236,8 +236,7 @@ impl Browser {
         let tab = self.tabs.active_id;
         self.remote.requests.remove(&tab);
         if let Some(slot) = self.tab_slot_mut(tab) {
-            slot.set_remote_load(None);
-            slot.set_tags_load(None);
+            slot.clear_async_loads();
             slot.navigation.cancel_pending();
         }
         if self
@@ -406,7 +405,8 @@ impl Browser {
                 this.sync_remote_directory(tab, cx);
             },
         );
-        let observe_preferences = cx.observe_global::<configuration::Current>(move |this, cx| {
+        let preferences = cx.gds_ro().files().preferences().service();
+        let observe_preferences = cx.observe(&preferences, move |this, _, cx| {
             this.sync_remote_directory(tab, cx);
         });
         let observe_bounds = cx.observe_window_bounds(window, move |this, window, cx| {

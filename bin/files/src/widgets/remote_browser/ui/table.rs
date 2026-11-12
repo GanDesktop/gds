@@ -1,8 +1,5 @@
 use super::*;
-use gds::{
-    appearance::{tokens::DataListStyle, typography},
-    ui::time::Timestamp,
-};
+use gds::{app::AppExt as _, appearance::tokens::DataListStyle, ui::time::Timestamp};
 use gds_uim::{el, m};
 use gpui_kit::{
     assets::IconName,
@@ -43,8 +40,8 @@ const COLUMNS: [ColumnSpec; 3] = [
 
 pub(super) struct Files {
     view: WeakEntity<View>,
-    pub rows: Vec<Entry>,
-    pub selected: Vec<Address>,
+    pub rows: Arc<[Entry]>,
+    pub selected: Selection<Address>,
     columns: Vec<Column>,
 }
 
@@ -74,8 +71,8 @@ impl Files {
             TableState::new(
                 Self {
                     view,
-                    rows: Vec::new(),
-                    selected: Vec::new(),
+                    rows: Arc::from([]),
+                    selected: Selection::new(),
                     columns,
                 },
                 window,
@@ -148,7 +145,7 @@ impl Files {
             .div {
                 # $("remote-name", index);
                 flex; items_center; size_full; min_w_0; overflow_hidden;
-                text_size: $(typography::scaled(DataListStyle::NAME_SIZE, cx));
+                text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::NAME_SIZE));
                 text_color: foreground;
                 when: $(hidden && !selected), { opacity: 0.65; };
             } [
@@ -177,7 +174,7 @@ impl Files {
             .div { size_full; flex; items_center; min_w_0; overflow_hidden } [
                 .div {
                     w_full; min_w_0; truncate;
-                    text_size: $(typography::scaled(DataListStyle::META_SIZE, cx));
+                    text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::META_SIZE));
                     text_color: foreground;
                     @if (right_aligned) text_right; @end;
                 } [content],
@@ -211,7 +208,7 @@ impl TableDelegate for Files {
             .div {
                 # $("remote-column", index);
                 flex; items_center; size_full;
-                text_size: $(typography::scaled(DataListStyle::HEADER_SIZE, cx));
+                text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::HEADER_SIZE));
                 font_weight: FontWeight::NORMAL;
                 text_color: $(cx.theme().muted_foreground);
                 when: $(index == 0), m! { pl: $(NAME_ICON_WIDTH + NAME_ICON_GAP).px };
@@ -302,7 +299,7 @@ impl TableDelegate for Files {
         el! {
             .div {
                 size_full; flex; items_center; justify_center;
-                text_size: $(typography::scaled(DataListStyle::NAME_SIZE, cx));
+                text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::NAME_SIZE));
                 text_color: $(cx.theme().muted_foreground);
             } [label]
         }

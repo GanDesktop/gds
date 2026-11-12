@@ -1,9 +1,7 @@
 //! Preferences, their editor and live appearance updates.
 
 use super::*;
-use crate::entities::preferences::PreferencesExt as _;
 use crate::widgets::settings as widget;
-use gds::app::AppExt as _;
 
 pub(in crate::pages::workspace) struct State {
     pub preferences: configuration::Preferences,
@@ -44,7 +42,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Err(error) = cx.gds().preferences().update(preferences) {
+        if let Err(error) = cx.gds().files().preferences().update(preferences) {
             report_settings_failure(error, cx);
         }
         self.sync_preferences(window, cx);
@@ -55,7 +53,7 @@ impl Browser {
         edit: impl FnOnce(&mut configuration::Preferences),
         cx: &mut Context<Self>,
     ) {
-        if let Err(error) = cx.gds().preferences().edit(edit) {
+        if let Err(error) = cx.gds().files().preferences().edit(edit) {
             report_settings_failure(error, cx);
         }
     }
@@ -65,7 +63,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let preferences = cx.gds().preferences().current();
+        let preferences = cx.gds_ro().files().preferences().current();
         self.settings.view.update(cx, |view, cx| {
             view.set_preferences(preferences.clone(), window, cx);
         });
@@ -130,7 +128,6 @@ impl Browser {
                 self.navigate_location(id, location, cx);
             }
         }
-        self.sync_workspace_state(cx);
         cx.notify();
     }
 }

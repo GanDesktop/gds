@@ -136,7 +136,6 @@ impl Browser {
         if let Some(slot) = self.current_tab_mut() {
             slot.navigation.view_mut().set_place(Some(location));
         }
-        self.sync_workspace_state(cx);
         self.window.focus.focus(window, cx);
         cx.notify();
     }
@@ -161,7 +160,6 @@ impl Browser {
             }
         }
         self.save_places(cx);
-        self.sync_workspace_state(cx);
         cx.notify();
     }
 
@@ -173,7 +171,7 @@ impl Browser {
         match location.uri() {
             Ok(uri) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(uri));
-                file_clipboard::clear(cx);
+                cx.gds().files().clipboard().clear();
                 cx.notify();
             }
             Err(error) => notifications::error(error.to_string(), cx),
@@ -206,7 +204,6 @@ impl Browser {
                     }
                 }
                 browser.collections.network.discovery.finish(result);
-                browser.sync_workspace_state(cx);
                 cx.notify();
             });
         })
@@ -255,7 +252,6 @@ impl Browser {
                                 }
                             }
                         }
-                        browser.sync_workspace_state(cx);
                     }
                     Ok(_) => {}
                     Err(error) => notifications::error(error.to_string(), cx),

@@ -5,7 +5,7 @@
 //! no-replace guarantees as paste.
 
 use super::file_label::FileLabel;
-use std::{collections::HashSet, path::Path, path::PathBuf, sync::Arc};
+use std::{collections::HashSet, path::Path, path::PathBuf, sync::Arc, sync::OnceLock};
 
 use gds_uim::el;
 use gpui_kit::component::ActiveTheme;
@@ -77,73 +77,142 @@ impl DragItem {
     }
 }
 
+#[derive(Debug)]
+struct DragSnapshotInner {
+    rows: Arc<[Entry]>,
+    selected: Selection<PathBuf>,
+    entries: OnceLock<Arc<[DragItem]>>,
+}
+
+impl DragSnapshotInner {
+    fn entries(&self) -> &[DragItem] {
+        self.entries
+            .get_or_init(|| {
+                self.rows
+                    .iter()
+                    .filter(|row| self.selected.contains(&row.path))
+                    .map(DragItem::new)
+                    .collect::<Vec<_>>()
+                    .into()
+            })
+            .as_ref()
+    }
+}
+
+#[derive(Clone, Debug)]
+enum DragPayload {
+    Single(Entry),
+    Selection(Arc<DragSnapshotInner>),
+}
+
 /// Files carried by a drag that started in the file table.
 #[derive(Clone, Debug)]
 pub(in crate::pages::workspace) struct FileDrag {
-    entries: Arc<[DragItem]>,
+    payload: DragPayload,
 }
 
 impl FileDrag {
-    fn shared(entries: Arc<[DragItem]>) -> Self {
-        Self { entries }
+    fn selection(inner: Arc<DragSnapshotInner>) -> Self {
+        Self {
+            payload: DragPayload::Selection(inner),
+        }
     }
 
     fn single(entry: &Entry) -> Self {
-        Self::shared(vec![DragItem::new(entry)].into())
+        Self {
+            payload: DragPayload::Single(entry.clone()),
+        }
     }
 
     pub(in crate::pages::workspace) fn paths(&self) -> Vec<PathBuf> {
-        self.entries.iter().map(|item| item.path.clone()).collect()
+        match &self.payload {
+            DragPayload::Single(entry) => vec![entry.path.clone()],
+            DragPayload::Selection(inner) => inner
+                .entries()
+                .iter()
+                .map(|item| item.path.clone())
+                .collect(),
+        }
     }
 
     fn count(&self) -> usize {
-        self.entries.len()
+        match &self.payload {
+            DragPayload::Single(_) => 1,
+            DragPayload::Selection(inner) => inner.entries().len(),
+        }
     }
 
     /// Hand the real paths to the platform when the drag leaves the window.
     pub(in crate::pages::workspace) fn external_payload(&self) -> ExternalDragPayload {
-        ExternalDragPayload::Files(FileDragPaths::new(
-            self.entries
-                .iter()
-                .map(|item| (item.path.clone(), item.is_dir)),
-        ))
+        match &self.payload {
+            DragPayload::Single(entry) => ExternalDragPayload::Files(FileDragPaths::new(
+                std::iter::once((entry.path.clone(), entry.kind == EntryKind::Directory)),
+            )),
+            DragPayload::Selection(inner) => ExternalDragPayload::Files(FileDragPaths::new(
+                inner
+                    .entries()
+                    .iter()
+                    .map(|item| (item.path.clone(), item.is_dir)),
+            )),
+        }
     }
 }
 
-/// Frozen selection for drag payloads. It is rebuilt only when the visible rows
-/// or the selection change, so rendering a large virtual table never walks the
-/// whole selection once per row.
-#[derive(Default)]
+/// Frozen selection for drag payloads. Storing the shared row slice and
+/// copy-on-write selection is O(1); the drag item slice is materialized lazily
+/// only when a drag actually starts.
+#[derive(Clone, Default)]
 pub(in crate::pages::workspace) struct DragSnapshot {
-    entries: Arc<[DragItem]>,
-    selected: HashSet<PathBuf>,
+    inner: Option<Arc<DragSnapshotInner>>,
 }
 
 impl DragSnapshot {
-    pub(in crate::pages::workspace) fn new(rows: &[Entry], selected: &[PathBuf]) -> Self {
-        let selected: HashSet<PathBuf> = selected.iter().cloned().collect();
-        let entries: Arc<[DragItem]> = rows
-            .iter()
-            .filter(|row| selected.contains(&row.path))
-            .map(DragItem::new)
-            .collect::<Vec<_>>()
-            .into();
-        Self { entries, selected }
+    pub(in crate::pages::workspace) fn new(
+        rows: &Arc<[Entry]>,
+        selected: &Selection<PathBuf>,
+    ) -> Self {
+        if rows.is_empty() || selected.is_empty() {
+            return Self { inner: None };
+        }
+        Self {
+            inner: Some(Arc::new(DragSnapshotInner {
+                rows: Arc::clone(rows),
+                selected: selected.clone(),
+                entries: OnceLock::new(),
+            })),
+        }
     }
 
     pub(in crate::pages::workspace) fn is_selected(&self, path: &Path) -> bool {
-        self.selected.contains(path)
+        self.inner
+            .as_ref()
+            .is_some_and(|inner| inner.selected.contains(path))
     }
 
     /// A drag started on `entry` carries the whole selection when that row
     /// belongs to it, and only that row otherwise. Starting a drag never
     /// rewrites the selection, so an unselected row drags alone.
+    #[allow(dead_code)]
     pub(in crate::pages::workspace) fn drag_for(&self, entry: &Entry) -> FileDrag {
-        if self.is_selected(&entry.path) {
-            FileDrag::shared(Arc::clone(&self.entries))
-        } else {
-            FileDrag::single(entry)
+        self.drag_for_row(entry, self.is_selected(&entry.path))
+    }
+
+    pub(in crate::pages::workspace) fn drag_for_row(
+        &self,
+        entry: &Entry,
+        selected: bool,
+    ) -> FileDrag {
+        match (&self.inner, selected) {
+            (Some(inner), true) => FileDrag::selection(Arc::clone(inner)),
+            _ => FileDrag::single(entry),
         }
+    }
+
+    #[cfg(test)]
+    fn is_materialized(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|inner| inner.entries.get().is_some())
     }
 }
 
@@ -201,7 +270,15 @@ impl DragPreview {
         let content_offset =
             cursor_offset + point(px(PREVIEW_POINTER_GAP), px(PREVIEW_POINTER_GAP));
         let color = cx.theme().popover_foreground;
-        let labels = drag.entries.iter().take(PREVIEW_VISIBLE_ITEMS).enumerate().map(|(index, item)| {
+        let single;
+        let items: &[DragItem] = match &drag.payload {
+            DragPayload::Single(entry) => {
+                single = [DragItem::new(entry)];
+                &single
+            }
+            DragPayload::Selection(inner) => inner.entries(),
+        };
+        let labels = items.iter().take(PREVIEW_VISIBLE_ITEMS).enumerate().map(|(index, item)| {
             el! {
                 .div {
                     ml: $(index as f32 * PREVIEW_STACK_INSET).px;
@@ -458,5 +535,56 @@ impl Browser {
         })
         .detach();
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DragSnapshot, Entry, EntryKind, FileDrag, PathBuf, Selection};
+    use crate::entities::file::directory::EntryDetails;
+    use std::sync::Arc;
+
+    fn sample_entry(index: usize) -> Entry {
+        let name = format!("file-{index:04}.txt");
+        Entry::new(
+            PathBuf::from(format!("/tmp/drag-test/{name}")),
+            name.into(),
+            EntryKind::File,
+            Some(128),
+            None,
+            EntryDetails::default(),
+        )
+    }
+
+    #[test]
+    fn drag_for_row_defers_selection_materialization_until_drag_starts() {
+        let rows: Arc<[Entry]> = (0..5_000).map(sample_entry).collect::<Vec<_>>().into();
+        let selected: Selection<PathBuf> = rows[..1_000]
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        let snapshot = DragSnapshot::new(&rows, &selected);
+
+        let selected_drags: Vec<FileDrag> = rows[..30]
+            .iter()
+            .map(|entry| snapshot.drag_for_row(entry, true))
+            .collect();
+        let unselected_drags: Vec<FileDrag> = rows[1_000..1_030]
+            .iter()
+            .map(|entry| snapshot.drag_for(entry))
+            .collect();
+        assert!(!snapshot.is_materialized());
+
+        assert_eq!(unselected_drags[0].paths(), vec![rows[1_000].path.clone()]);
+        assert_eq!(unselected_drags[0].count(), 1);
+        assert!(!snapshot.is_materialized());
+
+        let expected_selected: Vec<PathBuf> = rows[..1_000]
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        assert_eq!(selected_drags[0].paths(), expected_selected);
+        assert!(snapshot.is_materialized());
+        assert_eq!(selected_drags[15].count(), 1_000);
     }
 }

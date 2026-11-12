@@ -1,12 +1,14 @@
 //! Coalesce filesystem events and reconcile entries without restarting navigation.
 mod presentation;
+use tokio_util::sync::CancellationToken;
+
 use super::*;
 
 const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
 
 struct WatchTarget {
     revision: u64,
-    snapshot: directory::DirectorySnapshot,
+    snapshot: Arc<directory::DirectorySnapshot>,
 }
 
 enum WatchState {
@@ -19,13 +21,20 @@ enum WatchEvent {
     Inspect(tokio::sync::oneshot::Sender<WatchState>),
     Apply {
         revision: u64,
-        result: Result<directory::DirectorySnapshot, directory::Error>,
+        result: Result<Arc<directory::DirectorySnapshot>, directory::Error>,
     },
 }
 
 pub(in crate::pages::workspace) struct Watch {
     path: PathBuf,
+    cancel: CancellationToken,
     _events: Task<()>,
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
 
 impl Browser {
@@ -52,11 +61,16 @@ impl Browser {
         };
         let tasks = self.window.tasks.clone();
         let worker_tasks = tasks.clone();
+        let cancel = tasks.token().child_token();
+        let worker_cancel = cancel.clone();
         let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(1);
         let watcher_task = tasks
             .spawn_cancellable_named("Watch directory", async move {
                 while watcher.changed().await {
                     tokio::time::sleep(DEBOUNCE).await;
+                    if worker_cancel.is_cancelled() {
+                        return;
+                    }
                     // Keep changes queued during navigation rather than scheduling another
                     // full refresh, which can otherwise loop during sustained downloads.
                     let target = loop {
@@ -74,14 +88,21 @@ impl Browser {
                     let Some(WatchTarget { revision, snapshot }) = target else {
                         continue;
                     };
+                    let apply_cancel = worker_cancel.clone();
                     let work = worker_tasks
                         .spawn_blocking_named("Reconcile directory changes", move || {
-                            changes.apply(snapshot)
+                            changes.apply_shared(&snapshot, &apply_cancel)
                         });
-                    let result = work
+                    let result = match work
                         .await
                         .map_err(directory::Error::from)
-                        .and_then(std::convert::identity);
+                        .and_then(std::convert::identity)
+                    {
+                        Ok(Some(snapshot)) => Ok(snapshot),
+                        Ok(None) => continue,
+                        Err(error) if error.is_cancelled() => return,
+                        Err(error) => Err(error),
+                    };
                     if events_tx
                         .send(WatchEvent::Apply { revision, result })
                         .await
@@ -105,12 +126,12 @@ impl Browser {
                                 if slot.is_loading() {
                                     return WatchState::Loading;
                                 }
-                                WatchState::Ready(slot.navigation.directory().cloned().map(
-                                    |snapshot| WatchTarget {
+                                WatchState::Ready(slot.navigation.directory_arc().map(|snapshot| {
+                                    WatchTarget {
                                         revision: slot.navigation.revision(),
                                         snapshot,
-                                    },
-                                ))
+                                    }
+                                }))
                             })
                             .unwrap_or(WatchState::Closed);
                         let _ = reply.send(state);
@@ -136,6 +157,7 @@ impl Browser {
         if let Some(slot) = self.tab_slot_mut(id) {
             slot.set_watch(Some(Watch {
                 path: path.to_owned(),
+                cancel,
                 _events: events,
             }));
         }
@@ -145,23 +167,25 @@ impl Browser {
         &mut self,
         id: u64,
         revision: u64,
-        snapshot: directory::DirectorySnapshot,
+        snapshot: Arc<directory::DirectorySnapshot>,
         cx: &mut Context<Self>,
     ) {
+        if id != self.tabs.active_id {
+            if let Some(slot) = self.tab_slot_mut(id)
+                && slot.navigation.update_directory(revision, snapshot)
+            {
+                slot.projection_dirty = true;
+                slot.set_local_enrich(None);
+            }
+            return;
+        }
         let Some(slot) = self.tab_slot(id) else {
             return;
         };
-        if slot
-            .navigation
-            .directory()
-            .is_some_and(|current| current.entries == snapshot.entries)
-        {
-            return;
-        }
         let previous = slot.table_rows.clone();
         let selected = slot.navigation.view().selected.clone();
         let layout = self.columns_layout(&slot.location()).clone();
-        let active = id == self.tabs.active_id && self.pages.is_empty();
+        let active = self.pages.is_empty();
         let details = self.details_visible();
         let Some(slot) = self.tab_slot_mut(id) else {
             return;
@@ -169,6 +193,7 @@ impl Browser {
         if !slot.navigation.update_directory(revision, snapshot) {
             return;
         }
+        slot.set_local_enrich(None);
         slot.refresh_visible();
         let rows = slot.table_rows.clone();
         let changed = active
@@ -182,10 +207,9 @@ impl Browser {
                     .iter()
                     .map(|entry| &entry.path)
                     .ne(rows.iter().map(|entry| &entry.path)));
-        if id == self.tabs.active_id {
-            // Keep input handlers and later scrolling current even when no pixels change.
-            table::FileTable::update_rows(&self.files.table, rows, changed, cx);
-        }
+        // Keep input handlers and later scrolling current even when no pixels change.
+        table::FileTable::update_rows(&self.files.table, rows, changed, cx);
+        self.schedule_enrichment(id, cx);
         if notify_browser {
             cx.notify();
         }

@@ -67,7 +67,6 @@ impl Browser {
                     .set_details(self.current_location(), true);
             }
         }
-        self.sync_workspace_state(cx);
         self.window.focus.focus(window, cx);
         if command.startup_id.is_empty() {
             window.activate_window();

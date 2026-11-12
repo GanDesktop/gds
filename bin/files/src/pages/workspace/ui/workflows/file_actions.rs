@@ -12,7 +12,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, WindowExt, dialog::AlertDialog, menu::PopupMenu};
 use gpui_kit::{prelude::*, *};
 
-use super::{Browser, ClipboardNotice};
+use super::{AppExt as _, Browser, ClipboardNotice, FilesExt as _};
 use crate::entities::file::directory::EntryKind;
 use crate::features::file_operations as operations;
 
@@ -94,7 +94,7 @@ impl Selection {
         }
         let slot = browser.active()?;
         let tab = &slot.navigation;
-        let selected: HashSet<_> = paths.iter().collect();
+        let selected = &tab.view().selected;
         let directories_only = slot
             .table_rows
             .iter()
@@ -115,9 +115,8 @@ impl Selection {
         if slot.id != self.tab_id || slot.path() != Some(self.directory.as_path()) {
             return false;
         }
-        let current = browser.selected_visible_paths();
-        let selected: HashSet<_> = current.iter().collect();
-        current.len() == self.paths.len() && self.paths.iter().all(|path| selected.contains(path))
+        let selected = &slot.navigation.view().selected;
+        selected.len() == self.paths.len() && self.paths.iter().all(|path| selected.contains(path))
     }
 }
 
@@ -380,7 +379,10 @@ impl Browser {
         if tab.directory().is_none() {
             return Vec::new();
         }
-        let selected: HashSet<_> = tab.view().selected.iter().collect();
+        let selected = &tab.view().selected;
+        if selected.is_empty() {
+            return Vec::new();
+        }
         slot.table_rows
             .iter()
             .filter(|entry| selected.contains(&entry.path))
@@ -676,7 +678,7 @@ impl Browser {
             Ok(text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 // Path text replaces both the file summary and cut markers.
-                crate::shared::lib::clipboard::clear(cx);
+                cx.gds().files().clipboard().clear();
                 notifications::Report::new(
                     notifications::Level::Success,
                     i18n::count("paths-copied", paths.len(), cx),

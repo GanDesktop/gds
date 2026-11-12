@@ -3,8 +3,12 @@ use super::address::Location;
 use crate::entities::file::x::location::{DirectorySnapshot, ReadOptions, directory};
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
+use tokio_util::sync::CancellationToken;
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -16,7 +20,7 @@ pub struct Visit<V> {
 
 #[derive(Debug)]
 pub struct Navigation<V> {
-    directory: Option<DirectorySnapshot>,
+    directory: Option<Arc<DirectorySnapshot>>,
     path: Option<PathBuf>,
     history: Vec<Visit<V>>,
     history_index: usize,
@@ -52,12 +56,29 @@ impl LoadRequest {
     pub fn location(&self) -> &Location {
         &self.location
     }
+    /// Read the requested local directory with full synchronous metadata.
+    ///
     /// # Errors
     /// Reports a failed filesystem read. Virtual and unavailable locations do no I/O.
-    pub fn load(&self) -> Result<Option<DirectorySnapshot>, directory::Error> {
+    #[cfg(test)]
+    pub fn load(&self) -> Result<Option<Arc<DirectorySnapshot>>, directory::Error> {
         self.path
             .as_ref()
-            .map(|path| directory::read_directory(path, self.options))
+            .map(|path| directory::read_directory(path, self.options).map(Arc::new))
+            .transpose()
+    }
+    /// Read the requested local directory's base metadata without secondary child-count,
+    /// header-sniff, or symlink-target probes.
+    ///
+    /// # Errors
+    /// Reports [`directory::Error::Cancelled`] when `cancel` fires, or a failed filesystem read.
+    pub fn load_base(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Arc<DirectorySnapshot>>, directory::Error> {
+        self.path
+            .as_ref()
+            .map(|path| directory::read_directory_base(path, self.options, cancel).map(Arc::new))
             .transpose()
     }
 }
@@ -84,6 +105,12 @@ pub enum Error {
     Load(#[from] directory::Error),
     #[error("the loaded directory does not match the requested location")]
     UnexpectedSnapshot,
+}
+
+impl Error {
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Load(error) if error.is_cancelled())
+    }
 }
 
 /// Resolve typed local input without filesystem access or shell expansion.
@@ -173,8 +200,13 @@ impl<V: Default> Navigation<V> {
         self.revision
     }
 
-    /// Apply watch data without entering navigation/loading or altering view state.
-    pub fn update_directory(&mut self, revision: u64, snapshot: DirectorySnapshot) -> bool {
+    /// Apply watch or enrichment data without entering navigation/loading or altering view state.
+    pub fn update_directory(
+        &mut self,
+        revision: u64,
+        snapshot: impl Into<Arc<DirectorySnapshot>>,
+    ) -> bool {
+        let snapshot = snapshot.into();
         if self.pending.is_some()
             || self.revision != revision
             || self.path() != Some(snapshot.path.as_path())
@@ -186,7 +218,10 @@ impl<V: Default> Navigation<V> {
     }
 
     pub fn directory(&self) -> Option<&DirectorySnapshot> {
-        self.directory.as_ref()
+        self.directory.as_deref()
+    }
+    pub fn directory_arc(&self) -> Option<Arc<DirectorySnapshot>> {
+        self.directory.clone()
     }
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
@@ -277,7 +312,7 @@ impl<V: Default> Navigation<V> {
     pub fn finish_load(
         &mut self,
         request: &LoadRequest,
-        result: Result<Option<DirectorySnapshot>, directory::Error>,
+        result: Result<Option<Arc<DirectorySnapshot>>, directory::Error>,
     ) -> Result<LoadOutcome, Error> {
         if !self
             .pending

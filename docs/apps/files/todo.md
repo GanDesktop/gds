@@ -38,7 +38,7 @@ Current behavior:
 - Groups selection requests by parent directory, reuses existing windows and tabs where applicable, and forwards caller `StartupId` activation tokens.
 - `programs.gds-files.fileManager1.enable` installs D-Bus activation (`gds-files --dbus-service`) separately from the picker and reports existing bus owners without stealing the bus name.
 
-Entry points: [`bin/files/src/app/startup.rs`](../../../bin/files/src/app/startup.rs), [`bin/files/src/app/cli.rs`](../../../bin/files/src/app/cli.rs), [`bin/files/src/pages/workspace/ui.rs`](../../../bin/files/src/pages/workspace/ui.rs), [`packaging/nix/apps/files/`](../../../packaging/nix/apps/files/). Specification: [File Manager D-Bus Interface](https://wiki.freedesktop.org/www/Specifications/file-manager-interface/).
+Entry points: [`bin/files/src/app.rs`](../../../bin/files/src/app.rs), [`bin/files/src/app/desktop.rs`](../../../bin/files/src/app/desktop.rs), [`bin/files/src/app/cli.rs`](../../../bin/files/src/app/cli.rs), [`bin/files/src/pages/workspace/ui.rs`](../../../bin/files/src/pages/workspace/ui.rs), [`packaging/nix/apps/files/`](../../../packaging/nix/apps/files/). Specification: [File Manager D-Bus Interface](https://wiki.freedesktop.org/www/Specifications/file-manager-interface/).
 
 ## Desktop Interoperability
 

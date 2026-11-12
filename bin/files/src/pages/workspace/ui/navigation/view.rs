@@ -40,6 +40,27 @@ pub(in crate::pages::workspace) const PREVIEW_WIDTH: f32 = 280.;
 
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let sidebar_state = if self.sidebar_collapsed() {
+            ui::sidebar::SidebarState::Collapsed
+        } else {
+            ui::sidebar::SidebarState::Expanded
+        };
+        let previous_presentation = self.sidebar.presentation;
+        self.sidebar.presentation = ui::sidebar::SideBar::default().state(sidebar_state).sample(
+            "files-sidebar-motion",
+            window,
+            cx,
+        );
+        if self.sidebar.presentation != previous_presentation {
+            self.settings.view.update(cx, |view, cx| {
+                view.set_sidebar_presentation(self.sidebar.presentation, cx)
+            });
+            if (self.sidebar.presentation.width() - previous_presentation.width()).abs()
+                > f32::EPSILON
+            {
+                self.sync_content_width(cx);
+            }
+        }
         let width = self.width();
         let frame = if self.pages.current() == Some(&pages::Page::Help) {
             Frame::without_sidebar()
@@ -290,7 +311,7 @@ impl Browser {
         let id = slot.id;
         let presentation = self.sidebar.presentation;
         let compact = presentation.progress() == 0.;
-        let row_height = gds::appearance::typography::scaled(TAB_HEIGHT, cx);
+        let row_height = cx.gds_ro().appearance().typography().scaled(TAB_HEIGHT);
         let selected = id == self.tabs.active_id;
         let selection =
             motion::state_progress(format!("files-tab-selection-{id}"), selected, window, cx);
@@ -392,7 +413,7 @@ impl Browser {
                 pr: ITEM_GAP.px; rounded: ITEM_RADIUS.px; cursor_pointer;
                 bg: $(cx.theme().sidebar_accent.opacity(selection));
                 text_color: $(cx.theme().sidebar_foreground.interpolate(&cx.theme().sidebar_accent_foreground, selection));
-                @if (!selected && selection == 0.) hover: { bg: $(gds::appearance::theme::Colors::current(cx).sidebar_hover()) }; @end;
+                @if (!selected && selection == 0.) hover: { bg: $(cx.gds_ro().appearance().theme().colors().sidebar_hover()) }; @end;
                 on_click: on_click;
                 on_hover: on_hover;
                 @if (!revealing_close) tooltip_show_delay: tokens::TOOLTIP_DELAY; tooltip: tooltip; @end;

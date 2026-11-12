@@ -8,7 +8,9 @@ pub use super::columns::Column as Key;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
     #[default]
+    #[serde(alias = "ascending")]
     Ascending,
+    #[serde(alias = "descending")]
     Descending,
 }
 
@@ -35,6 +37,12 @@ pub struct Sort {
 }
 
 impl Sort {
+    /// Whether the sort matches the canonical directories-first, ascending-name order
+    /// already maintained by [`super::super::directory::DirectorySnapshot`].
+    pub const fn is_canonical(self) -> bool {
+        matches!(self.key, Key::Name) && matches!(self.direction, Direction::Ascending)
+    }
+
     pub fn next(self, key: Key) -> Self {
         Self {
             key,

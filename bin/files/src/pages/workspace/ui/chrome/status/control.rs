@@ -14,6 +14,7 @@ use gpui_kit::{
 use std::rc::Rc;
 
 type OpenHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+type OpenChangeHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 
 #[component]
 #[derive(IntoElement)]
@@ -28,6 +29,8 @@ pub(in crate::pages::workspace) struct StatusControl {
     details: Option<AnyView>,
     #[attr(option)]
     on_open: Option<OpenHandler>,
+    #[attr(option)]
+    on_open_change: Option<OpenChangeHandler>,
 }
 
 impl Default for StatusControl {
@@ -38,6 +41,7 @@ impl Default for StatusControl {
             summary: StatusSummary::default(),
             details: None,
             on_open: None,
+            on_open_change: None,
         }
     }
 }
@@ -50,6 +54,7 @@ impl RenderOnce for StatusControl {
             summary,
             details,
             on_open,
+            on_open_change,
         } = self;
         let trigger = el! {
             id.Button::new {
@@ -63,16 +68,19 @@ impl RenderOnce for StatusControl {
                     @if (let Some(details) = details.clone()) details, @end,
                 ] }
             };
-        let on_open_change = move |open: &bool, window: &mut Window, cx: &mut App| {
+        let handle_open_change = move |open: &bool, window: &mut Window, cx: &mut App| {
             if *open && let Some(on_open) = &on_open {
                 on_open(window, cx);
+            }
+            if let Some(on_open_change) = &on_open_change {
+                on_open_change(*open, window, cx);
             }
         };
         el! {
             id.Popover::new {
                 appearance: false; anchor: Anchor::BottomLeft;
                 trigger: trigger; content: content;
-                on_open_change: on_open_change;
+                on_open_change: handle_open_change;
             }
         }
     }
