@@ -1,7 +1,7 @@
 //! Shared palette refresh driven by the process's desktop source observer.
 
 use super::{Appearance, Change, Error, Loaded, ModePreference, Observer, Source, apply_loaded};
-use gpui_kit::{App, AppContext, Context, Entity, Global, Subscription, Task, Window};
+use gpui_kit::{App, AppContext, Context, Entity, Global, Subscription, Task};
 
 struct Shared(Entity<HotReload>);
 impl Global for Shared {}
@@ -15,13 +15,8 @@ pub struct HotReload {
 }
 
 impl HotReload {
-    pub fn shared(appearance: Appearance, window: &mut Window, cx: &mut App) -> Entity<Self> {
-        Observer::attach(window, cx);
-        Self::initialize(appearance, cx)
-    }
-
     /// Install the application's palette watcher before creating its windows.
-    pub fn initialize(appearance: Appearance, cx: &mut App) -> Entity<Self> {
+    pub(crate) fn initialize(appearance: Appearance, cx: &mut App) -> Entity<Self> {
         if let Some(shared) = cx.try_global::<Shared>() {
             return shared.0.clone();
         }
@@ -30,13 +25,8 @@ impl HotReload {
         reload
     }
 
-    pub fn get(cx: &App) -> Entity<Self> {
+    pub(crate) fn get(cx: &App) -> Entity<Self> {
         cx.global::<Shared>().0.clone()
-    }
-
-    pub fn new(appearance: Appearance, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Observer::attach(window, cx);
-        Self::start(appearance, cx)
     }
 
     fn start(appearance: Appearance, cx: &mut Context<Self>) -> Self {
@@ -61,16 +51,7 @@ impl HotReload {
         reload
     }
 
-    pub fn set_appearance(
-        &mut self,
-        appearance: Appearance,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.configure(appearance, cx);
-    }
-
-    pub fn configure(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
+    pub(crate) fn configure(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
         let reload = self.appearance.source != appearance.source
             || self.appearance.mode != appearance.mode
             || (appearance.source == Source::Builtin

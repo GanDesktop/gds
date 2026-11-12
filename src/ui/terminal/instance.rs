@@ -1,8 +1,8 @@
 //! GPUI ownership, focus and rendering for a terminal service.
 use super::{Event, INPUT_CONTEXT, Preferences, view::View};
+use crate::app::AppExt as _;
 use crate::service::terminal::{self as service, Shutdown, SpawnOptions, Status};
 use crate::{appearance::theme, i18n};
-use gds::app::AppExt as _;
 use gpui_kit::{prelude::*, *};
 use std::path::{Path, PathBuf};
 use tokio::sync::watch;
@@ -208,6 +208,8 @@ impl Render for Terminal {
                     Status::Closed => ("gds-terminal-exited", None),
                     _ => ("gds-terminal-stopping", None),
                 };
+                let theme = cx.gds_ro().appearance().theme();
+                let colors = theme.colors();
                 div()
                     .size_full()
                     .min_w_0()
@@ -218,15 +220,11 @@ impl Render for Terminal {
                     .gap_2()
                     .key_context(INPUT_CONTEXT)
                     .track_focus(&self.focus)
-                    .bg(theme::content_background(cx))
-                    .text_color(theme::Colors::current(cx).foreground)
+                    .bg(theme.content_background())
+                    .text_color(colors.foreground)
                     .child(i18n::text(label, cx))
                     .when_some(detail, |this, detail| {
-                        this.child(
-                            div()
-                                .text_color(theme::Colors::current(cx).error)
-                                .child(detail),
-                        )
+                        this.child(div().text_color(colors.error).child(detail))
                     })
                     .into_any_element()
             }

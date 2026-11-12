@@ -1,3 +1,4 @@
+use crate::app::AppExt as _;
 use gds_uim::el;
 use gpui_kit::component::StyledExt as _;
 use gpui_kit::{IntoElement, prelude::*, *};
@@ -24,6 +25,6 @@ container_traits!(PageTitle);
 impl RenderOnce for PageTitle {
     fn render(mut self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let style = std::mem::take(self.base.style());
-        el! { $(self.base) { text_size: $(crate::appearance::typography::scaled(TITLE_SIZE, cx)); refine_style: $&style; } }
+        el! { $(self.base) { text_size: $(cx.gds_ro().appearance().typography().scaled(TITLE_SIZE)); refine_style: $&style; } }
     }
 }

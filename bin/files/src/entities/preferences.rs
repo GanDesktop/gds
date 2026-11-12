@@ -5,4 +5,4 @@ mod presentation;
 mod service;
 pub(crate) use api::load;
 pub(crate) use model::{Preferences, PreferencesEditor};
-pub(crate) use service::{Current, PreferencesExt, SaveFailed};
+pub(crate) use service::SaveFailed;

@@ -1,4 +1,5 @@
 use super::{About, Application, HEIGHT, WIDTH};
+use crate::app::AppExt as _;
 use gpui_kit::{
     AppContext as _, ParentElement as _, Styled as _, TestAppContext,
     component::{ActiveTheme as _, Root, WindowExt, dialog::DialogEntrance},
@@ -12,17 +13,20 @@ fn cargo_identity_can_be_copied_and_information_pages_return_to_the_overview(
 ) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("translations");
-        crate::ui::dialog::register(cx);
-        crate::appearance::theme::apply(
-            &crate::appearance::theme::Appearance {
+        cx.gds()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("translations");
+        cx.gds().ui().register_dialogs();
+        cx.gds()
+            .appearance()
+            .theme()
+            .apply(&crate::appearance::theme::Appearance {
                 source: crate::appearance::theme::Source::Builtin,
                 content_opacity: 0.35,
                 ..Default::default()
-            },
-            cx,
-        )
-        .expect("GDS appearance");
+            })
+            .expect("GDS appearance");
     });
     let app = Application::cargo("gds-files");
     assert_eq!(app.version, env!("CARGO_PKG_VERSION"));
@@ -65,17 +69,20 @@ fn escape_returns_from_license_and_the_close_shortcut_dismisses_the_dialog(
 ) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("translations");
-        crate::ui::dialog::register(cx);
-        crate::appearance::theme::apply(
-            &crate::appearance::theme::Appearance {
+        cx.gds()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("translations");
+        cx.gds().ui().register_dialogs();
+        cx.gds()
+            .appearance()
+            .theme()
+            .apply(&crate::appearance::theme::Appearance {
                 source: crate::appearance::theme::Source::Builtin,
                 content_opacity: 0.35,
                 ..Default::default()
-            },
-            cx,
-        )
-        .expect("GDS appearance");
+            })
+            .expect("GDS appearance");
     });
     let window = cx.open_window(size(px(800.), px(700.)), |window, cx| {
         let view = cx.new(|_| gpui_kit::Empty);
@@ -110,16 +117,16 @@ fn escape_returns_from_license_and_the_close_shortcut_dismisses_the_dialog(
             crate::appearance::theme::ModePreference::Light,
             crate::appearance::theme::ModePreference::Dark,
         ] {
-            crate::appearance::theme::apply(
-                &crate::appearance::theme::Appearance {
+            cx.gds()
+                .appearance()
+                .theme()
+                .apply(&crate::appearance::theme::Appearance {
                     source: crate::appearance::theme::Source::Builtin,
                     mode,
                     content_opacity: 0.35,
                     ..Default::default()
-                },
-                cx,
-            )
-            .expect("switch GDS appearance");
+                })
+                .expect("switch GDS appearance");
             window.render_frame(cx);
             let surface = window.find("surface").bounds();
             let background: gpui_kit::Background = cx.theme().tokens.background.clone().into();

@@ -17,28 +17,25 @@ pub(crate) fn init(cx: &mut App) {
         return;
     }
     cx.set_global(ActionsRegistered);
-    gds::ui::actions::register(cx);
-    gds::ui::terminal::init(cx);
+    cx.gds().ui().register_actions();
+    cx.gds().ui().init_terminal();
     cx.on_app_quit(|_| async { gds::service::terminal::shutdown_all().await })
         .detach();
     crate::shared::config::terminal::init(cx);
     crate::pages::workspace::windows::bind_page_keys(cx);
     crate::features::navigation::install(crate::pages::workspace::routes(), cx);
-    gds::ui::time::apply(gds::ui::time::Format::Relative, cx);
-    gds::ui::keytips::install(cx);
-    gds::ui::logs::init(
-        gds::ui::logs::Options {
-            app_id: Some("io.github.GanDesktop.GdsAgents".into()),
-            app_name: "GDS Agents".into(),
-            background: |cx| {
-                cx.global::<crate::shared::lib::appearance::Appearance>()
-                    .background
-            },
-            root: |view, window, cx| crate::shared::lib::appearance::window_root(view, window, cx),
-            ignored_contexts: &[crate::shared::config::TERMINAL_TABS_CONTEXT],
+    cx.gds().ui().time().apply(gds::ui::time::Format::Relative);
+    cx.gds().ui().keytips().install();
+    cx.gds().ui().logs().init(gds::ui::logs::Options {
+        app_id: Some("io.github.GanDesktop.GdsAgents".into()),
+        app_name: "GDS Agents".into(),
+        background: |cx| {
+            cx.global::<crate::shared::lib::appearance::Appearance>()
+                .background
         },
-        cx,
-    );
+        root: |view, window, cx| crate::shared::lib::appearance::window_root(view, window, cx),
+        ignored_contexts: &[crate::shared::config::TERMINAL_TABS_CONTEXT],
+    });
     let (settings, quit) = if cfg!(target_os = "macos") {
         ("cmd-,", "cmd-q")
     } else {

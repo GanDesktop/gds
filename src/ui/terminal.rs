@@ -35,7 +35,7 @@ struct Initialized;
 impl Global for Initialized {}
 
 /// Reserve Tab for PTY input. Applications own service cleanup and other shortcuts.
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     if cx.has_global::<Initialized>() {
         return;
     }

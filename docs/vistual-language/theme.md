@@ -58,7 +58,7 @@ Files defaults to the system palette and follows the desktop light/dark preferen
 
 ## 4. 固定配色分工
 
-Files、Agents 与公共组件共用 `src/appearance/theme/palette.rs` 的角色快照和 Kit 桥接。DMS / Matugen、KDE、Qt 和内置来源只提供角色的值；应用不另设配色表。常规组件读取 Kit 的语义字段，自绘面板及状态层通过 `gds::appearance::theme::Colors::current(cx)` 读取同一快照。主题热更新一次替换整份快照，透明度设置只改变材质 alpha。
+Files、Agents 与公共组件共用 `src/appearance/theme/palette.rs` 的角色快照和 Kit 桥接。DMS / Matugen、KDE、Qt 和内置来源只提供角色的值；应用不另设配色表。常规组件读取 Kit 的语义字段，自绘面板及状态层通过 `cx.gds_ro().appearance().theme().colors()` 读取同一快照。主题热更新一次替换整份快照，透明度设置只改变材质 alpha。
 
 来源实现按输入职责集中在 `theme/provider`：
 

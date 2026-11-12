@@ -2,7 +2,7 @@ use gpui_kit::{App, SharedString, component::select::SelectItem};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::{appearance::typography, i18n};
+use crate::{app::AppExt as _, i18n};
 
 pub trait Model: Clone + Default + PartialEq + 'static {
     fn fields() -> Vec<Field<Self>>;
@@ -174,7 +174,11 @@ impl<T> Field<T> {
 
     pub(super) fn choices(&self, model: &T, cx: &App) -> Vec<Choice> {
         let mut choices = match self.kind {
-            Kind::Font => typography::installed_families(cx)
+            Kind::Font => cx
+                .gds_ro()
+                .appearance()
+                .typography()
+                .installed_families()
                 .into_iter()
                 .map(|name| Choice::new(Value::String(name.clone()), name))
                 .collect(),

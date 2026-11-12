@@ -1,6 +1,6 @@
 use super::{Application, Tasks};
 use crate::service::task_manager::Scope;
-use gpui_kit::Global;
+use gpui_kit::{App, Global};
 
 struct Executor {
     scope: Scope,
@@ -16,7 +16,7 @@ impl Drop for Executor {
     }
 }
 
-impl Tasks<'_> {
+impl Tasks<&mut App> {
     /// Install an isolated executor for a GPUI test application.
     pub fn init_test(&mut self, inspect: bool) {
         if self.cx.has_global::<Application>() {

@@ -5,7 +5,7 @@ impl Frame {
     pub fn workspace(&self, sidebar: AnyElement, content: AnyElement, cx: &App) -> Div {
         let surface = div()
             .size_full()
-            .bg(theme::content_background(cx))
+            .bg(cx.gds_ro().appearance().theme().content_background())
             .child(content);
         self.workspace_with_content_surface(sidebar, surface.into_any_element(), cx)
     }
@@ -23,7 +23,7 @@ impl Frame {
         el! {
             .div { relative; flex; flex_1; min_h_0; w_full } [
                 @if (let Some(width) = width)
-                    .div { # "frame-workspace-sidebar"; test_support; w: width.px; h_full; flex_shrink_0; bg: $(theme::sidebar_background(cx)) } [sidebar],
+                    .div { # "frame-workspace-sidebar"; test_support; w: width.px; h_full; flex_shrink_0; bg: $(cx.gds_ro().appearance().theme().sidebar_background()) } [sidebar],
                 @end,
                 .div { flex_1; min_w_0; h_full } [content],
                 ..divider,

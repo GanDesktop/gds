@@ -1,5 +1,5 @@
 //! An independent Debug window for logs and registered application tasks.
-use gds::app::AppExt as _;
+use crate::app::AppExt as _;
 
 use crate::i18n::t;
 use crate::service::logs::{Entry, Level, Snapshot, Store};
@@ -42,7 +42,8 @@ actions!(
     ]
 );
 
-pub use window::{OpenLogs, Options, init, install, is_enabled, open, store};
+pub use window::{OpenLogs, Options};
+pub(crate) use window::{init, install, is_enabled, open, store};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -274,7 +275,7 @@ impl Render for Viewer {
                 size_full;
                 flex;
                 flex_col;
-                bg: $(crate::appearance::theme::content_background(cx));
+                bg: $(cx.gds_ro().appearance().theme().content_background());
                 text_color: $(cx.theme().foreground);
                 on_action: $(cx.listener(|_, _: &CloseLogs, window, _| window.remove_window()));
                 on_action: $(cx.listener(|this, _: &PreviousLog, _, cx| this.move_selection(false, false, cx)));

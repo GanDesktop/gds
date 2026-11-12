@@ -1,4 +1,5 @@
 //! Typed startup arguments; picker filters retain their domain parser.
+
 use crate::features::pick_files::{Filter, Options};
 use clap::{ArgGroup, Parser};
 use std::path::PathBuf;
@@ -13,7 +14,7 @@ use std::path::PathBuf;
 #[command(
     after_help = "Run inside a graphical Wayland or X11 session.\nPicker exit status: 0 selected, 1 cancelled, 2 output or argument failure."
 )]
-pub struct Arguments {
+pub(super) struct Arguments {
     /// Directory to open (default: home). Use -- before names starting with '-'.
     pub directory: Option<PathBuf>,
     /// Pick files, print one JSON result on stdout and exit.

@@ -54,6 +54,7 @@ pub enum Error {
 /// A Fluent catalog composed of suite messages and the owning application's resources.
 /// Static labels are cached for consumers that render outside a GPUI context.
 pub struct Catalog {
+    #[cfg(feature = "app")]
     language: Language,
     bundle: FluentBundle<FluentResource>,
     labels: HashMap<String, String>,
@@ -105,6 +106,7 @@ impl Catalog {
                 .map_err(|errors| Error::Bundle(format!("{errors:?}")))?;
         }
         let mut catalog = Self {
+            #[cfg(feature = "app")]
             language,
             bundle,
             labels: HashMap::new(),
@@ -131,6 +133,7 @@ impl Catalog {
     }
 }
 
+#[cfg_attr(not(feature = "app"), allow(dead_code))]
 struct Messages(Catalog);
 impl Global for Messages {}
 
@@ -138,7 +141,8 @@ impl Global for Messages {}
 ///
 /// # Errors
 /// Returns an error when bundled Fluent cannot be parsed or registered.
-pub fn install(language: Language, cx: &mut App) -> Result<(), Error> {
+#[cfg(feature = "app")]
+pub(crate) fn install(language: Language, cx: &mut App) -> Result<(), Error> {
     install_resources(language, &[], cx)
 }
 
@@ -146,7 +150,8 @@ pub fn install(language: Language, cx: &mut App) -> Result<(), Error> {
 ///
 /// # Errors
 /// Returns an error for invalid Fluent or duplicate message IDs.
-pub fn install_resources(
+#[cfg(feature = "app")]
+pub(crate) fn install_resources(
     language: Language,
     application: &[&str],
     cx: &mut App,
@@ -157,7 +162,8 @@ pub fn install_resources(
 
 impl Catalog {
     /// Install a fully parsed catalog without introducing another fallible step.
-    pub fn install(mut self, cx: &mut App) {
+    #[cfg(feature = "app")]
+    pub(crate) fn install(mut self, cx: &mut App) {
         self.bundle.set_use_isolating(false);
         gpui_kit::component::set_locale(self.language.locale());
         cx.set_global(Messages(self));
@@ -175,7 +181,8 @@ pub fn deferred(callback: impl FnOnce(&App) -> SharedString) -> impl FnOnce(&App
     callback
 }
 
-pub fn language(cx: &App) -> Language {
+#[cfg(feature = "app")]
+pub(crate) fn language(cx: &App) -> Language {
     cx.global::<Messages>().0.language
 }
 

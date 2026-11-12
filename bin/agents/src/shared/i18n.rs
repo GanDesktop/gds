@@ -2,6 +2,7 @@
 //! arguments are formatted by Fluent, including its plural and bidi handling.
 
 use fluent_bundle::FluentArgs;
+use gds::app::AppExt as _;
 use gds::i18n::Catalog;
 pub(crate) use gds::i18n::Language;
 use std::sync::{
@@ -25,7 +26,10 @@ pub(crate) fn install(language: Language, cx: &mut gpui_kit::App) {
         Language::Chinese => CHINESE,
         Language::English => ENGLISH,
     };
-    gds::i18n::install_resources(language, &[source], cx).expect("embedded Agents Fluent catalog");
+    cx.gds()
+        .i18n()
+        .install_resources(language, &[source])
+        .expect("embedded Agents Fluent catalog");
 }
 
 pub(crate) fn language() -> Language {

@@ -8,9 +8,9 @@ use gpui_kit::{
 
 pub(super) const WIDTH: f32 = 1_000.;
 pub(super) const HEIGHT: f32 = 720.;
-#[cfg(test)]
+#[cfg(all(test, feature = "gui-tests"))]
 pub(super) const MIN_WIDTH: f32 = 780.;
-#[cfg(test)]
+#[cfg(all(test, feature = "gui-tests"))]
 pub(super) const MIN_HEIGHT: f32 = 480.;
 
 actions!(logs, [OpenLogs]);
@@ -32,7 +32,7 @@ impl Default for Options {
             app_name: "GDS".into(),
             background: |_| crate::appearance::tokens::WINDOW_BACKGROUND,
             root: |view, window, cx| {
-                crate::appearance::theme::Observer::attach(window, cx);
+                cx.gds().appearance().theme().attach_observer(window);
                 let surface = crate::ui::notifications::surface::wrap(view, window, cx);
                 Root::new(surface, window, cx).text_size(crate::appearance::tokens::SMALL)
             },
@@ -53,20 +53,20 @@ pub(super) struct OpenWindow {
 impl Global for OpenWindow {}
 
 /// Install the collector created before the application's background tasks start.
-pub fn install(store: Store, cx: &mut App) {
+pub(crate) fn install(store: Store, cx: &mut App) {
     cx.set_global(Records(store));
 }
 
-pub fn is_enabled(cx: &App) -> bool {
+pub(crate) fn is_enabled(cx: &App) -> bool {
     cx.has_global::<Records>()
 }
 
-pub fn store(cx: &App) -> Option<Store> {
+pub(crate) fn store(cx: &App) -> Option<Store> {
     cx.try_global::<Records>().map(|records| records.0.clone())
 }
 
 /// Register the viewer's actions once for this application process.
-pub fn init(options: Options, cx: &mut App) {
+pub(crate) fn init(options: Options, cx: &mut App) {
     if !is_enabled(cx) || cx.has_global::<Registered>() {
         return;
     }
@@ -118,7 +118,7 @@ pub fn init(options: Options, cx: &mut App) {
 ///
 /// # Errors
 /// Reports disabled logging, missing initialization or native window creation errors.
-pub fn open(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
+pub(crate) fn open(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     let store =
         store(cx).context("Logging is disabled; start the application with --enable-logs")?;
     let options = cx

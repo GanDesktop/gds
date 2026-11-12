@@ -47,7 +47,10 @@ fn application_watcher_survives_window_closure_and_updates_all_views(cx: &mut Te
     )
     .expect("external update");
     cx.update(|cx| {
-        gds::appearance::theme::Observer::shared(cx)
+        cx.gds()
+            .appearance()
+            .theme()
+            .observer()
             .update(cx, |observer, cx| observer.refresh(cx));
     });
     cx.executor().run_until_parked();
@@ -65,7 +68,10 @@ fn application_watcher_survives_window_closure_and_updates_all_views(cx: &mut Te
     )
     .expect("update with only settings left");
     cx.update(|cx| {
-        gds::appearance::theme::Observer::shared(cx)
+        cx.gds()
+            .appearance()
+            .theme()
+            .observer()
             .update(cx, |observer, cx| observer.refresh(cx));
     });
     cx.executor().run_until_parked();
@@ -74,7 +80,10 @@ fn application_watcher_survives_window_closure_and_updates_all_views(cx: &mut Te
     assert_eq!(second_size.get(), 24.);
     std::fs::write(&path, r#"{"appearance":{"ui_font_size":0}}"#).expect("invalid external update");
     cx.update(|cx| {
-        gds::appearance::theme::Observer::shared(cx)
+        cx.gds()
+            .appearance()
+            .theme()
+            .observer()
             .update(cx, |observer, cx| observer.refresh(cx));
     });
     cx.executor().run_until_parked();

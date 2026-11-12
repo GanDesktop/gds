@@ -1,4 +1,5 @@
 use super::{DirectoryPicker, Entry, Loader, Location, Navigation, Page, Request};
+use crate::app::AppExt as _;
 use gpui_kit::{
     AppContext, Context, Entity, IntoElement, Render, TestAppContext, Window, WindowHandle, div,
     px, size,
@@ -30,8 +31,11 @@ impl Render for Host {
 fn fixture(cx: &mut TestAppContext) -> Fixture {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("catalog");
-        crate::ui::dialog::register(cx);
+        cx.gds()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("catalog");
+        cx.gds().ui().register_dialogs();
     });
     let requests = Rc::new(RefCell::new(VecDeque::new()));
     let queued = requests.clone();

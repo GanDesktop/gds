@@ -87,7 +87,7 @@ struct Current {
 impl Global for Current {}
 
 /// Installed font family names reported by the platform text system.
-pub fn installed_families(cx: &App) -> Vec<String> {
+pub(crate) fn installed_families(cx: &App) -> Vec<String> {
     cx.text_system().all_font_names()
 }
 
@@ -95,7 +95,7 @@ pub fn installed_families(cx: &App) -> Vec<String> {
 ///
 /// `rem`-based styles already follow the theme's base size; this is for fixed
 /// pixel sizes that cannot. The default preference returns `base_px` unchanged.
-pub fn scaled(base_px: f32, cx: &App) -> Pixels {
+pub(crate) fn scaled(base_px: f32, cx: &App) -> Pixels {
     let scale = cx
         .try_global::<Current>()
         .map_or(1.0, |current| current.size / DEFAULT_SIZE);
@@ -111,7 +111,7 @@ pub fn scaled(base_px: f32, cx: &App) -> Pixels {
 /// # Errors
 /// Rejects non-finite sizes outside [`MIN_SIZE`]..=[`MAX_SIZE`]. Nothing is
 /// changed in that case.
-pub fn install(preferences: &Preferences, cx: &mut App) -> Result<Applied, Error> {
+pub(crate) fn install(preferences: &Preferences, cx: &mut App) -> Result<Applied, Error> {
     validate_size(preferences.size)?;
     let resolved = ResolvedFamily::resolve(
         preferences.family.as_deref(),

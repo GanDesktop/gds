@@ -160,7 +160,7 @@ impl Error {
 }
 
 /// Update client-side window corners without reloading the palette.
-pub fn update_window_corners(rounded: bool, cx: &mut App) {
+pub(crate) fn update_window_corners(rounded: bool, cx: &mut App) {
     cx.set_global(
         gpui_kit::component::WindowBorderStyle::default().with_corner_radius(gpui_kit::px(
             if rounded {
@@ -195,7 +195,7 @@ impl Global for Material {}
 /// Returns an error for invalid opacity, unavailable source files, disabled Qt
 /// custom palettes, or unsupported/malformed palette data. The previous valid
 /// theme and material settings are retained on every such failure.
-pub fn apply(appearance: &Appearance, cx: &mut App) -> Result<Applied, Error> {
+pub(crate) fn apply(appearance: &Appearance, cx: &mut App) -> Result<Applied, Error> {
     appearance.prepare(cx.window_appearance())?.install(cx)
 }
 
@@ -220,7 +220,7 @@ impl Prepared {
     ///
     /// # Errors
     /// Reports invalid surface opacity; the previous palette remains installed.
-    pub fn install(self, cx: &mut App) -> Result<Applied, Error> {
+    pub(crate) fn install(self, cx: &mut App) -> Result<Applied, Error> {
         apply_loaded(&self.appearance, self.loaded, cx)
     }
 }
@@ -305,7 +305,7 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
 /// # Errors
 /// Returns an error for non-finite/out-of-range alpha or when no appearance has
 /// been applied yet. Neither opacity is changed if validation fails.
-pub fn update_opacity(content: f32, sidebar: f32, cx: &mut App) -> Result<(), Error> {
+pub(crate) fn update_opacity(content: f32, sidebar: f32, cx: &mut App) -> Result<(), Error> {
     validate_opacity("content_opacity", content)?;
     validate_opacity("sidebar_opacity", sidebar)?;
     if !cx.has_global::<Material>() {
@@ -320,7 +320,7 @@ pub fn update_opacity(content: f32, sidebar: f32, cx: &mut App) -> Result<(), Er
 
 /// Background for the application-owned content surface, not text or controls.
 /// The window/root must permit transparency for alpha to reach the desktop.
-pub fn content_background(cx: &App) -> Hsla {
+pub(crate) fn content_background(cx: &App) -> Hsla {
     let Some(material) = cx.try_global::<Material>() else {
         return Theme::global(cx).background;
     };
@@ -330,7 +330,7 @@ pub fn content_background(cx: &App) -> Hsla {
 }
 
 /// Background for the application-owned sidebar and toolbar surfaces.
-pub fn sidebar_background(cx: &App) -> Hsla {
+pub(crate) fn sidebar_background(cx: &App) -> Hsla {
     let Some(material) = cx.try_global::<Material>() else {
         return Theme::global(cx).sidebar;
     };

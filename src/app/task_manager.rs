@@ -1,4 +1,6 @@
 //! Application-owned task service. Close windows, drain work, then quit.
+use std::ops::Deref;
+
 use crate::service::task_manager::Scope;
 use gpui_kit::{App, Global};
 
@@ -18,29 +20,30 @@ enum Phase {
 }
 
 /// Task service access and application shutdown coordination.
-pub struct Tasks<'a> {
-    pub(super) cx: &'a mut App,
+#[derive(Clone, Copy)]
+pub struct Tasks<C> {
+    pub(super) cx: C,
 }
 
-impl Tasks<'_> {
+impl<C: Deref<Target = App>> Tasks<C> {
     /// Obtain the service installed by application startup before deriving tasks.
     pub fn scope(&self) -> Scope {
-        let cx = &*self.cx;
-        cx.global::<Application>().scope.clone()
+        self.cx.global::<Application>().scope.clone()
     }
 
     /// Read-only diagnostics, available only when enabled at startup.
     pub fn inspector(&self) -> Option<crate::service::task_manager::Inspector> {
-        let cx = &*self.cx;
-        cx.try_global::<Application>()?.scope.inspector()
+        self.cx.try_global::<Application>()?.scope.inspector()
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        let cx = &*self.cx;
-        cx.try_global::<Application>()
+        self.cx
+            .try_global::<Application>()
             .is_some_and(|app| app.phase == Phase::Closing)
     }
+}
 
+impl Tasks<&mut App> {
     /// Install once before starting tasks; diagnostics are fixed for this app lifetime.
     pub fn init(&mut self, scope: Scope) {
         let cx = &mut *self.cx;

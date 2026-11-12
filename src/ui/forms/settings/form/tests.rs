@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::AppExt as _;
 use gpui_kit::{
     AppContext, Entity, TestAppContext, WindowHandle, component::Root, px, size,
     test::TestWindowExt,
@@ -69,8 +70,12 @@ struct Fixture {
 fn fixture(cx: &mut TestAppContext) -> Fixture {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        crate::i18n::install_resources(crate::i18n::Language::English,
-            &["test-enabled = Enabled\ntest-name = Name\ntest-count = Count\ntest-opacity = Opacity\ntest-arguments = Arguments\n"], cx)
+        cx.gds()
+            .i18n()
+            .install_resources(
+                crate::i18n::Language::English,
+                &["test-enabled = Enabled\ntest-name = Name\ntest-count = Count\ntest-opacity = Opacity\ntest-arguments = Arguments\n"],
+            )
             .expect("test catalog");
     });
     let mut editor = None;

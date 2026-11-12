@@ -1,4 +1,5 @@
 use super::*;
+use crate::entities::file::x::location::{Layout, Sort};
 use crate::entities::location::Location as Address;
 
 #[tokio::test]
@@ -67,4 +68,35 @@ async fn persist_ordered_abstract_locations() {
         store.read().await.expect("read pins after removal").pinned,
         vec![Address::Recent, local, remote]
     );
+}
+
+#[tokio::test]
+async fn read_legacy_pascal_case_view_settings() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    let path = root.path().join("state.sqlite");
+    let scope =
+        gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false);
+
+    let mut store = Store::open_at(&scope, &path)
+        .await
+        .expect("open places store");
+    toasty::sql::query(
+        r#"UPDATE view_settings SET columns = '["Name","Modified","DetailedType"]', sort = '{"key":"Name","direction":"Ascending"}' WHERE key_kind = 'defaults'"#,
+    )
+    .exec(&mut store.db)
+    .await
+    .expect("write legacy view_settings JSON");
+    drop(store);
+
+    let store = Store::open_at(&scope, &path)
+        .await
+        .expect("reopen places store with legacy view_settings");
+    let places = store
+        .read()
+        .await
+        .expect("read places snapshot with legacy view_settings");
+    let expected_columns: Layout =
+        serde_json::from_str(r#"["name","modified","detailed-type"]"#).expect("canonical layout");
+    assert_eq!(places.defaults.columns, Some(expected_columns));
+    assert_eq!(places.defaults.sort, Some(Sort::default()));
 }

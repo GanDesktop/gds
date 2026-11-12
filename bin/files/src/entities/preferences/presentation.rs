@@ -2,6 +2,7 @@
 
 use super::Preferences;
 use crate::shared::i18n;
+use gds::app::AppExt as _;
 use gds::appearance::{theme, typography};
 use gpui_kit::App;
 
@@ -48,18 +49,26 @@ impl Prepared {
 
     pub(super) fn install(self, preferences: &Preferences, cx: &mut App) {
         if let Some(theme) = self.theme {
-            theme.install(cx).expect("prepared theme has valid opacity");
+            cx.gds()
+                .appearance()
+                .theme()
+                .install(theme)
+                .expect("prepared theme has valid opacity");
         }
         if let Some(font) = self.font {
-            typography::install(&font, cx).expect("prepared font has a valid size");
+            cx.gds()
+                .appearance()
+                .typography()
+                .apply(&font)
+                .expect("prepared font has a valid size");
         }
         if let Some(language) = self.language {
-            language.install(cx);
+            cx.gds().i18n().install_catalog(language);
         }
-        gds::ui::time::apply(preferences.time_format, cx);
-        gds::appearance::motion::set_animations_enabled(
-            preferences.animations_enabled.unwrap_or(true),
-            cx,
-        );
+        cx.gds().ui().time().apply(preferences.time_format);
+        cx.gds()
+            .appearance()
+            .motion()
+            .set_enabled(preferences.animations_enabled.unwrap_or(true));
     }
 }

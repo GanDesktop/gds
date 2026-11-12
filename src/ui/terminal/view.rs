@@ -3,7 +3,7 @@ use super::{
     input,
 };
 use crate::service::terminal::Session;
-use crate::{appearance::theme::Colors, i18n};
+use crate::{app::AppExt as _, i18n};
 use alacritty_terminal::{
     grid::Scroll,
     index::{Column, Line, Point as GridPoint, Side},
@@ -343,7 +343,9 @@ fn mouse_button(button: MouseButton) -> u8 {
 }
 impl Render for View {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = Colors::current(cx);
+        let theme = cx.gds_ro().appearance().theme();
+        let colors = theme.colors();
+        let content_background = theme.content_background();
         let status = match self.session.status() {
             crate::service::terminal::ProcessStatus::Running => None,
             crate::service::terminal::ProcessStatus::Stopping => {
@@ -388,7 +390,7 @@ impl Render for View {
             .when_some(self.error.clone(), |this, error| {
                 this.child(
                     div()
-                        .bg(crate::appearance::theme::content_background(cx))
+                        .bg(content_background)
                         .text_xs()
                         .text_color(colors.error)
                         .child(error),
@@ -397,7 +399,7 @@ impl Render for View {
             .when_some(status, |this, status| {
                 this.child(
                     div()
-                        .bg(crate::appearance::theme::content_background(cx))
+                        .bg(content_background)
                         .text_xs()
                         .text_color(colors.muted_foreground)
                         .child(status),

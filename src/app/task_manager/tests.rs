@@ -60,7 +60,7 @@ fn debug_collects_from_startup_without_opening_the_panel(cx: &mut TestAppContext
             cx.gds().tasks().inspector().unwrap().snapshot().tasks.len(),
             1
         );
-        assert!(!crate::ui::logs::is_enabled(cx));
+        assert!(!cx.gds_ro().ui().logs().is_enabled());
     });
     cx.update(|cx| assert!(cx.windows().is_empty()));
 }

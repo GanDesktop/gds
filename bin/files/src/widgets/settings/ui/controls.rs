@@ -18,6 +18,7 @@ use crate::widgets::settings::ui::View;
 use gds::ui::button::Button;
 use gds::ui::settings::{SettingActions, SettingControl, SettingLabel, SettingReset, SettingRow};
 use gds::{
+    app::AppExt as _,
     appearance::theme::{BuiltinTheme, ModePreference, SourceKind},
     i18n::{t, text},
 };
@@ -277,7 +278,7 @@ impl Choice<std::path::PathBuf> {
         entries: &[gds::appearance::theme::provider::custom::Entry],
         cx: &App,
     ) -> Vec<Self> {
-        let locale = gds::i18n::language(cx).locale();
+        let locale = cx.gds_ro().i18n().language().locale();
         entries
             .iter()
             .map(|entry| {

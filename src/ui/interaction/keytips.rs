@@ -18,7 +18,7 @@ use gpui_kit::base::{Root, RootPlugin};
 use gpui_kit::component::{ActiveTheme, window_paddings};
 use gpui_kit::{IntoElement, prelude::*, *};
 
-use crate::appearance::typography;
+use crate::app::AppExt as _;
 use crate::ui::{HeldModifier, Shortcut, ShortcutBadge};
 
 /// Horizontal padding of a compact label.
@@ -142,7 +142,7 @@ impl Keytips {
 ///
 /// The plugin also clears on window deactivation, which may lose the matching
 /// modifier release. Callers can explicitly clear during other focus transitions.
-pub fn release(window: &mut Window, cx: &mut App) {
+pub(crate) fn release(window: &mut Window, cx: &mut App) {
     let Some(layer) = layer(window, cx) else {
         return;
     };
@@ -157,13 +157,19 @@ pub fn release(window: &mut Window, cx: &mut App) {
     }
 }
 
-/// Register the hint layer for the windows created afterwards.
+struct Initialized;
+impl Global for Initialized {}
+
+/// Register the hint layer once for all application windows.
 ///
-/// Call it while a window's view is being built (that runs before its root
-/// exists) and after `gpui_kit::init`. The layer paints itself in its own
-/// deferred layer, so its registration order no longer decides whether it
-/// covers a dialog.
-pub fn install(cx: &mut App) {
+/// `Gds::initialize` calls this at startup after `gpui_kit::init`. The layer
+/// paints itself in its own deferred layer, so its registration order no
+/// longer decides whether it covers a dialog.
+pub(crate) fn install(cx: &mut App) {
+    if cx.has_global::<Initialized>() {
+        return;
+    }
+    cx.set_global(Initialized);
     Root::register_plugin::<Keytips>(cx, Keytips::new);
 }
 
@@ -501,7 +507,8 @@ pub fn suffix_anchor(
         return div().size_0().into_any_element();
     };
     let label = ShortcutBadge::path_label(&[binding.clone()], held).unwrap_or_default();
-    let text_size = typography::scaled(LABEL_TEXT_SIZE, cx);
+    let typography = cx.gds_ro().appearance().typography();
+    let text_size = typography.scaled(LABEL_TEXT_SIZE);
     let run = window.text_style().to_run(label.len());
     let width = window
         .text_system()
@@ -510,7 +517,7 @@ pub fn suffix_anchor(
         + px(LABEL_PADDING_X * 2. + 2.);
     // Text layout rounds glyph advances up; the clip must include the entire border.
     let width = width.ceil();
-    let gap = typography::scaled(SUFFIX_GAP, cx);
+    let gap = typography.scaled(SUFFIX_GAP);
     let height = (text_size * LABEL_LINE_HEIGHT + px(LABEL_PADDING_Y * 2. + 2.)).ceil();
     let label = compact_label(key, &[binding], held, cx).w_full().h_full();
     el! {
@@ -941,7 +948,11 @@ fn compact_label(
     held: HeldModifier,
     cx: &App,
 ) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
-    let text_size = typography::scaled(LABEL_TEXT_SIZE, cx);
+    let text_size = cx
+        .gds_ro()
+        .appearance()
+        .typography()
+        .scaled(LABEL_TEXT_SIZE);
     let label = ShortcutBadge::path_label(bindings, held).unwrap_or_default();
     div()
         .id(SharedString::from(format!("keytip-{key}")))

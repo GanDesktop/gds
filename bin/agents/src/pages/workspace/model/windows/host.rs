@@ -1,5 +1,6 @@
 use crate::shared::i18n::tr;
 use futures::FutureExt as _;
+use gds::app::AppExt as _;
 use std::collections::HashMap;
 
 use bas::service::tls::ConnectionOptions;
@@ -500,7 +501,7 @@ impl Host {
             .flex()
             .flex_col()
             .when(!matches!(page.content, Content::Help), |surface| {
-                surface.bg(gds::appearance::theme::content_background(cx))
+                surface.bg(cx.gds_ro().appearance().theme().content_background())
             })
             .key_context("BasWorkspacePage")
             .track_focus(&self.focus)

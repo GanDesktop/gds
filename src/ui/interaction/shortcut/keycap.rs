@@ -1,5 +1,5 @@
 use super::*;
-use crate::appearance::typography;
+use crate::app::AppExt as _;
 use gds_uim::el;
 use gpui_kit::IntoElement;
 use gpui_kit::component::ActiveTheme as _;
@@ -29,7 +29,7 @@ impl RenderOnce for Keycap {
                 rounded: KEY_GAP.px; border_1;
                 border_color: $cx.theme().border;
                 bg: $cx.theme().secondary; text_color: $cx.theme().muted_foreground;
-                text_size: $(typography::scaled(KEY_TEXT_SIZE, cx));
+                text_size: $(cx.gds_ro().appearance().typography().scaled(KEY_TEXT_SIZE));
             }
         }
     }

@@ -1,7 +1,7 @@
 use super::View;
+use crate::app::AppExt as _;
 use crate::service::terminal::{Session, SpawnOptions};
 use crate::ui::terminal::Preferences;
-use gds::app::AppExt as _;
 use gpui_kit::{
     AppContext, Context, Entity, FocusHandle, IntoElement, KeyBinding, Render, TestAppContext,
     Window, actions, component::Root, div, prelude::*, px, size, test::TestWindowExt,
@@ -47,8 +47,11 @@ fn single_terminal_respects_its_hosts_key_map(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         cx.gds().tasks().init_test(false);
-        crate::ui::terminal::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
+        cx.gds().ui().init_terminal();
+        cx.gds()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
         // The host, not the reusable terminal, chooses all these bindings.
         cx.bind_keys([
             KeyBinding::new(
@@ -141,8 +144,11 @@ fn tab_routes_to_pty_and_outside_terminal_traversal_still_works(cx: &mut TestApp
     cx.update(|cx| {
         gpui_kit::init(cx);
         cx.gds().tasks().init_test(false);
-        crate::ui::terminal::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
+        cx.gds().ui().init_terminal();
+        cx.gds()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
     });
     let tasks = cx.update(|cx| cx.gds().tasks().scope());
     let session = Session::spawn(&tasks, SpawnOptions {
@@ -207,8 +213,11 @@ fn tab_completes_a_filename_in_a_real_interactive_shell(cx: &mut TestAppContext)
     cx.update(|cx| {
         gpui_kit::init(cx);
         cx.gds().tasks().init_test(false);
-        crate::ui::terminal::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
+        cx.gds().ui().init_terminal();
+        cx.gds()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
     });
     let account_shell = nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .expect("test account lookup")
@@ -274,8 +283,11 @@ fn changing_terminal_typography_updates_existing_grid_metrics(cx: &mut TestAppCo
     cx.update(|cx| {
         gpui_kit::init(cx);
         cx.gds().tasks().init_test(false);
-        crate::ui::terminal::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
+        cx.gds().ui().init_terminal();
+        cx.gds()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
     });
     let tasks = cx.update(|cx| cx.gds().tasks().scope());
     let session = Session::spawn(

@@ -2,6 +2,7 @@
 
 use std::{cell::Cell, rc::Rc};
 
+use crate::app::AppExt as _;
 use gpui_kit::{
     AnyElement, App, ClickEvent, Decorations, IntoElement, MouseButton, ParentElement, RenderOnce,
     SharedString, Styled, TestSupportExt, Window, WindowControlArea, WindowDecorations,
@@ -289,7 +290,7 @@ impl RenderOnce for TitleBar {
                 cfg!(target_os = "macos") && !window.is_fullscreen(),
                 |bar| bar.pl(px(MACOS_CONTROLS_WIDTH)),
             )
-            .bg(crate::appearance::theme::sidebar_background(cx))
+            .bg(cx.gds_ro().appearance().theme().sidebar_background())
             .border_b_1()
             .border_color(cx.theme().title_bar_border)
             .child(title.children(self.children))

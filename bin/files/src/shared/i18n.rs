@@ -2,7 +2,6 @@
 
 pub use gds::i18n::{Error, Language, text};
 pub(crate) use gds::t;
-use gpui_kit::App;
 
 /// Build a Fluent catalog combining suite messages with Files translations.
 ///
@@ -32,15 +31,6 @@ pub fn prepare(language: Language) -> Result<gds::i18n::Catalog, Error> {
         ],
     };
     gds::i18n::Catalog::new(language, &sources)
-}
-
-/// Install the Files and suite translation catalog into the application context.
-///
-/// # Errors
-/// Returns an error if any bundled Fluent resource fails to parse or contains duplicate message IDs.
-pub fn install(language: Language, cx: &mut App) -> Result<(), Error> {
-    prepare(language)?.install(cx);
-    Ok(())
 }
 
 #[cfg(test)]

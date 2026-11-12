@@ -92,7 +92,7 @@ remote = [
     "dep:percent-encoding",
 ]
 appearance = [
-    "task-manager",
+    "app", "task-manager",
     "watch", "dep:gpui-kit", "dep:font-kit", "dep:directories", "dep:tracing",
     "dep:serde", "dep:serde_json", "dep:thiserror", "dep:toml", "dep:rust-ini",
     "dep:zbus", "dep:futures-lite",

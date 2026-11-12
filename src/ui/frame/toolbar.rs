@@ -24,10 +24,11 @@ impl Frame {
         let width = self
             .sidebar_width
             .unwrap_or(2. * MENU_PADDING + ICON_BUTTON_SIZE);
+        let theme = cx.gds_ro().appearance().theme();
         let leading_background = if self.sidebar_width.is_some() {
-            theme::sidebar_background(cx)
+            theme.sidebar_background()
         } else {
-            theme::content_background(cx)
+            theme.content_background()
         };
         let divider = self.vertical_divider(cx);
         let collapsed_width = crate::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH;
@@ -51,7 +52,7 @@ impl Frame {
                 ],
                 .div {
                     flex_1; min_w_0; h_full; flex; items_center;
-                    px: SIDEBAR_PADDING.px; gap_1; bg: $(theme::content_background(cx));
+                    px: SIDEBAR_PADDING.px; gap_1; bg: $(theme.content_background());
                 } [
                     .div { flex_1; min_w_0; h_full; flex; items_center; overflow_hidden } [controls],
                     window_controls,

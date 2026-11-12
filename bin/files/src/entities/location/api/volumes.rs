@@ -12,5 +12,5 @@ mod usage;
 
 pub use model::*;
 pub use network::{NetworkMountError, read_network_mounts};
-pub use service::*;
+pub(crate) use service::*;
 pub use usage::{Capacity, CapacityState};

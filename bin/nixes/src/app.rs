@@ -32,22 +32,27 @@ pub fn run() -> anyhow::Result<()> {
                 cx.gds().tasks().request_quit();
                 return;
             }
-            if let Err(error) = theme::apply(&theme::Appearance::default(), cx) {
+            if let Err(error) = cx
+                .gds()
+                .appearance()
+                .theme()
+                .apply(&theme::Appearance::default())
+            {
                 eprintln!("{error}");
             }
-            if let Err(error) = typography::install(&typography::Preferences::default(), cx) {
+            if let Err(error) = cx
+                .gds()
+                .appearance()
+                .typography()
+                .apply(&typography::Preferences::default())
+            {
                 eprintln!("{error}");
             }
-            if gds::ui::logs::is_enabled(cx) {
-                gds::ui::logs::init(
-                    gds::ui::logs::Options {
-                        app_id: Some("io.github.GanDesktop.GdsNixes".into()),
-                        app_name: "GDS Nixes".into(),
-                        ..Default::default()
-                    },
-                    cx,
-                );
-            }
+            cx.gds().ui().logs().init(gds::ui::logs::Options {
+                app_id: Some("io.github.GanDesktop.GdsNixes".into()),
+                app_name: "GDS Nixes".into(),
+                ..Default::default()
+            });
             #[cfg(unix)]
             cx.gds()
                 .tasks()

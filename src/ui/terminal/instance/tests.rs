@@ -1,6 +1,5 @@
 use super::{Preferences, Terminal};
-use crate::appearance::theme;
-use gds::app::AppExt as _;
+use crate::{app::AppExt as _, appearance::theme};
 use gpui_kit::{AppContext, TestAppContext, px, size};
 use std::path::{Path, PathBuf};
 
@@ -12,7 +11,11 @@ fn installed_themes_reach_starting_and_hidden_terminals_without_paint(cx: &mut T
     cx.update(|cx| {
         gpui_kit::init(cx);
         cx.gds().tasks().init_test(false);
-        theme::apply(&theme::Appearance::default(), cx).expect("initial theme");
+        cx.gds()
+            .appearance()
+            .theme()
+            .apply(&theme::Appearance::default())
+            .expect("initial theme");
     });
     let shell = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|path| path.join("sh"))
@@ -62,14 +65,14 @@ dd bs=1 count=25 of=second.reply 2>/dev/null
 
 fn install(mode: theme::ModePreference, cx: &mut TestAppContext) -> String {
     cx.update(|cx| {
-        theme::apply(
-            &theme::Appearance {
+        cx.gds()
+            .appearance()
+            .theme()
+            .apply(&theme::Appearance {
                 mode,
                 ..Default::default()
-            },
-            cx,
-        )
-        .expect("install theme");
+            })
+            .expect("install theme");
         let colors = crate::ui::terminal::view::palette::Palette::new(cx).query_colors();
         let color = colors[alacritty_terminal::vte::ansi::NamedColor::Foreground as usize];
         format!(

@@ -7,6 +7,6 @@ mod pages;
 mod shared;
 mod widgets;
 
-fn main() -> anyhow::Result<std::process::ExitCode> {
+fn main() -> std::process::ExitCode {
     app::run()
 }

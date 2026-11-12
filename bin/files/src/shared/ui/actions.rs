@@ -1,5 +1,6 @@
 //! Files commands and their workspace-specific default key bindings.
 
+use gds::app::AppExt as _;
 use gds::ui::Shortcut;
 pub use gds::ui::actions::{Cancel, CloseAllNotifications, CloseNotification, FocusNotifications};
 use gpui_kit::*;
@@ -325,7 +326,8 @@ impl Command {
         window.highest_precedence_binding_for_action_in_context(action.as_ref(), context)
     }
 
-    /// The default keystroke for this command, as registered by [`register`].
+    /// The default keystroke for this command, as registered by
+    /// [`crate::shared::app::Files::register_actions`].
     pub fn default_stroke(self) -> &'static str {
         match self {
             Self::Menu => "alt-m",
@@ -390,7 +392,8 @@ impl Command {
 
     /// Extra strokes that run the same action.
     ///
-    /// [`register`] adds them before [`Self::default_stroke`], so the primary
+    /// [`crate::shared::app::Files::register_actions`] adds them before
+    /// [`Self::default_stroke`], so the primary
     /// stroke stays the highest-precedence binding that keycaps, tooltips,
     /// Alt hints and the settings page display.
     pub fn compatibility_strokes(self) -> &'static [&'static str] {
@@ -416,10 +419,13 @@ impl Command {
     }
 }
 
-pub fn register(cx: &mut App) {
-    let bindings = bindings(cx);
-    cx.bind_keys(bindings);
-    gds::ui::dialog::register(cx);
+impl crate::shared::app::Files<&mut App> {
+    pub(crate) fn register_actions(&mut self) {
+        let cx = self.app();
+        let bindings = bindings(cx);
+        cx.bind_keys(bindings);
+        cx.gds().ui().register_dialogs();
+    }
 }
 
 /// Every bundled binding, in precedence order: compatibility aliases first,

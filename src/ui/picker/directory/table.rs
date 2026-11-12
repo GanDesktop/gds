@@ -1,9 +1,7 @@
 use super::*;
 use crate::{
-    appearance::{
-        theme::Colors,
-        tokens::{self, DataListStyle},
-    },
+    app::AppExt as _,
+    appearance::tokens::{self, DataListStyle},
     i18n::t,
 };
 use gds_uim::el;
@@ -72,7 +70,11 @@ impl TableDelegate for Directories {
         cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
         let color = if self.selected == Some(index) {
-            Colors::current(cx).selection_foreground
+            cx.gds_ro()
+                .appearance()
+                .theme()
+                .colors()
+                .selection_foreground
         } else {
             cx.theme().foreground
         };

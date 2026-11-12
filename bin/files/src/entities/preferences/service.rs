@@ -4,19 +4,11 @@ use super::{Preferences, api, presentation};
 use gds::app::AppExt as _;
 use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
 use std::{
+    ops::Deref,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 use tokio::sync::mpsc;
-
-pub(crate) struct Current(pub Preferences);
-impl Global for Current {}
-
-impl Current {
-    fn get(cx: &App) -> Preferences {
-        cx.global::<Self>().0.clone()
-    }
-}
 
 pub(crate) struct SaveFailed(pub String);
 
@@ -34,14 +26,15 @@ struct Installed(Entity<Service>);
 impl Global for Installed {}
 
 pub(crate) struct Service {
+    current: Preferences,
     queue: Queue,
     _updates: Task<()>,
 }
 impl EventEmitter<SaveFailed> for Service {}
 
 impl Service {
-    fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
-        let tasks = cx.gds().tasks().scope();
+    fn new(preferences: Preferences, path: PathBuf, cx: &mut Context<Self>) -> Self {
+        let tasks = cx.gds_ro().tasks().scope();
         let (sender, mut receiver) = mpsc::unbounded_channel::<Preferences>();
         let queue = Arc::new(Mutex::new(Some(sender)));
         let closing = queue.clone();
@@ -78,16 +71,17 @@ impl Service {
             }
         });
         Self {
+            current: preferences,
             queue,
             _updates: updates,
         }
     }
 
-    fn update(&self, preferences: Preferences, cx: &mut App) -> Result<(), Error> {
-        let prepared = presentation::Prepared::new(&preferences, &Current::get(cx), cx)?;
+    fn update(&mut self, preferences: Preferences, cx: &mut Context<Self>) -> Result<(), Error> {
+        let prepared = presentation::Prepared::new(&preferences, &self.current, cx)?;
         let queue = self.queue.lock().expect("preferences queue lock");
         let sender = queue.as_ref().ok_or(Error::Closed)?;
-        if cx.gds().tasks().is_shutting_down() || sender.is_closed() {
+        if cx.gds_ro().tasks().is_shutting_down() || sender.is_closed() {
             return Err(Error::Closed);
         }
         // Persist failures leave this accepted snapshot active in every window.
@@ -96,35 +90,42 @@ impl Service {
             .send(preferences.clone())
             .map_err(|_| Error::Closed)?;
         prepared.install(&preferences, cx);
-        gds::appearance::theme::HotReload::get(cx).update(cx, |reload, cx| {
-            reload.configure(preferences.appearance.clone(), cx);
-        });
-        if cx.global::<Current>().0 != preferences {
-            cx.set_global(Current(preferences));
+        cx.gds()
+            .appearance()
+            .theme()
+            .configure_hot_reload(preferences.appearance.clone());
+        if self.current != preferences {
+            self.current = preferences;
+            cx.notify();
         }
         Ok(())
     }
 }
 
-pub(crate) trait PreferencesExt {
-    fn preferences(&mut self) -> Accessor<'_>;
+#[derive(Clone, Copy)]
+pub(crate) struct Accessor<C> {
+    cx: C,
 }
 
-impl PreferencesExt for gds::app::Gds<'_> {
-    fn preferences(&mut self) -> Accessor<'_> {
-        Accessor { cx: self.app() }
+impl<C> crate::shared::app::Files<C> {
+    pub(crate) fn preferences(self) -> Accessor<C> {
+        Accessor {
+            cx: self.into_inner(),
+        }
     }
 }
 
-pub(crate) struct Accessor<'a> {
-    cx: &'a mut App,
-}
-
-impl Accessor<'_> {
+impl<C: Deref<Target = App>> Accessor<C> {
     pub(crate) fn current(&self) -> Preferences {
-        Current::get(self.cx)
+        self.service().read(&self.cx).current.clone()
     }
 
+    pub(crate) fn service(&self) -> Entity<Service> {
+        self.cx.global::<Installed>().0.clone()
+    }
+}
+
+impl Accessor<&mut App> {
     /// # Errors
     /// Reports an unavailable application configuration directory.
     pub(crate) fn initialize(
@@ -139,8 +140,7 @@ impl Accessor<'_> {
             !self.cx.has_global::<Installed>(),
             "preferences already initialized"
         );
-        self.cx.set_global(Current(preferences));
-        let service = self.cx.new(|cx| Service::new(path, cx));
+        let service = self.cx.new(|cx| Service::new(preferences, path, cx));
         self.cx.set_global(Installed(service.clone()));
         service
     }
@@ -148,7 +148,7 @@ impl Accessor<'_> {
     /// # Errors
     /// Rejects invalid presentation values or updates during shutdown.
     pub(crate) fn update(&mut self, preferences: Preferences) -> Result<(), Error> {
-        let service = self.cx.global::<Installed>().0.clone();
+        let service = self.service();
         service.update(self.cx, |service, cx| service.update(preferences, cx))
     }
 
@@ -157,7 +157,7 @@ impl Accessor<'_> {
     /// # Errors
     /// Rejects invalid presentation values or updates during shutdown.
     pub(crate) fn edit(&mut self, edit: impl FnOnce(&mut Preferences)) -> Result<(), Error> {
-        let mut preferences = Current::get(self.cx);
+        let mut preferences = self.current();
         edit(&mut preferences);
         self.update(preferences)
     }

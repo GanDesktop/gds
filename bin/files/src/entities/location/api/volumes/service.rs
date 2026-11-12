@@ -1,6 +1,8 @@
+use gds::app::AppExt as _;
 use gds::service::task_manager::Scope;
 use std::{
     collections::HashMap,
+    ops::Deref,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -50,21 +52,39 @@ pub struct Service {
     _updates: Task<()>,
 }
 
-impl Service {
-    pub fn initialize(tasks: Scope, cx: &mut App) -> Entity<Self> {
+#[derive(Clone, Copy)]
+pub(crate) struct Accessor<C> {
+    cx: C,
+}
+
+impl<C> crate::shared::app::Files<C> {
+    pub(crate) fn volumes(self) -> Accessor<C> {
+        Accessor {
+            cx: self.into_inner(),
+        }
+    }
+}
+
+impl<C: Deref<Target = App>> Accessor<C> {
+    pub(crate) fn service(&self) -> Entity<Service> {
+        self.cx.global::<SharedService>().0.clone()
+    }
+}
+
+impl Accessor<&mut App> {
+    pub(crate) fn initialize(&mut self) -> Entity<Service> {
         assert!(
-            !cx.has_global::<SharedService>(),
+            !self.cx.has_global::<SharedService>(),
             "volumes already initialized"
         );
-        let service = cx.new(|cx| Self::new(tasks, cx));
-        cx.set_global(SharedService(service.clone()));
+        let tasks = self.cx.gds_ro().tasks().scope();
+        let service = self.cx.new(|cx| Service::new(tasks, cx));
+        self.cx.set_global(SharedService(service.clone()));
         service
     }
+}
 
-    pub fn get(cx: &App) -> Entity<Self> {
-        cx.global::<SharedService>().0.clone()
-    }
-
+impl Service {
     fn new(tasks: Scope, cx: &mut Context<Self>) -> Self {
         let last_observation = Instant::now();
         let (sender, mut receiver) = mpsc::channel(16);

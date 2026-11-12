@@ -41,7 +41,7 @@ pub(crate) fn run() -> Result<()> {
         .with_assets(assets::Assets)
         .run(move |cx| {
             cx.gds().initialize(tasks.clone(), logs);
-            gds::appearance::motion::follow_system(&tasks, cx);
+            cx.gds().appearance().motion().follow_system();
             configuration::init(args.settings_file, cx);
             let profiles = routing::shared(cx);
             let server = match profiles.read(cx).startup_target(args.server) {

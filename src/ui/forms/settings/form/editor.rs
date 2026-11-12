@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use super::{Choice, Field, Kind, Model};
 use crate::{
+    app::AppExt as _,
     i18n,
     ui::{self, settings::*},
 };
@@ -169,7 +170,7 @@ impl<T: Model> Editor<T> {
             value,
             fields,
             controls,
-            language: i18n::language(cx),
+            language: cx.gds_ro().i18n().language(),
             _subscriptions: subscriptions,
         }
     }
@@ -180,7 +181,7 @@ impl<T: Model> Editor<T> {
 
     /// Application acceptance or rollback synchronizes native widgets without emitting changes.
     pub fn set_value(&mut self, value: T, window: &mut Window, cx: &mut Context<Self>) {
-        if self.value == value && self.language == i18n::language(cx) {
+        if self.value == value && self.language == cx.gds_ro().i18n().language() {
             return;
         }
         self.value = value;
@@ -190,7 +191,7 @@ impl<T: Model> Editor<T> {
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.language = i18n::language(cx);
+        self.language = cx.gds_ro().i18n().language();
         for (field, control) in self.fields.iter().zip(&mut self.controls) {
             let current = (field.get)(&self.value);
             match control {
@@ -311,7 +312,7 @@ impl<T: Model> Editor<T> {
                         .small()
                         .w_full()
                         .aria_label(label)
-                        .bg(crate::appearance::theme::Colors::current(cx).content)),
+                        .bg(cx.gds_ro().appearance().theme().colors().content)),
                 ]
             }
             .into_any_element(),
@@ -344,7 +345,7 @@ impl<T: Model> Editor<T> {
 
 impl<T: Model> Render for Editor<T> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.language != i18n::language(cx) {
+        if self.language != cx.gds_ro().i18n().language() {
             self.sync(window, cx);
         }
         let mut rows = Vec::new();
