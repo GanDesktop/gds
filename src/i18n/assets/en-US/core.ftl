@@ -22,6 +22,8 @@ form-language = Language
 form-time-format = Time format
 form-time-relative = Relative
 form-time-absolute = Absolute
+form-number-not-finite = Number must be finite
+form-number-out-of-range = Number is outside the field's representable range
 
 gds-thumbnail-loading = Loading preview…
 gds-thumbnail-too-large = This image is too large to preview

@@ -4,9 +4,9 @@ use std::{cell::Cell, rc::Rc};
 
 use crate::app::AppExt as _;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Decorations, IntoElement, MouseButton, ParentElement, RenderOnce,
-    SharedString, Styled, TestSupportExt, Window, WindowControlArea, WindowDecorations,
-    WindowOptions,
+    AnyElement, App, ClickEvent, Decorations, Div, IntoElement, MouseButton, ParentElement,
+    RenderOnce, SharedString, Stateful, Styled, TestSupportExt, Window, WindowControlArea,
+    WindowDecorations, WindowOptions,
     assets::IconName,
     component::{ActiveTheme, Icon, InteractiveElementExt, Sizable, button::ButtonVariants},
     div,
@@ -239,45 +239,102 @@ impl ParentElement for TitleBar {
     }
 }
 
+#[derive(Default)]
+pub(super) struct DragBarState {
+    dragging: Cell<bool>,
+    press_allowed: Cell<bool>,
+}
+
+impl DragBarState {
+    pub(super) fn mouse_down(&self, default_prevented: bool) {
+        let allowed = !default_prevented;
+        self.dragging.set(allowed);
+        self.press_allowed.set(allowed);
+    }
+
+    pub(super) fn mouse_up(&self) {
+        self.dragging.set(false);
+    }
+
+    pub(super) fn mouse_down_out(&self) {
+        self.dragging.set(false);
+        self.press_allowed.set(false);
+    }
+
+    pub(super) fn should_start_window_move(&self, is_left_button_held: bool) -> bool {
+        self.dragging.replace(false) && is_left_button_held
+    }
+
+    pub(super) fn take_double_click(&self, default_prevented: bool) -> bool {
+        self.press_allowed.replace(false) && !default_prevented
+    }
+}
+
+fn handle_titlebar_double_click(window: &mut Window) {
+    if cfg!(target_os = "macos") {
+        window.titlebar_double_click();
+    } else if window.window_controls().maximize {
+        window.zoom_window();
+    }
+}
+
+pub(super) fn drag_bar_interactions(
+    element: Stateful<Div>,
+    drag_state_id: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
+    let state = window
+        .use_keyed_state(drag_state_id, cx, |_, _| Rc::new(DragBarState::default()))
+        .read(cx)
+        .clone();
+    let down = state.clone();
+    let up = state.clone();
+    let outside = state.clone();
+    let move_state = state.clone();
+    let mut element = element
+        .window_control_area(WindowControlArea::Drag)
+        .on_mouse_down(MouseButton::Left, move |_, window, _| {
+            down.mouse_down(window.default_prevented());
+        })
+        .on_mouse_up(MouseButton::Left, move |_, _, _| up.mouse_up())
+        .on_mouse_down_out(move |_, _, _| outside.mouse_down_out())
+        .on_mouse_move(move |event, window, _| {
+            if move_state.should_start_window_move(event.dragging()) {
+                window.start_window_move();
+            }
+        })
+        .on_double_click(move |_, window, _| {
+            if state.take_double_click(window.default_prevented()) {
+                handle_titlebar_double_click(window);
+            }
+        });
+    if cfg!(target_os = "linux")
+        && matches!(window.window_decorations(), Decorations::Client { .. })
+    {
+        element = element.on_mouse_down(MouseButton::Right, |event, window, _| {
+            if !window.default_prevented() {
+                window.show_window_menu(event.position);
+            }
+        });
+    }
+    element
+}
+
 impl RenderOnce for TitleBar {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let dragging = window
-            .use_state(cx, |_, _| Rc::new(Cell::new(false)))
-            .read(cx)
-            .clone();
-        let down = dragging.clone();
-        let up = dragging.clone();
-        let outside = dragging.clone();
-        let mut title = div()
-            .id("title-bar-content")
-            .flex()
-            .items_center()
-            .flex_1()
-            .h_full()
-            .text_size(crate::appearance::tokens::SMALL)
-            .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, move |_, _, _| down.set(true))
-            .on_mouse_up(MouseButton::Left, move |_, _, _| up.set(false))
-            .on_mouse_down_out(move |_, _, _| outside.set(false))
-            .on_mouse_move(move |_, window, _| {
-                if dragging.replace(false) {
-                    window.start_window_move();
-                }
-            })
-            .on_double_click(|_, window, _| {
-                if cfg!(target_os = "macos") {
-                    window.titlebar_double_click();
-                } else if window.window_controls().maximize {
-                    window.zoom_window();
-                }
-            });
-        if cfg!(target_os = "linux")
-            && matches!(window.window_decorations(), Decorations::Client { .. })
-        {
-            title = title.on_mouse_down(MouseButton::Right, |event, window, _| {
-                window.show_window_menu(event.position)
-            });
-        }
+        let title = drag_bar_interactions(
+            div()
+                .id("title-bar-content")
+                .flex()
+                .items_center()
+                .flex_1()
+                .h_full()
+                .text_size(crate::appearance::tokens::SMALL),
+            "title-bar-drag-state",
+            window,
+            cx,
+        );
         div()
             .id("title-bar")
             .flex()

@@ -135,7 +135,87 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
                     directory: PathBuf::from("/tmp")
                 }
             );
+            drop(receiver);
+            let closing =
+                Server::open_existing(APP_BUS_NAME, std::path::Path::new("/tmp"), "closed")
+                    .await
+                    .unwrap_err();
+            assert!(
+                closing.to_string().contains("file manager is closing"),
+                "unexpected error: {closing}"
+            );
             other._connection.close().await.expect("close Files");
             client.close().await.expect("close other provider");
+        });
+}
+
+#[test]
+fn launcher_interface_constant_and_name_has_no_owner_retry() {
+    assert_eq!(
+        <Launcher as zbus::object_server::Interface>::name().as_str(),
+        LAUNCHER_INTERFACE
+    );
+    assert_eq!(
+        <Interface as zbus::object_server::Interface>::name().as_str(),
+        BUS_NAME
+    );
+
+    tokio::runtime::Runtime::new()
+        .expect("Tokio")
+        .block_on(async {
+            let mut requests = 0usize;
+            let mut owner_queries = 0usize;
+            let resolved = resolve_provider_conflict(
+                || {
+                    requests += 1;
+                    let attempt = requests;
+                    async move {
+                        if attempt == 1 {
+                            Err(zbus::Error::NameTaken)
+                        } else {
+                            Ok(RequestNameReply::PrimaryOwner)
+                        }
+                    }
+                },
+                || {
+                    owner_queries += 1;
+                    async { Err(zbus::fdo::Error::NameHasNoOwner("owner exited".into())) }
+                },
+            )
+            .await
+            .expect("retry after NameHasNoOwner should claim bus name");
+            assert_eq!(resolved, None);
+            assert_eq!(requests, 2);
+            assert_eq!(owner_queries, 1);
+
+            let mut requests = 0usize;
+            let conflict = resolve_provider_conflict(
+                || {
+                    requests += 1;
+                    async { Err(zbus::Error::NameTaken) }
+                },
+                || {
+                    let first = owner_queries == 1;
+                    owner_queries += 1;
+                    async move {
+                        if first {
+                            Err(zbus::fdo::Error::NameHasNoOwner("owner exited".into()))
+                        } else {
+                            Ok(":1.42".to_string())
+                        }
+                    }
+                },
+            )
+            .await
+            .expect("conflict after retry should report new owner");
+            assert_eq!(conflict.as_deref(), Some(":1.42"));
+            assert_eq!(requests, 2);
+
+            let failed = resolve_provider_conflict(
+                || async { Err(zbus::Error::NameTaken) },
+                || async { Err(zbus::fdo::Error::NameHasNoOwner("flapping".into())) },
+            )
+            .await;
+            assert!(matches!(failed, Err(Error::Bus(_))));
         });
 }

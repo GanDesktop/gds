@@ -357,45 +357,69 @@ fn application_quit_waits_for_workers_and_rejects_later_spawns() {
         .build()
         .expect("test executor");
     let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
-    const CHILD_ENV: &str = "GDS_TERMINAL_QUIT_BARRIER_TEST_CHILD";
-    if std::env::var_os(CHILD_ENV).is_none() {
-        // The registry's shutdown is intentionally irreversible; isolate it
-        // from the test harness's other concurrently running session tests.
-        let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args(["--exact", "service::terminal::session::tests::application_quit_waits_for_workers_and_rejects_later_spawns", "--nocapture"])
-            .env(CHILD_ENV, "1").status().expect("isolated quit test");
-        assert!(status.success());
-        return;
-    }
     let directory = tempfile::tempdir().expect("test directory");
-    let session = Session::spawn(
+    let live_session = Session::spawn(
         &tasks,
         options(
             directory.path().to_owned(),
-            "trap '' HUP; echo $$ > shell.pid; printf READY; while :; do read value; done",
+            "trap '' HUP; echo $$ > live.pid; printf READY; while :; do read value; done",
         ),
     )
-    .expect("spawn PTY");
-    wait_until(|| screen(&session).contains("READY"));
-    let pid: i32 = std::fs::read_to_string(directory.path().join("shell.pid"))
-        .expect("shell pid")
+    .expect("spawn live PTY");
+    let dropped_session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            "trap '' HUP; echo $$ > dropped.pid; printf READY; while :; do read value; done",
+        ),
+    )
+    .expect("spawn dropped PTY");
+    wait_until(|| screen(&live_session).contains("READY"));
+    wait_until(|| screen(&dropped_session).contains("READY"));
+    let live_pid: i32 = std::fs::read_to_string(directory.path().join("live.pid"))
+        .expect("live shell pid")
         .trim()
         .parse()
-        .expect("numeric shell pid");
-    let updates = session.updates();
-    // Weak registry entries must still find workers after UI handles are gone.
-    drop(session);
-    futures_lite::future::block_on(super::shutdown_all());
-    assert!(*updates.borrow());
+        .expect("numeric live shell pid");
+    let dropped_pid: i32 = std::fs::read_to_string(directory.path().join("dropped.pid"))
+        .expect("dropped shell pid")
+        .trim()
+        .parse()
+        .expect("numeric dropped shell pid");
+    let live_updates = live_session.updates();
+    let dropped_updates = dropped_session.updates();
+    drop(dropped_session);
+    runtime.block_on(tasks.shutdown());
+    assert!(*live_updates.borrow());
+    assert!(*dropped_updates.borrow());
+    assert!(!live_session.is_running());
     assert!(
-        !std::path::Path::new(&format!("/proc/{pid}")).exists(),
-        "quit must wait for reap"
+        !std::path::Path::new(&format!("/proc/{live_pid}")).exists(),
+        "scope shutdown must reap active session"
+    );
+    assert!(
+        !std::path::Path::new(&format!("/proc/{dropped_pid}")).exists(),
+        "scope shutdown must wait for dropped session reap"
     );
     assert!(matches!(
         Session::spawn(&tasks, options(directory.path().to_owned(), "exit")),
         Err(Error::Closed)
     ));
-    futures_lite::future::block_on(super::shutdown_all());
+    let fresh = crate::service::task_manager::Scope::with_runtime(&runtime, false);
+    let reopened = Session::spawn(
+        &fresh,
+        options(directory.path().to_owned(), "printf REOPENED; exit 0"),
+    )
+    .expect("new Scope in the same process must accept spawns after shutdown");
+    assert_eq!(
+        wait_for_exit(&reopened),
+        Status::Exited {
+            code: 0,
+            signal: None
+        }
+    );
+    assert!(screen(&reopened).contains("REOPENED"));
+    runtime.block_on(fresh.shutdown());
 }
 
 #[cfg(target_os = "linux")]
@@ -846,4 +870,102 @@ fn input_backpressure_is_atomic() {
     session.terminate();
     session.terminate();
     assert!(matches!(wait_for_exit(&session), Status::Exited { .. }));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn clean_shell_exit_still_reaps_session_background_jobs() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
+    let directory = tempfile::tempdir().expect("test directory");
+    let job_pid_file = directory.path().join("job.pid");
+    let session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            // Redirect stdio so slave PTY hits EOF as soon as the shell exits
+            // while an HUP-ignoring background job remains in the same session.
+            "(trap '' HUP; echo $$ > job.pid; exec sleep 60) </dev/null >/dev/null 2>&1 & while [ ! -s job.pid ]; do sleep 0.01; done; exit 0",
+        ),
+    )
+    .expect("spawn PTY");
+    let updates = session.updates();
+    assert_eq!(
+        wait_for_exit(&session),
+        Status::Exited {
+            code: 0,
+            signal: None
+        }
+    );
+    wait_until(|| *updates.borrow());
+    let job: i32 = std::fs::read_to_string(&job_pid_file)
+        .expect("background job pid")
+        .trim()
+        .parse()
+        .expect("numeric background job pid");
+    wait_until(|| {
+        let stat = std::fs::read_to_string(format!("/proc/{job}/stat"));
+        match stat {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Ok(stat) => stat
+                .rsplit_once(") ")
+                .is_some_and(|(_, fields)| fields.starts_with("Z ")),
+            _ => false,
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn parent_scope_shutdown_cascades_to_child_sessions_and_rejects_cancelled_spawns() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let parent = crate::service::task_manager::Scope::with_runtime(&runtime, false);
+    let child = parent.child();
+    let directory = tempfile::tempdir().expect("test directory");
+    let session = Session::spawn(
+        &child,
+        options(
+            directory.path().to_owned(),
+            "trap '' HUP; echo $$ > shell.pid; printf READY; while :; do read value; done",
+        ),
+    )
+    .expect("spawn PTY in child scope");
+    wait_until(|| screen(&session).contains("READY"));
+    let pid: i32 = std::fs::read_to_string(directory.path().join("shell.pid"))
+        .expect("shell pid")
+        .trim()
+        .parse()
+        .expect("numeric shell pid");
+    let updates = session.updates();
+    runtime.block_on(parent.shutdown());
+    assert!(*updates.borrow());
+    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+    assert!(matches!(
+        Session::spawn(&child, options(directory.path().to_owned(), "exit")),
+        Err(Error::Closed)
+    ));
+    assert!(matches!(
+        Session::spawn(&parent, options(directory.path().to_owned(), "exit")),
+        Err(Error::Closed)
+    ));
+    drop(child);
+    let fresh = crate::service::task_manager::Scope::with_runtime(&runtime, false);
+    let next = Session::spawn(&fresh, options(directory.path().to_owned(), "exit 0"))
+        .expect("spawn in fresh scope");
+    assert_eq!(
+        wait_for_exit(&next),
+        Status::Exited {
+            code: 0,
+            signal: None
+        }
+    );
+    runtime.block_on(fresh.shutdown());
 }

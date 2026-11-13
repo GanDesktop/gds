@@ -130,6 +130,9 @@ impl TableDelegate for Directories {
                     .is_some_and(|page| page.next_cursor.is_some())
         })
     }
+    fn load_more_threshold(&self) -> usize {
+        super::view::TABLE_LOAD_MORE_THRESHOLD
+    }
     fn load_more(&mut self, window: &mut Window, _cx: &mut Context<TableState<Self>>) {
         let picker = self.picker.clone();
         window.on_next_frame(move |window, cx| {

@@ -101,6 +101,9 @@ impl Source {
                         result.metadata = Field::Available(Metadata::File(FileFacts::Audio(
                             audio::Metadata::from_file(&file).into(),
                         )));
+                        if cancel.is_cancelled() {
+                            return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
+                        }
                         thumbnail::cover(&file)
                     })
                 } else {

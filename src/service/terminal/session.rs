@@ -7,7 +7,7 @@ use std::{
     collections::VecDeque,
     path::PathBuf,
     sync::{
-        Arc, Mutex, MutexGuard, OnceLock, Weak,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -276,30 +276,10 @@ impl State {
     }
 }
 
-#[derive(Default)]
-struct Registry {
-    shutting_down: bool,
-    states: Vec<Weak<State>>,
-}
-
-static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
-
 /// Marks completion only after the backend has dropped its PTY handles and reaped.
-/// During startup it is held on the spawning thread, so failed/in-flight spawns
-/// participate in the same application shutdown barrier.
+/// During startup it is held on the spawning thread so failed or cancelled
+/// spawns still report completion before unwinding.
 pub(crate) struct Completion(Arc<State>);
-
-impl Completion {
-    fn register(state: Arc<State>) -> Result<Self, Error> {
-        let mut registry = lock(REGISTRY.get_or_init(Default::default));
-        if registry.shutting_down {
-            return Err(Error::Closed);
-        }
-        registry.states.retain(|state| state.strong_count() != 0);
-        registry.states.push(Arc::downgrade(&state));
-        Ok(Self(state))
-    }
-}
 
 impl Drop for Completion {
     fn drop(&mut self) {
@@ -310,27 +290,6 @@ impl Drop for Completion {
         }
         drop(metadata);
         self.0.updates.send_replace(true);
-    }
-}
-
-/// Permanently stop new spawns and asynchronously wait for all registered PTYs.
-/// Register this future with the application's quit hook, not a window's hide
-/// handler. It includes sessions currently inside the blocking spawn operation.
-pub async fn shutdown_all() {
-    let states = {
-        let mut registry = lock(REGISTRY.get_or_init(Default::default));
-        registry.shutting_down = true;
-        registry
-            .states
-            .iter()
-            .filter_map(Weak::upgrade)
-            .collect::<Vec<_>>()
-    };
-    for state in &states {
-        state.stop();
-    }
-    for state in states {
-        let _ = state.updates.subscribe().wait_for(|stopped| *stopped).await;
     }
 }
 
@@ -475,6 +434,17 @@ impl Session {
         }
         #[cfg(unix)]
         {
+            if tasks.token().is_cancelled() {
+                return Err(Error::Closed);
+            }
+            // Hold a scope admission token across Backend::open so scope.shutdown()
+            // waits for and reaps a session cancelled mid-spawn.
+            let _spawn = tasks
+                .register_named(
+                    "Spawn terminal",
+                    crate::service::task_manager::Execution::Blocking,
+                )
+                .map_err(|_| Error::Closed)?;
             let size = Size::new(options.columns, options.rows, 0, 0)?;
             let (updates, _) = watch::channel(false);
             let state = Arc::new(State {
@@ -490,7 +460,7 @@ impl Session {
                 updates,
                 wake: tokio::sync::Notify::new(),
             });
-            let completion = Completion::register(state.clone())?;
+            let completion = Completion(state.clone());
             let config = size.term_config(options.scrollback);
             let term = Term::new(
                 config,
@@ -505,19 +475,27 @@ impl Session {
                 scrollback: options.scrollback.min(MAX_SCROLLBACK),
             });
             let backend = backend::Backend::open(&options, size)?.with_completion(completion);
-            if shared.state.shutdown.load(Ordering::Acquire) {
+            if tasks.token().is_cancelled() || shared.state.shutdown.load(Ordering::Acquire) {
+                drop(backend);
                 return Err(Error::Closed);
             }
             let worker_shared = shared.clone();
             // Backend::drop also reaps if thread creation fails after spawning.
             let worker_tasks = tasks.clone();
-            tasks
-                .spawn_thread_named(
-                    "Run terminal I/O",
-                    std::thread::Builder::new().name("gds-terminal-io".into()),
-                    move || backend.run(worker_shared, worker_tasks),
-                )
-                .map_err(anyhow::Error::from)?;
+            if let Err(error) = tasks.spawn_thread_named(
+                "Run terminal I/O",
+                std::thread::Builder::new().name("gds-terminal-io".into()),
+                move || backend.run(worker_shared, worker_tasks),
+            ) {
+                if tasks.token().is_cancelled()
+                    || error
+                        .get_ref()
+                        .is_some_and(|inner| inner.is::<crate::service::task_manager::Closed>())
+                {
+                    return Err(Error::Closed);
+                }
+                return Err(anyhow::Error::from(error).into());
+            }
             Ok(Self(Arc::new(Handle { shared })))
         }
     }

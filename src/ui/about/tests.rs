@@ -154,3 +154,16 @@ fn escape_returns_from_license_and_the_close_shortcut_dismisses_the_dialog(
     })
     .expect("About dialog keyboard navigation");
 }
+
+#[gpui_kit::test]
+fn opening_about_multiple_times_binds_keys_only_once(cx: &mut TestAppContext) {
+    let application = Application::cargo("gds-files");
+    cx.update(|cx| {
+        cx.new(|cx| About::new(application, cx));
+        cx.new(|cx| About::new(application, cx));
+        cx.new(|cx| About::new(application, cx));
+        let bindings = cx.key_bindings();
+        let keymap = bindings.borrow();
+        assert_eq!(keymap.bindings_for_action(&super::Back).count(), 2);
+    });
+}

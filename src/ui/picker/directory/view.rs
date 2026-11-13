@@ -18,6 +18,28 @@ use gpui_kit::{
     prelude::*,
 };
 
+/// Maximum height of the picker body inside the modal frame.
+const MAX_PICKER_HEIGHT: f32 = 440.;
+/// Minimum height of the picker body so short windows stay usable.
+const MIN_PICKER_HEIGHT: f32 = 200.;
+/// Extra rows kept beyond the tallest viewport so scroll-driven `DataTable`
+/// prefetch can trigger when a directory only partially fills the viewport.
+const SCROLL_PREFETCH_MARGIN: usize = 9;
+/// Minimum visible rows fetched eagerly before stopping page prefetch.
+///
+/// Exceeds `ceil(MAX_PICKER_HEIGHT / DataListStyle::ROW_HEIGHT)` (`11`) plus
+/// `SCROLL_PREFETCH_MARGIN` (`9`) so filtered or hidden-heavy views overflow the
+/// viewport enough for scroll-driven `TableDelegate::load_more` without draining
+/// every subsequent page.
+pub(super) const MIN_SCROLLABLE_ROWS: usize = (MAX_PICKER_HEIGHT as usize)
+    .div_ceil(DataListStyle::ROW_HEIGHT as usize)
+    + SCROLL_PREFETCH_MARGIN;
+/// Remaining-row scroll-prefetch threshold passed to `TableDelegate`.
+///
+/// Kept strictly smaller than `SCROLL_PREFETCH_MARGIN` so initial renders with
+/// `MIN_SCROLLABLE_ROWS` at scroll top do not immediately trigger `load_more`.
+pub(super) const TABLE_LOAD_MORE_THRESHOLD: usize = 5;
+
 impl DirectoryPicker {
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         el! { .PickerToolbar::default [
@@ -122,8 +144,8 @@ impl DirectoryPicker {
 impl Render for DirectoryPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let height = (window.bounds().size.height - px(190.))
-            .min(px(440.))
-            .max(px(200.));
+            .min(px(MAX_PICKER_HEIGHT))
+            .max(px(MIN_PICKER_HEIGHT));
         let chosen = self
             .selected_entry(cx)
             .map(|entry| entry.location.path.clone())

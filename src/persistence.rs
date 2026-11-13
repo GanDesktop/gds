@@ -73,6 +73,47 @@ fn open_lock(path: &Path) -> io::Result<fs::File> {
     options.open(path)
 }
 
+fn reject_symlink(path: &Path) -> Result<(), Error> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::Symlink(path.into())),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error(path, error)),
+    }
+}
+
+fn lock_open_error(path: &Path, error: io::Error) -> Error {
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(nix::libc::ELOOP) {
+        return Error::Symlink(path.into());
+    }
+    io_error(path, error)
+}
+
+fn check_writable(path: &Path, metadata: &fs::Metadata) -> Result<(), Error> {
+    let readonly = metadata.permissions().readonly();
+    #[cfg(unix)]
+    let readonly = {
+        use std::os::unix::fs::PermissionsExt;
+        // Check mode bits as well as `access(W_OK)` so root-owned test runners
+        // (uid 0) still respect `0o444`/`0o555` fixtures while non-root users
+        // still detect `root`-owned `0o644` files and `EROFS`/ACL mounts.
+        if readonly || metadata.permissions().mode() & 0o222 == 0 {
+            true
+        } else {
+            match nix::unistd::access(path, nix::unistd::AccessFlags::W_OK) {
+                Ok(()) => false,
+                Err(nix::errno::Errno::EACCES | nix::errno::Errno::EROFS) => true,
+                Err(error) => return Err(io_error(path, error.into())),
+            }
+        }
+    };
+    if readonly {
+        return Err(Error::ReadOnly(path.into()));
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct File {
     path: PathBuf,
@@ -114,24 +155,28 @@ impl File {
         let mut lock_path = self.path.as_os_str().to_owned();
         lock_path.push(".lock");
         let lock_path = PathBuf::from(lock_path);
-        let lock = open_lock(&lock_path).map_err(|error| io_error(&lock_path, error))?;
+        reject_symlink(&lock_path)?;
+        let lock = open_lock(&lock_path).map_err(|error| lock_open_error(&lock_path, error))?;
         acquire_lock(&lock).map_err(|error| match error {
             fs::TryLockError::WouldBlock => Error::Busy(self.path.clone()),
             fs::TryLockError::Error(error) => io_error(&lock_path, error),
         })?;
         let _lock = lock;
+        self.writable()?;
         if self.read()?.as_deref() != expected {
             return Err(Error::Conflict(self.path.clone()));
         }
         let mut temporary =
             tempfile::NamedTempFile::new_in(parent).map_err(|error| io_error(parent, error))?;
         if expected.is_some() {
-            let permissions = fs::metadata(&self.path)
-                .map_err(|error| io_error(&self.path, error))?
-                .permissions();
+            let metadata =
+                fs::symlink_metadata(&self.path).map_err(|error| io_error(&self.path, error))?;
+            if metadata.file_type().is_symlink() {
+                return Err(Error::Symlink(self.path.clone()));
+            }
             temporary
                 .as_file()
-                .set_permissions(permissions)
+                .set_permissions(metadata.permissions())
                 .map_err(|error| io_error(&self.path, error))?;
         }
         temporary
@@ -159,33 +204,53 @@ impl File {
     }
 
     fn writable(&self) -> Result<(), Error> {
-        let mut needs_write_permission = true;
-        for path in self
+        match fs::symlink_metadata(&self.path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(Error::Symlink(self.path.clone()));
+                }
+                check_writable(&self.path, &metadata)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io_error(&self.path, error)),
+        }
+
+        let parent = self
             .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let mut needs_write_permission = true;
+        for path in parent
             .ancestors()
             .filter(|path| !path.as_os_str().is_empty())
         {
+            // Ancestor directories may be symlinks (for example NixOS
+            // Impermanence `~/.config -> /persist/...` or macOS `/var`) as long
+            // as they resolve to existing directories.
             let metadata = match fs::symlink_metadata(path) {
+                Ok(link_meta) if link_meta.file_type().is_symlink() => match fs::metadata(path) {
+                    Ok(target_meta) => target_meta,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        return Err(Error::Symlink(path.into()));
+                    }
+                    Err(error) => return Err(io_error(path, error)),
+                },
                 Ok(metadata) => metadata,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(io_error(path, error)),
             };
-            if metadata.file_type().is_symlink() {
-                return Err(Error::Symlink(path.into()));
+            if !metadata.is_dir() {
+                return Err(io_error(
+                    path,
+                    io::Error::other("configuration ancestor is not a directory"),
+                ));
             }
             if needs_write_permission {
-                let readonly = metadata.permissions().readonly();
-                #[cfg(unix)]
-                let readonly = {
-                    use std::os::unix::fs::PermissionsExt;
-                    readonly || metadata.permissions().mode() & 0o222 == 0
-                };
-                if readonly {
-                    return Err(Error::ReadOnly(path.into()));
-                }
+                check_writable(path, &metadata)?;
                 // Only the file and its nearest existing parent need to be writable.
                 // Higher ancestors, such as Fedora's /, only need traversal access.
-                needs_write_permission = !metadata.is_dir();
+                needs_write_permission = false;
             }
         }
         Ok(())

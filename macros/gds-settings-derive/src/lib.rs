@@ -1,7 +1,7 @@
 //! Derive typed field bindings for the shared native settings editor.
 
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as Tokens;
+use proc_macro2::{Span, TokenStream as Tokens};
 use quote::{format_ident, quote};
 use syn::{
     Attribute, Data, DeriveInput, Expr, Fields, LitStr, Type, parse_macro_input, spanned::Spanned,
@@ -16,18 +16,26 @@ pub fn derive_editor(input: TokenStream) -> TokenStream {
 
 #[derive(Default)]
 struct Options {
-    label: Option<LitStr>,
-    help: Option<LitStr>,
-    group: Option<LitStr>,
-    id: Option<LitStr>,
-    kind: Option<LitStr>,
-    skip: bool,
-    min: Option<Expr>,
-    max: Option<Expr>,
-    step: Option<Expr>,
-    scale: Option<Expr>,
-    default: Option<Expr>,
-    unit: Option<LitStr>,
+    label: Option<(LitStr, Span)>,
+    help: Option<(LitStr, Span)>,
+    group: Option<(LitStr, Span)>,
+    id: Option<(LitStr, Span)>,
+    kind: Option<(LitStr, Span)>,
+    skip: Option<Span>,
+    min: Option<(Expr, Span)>,
+    max: Option<(Expr, Span)>,
+    step: Option<(Expr, Span)>,
+    scale: Option<(Expr, Span)>,
+    default: Option<(Expr, Span)>,
+    unit: Option<(LitStr, Span)>,
+}
+
+fn set_option<T>(slot: &mut Option<(T, Span)>, value: T, span: Span) -> syn::Result<()> {
+    if slot.is_some() {
+        return Err(syn::Error::new(span, "duplicate settings UI annotation"));
+    }
+    *slot = Some((value, span));
+    Ok(())
 }
 
 impl Options {
@@ -35,30 +43,62 @@ impl Options {
         let mut result = Self::default();
         for attr in attrs.iter().filter(|a| a.path().is_ident("setting")) {
             attr.parse_nested_meta(|meta| {
+                let span = meta.path.span();
                 let key = meta
                     .path
                     .get_ident()
                     .map(ToString::to_string)
                     .unwrap_or_default();
                 match key.as_str() {
-                    "skip" => result.skip = true,
-                    "label" => result.label = Some(meta.value()?.parse()?),
-                    "help" => result.help = Some(meta.value()?.parse()?),
-                    "group" => result.group = Some(meta.value()?.parse()?),
-                    "id" => result.id = Some(meta.value()?.parse()?),
-                    "kind" => result.kind = Some(meta.value()?.parse()?),
-                    "min" => result.min = Some(meta.value()?.parse()?),
-                    "max" => result.max = Some(meta.value()?.parse()?),
-                    "step" => result.step = Some(meta.value()?.parse()?),
-                    "scale" => result.scale = Some(meta.value()?.parse()?),
-                    "default" => result.default = Some(meta.value()?.parse()?),
-                    "unit" => result.unit = Some(meta.value()?.parse()?),
+                    "skip" => {
+                        if result.skip.is_some() {
+                            return Err(syn::Error::new(span, "duplicate settings UI annotation"));
+                        }
+                        result.skip = Some(span);
+                    }
+                    "label" => set_option(&mut result.label, meta.value()?.parse()?, span)?,
+                    "help" => set_option(&mut result.help, meta.value()?.parse()?, span)?,
+                    "group" => set_option(&mut result.group, meta.value()?.parse()?, span)?,
+                    "id" => set_option(&mut result.id, meta.value()?.parse()?, span)?,
+                    "kind" => set_option(&mut result.kind, meta.value()?.parse()?, span)?,
+                    "min" => set_option(&mut result.min, meta.value()?.parse()?, span)?,
+                    "max" => set_option(&mut result.max, meta.value()?.parse()?, span)?,
+                    "step" => set_option(&mut result.step, meta.value()?.parse()?, span)?,
+                    "scale" => set_option(&mut result.scale, meta.value()?.parse()?, span)?,
+                    "default" => set_option(&mut result.default, meta.value()?.parse()?, span)?,
+                    "unit" => set_option(&mut result.unit, meta.value()?.parse()?, span)?,
                     _ => return Err(meta.error("unknown settings UI annotation")),
                 }
                 Ok(())
             })?;
         }
         Ok(result)
+    }
+
+    fn first_numeric_span(&self) -> Option<Span> {
+        [&self.min, &self.max, &self.step, &self.scale]
+            .into_iter()
+            .flatten()
+            .map(|(_, span)| *span)
+            .next()
+            .or_else(|| self.unit.as_ref().map(|(_, span)| *span))
+    }
+
+    fn first_variant_disallowed_span(&self) -> Option<Span> {
+        [&self.help, &self.group, &self.id, &self.kind]
+            .into_iter()
+            .flatten()
+            .map(|(_, span)| *span)
+            .next()
+            .or_else(|| self.default.as_ref().map(|(_, span)| *span))
+            .or_else(|| self.first_numeric_span())
+    }
+
+    fn first_non_skip_span(&self) -> Option<Span> {
+        self.label
+            .as_ref()
+            .map(|(_, span)| *span)
+            .or_else(|| self.first_variant_disallowed_span())
     }
 }
 
@@ -122,13 +162,19 @@ fn expand(input: DeriveInput) -> syn::Result<Tokens> {
                     continue;
                 }
                 let options = Options::parse(&field.attrs)?;
-                if options.skip {
+                if options.skip.is_some() {
+                    if let Some(other) = options.first_non_skip_span() {
+                        return Err(syn::Error::new(
+                            other,
+                            "#[setting(skip)] cannot be combined with other settings UI annotations",
+                        ));
+                    }
                     continue;
                 }
                 let member = field.ident.as_ref().expect("named field");
                 let ty = &field.ty;
                 let (inner, nullable, type_name) = inner_type(ty)?;
-                let label = options.label.ok_or_else(|| {
+                let (label, _) = options.label.as_ref().ok_or_else(|| {
                     syn::Error::new(
                         field.span(),
                         "editable fields need #[setting(label = \"message-id\")]",
@@ -136,51 +182,90 @@ fn expand(input: DeriveInput) -> syn::Result<Tokens> {
                 })?;
                 let id = options
                     .id
+                    .as_ref()
+                    .map(|(lit, _)| lit.clone())
                     .unwrap_or_else(|| LitStr::new(&member.to_string(), member.span()));
                 if !identities.insert(id.value()) {
                     return Err(syn::Error::new(id.span(), "duplicate settings field id"));
                 }
                 let help = options
                     .help
+                    .as_ref()
+                    .map(|(lit, _)| lit.clone())
                     .unwrap_or_else(|| LitStr::new("", member.span()));
                 let group = options
                     .group
+                    .as_ref()
+                    .map(|(lit, _)| lit.clone())
                     .unwrap_or_else(|| LitStr::new("", member.span()));
-                let kind = match options.kind.as_ref().map(LitStr::value).as_deref() {
-                    Some("font") => quote!(#api::Kind::Font),
-                    Some("language") => quote!(#api::Kind::Language),
-                    Some("text") => quote!(#api::Kind::Text),
-                    Some("string_list") => quote!(#api::Kind::StringList),
-                    Some(_) => {
-                        return Err(syn::Error::new(
-                            field.span(),
-                            "kind must be font, language, text or string_list; primitive types and enums are inferred",
-                        ));
-                    }
+                let (is_number, kind) = match options
+                    .kind
+                    .as_ref()
+                    .map(|(lit, span)| (lit.value(), *span))
+                {
+                    Some((kind, span)) => match kind.as_str() {
+                        "font" => (false, quote!(#api::Kind::Font)),
+                        "language" => (false, quote!(#api::Kind::Language)),
+                        "text" => (false, quote!(#api::Kind::Text)),
+                        "string_list" => (false, quote!(#api::Kind::StringList)),
+                        _ => {
+                            return Err(syn::Error::new(
+                                span,
+                                "kind must be font, language, text or string_list; primitive types and enums are inferred",
+                            ));
+                        }
+                    },
                     None => match type_name.as_str() {
-                        "bool" => quote!(#api::Kind::Toggle),
-                        "String" | "PathBuf" => quote!(#api::Kind::Text),
-                        "Language" => quote!(#api::Kind::Language),
+                        "bool" => (false, quote!(#api::Kind::Toggle)),
+                        "String" | "PathBuf" => (false, quote!(#api::Kind::Text)),
+                        "Language" => (false, quote!(#api::Kind::Language)),
                         "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16"
                         | "u32" | "u64" | "usize" => {
-                            let min = options.min.unwrap_or_else(|| syn::parse_quote!(0.0));
-                            let max = options.max.unwrap_or_else(|| syn::parse_quote!(100.0));
-                            let step = options.step.unwrap_or_else(|| syn::parse_quote!(1.0));
-                            let scale = options.scale.unwrap_or_else(|| syn::parse_quote!(1.0));
+                            let min = options
+                                .min
+                                .as_ref()
+                                .map(|(expr, _)| expr.clone())
+                                .unwrap_or_else(|| syn::parse_quote!(0.0));
+                            let max = options
+                                .max
+                                .as_ref()
+                                .map(|(expr, _)| expr.clone())
+                                .unwrap_or_else(|| syn::parse_quote!(100.0));
+                            let step = options
+                                .step
+                                .as_ref()
+                                .map(|(expr, _)| expr.clone())
+                                .unwrap_or_else(|| syn::parse_quote!(1.0));
+                            let scale = options
+                                .scale
+                                .as_ref()
+                                .map(|(expr, _)| expr.clone())
+                                .unwrap_or_else(|| syn::parse_quote!(1.0));
                             let unit = options
                                 .unit
+                                .as_ref()
+                                .map(|(lit, _)| lit.clone())
                                 .unwrap_or_else(|| LitStr::new("", member.span()));
-                            let integer = if type_name.starts_with('u') {
-                                quote!(#api::Integer::Unsigned)
-                            } else if type_name.starts_with('i') {
-                                quote!(#api::Integer::Signed)
-                            } else {
-                                quote!(#api::Integer::Float)
+                            let integer = match type_name.as_str() {
+                                "i8" => quote!(#api::Integer::I8),
+                                "i16" => quote!(#api::Integer::I16),
+                                "i32" => quote!(#api::Integer::I32),
+                                "i64" => quote!(#api::Integer::I64),
+                                "isize" => quote!(#api::Integer::Isize),
+                                "u8" => quote!(#api::Integer::U8),
+                                "u16" => quote!(#api::Integer::U16),
+                                "u32" => quote!(#api::Integer::U32),
+                                "u64" => quote!(#api::Integer::U64),
+                                "usize" => quote!(#api::Integer::Usize),
+                                _ => quote!(#api::Integer::Float),
                             };
-                            quote!(#api::Kind::Number(#api::Number {
-                                min: (#min) as f64, max: (#max) as f64, step: (#step) as f64,
-                                scale: (#scale) as f64, unit: #unit, integer: #integer,
-                            }))
+                            (
+                                true,
+                                quote!(#api::Kind::Number(#api::Number {
+                                    min: (#min) as f64, max: (#max) as f64, step: (#step) as f64,
+                                    scale: (#scale) as f64, unit: #unit, integer: #integer,
+                                })),
+                            )
                         }
                         "Vec" | "HashMap" | "BTreeMap" | "i128" | "u128" => {
                             return Err(syn::Error::new(
@@ -188,11 +273,20 @@ fn expand(input: DeriveInput) -> syn::Result<Tokens> {
                                 "this field needs a custom editor; leave it unannotated or use #[setting(skip)]",
                             ));
                         }
-                        _ => quote!(#api::Kind::Choice(<#inner as #api::Choices>::choices)),
+                        _ => (
+                            false,
+                            quote!(#api::Kind::Choice(<#inner as #api::Choices>::choices)),
+                        ),
                     },
                 };
-                let default = match options.default {
-                    Some(value) => quote!(Some(|| #api::encode(&(#value)))),
+                if !is_number && let Some(numeric) = options.first_numeric_span() {
+                    return Err(syn::Error::new(
+                        numeric,
+                        "numeric settings annotations (min, max, step, scale, unit) only apply to numeric fields",
+                    ));
+                }
+                let default = match options.default.as_ref() {
+                    Some((value, _)) => quote!(Some(|| #api::encode(&(#value)))),
                     None => quote!(None),
                 };
                 descriptors.push(quote! {
@@ -226,8 +320,20 @@ fn expand(input: DeriveInput) -> syn::Result<Tokens> {
             let mut choices = Vec::new();
             for variant in &data.variants {
                 let options = Options::parse(&variant.attrs)?;
-                if options.skip {
+                if options.skip.is_some() {
+                    if let Some(other) = options.first_non_skip_span() {
+                        return Err(syn::Error::new(
+                            other,
+                            "#[setting(skip)] cannot be combined with other settings UI annotations",
+                        ));
+                    }
                     continue;
+                }
+                if let Some(disallowed) = options.first_variant_disallowed_span() {
+                    return Err(syn::Error::new(
+                        disallowed,
+                        "enum choice variants only support #[setting(label = \"message-id\")] or #[setting(skip)]",
+                    ));
                 }
                 if !matches!(variant.fields, Fields::Unit) {
                     return Err(syn::Error::new(
@@ -235,7 +341,7 @@ fn expand(input: DeriveInput) -> syn::Result<Tokens> {
                         "configuration choices require unit enum variants",
                     ));
                 }
-                let label = options.label.ok_or_else(|| {
+                let (label, _) = options.label.ok_or_else(|| {
                     syn::Error::new(
                         variant.span(),
                         "enum choices need #[setting(label = \"message-id\")]",

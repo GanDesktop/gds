@@ -3371,6 +3371,7 @@ dependencies = [
  "directories",
  "dirs 6.0.0",
  "fluent-bundle",
+ "fluent-syntax",
  "futures",
  "futures-lite",
  "gds-settings-derive",

@@ -54,14 +54,19 @@ impl Sources {
             .iter()
             .flat_map(|path| std::iter::once(path.clone()).chain(resolved_target(path)))
             .collect();
-        let directories: BTreeSet<_> = targets
-            .iter()
+        let mut essential = BTreeSet::new();
+        let mut directories = BTreeSet::new();
+        for target in &targets {
             // A watch on a symlinked directory follows its current inode. Also
             // watch the ancestors so replacing any path component wakes refresh.
-            .flat_map(|path| path.ancestors().skip(1))
-            .filter(|parent| parent.is_dir())
-            .map(ToOwned::to_owned)
-            .collect();
+            let mut parents = target.ancestors().skip(1).filter(|parent| parent.is_dir());
+            if let Some(leaf_parent) = parents.next() {
+                let leaf_parent = leaf_parent.to_path_buf();
+                essential.insert(leaf_parent.clone());
+                directories.insert(leaf_parent);
+                directories.extend(parents.map(Path::to_path_buf));
+            }
+        }
         let targets: Vec<_> = targets.into_iter().collect();
         if targets == self.targets && directories == self.directories {
             return Ok(());
@@ -82,14 +87,26 @@ impl Sources {
                 {
                     let _ = sender.try_send(());
                 }
-                Err(error) => eprintln!("desktop file watcher: {error}"),
+                Err(error) => tracing::warn!(%error, "desktop file watcher error"),
                 _ => {}
             })?;
+        let mut active_directories = directories.clone();
         for directory in &directories {
-            watcher.watch(directory, RecursiveMode::NonRecursive)?;
+            if let Err(error) = watcher.watch(directory, RecursiveMode::NonRecursive) {
+                if matches!(error.kind, notify::ErrorKind::PathNotFound) {
+                    tracing::debug!(?directory, %error, "skipping vanished watch directory");
+                    active_directories.remove(directory);
+                } else if !essential.contains(directory)
+                    && !matches!(error.kind, notify::ErrorKind::MaxFilesWatch)
+                {
+                    tracing::debug!(?directory, %error, "skipping inaccessible watch ancestor");
+                } else {
+                    return Err(error);
+                }
+            }
         }
         self.targets = targets;
-        self.directories = directories;
+        self.directories = active_directories;
         self.watcher = Some(watcher);
         Ok(())
     }

@@ -42,25 +42,19 @@ impl<T> Clone for State<T> {
 }
 
 impl<T> State<T> {
-    fn request(&mut self, requested: bool) -> bool {
+    fn request(&mut self, requested: bool) {
         if requested && matches!(self, Self::NotRequested) {
             *self = Self::Loading;
-            return true;
         }
-        false
     }
 
-    fn from_field<U>(field: Field<U>, convert: impl FnOnce(U) -> Result<Arc<T>, Error>) -> Self {
-        let result = match field {
-            Field::NotRequested => return Self::NotRequested,
-            Field::Unavailable => return Self::Unavailable,
-            Field::Failed(error) => Err(error),
-            Field::Available(value) => convert(value),
-        };
-        match result {
-            Ok(value) => Self::Ready(value),
-            Err(Error::TooLarge) => Self::TooLarge,
-            Err(error) => {
+    fn from_field<U>(field: Field<U>, convert: impl FnOnce(U) -> Arc<T>) -> Self {
+        match field {
+            Field::NotRequested => Self::NotRequested,
+            Field::Unavailable => Self::Unavailable,
+            Field::Available(value) => Self::Ready(convert(value)),
+            Field::Failed(Error::TooLarge) => Self::TooLarge,
+            Field::Failed(error) => {
                 tracing::debug!(%error, "file inspection unavailable");
                 Self::Failed(error.to_string().into())
             }
@@ -89,8 +83,8 @@ impl Snapshot {
 
     fn from_inspection(inspection: Inspection) -> Self {
         Self {
-            metadata: State::from_field(inspection.metadata, |metadata| Ok(Arc::new(metadata))),
-            thumbnail: State::from_field(inspection.thumbnail, Cache::decode),
+            metadata: State::from_field(inspection.metadata, Arc::new),
+            thumbnail: State::from_field(inspection.thumbnail, Cache::render_image),
         }
     }
 }
@@ -146,11 +140,12 @@ impl Cache {
             bytes: 0,
         });
         entry.touched = self.clock;
-        let metadata = entry.snapshot.metadata.request(request.metadata());
-        let thumbnail = entry.snapshot.thumbnail.request(request.thumbnail());
+        entry.snapshot.metadata.request(request.metadata());
+        entry.snapshot.thumbnail.request(request.thumbnail());
+        let pending = !entry.running && entry.snapshot.pending().is_some();
         let snapshot = entry.snapshot.clone();
-        if (metadata || thumbnail) && !entry.running {
-            self.pending.push_back(source);
+        if pending {
+            self.enqueue_pending(source);
         }
         self.trim(cx);
         self.pump(cx);
@@ -178,21 +173,26 @@ impl Cache {
             .retain(|source| self.entries.contains_key(source));
     }
 
-    /// # Errors
-    /// Reports malformed generated PNGs.
-    fn decode(thumbnail: Thumbnail) -> Result<Arc<RenderImage>, Error> {
-        let mut pixels =
-            image::load_from_memory_with_format(&thumbnail.bytes, image::ImageFormat::Png)?
-                .into_rgba8();
+    fn render_image(thumbnail: Thumbnail) -> Arc<RenderImage> {
+        let mut pixels = thumbnail.into_rgba();
         for pixel in pixels.pixels_mut() {
             pixel.0.swap(0, 2);
         }
-        Ok(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])))
+        Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]))
+    }
+
+    fn enqueue_pending(&mut self, source: Source) {
+        self.pending.retain(|queued| queued != &source);
+        self.pending.push_back(source);
+    }
+
+    fn next_pending(&mut self) -> Option<Source> {
+        self.pending.pop_back()
     }
 
     fn pump(&mut self, cx: &mut Context<Self>) {
         while self.running < WORKERS {
-            let Some(source) = self.pending.pop_front() else {
+            let Some(source) = self.next_pending() else {
                 break;
             };
             let Some(entry) = self.entries.get_mut(&source).filter(|entry| !entry.running) else {
@@ -246,7 +246,7 @@ impl Cache {
                         }
                         // A request for the other field may have arrived while this job ran.
                         if entry.snapshot.pending().is_some() {
-                            cache.pending.push_back(source);
+                            cache.enqueue_pending(source);
                         }
                     }
                     cache.trim(cx);

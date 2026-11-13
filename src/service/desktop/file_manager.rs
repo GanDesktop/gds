@@ -8,6 +8,7 @@ use zbus::{
 
 pub const BUS_NAME: &str = "org.freedesktop.FileManager1";
 pub const OBJECT_PATH: &str = "/org/freedesktop/FileManager1";
+pub const LAUNCHER_INTERFACE: &str = "io.github.GanDesktop.Files";
 
 /// Desktop requests carry the paths appropriate to each operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,26 +51,29 @@ fn local_paths(uris: &[String]) -> zbus::fdo::Result<Vec<PathBuf>> {
     uris.iter().map(|uri| local_path(uri)).collect()
 }
 
-struct Interface {
-    sender: mpsc::Sender<Command>,
+async fn dispatch(
+    sender: &mpsc::Sender<Command>,
+    request: Request,
+    startup_id: String,
+) -> zbus::fdo::Result<()> {
+    sender
+        .send(Command {
+            request,
+            startup_id,
+        })
+        .await
+        .map_err(|_| zbus::fdo::Error::Failed("file manager is closing".into()))
 }
 
-impl Interface {
-    async fn dispatch(&self, request: Request, startup_id: String) -> zbus::fdo::Result<()> {
-        self.sender
-            .send(Command {
-                request,
-                startup_id,
-            })
-            .await
-            .map_err(|_| zbus::fdo::Error::Failed("Files is closing".into()))
-    }
+struct Interface {
+    sender: mpsc::Sender<Command>,
 }
 
 #[zbus::interface(name = "org.freedesktop.FileManager1")]
 impl Interface {
     async fn show_folders(&self, uris: Vec<String>, startup_id: String) -> zbus::fdo::Result<()> {
-        self.dispatch(
+        dispatch(
+            &self.sender,
             Request::ShowFolders {
                 directories: local_paths(&uris)?,
             },
@@ -78,7 +82,8 @@ impl Interface {
         .await
     }
     async fn show_items(&self, uris: Vec<String>, startup_id: String) -> zbus::fdo::Result<()> {
-        self.dispatch(
+        dispatch(
+            &self.sender,
             Request::ShowItems {
                 paths: local_paths(&uris)?,
             },
@@ -91,7 +96,8 @@ impl Interface {
         uris: Vec<String>,
         startup_id: String,
     ) -> zbus::fdo::Result<()> {
-        self.dispatch(
+        dispatch(
+            &self.sender,
             Request::ShowProperties {
                 paths: local_paths(&uris)?,
             },
@@ -108,16 +114,42 @@ struct Launcher {
 #[zbus::interface(name = "io.github.GanDesktop.Files")]
 impl Launcher {
     async fn open_window(&self, uri: String, startup_id: String) -> zbus::fdo::Result<()> {
-        let command = Command {
-            request: Request::NewWindow {
+        dispatch(
+            &self.sender,
+            Request::NewWindow {
                 directory: local_path(&uri)?,
             },
             startup_id,
-        };
-        self.sender
-            .send(command)
-            .await
-            .map_err(|_| zbus::fdo::Error::Failed("Files is closing".into()))
+        )
+        .await
+    }
+}
+
+async fn resolve_provider_conflict<Req, ReqFut, Own, OwnFut>(
+    mut request_name: Req,
+    mut get_owner: Own,
+) -> Result<Option<String>, Error>
+where
+    Req: FnMut() -> ReqFut,
+    ReqFut: Future<Output = zbus::Result<RequestNameReply>>,
+    Own: FnMut() -> OwnFut,
+    OwnFut: Future<Output = zbus::fdo::Result<String>>,
+{
+    let mut retried = false;
+    loop {
+        match request_name().await {
+            Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => {
+                return Ok(None);
+            }
+            Ok(_) | Err(zbus::Error::NameTaken) => match get_owner().await {
+                Ok(owner) => return Ok(Some(owner)),
+                Err(zbus::fdo::Error::NameHasNoOwner(_)) if !retried => {
+                    retried = true;
+                }
+                Err(error) => return Err(zbus::Error::from(error).into()),
+            },
+            Err(error) => return Err(error.into()),
+        }
     }
 }
 
@@ -148,22 +180,21 @@ impl Server {
             Ok(_) | Err(zbus::Error::NameTaken) => return Err(Error::AlreadyRunning),
             Err(error) => return Err(error.into()),
         }
-        let provider_conflict = match connection
-            .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())
-            .await
-        {
-            Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => None,
-            Ok(_) | Err(zbus::Error::NameTaken) => {
-                let dbus = zbus::fdo::DBusProxy::new(&connection).await?;
-                Some(
-                    dbus.get_name_owner(BUS_NAME.try_into().expect("standard bus name"))
-                        .await
-                        .map_err(zbus::Error::from)?
-                        .to_string(),
-                )
-            }
-            Err(error) => return Err(error.into()),
-        };
+        let conn = &connection;
+        let provider_conflict = resolve_provider_conflict(
+            || conn.request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into()),
+            || {
+                let conn = conn;
+                async move {
+                    let dbus = zbus::fdo::DBusProxy::new(conn).await?;
+                    let owner = dbus
+                        .get_name_owner(BUS_NAME.try_into().expect("standard bus name"))
+                        .await?;
+                    Ok(owner.to_string())
+                }
+            },
+        )
+        .await?;
         Ok(Self {
             _connection: connection,
             provider_conflict,
@@ -186,7 +217,7 @@ impl Server {
             .call_method(
                 Some(app_bus_name),
                 OBJECT_PATH,
-                Some("io.github.GanDesktop.Files"),
+                Some(LAUNCHER_INTERFACE),
                 "OpenWindow",
                 &(uri.as_str(), startup_id),
             )

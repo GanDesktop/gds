@@ -340,3 +340,156 @@ fn changing_terminal_typography_updates_existing_grid_metrics(cx: &mut TestAppCo
     .expect("terminal typography update");
     session.terminate();
 }
+
+#[gpui_kit::test]
+fn cursor_blink_task_tracks_focus_preferences_and_reduced_motion(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
+        cx.gds().ui().init_terminal();
+        cx.gds()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
+    });
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: std::env::temp_dir(),
+            args: vec!["-c".into(), "sleep 60".into()],
+            ..SpawnOptions::default()
+        },
+    )
+    .expect("local shell for blink lifecycle test");
+    let mut host = None;
+    let window = cx.open_window(size(px(800.), px(480.)), |window, cx| {
+        let view = cx.new(|cx| View::new(session.clone(), Preferences::default(), window, cx));
+        let entity = cx.new(|cx| Host {
+            view,
+            focus: cx.focus_handle().tab_stop(true),
+            next_focus: cx.focus_handle().tab_stop(true),
+            workspace_actions: 0,
+            settings: 0,
+            toggles: 0,
+            exits: 0,
+        });
+        host = Some(entity.clone());
+        Root::new(entity, window, cx)
+    });
+    let host = host.expect("host entity");
+    cx.update_window(window.into(), |_, window, _| window.activate_window())
+        .expect("activate terminal window");
+    cx.run_until_parked();
+
+    cx.update_window(window.into(), |_, window, cx| {
+        let terminal = host.read(cx).view.clone();
+        window.render_frame(cx);
+        {
+            let view = terminal.read(cx);
+            assert!(!view.focused);
+            assert!(view._blink.is_none());
+            assert!(view.cursor_on);
+        }
+
+        let inside = terminal.read(cx).focus_handle();
+        inside.focus(window, cx);
+        window.render_frame(cx);
+        {
+            let view = terminal.read(cx);
+            assert!(view.focused);
+            assert!(view._blink.is_some());
+            assert!(view.cursor_on);
+        }
+
+        terminal.update(cx, |view, cx| {
+            view.cursor_on = false;
+            view.set_preferences(
+                Preferences {
+                    cursor_blink: false,
+                    ..Preferences::default()
+                },
+                cx,
+            );
+        });
+        {
+            let view = terminal.read(cx);
+            assert!(view._blink.is_none());
+            assert!(view.cursor_on);
+        }
+
+        terminal.update(cx, |view, cx| {
+            view.set_preferences(Preferences::default(), cx);
+        });
+        assert!(terminal.read(cx)._blink.is_some());
+
+        terminal.update(cx, |view, _| view.cursor_on = false);
+        cx.set_reduce_motion(true);
+        window.refresh();
+        window.render_frame(cx);
+        {
+            let view = terminal.read(cx);
+            assert!(view._blink.is_none());
+            assert!(view.cursor_on);
+        }
+
+        cx.set_reduce_motion(false);
+        window.refresh();
+        window.render_frame(cx);
+        assert!(terminal.read(cx)._blink.is_some());
+
+        terminal.update(cx, |view, _| view.cursor_on = false);
+        let outside = host.read(cx).next_focus.clone();
+        outside.focus(window, cx);
+        window.render_frame(cx);
+        {
+            let view = terminal.read(cx);
+            assert!(!view.focused);
+            assert!(view._blink.is_none());
+            assert!(view.cursor_on);
+        }
+    })
+    .expect("cursor blink lifecycle assertions");
+    session.terminate();
+}
+
+#[gpui_kit::test]
+fn terminal_grid_renders_tabs_and_combining_marks(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.gds().tasks().init_test(false);
+        cx.gds().ui().init_terminal();
+        cx.gds()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
+    });
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: std::env::temp_dir(),
+            args: vec![
+                "-c".into(),
+                "printf '%s\\r\\n' 'A\te\u{0301}DONE'; sleep 60".into(),
+            ],
+            ..SpawnOptions::default()
+        },
+    )
+    .expect("local shell for combining glyph test");
+    wait_for_pty(|| screen(&session).contains("DONE"));
+    let mut terminal = None;
+    let window = cx.open_window(size(px(800.), px(480.)), |window, cx| {
+        let view = cx.new(|cx| View::new(session.clone(), Preferences::default(), window, cx));
+        terminal = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let terminal = terminal.expect("terminal view");
+    cx.update_window(window.into(), |_, window, cx| {
+        terminal.read(cx).focus_handle().focus(window, cx);
+        window.render_frame(cx);
+        assert!(terminal.read(cx).geometry.columns > 0);
+    })
+    .expect("combining glyph render");
+    session.terminate();
+}

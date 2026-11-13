@@ -47,7 +47,7 @@ enum Lookup {
 }
 
 struct CachedPng {
-    bytes: Vec<u8>,
+    image: RgbaImage,
     attributes: HashMap<String, String>,
 }
 
@@ -103,14 +103,19 @@ pub(super) fn load_with(
     }
     match generate() {
         Ok(image) => {
-            let bytes = encode(&image, identity.as_ref(), None)?;
             if let (Some(cache), Some(identity)) = (cache, identity.as_ref())
                 && identity.unchanged(&source.path)
-                && let Err(error) = cache.store(identity, &bytes)
             {
-                tracing::warn!(%error, "cannot save thumbnail cache");
+                match encode(&image, Some(identity), None) {
+                    Ok(bytes) => {
+                        if let Err(error) = cache.store(identity, &bytes) {
+                            tracing::warn!(%error, "cannot save thumbnail cache");
+                        }
+                    }
+                    Err(error) => tracing::warn!(%error, "cannot encode thumbnail cache"),
+                }
             }
-            Ok(Thumbnail { bytes })
+            Ok(Thumbnail::new(image))
         }
         Err(error) => {
             // Missing tools, timeouts and I/O failures can resolve without the
@@ -202,7 +207,7 @@ impl Cache {
             if let Some(png) = self.read(&self.root.join(flavor).join(identity.filename()), edge)
                 && identity.matches(&png.attributes)
             {
-                return Lookup::Ready(Thumbnail { bytes: png.bytes });
+                return Lookup::Ready(Thumbnail::new(png.image));
             }
         }
         if let Some(png) = self.read(&self.failure_path(identity), 1)
@@ -321,11 +326,14 @@ fn read_png(path: &Path, edge: u32) -> Result<Option<CachedPng>, CacheError> {
     if bytes.len() > MAX_PNG_BYTES {
         return Err(CacheError::Size);
     }
-    let decoder = png::Decoder::new_with_limits(
+    let mut decoder = png::Decoder::new_with_limits(
         Cursor::new(&bytes),
         png::Limits {
             bytes: MAX_PNG_BYTES,
         },
+    );
+    decoder.set_transformations(
+        png::Transformations::EXPAND | png::Transformations::ALPHA | png::Transformations::STRIP_16,
     );
     let mut reader = decoder.read_info()?;
     let info = reader.info();
@@ -340,8 +348,10 @@ fn read_png(path: &Path, edge: u32) -> Result<Option<CachedPng>, CacheError> {
         .output_buffer_size()
         .filter(|size| *size <= MAX_PNG_BYTES)
         .ok_or(CacheError::Size)?;
-    reader.next_frame(&mut vec![0; size])?;
+    let mut pixels = vec![0; size];
+    let frame = reader.next_frame(&mut pixels)?;
     reader.finish()?;
+    let image = rgba_from_frame(frame, pixels)?;
     let info = reader.info();
     let mut attributes = HashMap::new();
     for text in &info.uncompressed_latin1_text {
@@ -361,7 +371,46 @@ fn read_png(path: &Path, edge: u32) -> Result<Option<CachedPng>, CacheError> {
             attributes.insert(text.keyword.clone(), text.get_text()?);
         }
     }
-    Ok(Some(CachedPng { bytes, attributes }))
+    Ok(Some(CachedPng { image, attributes }))
+}
+
+fn rgba_from_frame(frame: png::OutputInfo, mut pixels: Vec<u8>) -> Result<RgbaImage, CacheError> {
+    pixels.truncate(frame.buffer_size());
+    if frame.bit_depth != png::BitDepth::Eight {
+        return Err(CacheError::Size);
+    }
+    let width = frame.width;
+    let height = frame.height;
+    let pixel_count = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|count| count.checked_mul(4))
+        .ok_or(CacheError::Size)?;
+    match frame.color_type {
+        png::ColorType::Rgba => RgbaImage::from_raw(width, height, pixels),
+        png::ColorType::Rgb => {
+            let mut rgba = Vec::with_capacity(pixel_count);
+            for chunk in pixels.chunks_exact(3) {
+                rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], u8::MAX]);
+            }
+            RgbaImage::from_raw(width, height, rgba)
+        }
+        png::ColorType::Grayscale => {
+            let mut rgba = Vec::with_capacity(pixel_count);
+            for &gray in &pixels {
+                rgba.extend_from_slice(&[gray, gray, gray, u8::MAX]);
+            }
+            RgbaImage::from_raw(width, height, rgba)
+        }
+        png::ColorType::GrayscaleAlpha => {
+            let mut rgba = Vec::with_capacity(pixel_count);
+            for chunk in pixels.chunks_exact(2) {
+                rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
+            }
+            RgbaImage::from_raw(width, height, rgba)
+        }
+        png::ColorType::Indexed => None,
+    }
+    .ok_or(CacheError::Size)
 }
 
 fn relevant(key: &str) -> bool {

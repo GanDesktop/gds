@@ -61,11 +61,7 @@ impl Fixture {
 }
 
 fn color(thumbnail: &Thumbnail) -> [u8; 4] {
-    image::load_from_memory(&thumbnail.bytes)
-        .expect("thumbnail PNG")
-        .to_rgba8()
-        .get_pixel(0, 0)
-        .0
+    thumbnail.as_rgba().get_pixel(0, 0).0
 }
 
 // Produced independently of our encoder: interoperable PNG text chunks may be
@@ -114,12 +110,11 @@ fn generated_pngs_have_standard_metadata_permissions_and_reuse_other_thumbnailer
     let fixture = Fixture::new();
     fixture.image([200, 0, 0], UNIX_EPOCH + Duration::new(10, 100));
     let thumbnail = fixture.load().expect("generated thumbnail");
-    let image = image::load_from_memory(&thumbnail.bytes).expect("generated PNG");
-    assert_eq!((image.width(), image.height()), (512, 256));
+    assert_eq!((thumbnail.width(), thumbnail.height()), (512, 256));
     let cached = read_png(&fixture.cached(), EDGE)
         .expect("cache file")
         .expect("saved PNG");
-    assert_eq!(cached.bytes, thumbnail.bytes);
+    assert_eq!(&cached.image, thumbnail.as_rgba());
     let identity = fixture.identity();
     assert_eq!(cached.attributes.get("Thumb::URI"), Some(&identity.uri));
     assert_eq!(
@@ -312,4 +307,38 @@ fn concurrent_writers_publish_complete_pngs_and_remove_temporary_files() {
             .count(),
         1
     );
+}
+
+#[test]
+fn external_rgb_cache_entries_decode_to_rgba() {
+    let fixture = Fixture::new();
+    fixture.image([200, 0, 0], UNIX_EPOCH + Duration::from_secs(10));
+    let identity = fixture.identity();
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, 512, 256);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .add_text_chunk("Thumb::URI".into(), identity.uri.clone())
+        .expect("external URI");
+    encoder
+        .add_text_chunk("Thumb::MTime".into(), identity.mtime.to_string())
+        .expect("external timestamp");
+    let image = RgbImage::from_pixel(512, 256, Rgb([10, 20, 30]));
+    let mut writer = encoder.write_header().expect("external RGB header");
+    writer
+        .write_image_data(image.as_raw())
+        .expect("external RGB pixels");
+    writer.finish().expect("external RGB PNG end");
+    fixture
+        .cache
+        .write(
+            &fixture.cache.root.join(WRITE_FLAVOR),
+            &identity.filename(),
+            &bytes,
+        )
+        .expect("cache RGB PNG");
+    let loaded = fixture.load().expect("reused RGB cache entry");
+    assert_eq!((loaded.width(), loaded.height()), (512, 256));
+    assert_eq!(color(&loaded), [10, 20, 30, 255]);
 }

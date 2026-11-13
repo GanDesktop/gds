@@ -39,7 +39,7 @@ pub(super) struct Geometry {
     /// Actual grid, excluding the terminal's content padding.
     pub bounds: Bounds<Pixels>,
     pub cell: Size<Pixels>,
-    columns: usize,
+    pub columns: usize,
     rows: usize,
 }
 impl Default for Geometry {
@@ -272,7 +272,7 @@ impl Element for Grid {
     ) -> Painted {
         let palette = Palette::new(cx);
         let scale = f32::from(window.scale_factor());
-        self.view.update(cx, |view, _| {
+        self.view.update(cx, |view, cx| {
             if !view.fonts.as_ref().is_some_and(|fonts| {
                 fonts.matches(
                     &view.preferences.font_family,
@@ -345,7 +345,12 @@ impl Element for Grid {
             let cursor = snapshot
                 .cursor
                 .filter(|(_, shape)| *shape != CursorShape::Hidden)
-                .filter(|_| !view.focused || view.cursor_on || !view.preferences.cursor_blink)
+                .filter(|_| {
+                    !view.focused
+                        || view.cursor_on
+                        || !view.preferences.cursor_blink
+                        || cx.reduce_motion()
+                })
                 .filter(|_| view.preedit.is_empty());
             let composition = (!view.preedit.is_empty())
                 .then(|| {
@@ -424,14 +429,23 @@ impl Element for Grid {
                     }
                 }
                 let hidden = flags.contains(Flags::HIDDEN) || obscured;
-                let mut value = if hidden || item.cell.c == '\t' {
-                    " ".to_owned()
+                let base = if hidden || item.cell.c == '\t' {
+                    ' '
                 } else {
-                    item.cell.c.to_string()
+                    item.cell.c
                 };
-                if !hidden && let Some(combining) = item.cell.zerowidth() {
-                    value.extend(combining);
-                }
+                let mut buf = [0u8; 4];
+                let mut combined = String::new();
+                let value: &str = if !hidden
+                    && let Some(combining) = item.cell.zerowidth()
+                    && !combining.is_empty()
+                {
+                    combined.push(base);
+                    combined.extend(combining);
+                    combined.as_str()
+                } else {
+                    base.encode_utf8(&mut buf)
+                };
                 let mut font = fonts.font.clone();
                 if flags.contains(Flags::BOLD) {
                     font.weight = FontWeight::BOLD;
@@ -439,7 +453,7 @@ impl Element for Grid {
                 if flags.contains(Flags::ITALIC) {
                     font.style = FontStyle::Italic;
                 }
-                rows[row as usize].push(column, &value, font, fg);
+                rows[row as usize].push(column, value, font, fg);
                 if !hidden {
                     let underline_color = item
                         .cell
@@ -588,7 +602,7 @@ impl Element for Grid {
                     )
                 };
                 if let Err(error) = result {
-                    eprintln!("terminal glyph paint: {error}");
+                    tracing::warn!(%error, "terminal glyph paint failed");
                 }
             }
             for line in &painted.underlines {

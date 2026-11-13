@@ -240,15 +240,10 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
         source_path,
     } = loaded;
 
-    // A mode change reloads Kit's registered palette. Apply custom colors only
-    // afterwards; Theme::update reconciles its colors/tokens/Base projection.
+    // A mode change reloads Kit's registered palette. Re-assert globals,
+    // materials, window corners, and user typography before applying our
+    // final theme overrides in a single Theme::update pass.
     Theme::change(ThemeMode::from(mode), None, cx);
-    Theme::update(cx, |theme| {
-        palette.apply_to(&mut theme.colors);
-        // Keep Kit's tinted border/inset line, not its outer 3px halo: our
-        // scrolling surfaces clip at their edges. Reapply on every palette load.
-        theme.focus_ring = false;
-    });
     cx.set_global(palette);
     cx.set_global(Material {
         content: palette.content,
@@ -258,9 +253,18 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
     });
     update_window_corners(appearance.rounded_corners, cx);
     material::Material::install(cx);
-    // Tables inherit their surrounding content material. Keep the background
-    // role opaque: native dialogs and other raised surfaces use it directly.
+    // Kit reloads the registered theme on a mode change, and a theme file may
+    // name its own fonts. Re-assert the user's typography so switching theme,
+    // mode or opacity never resets the font family or size.
+    crate::appearance::typography::reapply(cx);
     Theme::update(cx, |theme| {
+        palette.apply_to(&mut theme.colors);
+        // Keep Kit's tinted border/inset line, not its outer 3px halo: our
+        // scrolling surfaces clip at their edges. Reapply on every palette load.
+        theme.focus_ring = false;
+
+        // Tables inherit their surrounding content material. Keep the background
+        // role opaque: native dialogs and other raised surfaces use it directly.
         let mut clear = palette.content;
         clear.a = 0.0;
         // Data tables share the surrounding content material, not a second underlay.
@@ -274,14 +278,9 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
         theme.tokens.table_row_border = clear.into();
         theme.colors.scrollbar = clear;
         theme.tokens.scrollbar = clear.into();
-    });
-    // Kit reloads the registered theme on a mode change, and a theme file may
-    // name its own fonts. Re-assert the user's typography so switching theme,
-    // mode or opacity never resets the font family or size.
-    crate::appearance::typography::reapply(cx);
-    // Every theme application re-aligns the shared toast column, so switching
-    // themes cannot move it or leave it under the toolbar.
-    Theme::update(cx, |theme| {
+
+        // Every theme application re-aligns the shared toast column, so switching
+        // themes cannot move it or leave it under the toolbar.
         theme.notification.placement = gpui_kit::Anchor::TopRight;
         theme.notification.margins = gpui_kit::base::Edges {
             top: gpui_kit::px(super::tokens::TOOLBAR_HEIGHT + super::tokens::NOTIFICATION_TOP_GAP),

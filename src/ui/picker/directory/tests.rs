@@ -268,3 +268,152 @@ fn pagination_filtering_and_hidden_folders_preserve_source_paths(cx: &mut TestAp
     cx.run_until_parked();
     assert!(f.accepted.borrow().is_empty());
 }
+
+fn prefixed_names(prefix: &str, count: usize) -> Vec<String> {
+    (0..count).map(|i| format!("{prefix}-{i:02}")).collect()
+}
+
+#[gpui_kit::test]
+fn filter_stops_prefetching_once_enough_matching_rows_are_loaded(cx: &mut TestAppContext) {
+    let threshold = super::view::MIN_SCROLLABLE_ROWS;
+
+    // When filtering already yields >= MIN_SCROLLABLE_ROWS rows, no extra page is fetched.
+    let f = fixture(cx);
+    let mut names = prefixed_names("match", threshold);
+    names.extend(prefixed_names("other", 4));
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut first = page("/remote", &refs);
+    first.next_cursor = Some("page-2".into());
+    reply(&f, Ok(first), cx);
+    assert!(f.requests.borrow().is_empty());
+
+    cx.update_window(f.window.into(), |_, window, cx| {
+        window.press("ctrl-f", cx);
+        window.render_frame(cx);
+        window.input("match", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(
+            f.picker.read(cx).table.read(cx).delegate().rows.len(),
+            threshold
+        );
+    });
+    assert!(
+        f.requests.borrow().is_empty(),
+        "non-empty filter must not drain later pages when threshold rows already match"
+    );
+
+    // When filtering drops visible rows below threshold, prefetch fetches only until threshold is met.
+    let f2 = fixture(cx);
+    let mut page1_names = prefixed_names("rare", 5);
+    page1_names.extend(prefixed_names("common", threshold));
+    let page1_refs: Vec<&str> = page1_names.iter().map(String::as_str).collect();
+    let mut page1 = page("/remote", &page1_refs);
+    page1.next_cursor = Some("page-2".into());
+    reply(&f2, Ok(page1), cx);
+    assert!(f2.requests.borrow().is_empty());
+
+    cx.update_window(f2.window.into(), |_, window, cx| {
+        window.press("ctrl-f", cx);
+        window.render_frame(cx);
+        window.input("rare", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(f2.picker.read(cx).table.read(cx).delegate().rows.len(), 5);
+    });
+    assert_eq!(
+        f2.requests
+            .borrow()
+            .front()
+            .unwrap()
+            .request
+            .cursor
+            .as_deref(),
+        Some("page-2")
+    );
+
+    let page2_names = prefixed_names("rare-next", threshold);
+    let page2_refs: Vec<&str> = page2_names.iter().map(String::as_str).collect();
+    let mut page2 = page("/remote", &page2_refs);
+    page2.next_cursor = Some("page-3".into());
+    reply(&f2, Ok(page2), cx);
+    cx.update_window(f2.window.into(), |_, _, cx| {
+        assert_eq!(
+            f2.picker.read(cx).table.read(cx).delegate().rows.len(),
+            5 + threshold
+        );
+    })
+    .unwrap();
+    assert!(
+        f2.requests.borrow().is_empty(),
+        "applying page 2 with non-empty filter must stop once >= MIN_SCROLLABLE_ROWS rows match"
+    );
+}
+
+#[gpui_kit::test]
+fn toggle_hidden_only_prefetches_when_visible_rows_drop_below_threshold(cx: &mut TestAppContext) {
+    let threshold = super::view::MIN_SCROLLABLE_ROWS;
+
+    // Toggling hidden when visible rows already meet threshold does not fetch another page.
+    let f = fixture(cx);
+    let mut names = prefixed_names("dir", threshold);
+    names.extend(prefixed_names(".hid", 4));
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut first = page("/remote", &refs);
+    first.next_cursor = Some("page-2".into());
+    reply(&f, Ok(first), cx);
+    assert!(f.requests.borrow().is_empty());
+
+    cx.update_window(f.window.into(), |_, window, cx| {
+        f.picker.update(cx, |p, cx| p.toggle_hidden(window, cx));
+        assert_eq!(
+            f.picker.read(cx).table.read(cx).delegate().rows.len(),
+            threshold + 4
+        );
+        assert!(f.requests.borrow().is_empty());
+
+        f.picker.update(cx, |p, cx| p.toggle_hidden(window, cx));
+        assert_eq!(
+            f.picker.read(cx).table.read(cx).delegate().rows.len(),
+            threshold
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(f.requests.borrow().is_empty());
+
+    // Toggling hidden off when visible rows drop below threshold triggers load_more.
+    let f2 = fixture(cx);
+    cx.update_window(f2.window.into(), |_, window, cx| {
+        f2.picker.update(cx, |p, cx| p.toggle_hidden(window, cx));
+    })
+    .unwrap();
+    let mut mostly_hidden = prefixed_names("dir", 5);
+    mostly_hidden.extend(prefixed_names(".hid", threshold));
+    let refs2: Vec<&str> = mostly_hidden.iter().map(String::as_str).collect();
+    let mut page1 = page("/remote", &refs2);
+    page1.next_cursor = Some("page-2".into());
+    reply(&f2, Ok(page1), cx);
+    assert!(f2.requests.borrow().is_empty());
+
+    cx.update_window(f2.window.into(), |_, window, cx| {
+        f2.picker.update(cx, |p, cx| p.toggle_hidden(window, cx));
+        assert_eq!(f2.picker.read(cx).table.read(cx).delegate().rows.len(), 5);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        f2.requests
+            .borrow()
+            .front()
+            .unwrap()
+            .request
+            .cursor
+            .as_deref(),
+        Some("page-2")
+    );
+}

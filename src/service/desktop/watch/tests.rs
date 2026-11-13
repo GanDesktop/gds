@@ -101,3 +101,45 @@ async fn watches_missing_sources_and_atomic_replacements_through_managed_links()
     fs::rename(replacement, &path).expect("atomic palette replacement");
     changed(&mut receiver).await;
 }
+
+#[tokio::test]
+async fn skips_inaccessible_higher_ancestors_but_errors_on_inaccessible_leaf_parent() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    struct RestorePermissions(PathBuf, fs::Permissions);
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, self.1.clone());
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let locked = directory.path().join("locked");
+    let sub = locked.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    let target = sub.join("palette.json");
+    fs::write(&target, "initial").unwrap();
+
+    let original = fs::metadata(&locked).unwrap().permissions();
+    let _restore = RestorePermissions(locked.clone(), original);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o111)).unwrap();
+
+    let mut probe = notify::recommended_watcher(|_| {}).unwrap();
+    if probe.watch(&locked, RecursiveMode::NonRecursive).is_ok() {
+        return;
+    }
+
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let mut sources = Sources::new(sender);
+    sources
+        .set_paths(vec![target.clone()])
+        .expect("inaccessible higher ancestor should be skipped");
+    fs::write(&target, "updated").unwrap();
+    changed(&mut receiver).await;
+
+    let leaf_target = locked.join("direct.json");
+    assert!(
+        sources.set_paths(vec![leaf_target]).is_err(),
+        "inaccessible essential leaf parent must return an error"
+    );
+}

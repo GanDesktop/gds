@@ -19,8 +19,6 @@ pub(crate) fn init(cx: &mut App) {
     cx.set_global(ActionsRegistered);
     cx.gds().ui().register_actions();
     cx.gds().ui().init_terminal();
-    cx.on_app_quit(|_| async { gds::service::terminal::shutdown_all().await })
-        .detach();
     crate::shared::config::terminal::init(cx);
     crate::pages::workspace::windows::bind_page_keys(cx);
     crate::features::navigation::install(crate::pages::workspace::routes(), cx);

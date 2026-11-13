@@ -8,9 +8,32 @@ use super::{Error, Kind, Source};
 pub const EDGE: u32 = 512;
 const MAX_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
 
-/// An 8-bit RGBA PNG suitable for both desktop caches and UI image assets.
+/// A decoded 8-bit RGBA thumbnail image ready for UI rendering and desktop caching.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Thumbnail {
-    pub bytes: Vec<u8>,
+    image: ::image::RgbaImage,
+}
+
+impl Thumbnail {
+    pub(super) fn new(image: ::image::RgbaImage) -> Self {
+        Self { image }
+    }
+
+    pub fn width(&self) -> u32 {
+        self.image.width()
+    }
+
+    pub fn height(&self) -> u32 {
+        self.image.height()
+    }
+
+    pub fn as_rgba(&self) -> &::image::RgbaImage {
+        &self.image
+    }
+
+    pub fn into_rgba(self) -> ::image::RgbaImage {
+        self.image
+    }
 }
 
 impl Source {
@@ -40,6 +63,9 @@ impl Source {
             Kind::Video => video::load(&self.path, cancel),
             Kind::Audio => {
                 let bytes = super::audio::cover(&self.path)?.ok_or(Error::NoCover)?;
+                if cancel.is_cancelled() {
+                    return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
+                }
                 image::load_bytes(&bytes, None)
             }
             _ => Err(Error::NoCover),
