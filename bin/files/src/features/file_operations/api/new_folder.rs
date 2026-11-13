@@ -21,6 +21,12 @@ pub(crate) enum Error {
     },
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct Created {
+    pub path: PathBuf,
+    pub snapshot: Option<crate::features::file_operations::history::Snapshot>,
+}
+
 pub(crate) struct Request {
     pub directory: PathBuf,
     pub name: OsString,
@@ -34,11 +40,18 @@ impl Request {
     /// # Errors
     /// Rejects invalid leaf names and reports an occupied name or a filesystem
     /// failure.
-    pub fn execute(self) -> Result<PathBuf, Error> {
+    pub fn execute(self) -> Result<Created, Error> {
         names::validate(&self.name)?;
         let destination = self.directory.join(&self.name);
         match fs::create_dir(&destination) {
-            Ok(()) => Ok(destination),
+            Ok(()) => {
+                let snapshot =
+                    crate::features::file_operations::history::Snapshot::capture(&destination).ok();
+                Ok(Created {
+                    path: destination,
+                    snapshot,
+                })
+            }
             Err(source) if source.kind() == io::ErrorKind::AlreadyExists => Err(Error::Exists {
                 directory: self.directory,
                 name: self.name.to_string_lossy().escape_debug().to_string(),
@@ -56,7 +69,7 @@ impl Request {
         self,
         tasks: &gds::service::task_manager::Scope,
         cancel: tokio_util::sync::CancellationToken,
-    ) -> gds::service::task_manager::Task<Result<PathBuf, Error>> {
+    ) -> gds::service::task_manager::Task<Result<Created, Error>> {
         tasks.spawn_blocking_named("Create folder", move || {
             if cancel.is_cancelled() {
                 Err(Error::Cancelled)

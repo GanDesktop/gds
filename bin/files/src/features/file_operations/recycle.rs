@@ -68,6 +68,7 @@ pub enum Action {
 pub struct Outcome {
     pub entry: Entry,
     pub original_path: PathBuf,
+    pub restored: Option<super::history::Snapshot>,
     pub result: Result<(), Error>,
 }
 
@@ -310,17 +311,27 @@ pub fn perform_cancellable(
         .into_iter()
         .map(|entry| {
             let original_path = entry.original_path.clone();
+            let applied = if cancel.is_cancelled() {
+                Applied {
+                    restored: None,
+                    result: Err(Error::Cancelled),
+                }
+            } else {
+                entry.apply(action, cancel)
+            };
             Outcome {
                 original_path,
-                result: if cancel.is_cancelled() {
-                    Err(Error::Cancelled)
-                } else {
-                    entry.apply(action, cancel)
-                },
+                restored: applied.restored,
+                result: applied.result,
                 entry,
             }
         })
         .collect()
+}
+
+struct Applied {
+    restored: Option<super::history::Snapshot>,
+    result: Result<(), Error>,
 }
 
 impl Entry {
@@ -354,67 +365,96 @@ impl Entry {
         }
     }
 
-    /// # Errors
-    /// Propagates restore or purge failures for this record.
-    fn apply(
-        &self,
-        action: Action,
-        cancel: &tokio_util::sync::CancellationToken,
-    ) -> Result<(), Error> {
+    fn apply(&self, action: Action, cancel: &tokio_util::sync::CancellationToken) -> Applied {
         #[cfg(target_os = "linux")]
         {
             match action {
                 Action::Restore => self.restore(cancel),
-                Action::Purge => self.purge(),
+                Action::Purge => Applied {
+                    restored: None,
+                    result: self.purge(),
+                },
             }
         }
         #[cfg(not(target_os = "linux"))]
         {
             let _ = (action, cancel);
-            Err(Error::Unsupported)
+            Applied {
+                restored: None,
+                result: Err(Error::Unsupported),
+            }
         }
     }
 
-    /// # Errors
-    /// Refuses stale records, unavailable destination parents, an occupied
-    /// original location, and reports a delivered payload whose record cleanup
-    /// failed without rolling the restored payload back.
+    /// Restore the payload to its original location without replacing existing targets.
+    ///
+    /// When the payload commits on disk before `.trashinfo` cleanup fails, `restored`
+    /// still carries its committed [`super::history::Snapshot`] alongside `RestoreIncomplete`.
     #[cfg(target_os = "linux")]
-    fn restore(&self, cancel: &tokio_util::sync::CancellationToken) -> Result<(), Error> {
-        self.verify()?;
-        fs::create_dir_all(&self.original_parent).map_err(|source| Error::Io {
-            path: self.original_parent.clone(),
-            source,
-        })?;
+    fn restore(&self, cancel: &tokio_util::sync::CancellationToken) -> Applied {
+        if let Err(error) = self.verify() {
+            return Applied {
+                restored: None,
+                result: Err(error),
+            };
+        }
+        if let Err(source) = fs::create_dir_all(&self.original_parent) {
+            return Applied {
+                restored: None,
+                result: Err(Error::Io {
+                    path: self.original_parent.clone(),
+                    source,
+                }),
+            };
+        }
         let request = Request {
             paths: vec![self.payload.clone()],
             destination: self.original_parent.clone(),
             mode: Mode::Move,
         };
         let targets = vec![NamedTarget::new(self.payload.clone(), self.name.clone())];
-        let batch = Batch::named(request, targets)?;
+        let batch = match Batch::named(request, targets) {
+            Ok(batch) => batch,
+            Err(error) => {
+                return Applied {
+                    restored: None,
+                    result: Err(Error::from(error)),
+                };
+            }
+        };
         let mut items = batch.execute_cancellable(cancel.clone()).items;
         let item = items
             .pop()
             .expect("a named batch retains its single frozen payload");
         if item.destination_committed {
+            let restored = item.committed_snapshot;
             if let Err(error) = item.result {
-                return Err(Error::RestoreIncomplete {
-                    path: self.original_path.clone(),
-                    source: io::Error::other(error),
-                });
+                return Applied {
+                    restored,
+                    result: Err(Error::RestoreIncomplete {
+                        path: self.original_path.clone(),
+                        source: io::Error::other(error),
+                    }),
+                };
             }
-        } else if let Err(error) = item.result {
-            return Err(match error {
-                transfer::Error::Cancelled => Error::Cancelled,
-                transfer::Error::Conflict { path } => Error::RestoreConflict { path },
-                other => Error::Transfer(other),
+            let result = fs::remove_file(&self.info).map_err(|source| Error::RestoreIncomplete {
+                path: self.original_path.clone(),
+                source,
             });
+            return Applied { restored, result };
         }
-        fs::remove_file(&self.info).map_err(|source| Error::RestoreIncomplete {
-            path: self.original_path.clone(),
-            source,
-        })
+        let error = item
+            .result
+            .expect_err("uncommitted restore item carries an error");
+        let mapped = match error {
+            transfer::Error::Cancelled => Error::Cancelled,
+            transfer::Error::Conflict { path } => Error::RestoreConflict { path },
+            other => Error::Transfer(other),
+        };
+        Applied {
+            restored: None,
+            result: Err(mapped),
+        }
     }
 
     /// # Errors

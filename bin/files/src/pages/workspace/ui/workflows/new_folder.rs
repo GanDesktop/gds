@@ -3,7 +3,7 @@
 use crate::{
     features::file_operations::{
         history as operation_history, names,
-        new_folder::{Error, Request},
+        new_folder::{Created, Error, Request},
     },
     shared::i18n::t,
 };
@@ -249,18 +249,26 @@ impl Browser {
     fn finish_new_folder(
         &mut self,
         origin_tab: u64,
-        result: Result<PathBuf, Error>,
+        result: Result<Created, Error>,
         cx: &mut Context<Self>,
     ) {
         self.operations.in_progress = false;
         let report = match result {
-            Ok(destination) => {
-                self.operations
-                    .history
-                    .record(operation_history::Entry::new(
-                        operation_history::Kind::NewFolder,
-                        vec![operation_history::Step::trash(destination.clone())],
-                    ));
+            Ok(Created {
+                path: destination,
+                snapshot,
+            }) => {
+                if let Some(expected) = snapshot {
+                    self.operations
+                        .history
+                        .record(operation_history::Entry::new(
+                            operation_history::Kind::NewFolder,
+                            vec![operation_history::Step::trash_empty_directory(
+                                destination.clone(),
+                                expected,
+                            )],
+                        ));
+                }
                 if let Some(slot) = self.tab_slot_mut(origin_tab)
                     && destination.parent() == slot.path()
                 {

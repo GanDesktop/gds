@@ -23,6 +23,7 @@ impl CopiedTree {
             source: source.clone(),
             destination: destination.clone(),
             destination_committed: false,
+            committed_snapshot: None,
             result: Ok(()),
         })
         .expect("prepare copy");
@@ -144,4 +145,68 @@ fn cross_device_cleanup_preserves_tags_changed_after_copy() {
             .expect("read preserved source file tags"),
         ["external"]
     );
+}
+
+#[test]
+fn preserves_modified_timestamps_on_files_links_and_directories() {
+    use rustix::fs::{AtFlags, CWD, Timespec, Timestamps, UTIME_OMIT, utimensat};
+    use std::os::unix::fs::{MetadataExt, symlink};
+
+    let set_mtime = |path: &std::path::Path, secs: i64, nsecs: i64| {
+        let stamps = Timestamps {
+            last_access: Timespec {
+                tv_sec: 0,
+                tv_nsec: UTIME_OMIT,
+            },
+            last_modification: Timespec {
+                tv_sec: secs as _,
+                tv_nsec: nsecs as _,
+            },
+        };
+        utimensat(CWD, path, &stamps, AtFlags::SYMLINK_NOFOLLOW).expect("set fixture mtime");
+    };
+
+    let root = tempfile::tempdir().expect("isolated tempdir for mtime transfer test");
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir(&source).expect("create source directory");
+    fs::write(source.join("note.txt"), b"archived").expect("write source file");
+    symlink("missing-target", source.join("dangling-link")).expect("create source symlink");
+
+    set_mtime(&source.join("note.txt"), 946_684_800, 123_456_789);
+    set_mtime(&source.join("dangling-link"), 978_307_200, 987_654_321);
+    set_mtime(&source, 915_148_800, 555_000_111);
+
+    let prepared = Prepared::new(&Item {
+        source: source.clone(),
+        destination: destination.clone(),
+        destination_committed: false,
+        committed_snapshot: None,
+        result: Ok(()),
+    })
+    .expect("prepare cross-device move fixture");
+    let copied = Node {
+        cancel: CancellationToken::new(),
+        source: source.clone(),
+        destination: destination.clone(),
+    }
+    .copy_root()
+    .expect("copy source tree");
+    prepared
+        .remove_source(&copied)
+        .expect("remove copied source tree");
+
+    assert!(!source.exists());
+    let file_meta = fs::symlink_metadata(destination.join("note.txt")).expect("copied file meta");
+    assert_eq!(file_meta.mtime(), 946_684_800);
+    assert_eq!(file_meta.mtime_nsec(), 123_456_789);
+
+    let link_meta =
+        fs::symlink_metadata(destination.join("dangling-link")).expect("copied symlink meta");
+    assert_eq!(link_meta.mtime(), 978_307_200);
+    assert_eq!(link_meta.mtime_nsec(), 987_654_321);
+
+    let dir_meta = fs::symlink_metadata(&destination).expect("copied directory meta");
+    assert_eq!(dir_meta.mtime(), 915_148_800);
+    assert_eq!(dir_meta.mtime_nsec(), 555_000_111);
 }

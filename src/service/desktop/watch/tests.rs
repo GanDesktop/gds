@@ -103,6 +103,33 @@ async fn watches_missing_sources_and_atomic_replacements_through_managed_links()
 }
 
 #[tokio::test]
+async fn watches_replaced_directory_at_same_path() {
+    let directory = tempfile::tempdir().expect("watched directory root");
+    let current = directory.path().join("current");
+    let replacement = directory.path().join("replacement");
+    let retired = directory.path().join("retired");
+    fs::create_dir(&current).unwrap();
+    fs::create_dir(&replacement).unwrap();
+    fs::write(current.join("theme.toml"), "first").unwrap();
+    fs::write(replacement.join("theme.toml"), "second").unwrap();
+
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let mut sources = Sources::new(sender);
+    sources.set_paths(vec![current.join("theme.toml")]).unwrap();
+
+    fs::rename(&current, &retired).unwrap();
+    fs::rename(&replacement, &current).unwrap();
+    changed(&mut receiver).await;
+    sources
+        .refresh()
+        .expect("rebind watch to replaced directory inode");
+    drain_until_quiet(&mut receiver).await;
+
+    fs::write(current.join("theme.toml"), "third").unwrap();
+    changed(&mut receiver).await;
+}
+
+#[tokio::test]
 async fn skips_inaccessible_higher_ancestors_but_errors_on_inaccessible_leaf_parent() {
     use std::os::unix::fs::PermissionsExt as _;
 

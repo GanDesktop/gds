@@ -4,9 +4,232 @@
 //! replay does not register a new user operation.
 //! Batches retain only completed effects, including after partial failures.
 
-use std::{ffi::OsString, path::PathBuf};
+use std::{
+    ffi::OsString,
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use super::{names::NamedTarget, recycle, transfer};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+impl TargetKind {
+    fn of(file_type: fs::FileType) -> Self {
+        if file_type.is_dir() {
+            Self::Directory
+        } else if file_type.is_symlink() {
+            Self::Symlink
+        } else if file_type.is_file() {
+            Self::File
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// Filesystem identity and content stamp captured when an operation commits its target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    kind: TargetKind,
+    size: u64,
+    #[cfg(unix)]
+    modified: i64,
+    #[cfg(unix)]
+    modified_nanos: i64,
+    #[cfg(not(unix))]
+    modified: Option<std::time::SystemTime>,
+}
+
+impl Snapshot {
+    /// Capture the current `lstat` stamp of a committed path without following symlinks.
+    ///
+    /// # Errors
+    /// Propagates filesystem metadata lookup failures.
+    pub fn capture(path: &Path) -> io::Result<Self> {
+        let metadata = fs::symlink_metadata(path)?;
+        Ok(Self::from_metadata(&metadata))
+    }
+
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt as _;
+
+        Self {
+            #[cfg(unix)]
+            device: metadata.dev(),
+            #[cfg(unix)]
+            inode: metadata.ino(),
+            kind: TargetKind::of(metadata.file_type()),
+            size: metadata.len(),
+            #[cfg(unix)]
+            modified: metadata.mtime(),
+            #[cfg(unix)]
+            modified_nanos: metadata.mtime_nsec(),
+            #[cfg(not(unix))]
+            modified: metadata.modified().ok(),
+        }
+    }
+
+    /// # Errors
+    /// Maps missing entries to [`Error::TargetChanged`] and other failures to [`Error::TargetInspection`].
+    fn inspect(path: &Path) -> Result<Self, Error> {
+        Self::capture(path).map_err(|source| {
+            if source.kind() == io::ErrorKind::NotFound {
+                Error::TargetChanged {
+                    path: path.to_owned(),
+                }
+            } else {
+                Error::TargetInspection {
+                    path: path.to_owned(),
+                    source,
+                }
+            }
+        })
+    }
+
+    fn same_identity(&self, current: &Self) -> bool {
+        #[cfg(unix)]
+        {
+            self.device == current.device
+                && self.inode == current.inode
+                && self.kind == current.kind
+        }
+        #[cfg(not(unix))]
+        {
+            self.kind == current.kind
+        }
+    }
+
+    /// Verify that `path` still refers to the same filesystem object (allowing in-place edits).
+    ///
+    /// # Errors
+    /// Reports missing/replaced entries as [`Error::TargetChanged`] and I/O failures.
+    fn verify_identity(&self, path: &Path) -> Result<(), Error> {
+        let current = Self::inspect(path)?;
+        if self.same_identity(&current) {
+            Ok(())
+        } else {
+            Err(Error::TargetChanged {
+                path: path.to_owned(),
+            })
+        }
+    }
+
+    /// Verify that `path` still refers to the same unmodified entry.
+    ///
+    /// # Errors
+    /// Reports missing, replaced or modified entries as [`Error::TargetChanged`] and I/O failures.
+    fn verify_unmodified(&self, path: &Path) -> Result<(), Error> {
+        let current = Self::inspect(path)?;
+        if *self == current {
+            Ok(())
+        } else {
+            Err(Error::TargetChanged {
+                path: path.to_owned(),
+            })
+        }
+    }
+
+    /// Verify that `path` still refers to the exact created directory and contains no entries.
+    ///
+    /// # Errors
+    /// Reports replaced directories as [`Error::TargetChanged`], occupied directories as
+    /// [`Error::DirectoryNotEmpty`], and I/O failures.
+    fn verify_empty_directory(&self, path: &Path) -> Result<(), Error> {
+        #[cfg(target_os = "linux")]
+        {
+            use rustix::{
+                fs::{CWD, Dir, Mode, OFlags, fstat, openat},
+                io::Errno,
+            };
+            use std::os::unix::ffi::OsStrExt as _;
+
+            let descriptor = openat(
+                CWD,
+                path,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| match error {
+                Errno::NOENT | Errno::NOTDIR | Errno::LOOP => Error::TargetChanged {
+                    path: path.to_owned(),
+                },
+                other => Error::TargetInspection {
+                    path: path.to_owned(),
+                    source: other.into(),
+                },
+            })?;
+            let directory = fs::File::from(descriptor);
+            let stat = fstat(&directory).map_err(|error| Error::TargetInspection {
+                path: path.to_owned(),
+                source: error.into(),
+            })?;
+            if self.kind != TargetKind::Directory
+                || self.device != stat.st_dev
+                || self.inode != stat.st_ino
+            {
+                return Err(Error::TargetChanged {
+                    path: path.to_owned(),
+                });
+            }
+            let entries = Dir::read_from(&directory).map_err(|error| Error::TargetInspection {
+                path: path.to_owned(),
+                source: error.into(),
+            })?;
+            for entry in entries {
+                let entry = entry.map_err(|error| Error::TargetInspection {
+                    path: path.to_owned(),
+                    source: error.into(),
+                })?;
+                let name = std::ffi::OsStr::from_bytes(entry.file_name().to_bytes());
+                if name != "." && name != ".." {
+                    return Err(Error::DirectoryNotEmpty {
+                        path: path.to_owned(),
+                    });
+                }
+            }
+            Ok(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            if self.kind != TargetKind::Directory {
+                return Err(Error::TargetChanged {
+                    path: path.to_owned(),
+                });
+            }
+            self.verify_identity(path)?;
+            let mut entries = fs::read_dir(path).map_err(|source| Error::TargetInspection {
+                path: path.to_owned(),
+                source,
+            })?;
+            if entries
+                .next()
+                .transpose()
+                .map_err(|source| Error::TargetInspection {
+                    path: path.to_owned(),
+                    source,
+                })?
+                .is_some()
+            {
+                return Err(Error::DirectoryNotEmpty {
+                    path: path.to_owned(),
+                });
+            }
+            Ok(())
+        }
+    }
+}
 
 pub fn transfer_steps(report: &transfer::Report) -> Vec<Step> {
     report
@@ -16,12 +239,16 @@ pub fn transfer_steps(report: &transfer::Report) -> Vec<Step> {
             item.result.is_ok()
                 || (report.mode == transfer::Mode::Copy && item.destination_committed)
         })
-        .map(|item| match report.mode {
-            transfer::Mode::Copy => Step::trash(item.destination.clone()),
-            transfer::Mode::Move => Step::Move {
-                source: item.destination.clone(),
-                destination: item.source.clone(),
-            },
+        .filter_map(|item| {
+            let expected = item.committed_snapshot?;
+            Some(match report.mode {
+                transfer::Mode::Copy => Step::trash(item.destination.clone(), expected),
+                transfer::Mode::Move => Step::Move {
+                    source: item.destination.clone(),
+                    destination: item.source.clone(),
+                    expected,
+                },
+            })
         })
         .collect()
 }
@@ -55,31 +282,53 @@ impl Kind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrashPolicy {
+    Unmodified,
+    EmptyDirectory,
+}
+
 #[derive(Clone, Debug)]
 pub enum Step {
     Move {
         source: PathBuf,
         destination: PathBuf,
+        expected: Snapshot,
     },
     Trash {
         path: PathBuf,
         previous: Option<OsString>,
+        expected: Snapshot,
+        policy: TrashPolicy,
     },
     Restore(recycle::Entry),
 }
 
 impl Step {
-    pub fn trash(path: PathBuf) -> Self {
+    pub fn trash(path: PathBuf, expected: Snapshot) -> Self {
         Self::Trash {
             path,
             previous: None,
+            expected,
+            policy: TrashPolicy::Unmodified,
         }
     }
 
-    pub fn undo_restore(entry: &recycle::Entry) -> Self {
+    pub fn trash_empty_directory(path: PathBuf, expected: Snapshot) -> Self {
+        Self::Trash {
+            path,
+            previous: None,
+            expected,
+            policy: TrashPolicy::EmptyDirectory,
+        }
+    }
+
+    pub fn undo_restore(entry: &recycle::Entry, expected: Snapshot) -> Self {
         Self::Trash {
             path: entry.original_path.clone(),
             previous: Some(entry.id.clone()),
+            expected,
+            policy: TrashPolicy::Unmodified,
         }
     }
 
@@ -88,6 +337,7 @@ impl Step {
             Self::Move {
                 source,
                 destination,
+                ..
             } => vec![source.clone(), destination.clone()],
             Self::Trash { path, .. } => vec![path.clone()],
             Self::Restore(entry) => vec![entry.original_path.clone()],
@@ -95,8 +345,30 @@ impl Step {
     }
 
     /// # Errors
-    /// Propagates cancellation, move, trash or restore failures.
-    fn apply(&self, cancel: &tokio_util::sync::CancellationToken) -> Result<Self, Error> {
+    /// Rejects targets whose identity, content stamp or directory emptiness changed.
+    fn verify_trash(&self) -> Result<(), Error> {
+        let Self::Trash {
+            path,
+            expected,
+            policy,
+            ..
+        } = self
+        else {
+            return Ok(());
+        };
+        match policy {
+            TrashPolicy::Unmodified => expected.verify_unmodified(path),
+            TrashPolicy::EmptyDirectory => expected.verify_empty_directory(path),
+        }
+    }
+
+    /// # Errors
+    /// Propagates cancellation, target verification, move, trash or restore failures.
+    fn apply(
+        &self,
+        kind: Kind,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<Self, Error> {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -104,7 +376,9 @@ impl Step {
             Self::Move {
                 source,
                 destination,
+                expected,
             } => {
+                expected.verify_identity(source)?;
                 let parent = destination
                     .parent()
                     .ok_or_else(|| Error::InvalidPath(destination.clone()))?;
@@ -119,26 +393,50 @@ impl Step {
                     },
                     vec![NamedTarget::new(source.clone(), name.to_owned())],
                 )?;
-                batch
+                let item = batch
                     .execute_cancellable(cancel.clone())
                     .items
                     .pop()
-                    .expect("one move result")
-                    .result?;
+                    .expect("one move result");
+                item.result?;
+                let next = match item.committed_snapshot {
+                    Some(snapshot) => snapshot,
+                    None => Snapshot::inspect(destination)?,
+                };
                 Ok(Self::Move {
                     source: destination.clone(),
                     destination: source.clone(),
+                    expected: next,
                 })
             }
-            Self::Trash { path, .. } => Ok(Self::Restore(
-                recycle::trash_cancellable(path, cancel)?.entry?,
-            )),
+            Self::Trash { path, .. } => {
+                self.verify_trash()?;
+                Ok(Self::Restore(recycle::trash_cancellable(path, cancel)?.entry?))
+            }
             Self::Restore(entry) => {
-                recycle::perform_cancellable(recycle::Action::Restore, vec![entry.clone()], cancel)
-                    .pop()
-                    .expect("one restore result")
-                    .result?;
-                Ok(Self::undo_restore(entry))
+                let outcome = recycle::perform_cancellable(
+                    recycle::Action::Restore,
+                    vec![entry.clone()],
+                    cancel,
+                )
+                .pop()
+                .expect("one restore result");
+                outcome.result?;
+                let expected = match outcome.restored {
+                    Some(snapshot) => snapshot,
+                    None => Snapshot::inspect(&entry.original_path)?,
+                };
+                let policy = if kind == Kind::NewFolder {
+                    TrashPolicy::EmptyDirectory
+                } else {
+                    TrashPolicy::Unmodified
+                };
+                Ok(Self::Trash {
+                    path: entry.original_path.clone(),
+                    previous: Some(entry.id.clone()),
+                    expected,
+                    policy,
+                })
             }
         }
     }
@@ -150,6 +448,16 @@ pub enum Error {
     Cancelled,
     #[error("invalid history target: {0}")]
     InvalidPath(PathBuf),
+    #[error("history target changed or disappeared since the operation completed: {path}")]
+    TargetChanged { path: PathBuf },
+    #[error("cannot undo folder creation because the folder is no longer empty: {path}")]
+    DirectoryNotEmpty { path: PathBuf },
+    #[error("cannot inspect history target {path}: {source}")]
+    TargetInspection {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error(transparent)]
     Transfer(#[from] transfer::Error),
     #[error(transparent)]
@@ -196,8 +504,11 @@ impl Entry {
                 report.remaining.push(step);
                 continue;
             }
-            if let Step::Trash { path, previous } = &step {
-                match tracker.delete(path, cancel) {
+            if let Step::Trash { path, previous, .. } = &step {
+                let deleted = step
+                    .verify_trash()
+                    .and_then(|()| tracker.delete(path, cancel).map_err(Error::from));
+                match deleted {
                     Ok(original) => pending_trash.push(PendingTrash {
                         previous: previous.clone(),
                         step,
@@ -210,7 +521,7 @@ impl Entry {
                 }
                 continue;
             }
-            match step.apply(cancel) {
+            match step.apply(self.kind, cancel) {
                 Ok(inverse) => {
                     report.inverse.push(inverse);
                 }
@@ -336,3 +647,6 @@ impl History {
         }
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests;

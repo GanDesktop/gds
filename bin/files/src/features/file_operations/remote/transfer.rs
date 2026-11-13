@@ -27,6 +27,7 @@ pub(crate) struct Progress {
 #[derive(Default)]
 pub(crate) struct Report {
     pub completed: Vec<Resource>,
+    pub undo: Vec<super::super::history::Step>,
     pub failures: Vec<(String, String)>,
     pub cancelled: bool,
 }
@@ -67,7 +68,10 @@ pub(crate) async fn copy(
             break;
         }
         match work.copy_root(&source, &destination).await {
-            Ok(()) => report.completed.push(source),
+            Ok(undo) => {
+                report.completed.push(source);
+                report.undo.extend(undo);
+            }
             Err(Error::Cancelled) => {
                 report.cancelled = true;
                 break;
@@ -139,7 +143,11 @@ impl Work {
 
     /// # Errors
     /// Rejects self-nested copies and reports local or remote transfer failures.
-    async fn copy_root(&mut self, source: &Resource, destination: &Resource) -> Result<(), Error> {
+    async fn copy_root(
+        &mut self,
+        source: &Resource,
+        destination: &Resource,
+    ) -> Result<Vec<super::super::history::Step>, Error> {
         let name = source.name()?;
         let target = destination.child(&name)?;
         if let (
@@ -160,10 +168,10 @@ impl Work {
         }
         match destination {
             Resource::Local(directory) => self.download_to_local(source, directory, &name).await,
-            Resource::Remote { address, session } => {
-                self.upload_to_remote(source, &target, address, session)
-                    .await
-            }
+            Resource::Remote { address, session } => self
+                .upload_to_remote(source, &target, address, session)
+                .await
+                .map(|()| Vec::new()),
         }
     }
 
@@ -174,7 +182,7 @@ impl Work {
         source: &Resource,
         directory: &Path,
         name: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<super::super::history::Step>, Error> {
         if let Resource::Local(source) = source
             && tokio::fs::canonicalize(directory)
                 .await?
@@ -205,27 +213,41 @@ impl Work {
             mode: super::super::transfer::Mode::Move,
         })?;
         self.tasks
-            .spawn_blocking_named("Commit downloaded files", move || -> Result<(), Error> {
-                let result = batch.execute();
-                let mut transfer_error = None;
-                for item in result.items {
-                    if let Err(error) = item.result {
-                        transfer_error = Some(Error::Transfer(error));
-                        break;
+            .spawn_blocking_named(
+                "Commit downloaded files",
+                move || -> Result<Vec<super::super::history::Step>, Error> {
+                    let result = batch.execute();
+                    let mut undo = Vec::new();
+                    let mut transfer_error = None;
+                    for item in result.items {
+                        match item.result {
+                            Ok(()) => {
+                                if let Some(expected) = item.committed_snapshot {
+                                    undo.push(super::super::history::Step::trash(
+                                        item.destination,
+                                        expected,
+                                    ));
+                                }
+                            }
+                            Err(error) => {
+                                transfer_error = Some(Error::Transfer(error));
+                                break;
+                            }
+                        }
                     }
-                }
-                let cleanup = std::fs::remove_dir_all(&staging_dir);
-                match (transfer_error, cleanup) {
-                    (None, Ok(())) => Ok(()),
-                    (None, Err(cleanup)) => Err(Error::Io(cleanup)),
-                    (Some(operation), Ok(())) => Err(operation),
-                    (Some(operation), Err(cleanup)) => Err(Error::LocalStagingCleanup {
-                        path: staging_dir,
-                        operation: Box::new(operation),
-                        cleanup,
-                    }),
-                }
-            })
+                    let cleanup = std::fs::remove_dir_all(&staging_dir);
+                    match (transfer_error, cleanup) {
+                        (None, Ok(())) => Ok(undo),
+                        (None, Err(cleanup)) => Err(Error::Io(cleanup)),
+                        (Some(operation), Ok(())) => Err(operation),
+                        (Some(operation), Err(cleanup)) => Err(Error::LocalStagingCleanup {
+                            path: staging_dir,
+                            operation: Box::new(operation),
+                            cleanup,
+                        }),
+                    }
+                },
+            )
             .await?
     }
 

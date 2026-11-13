@@ -4,7 +4,7 @@ use super::name_form::NameForm;
 use crate::{
     features::file_operations::{
         history as operation_history,
-        rename::{Error, Request},
+        rename::{Error, Renamed, Request},
     },
     shared::i18n::t,
 };
@@ -255,21 +255,27 @@ impl Browser {
         &mut self,
         origin_tab: u64,
         source: PathBuf,
-        result: Result<PathBuf, Error>,
+        result: Result<Renamed, Error>,
         cx: &mut Context<Self>,
     ) {
         self.operations.in_progress = false;
         let report = match result {
-            Ok(destination) => {
-                self.operations
-                    .history
-                    .record(operation_history::Entry::new(
-                        operation_history::Kind::Rename,
-                        vec![operation_history::Step::Move {
-                            source: destination.clone(),
-                            destination: source.clone(),
-                        }],
-                    ));
+            Ok(Renamed {
+                destination,
+                snapshot,
+            }) => {
+                if let Some(expected) = snapshot {
+                    self.operations
+                        .history
+                        .record(operation_history::Entry::new(
+                            operation_history::Kind::Rename,
+                            vec![operation_history::Step::Move {
+                                source: destination.clone(),
+                                destination: source.clone(),
+                                expected,
+                            }],
+                        ));
+                }
                 let name = destination
                     .file_name()
                     .map_or_else(String::new, |name| name.to_string_lossy().into_owned());

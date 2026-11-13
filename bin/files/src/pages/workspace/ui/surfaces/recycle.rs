@@ -497,7 +497,12 @@ impl Browser {
                     outcomes
                         .iter()
                         .filter(|outcome| Effect::of(outcome).moved())
-                        .map(|outcome| operation_history::Step::undo_restore(&outcome.entry))
+                        .filter_map(|outcome| {
+                            Some(operation_history::Step::undo_restore(
+                                &outcome.entry,
+                                outcome.restored?,
+                            ))
+                        })
                         .collect(),
                 ));
             if !restored.is_empty() {

@@ -147,14 +147,14 @@ impl Source {
             },
             _ => {}
         }
-        let bytes = metadata::read_prefix(&self.path, metadata::PREFIX_BYTES)?;
-        Ok(metadata::probe_file(
+        metadata::probe_path(
+            &self.path,
             self.size,
             metadata::ProbeHint {
                 text: self.kind == Kind::Text,
                 audio: self.kind == Kind::Audio,
             },
-            &bytes,
-        ))
+        )
+        .map_err(Error::from)
     }
 }

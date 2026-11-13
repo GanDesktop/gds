@@ -86,6 +86,12 @@ pub(crate) enum Error {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct Renamed {
+    pub destination: PathBuf,
+    pub snapshot: Option<crate::features::file_operations::history::Snapshot>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct Request {
     pub source: PathBuf,
     pub name: OsString,
@@ -97,7 +103,7 @@ impl Request {
     /// # Errors
     /// Rejects invalid leaf names, a missing destination parent, an existing
     /// target, and failures reported by the filesystem.
-    pub(crate) fn execute(&self) -> Result<PathBuf, Error> {
+    pub(crate) fn execute(&self) -> Result<Renamed, Error> {
         let current = self
             .source
             .file_name()
@@ -114,7 +120,12 @@ impl Request {
         }
         Self::ensure_absent(&destination)?;
         Self::rename_no_replace(&self.source, &destination)?;
-        Ok(destination)
+        let snapshot =
+            crate::features::file_operations::history::Snapshot::capture(&destination).ok();
+        Ok(Renamed {
+            destination,
+            snapshot,
+        })
     }
 
     /// # Errors
@@ -175,7 +186,7 @@ impl Request {
         self,
         tasks: &gds::service::task_manager::Scope,
         cancel: tokio_util::sync::CancellationToken,
-    ) -> gds::service::task_manager::Task<Result<PathBuf, Error>> {
+    ) -> gds::service::task_manager::Task<Result<Renamed, Error>> {
         tasks.spawn_blocking_named("Rename file", move || {
             if cancel.is_cancelled() {
                 Err(Error::Cancelled)

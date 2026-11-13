@@ -123,14 +123,7 @@ impl Browser {
                             .history
                             .record(operation_history::Entry::new(
                                 operation_history::Kind::Copy,
-                                report
-                                    .completed
-                                    .iter()
-                                    .filter_map(|source| source.name().ok())
-                                    .map(|name| {
-                                        operation_history::Step::trash(destination.join(name))
-                                    })
-                                    .collect(),
+                                report.undo,
                             ));
                         if !report.completed.is_empty() {
                             this.refresh_after_file_operation(&[destination], cx);
