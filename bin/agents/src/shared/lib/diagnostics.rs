@@ -1,7 +1,7 @@
 //! User notices and the current process's frontend diagnostic log.
 
+use gds::app::AppExt as _;
 pub(crate) use gds::service::logs as log;
-pub(crate) use gds::ui::logs::{install as init, store};
 use gds::ui::notifications::surface;
 
 #[cfg(all(test, feature = "gui-tests"))]
@@ -20,6 +20,10 @@ use gpui_kit::{
 };
 use log::Level;
 use std::hash::{DefaultHasher, Hash, Hasher};
+
+pub(crate) fn store(cx: &App) -> Option<log::Store> {
+    cx.gds().ui().logs().store()
+}
 
 pub(crate) fn record(level: Level, title: &str, message: &str, cx: &mut App) {
     if let Some(store) = store(cx) {

@@ -1,4 +1,5 @@
 use super::*;
+use gds::app::AppExt as _;
 use gpui_kit::{ScrollDelta, TestAppContext, point, px, size, test::TestWindowExt};
 
 struct TestConfiguration {
@@ -8,6 +9,7 @@ impl gpui_kit::Global for TestConfiguration {}
 
 pub(super) fn init(cx: &mut App) {
     gpui_kit::init(cx);
+    cx.gds_mut().tasks().init_test(false);
     if !cx.has_global::<crate::shared::config::Configuration>() {
         let directory = tempfile::tempdir().expect("frontend settings");
         crate::shared::config::init(Some(directory.path().join("frontend.json")), cx);
@@ -144,7 +146,11 @@ fn switching_management_preserves_backend_drafts_and_notifications(cx: &mut Test
     cx.update(|cx| {
         init(cx);
         crate::shared::config::init(Some(directory.path().join("settings.json")), cx);
-        crate::entities::agent::init(first.clone(), runtime.handle().clone(), cx);
+        crate::entities::agent::init(
+            first.clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            cx,
+        );
     });
     cx.open_window(size(px(760.), px(680.)), |window, cx| {
         let original = shared(window, cx);
@@ -155,7 +161,11 @@ fn switching_management_preserves_backend_drafts_and_notifications(cx: &mut Test
             page.editor = Editor::Add(AgentSpec::acp("", Command::new("", [])));
             page.query = "original query".into();
         });
-        crate::entities::agent::init(second.clone(), runtime.handle().clone(), cx);
+        crate::entities::agent::init(
+            second.clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            cx,
+        );
         let other = shared(window, cx);
         assert_ne!(original.entity_id(), other.entity_id());
         assert!(other.read(cx).query.is_empty());
@@ -171,7 +181,11 @@ fn switching_management_preserves_backend_drafts_and_notifications(cx: &mut Test
             cx.global::<crate::entities::agent::Changes>().server,
             Some(first.clone())
         );
-        crate::entities::agent::init(first.clone(), runtime.handle().clone(), cx);
+        crate::entities::agent::init(
+            first.clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
+            cx,
+        );
         let restored = shared(window, cx);
         assert_eq!(original.entity_id(), restored.entity_id());
         assert_eq!(

@@ -85,7 +85,7 @@ fn nonempty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn parse(objects: &Objects) -> Snapshot {
+async fn parse(objects: &Objects) -> Snapshot {
     let mut snapshot = Snapshot::default();
     for (path, interfaces) in objects {
         let Some(drive) = interfaces.get(DRIVE) else {
@@ -186,7 +186,8 @@ fn parse(objects: &Objects) -> Snapshot {
         );
         // kernfs gives a newly attached block object a new inode even if Linux
         // reuses its major/minor pair. This also covers devices without a Drive.
-        let kernel_identity = std::fs::metadata(sysfs)
+        let kernel_identity = tokio::fs::metadata(sysfs)
+            .await
             .map(|metadata| metadata.ino())
             .unwrap_or_default();
         let attachment = format!("{detected}:{media}:{device_number}:{kernel_identity}");
@@ -228,7 +229,7 @@ async fn read(connection: &Connection) -> Result<Snapshot, Error> {
         .call("GetManagedObjects", &())
         .await
         .map_err(unavailable)?;
-    Ok(parse(&objects))
+    Ok(parse(&objects).await)
 }
 
 fn unavailable(error: zbus::Error) -> Error {

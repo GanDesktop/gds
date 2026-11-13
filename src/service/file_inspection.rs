@@ -101,6 +101,9 @@ impl Source {
                         result.metadata = Field::Available(Metadata::File(FileFacts::Audio(
                             audio::Metadata::from_file(&file).into(),
                         )));
+                        if cancel.is_cancelled() {
+                            return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
+                        }
                         thumbnail::cover(&file)
                     })
                 } else {
@@ -144,14 +147,14 @@ impl Source {
             },
             _ => {}
         }
-        let bytes = metadata::read_prefix(&self.path, metadata::PREFIX_BYTES)?;
-        Ok(metadata::probe_file(
+        metadata::probe_path(
+            &self.path,
             self.size,
             metadata::ProbeHint {
                 text: self.kind == Kind::Text,
                 audio: self.kind == Kind::Audio,
             },
-            &bytes,
-        ))
+        )
+        .map_err(Error::from)
     }
 }

@@ -45,7 +45,7 @@ impl Global for Palette {}
 
 impl Palette {
     /// Read the same snapshot used to populate GPUI Kit's theme.
-    pub fn current(cx: &App) -> Self {
+    pub(crate) fn current(cx: &App) -> Self {
         cx.try_global::<Self>().copied().unwrap_or_else(|| {
             let colors = cx.theme();
             let mode = if colors.background.l < 0.5 {

@@ -379,7 +379,7 @@ impl Workspace {
                                     rounded_full;
                                 };
                                 when: $(!self.window.compact && !self.can_send(cx)), {
-                                    bg: $(gds::appearance::theme::Colors::current(cx).hover());
+                                    bg: $(cx.gds().appearance().theme().colors().hover());
                                 };
                         },
                 ],

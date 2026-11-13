@@ -36,8 +36,16 @@ impl Report {
 /// Child files keep their execute bits; directories are changed after their children
 /// so removing directory access does not prevent the rest of the traversal.
 /// Failures are collected while processing the remaining items.
-pub(crate) fn apply(path: &Path, access: u32, recursive: bool) -> Report {
+pub(crate) fn apply_cancellable(
+    path: &Path,
+    access: u32,
+    recursive: bool,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Report {
     let mut report = Report::default();
+    if cancel.is_cancelled() {
+        return report;
+    }
     if !recursive {
         report.record(path, save(path, access));
         return report;
@@ -47,6 +55,9 @@ pub(crate) fn apply(path: &Path, access: u32, recursive: bool) -> Report {
         .follow_root_links(false)
         .contents_first(true)
     {
+        if cancel.is_cancelled() {
+            break;
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
@@ -62,19 +73,13 @@ pub(crate) fn apply(path: &Path, access: u32, recursive: bool) -> Report {
             }
             continue;
         }
-        let result = if entry.file_type().is_dir() || entry.depth() == 0 {
-            save(current, access)
+        let preserve_execute = !entry.file_type().is_dir() && entry.depth() > 0;
+        let preserve_mask = if preserve_execute {
+            !ACCESS_BITS | EXECUTE_BITS
         } else {
-            entry
-                .metadata()
-                .map_err(|error| Error::Filesystem(error.into()))
-                .and_then(|metadata| {
-                    let mode =
-                        (access & !EXECUTE_BITS) | (metadata.permissions().mode() & EXECUTE_BITS);
-                    save(current, mode)
-                })
+            !ACCESS_BITS
         };
-        report.record(current, result);
+        report.record(current, save_preserving(current, access, preserve_mask));
     }
     report
 }
@@ -99,12 +104,54 @@ pub(crate) fn read(path: &Path) -> Result<u32, Error> {
     Ok(metadata.permissions().mode())
 }
 
-/// Replace only the nine access bits, retaining the current special mode bits.
+/// Replace only the nine access bits, retaining the current special mode bits,
+/// without following symbolic links at any step.
 ///
 /// # Errors
 /// Reports inaccessible paths, symbolic links and permission changes denied by the OS.
 pub(crate) fn save(path: &Path, access: u32) -> Result<(), Error> {
-    let mode = (read(path)? & !ACCESS_BITS) | (access & ACCESS_BITS);
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+    save_preserving(path, access, !ACCESS_BITS)
+}
+
+fn save_preserving(path: &Path, access: u32, preserve_mask: u32) -> Result<(), Error> {
+    use rustix::{
+        fs::{CWD, FileType, Mode, OFlags, fstat, openat},
+        io::Errno,
+    };
+
+    #[cfg(target_os = "linux")]
+    let open_flags = OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    #[cfg(not(target_os = "linux"))]
+    let open_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+
+    let fd = match openat(CWD, path, open_flags, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(Errno::LOOP) => return Err(Error::Symlink),
+        Err(error) => return Err(io::Error::from(error).into()),
+    };
+    let stat = fstat(&fd).map_err(io::Error::from)?;
+    if FileType::from_raw_mode(stat.st_mode) == FileType::Symlink {
+        return Err(Error::Symlink);
+    }
+    let writable_mask = ACCESS_BITS & !preserve_mask;
+    let mode = (stat.st_mode & preserve_mask) | (access & writable_mask);
+    #[cfg(target_os = "linux")]
+    {
+        use rustix::fs::{AtFlags, chmodat};
+        use std::os::fd::AsRawFd;
+
+        let fd_path = format!("/proc/self/fd/{}", fd.as_raw_fd());
+        chmodat(CWD, fd_path, Mode::from_raw_mode(mode), AtFlags::empty())
+            .map_err(io::Error::from)?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        use rustix::fs::fchmod;
+
+        fchmod(&fd, Mode::from_raw_mode(mode)).map_err(io::Error::from)?;
+    }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

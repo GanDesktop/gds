@@ -1,5 +1,6 @@
 //! Theme-aware secondary surfaces for floating controls inside an application.
 
+use crate::app::AppExt as _;
 use gpui_kit::{prelude::*, *};
 
 const GLASS_RADIUS: f32 = 20.;
@@ -15,7 +16,7 @@ const CONTACT_SPREAD: f32 = -2.;
 
 /// A translucent glass panel with an even tint and a raised rim.
 pub fn glass_panel(opacity: f32, cx: &App) -> Div {
-    let colors = crate::appearance::theme::Colors::current(cx);
+    let colors = cx.gds().appearance().theme().colors();
     let highlight = colors.panel_foreground.opacity(HIGHLIGHT_OPACITY);
     let face = colors.panel.opacity(opacity * FACE_OPACITY);
     let shadows = vec![

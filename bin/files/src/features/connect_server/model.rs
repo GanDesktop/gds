@@ -1,10 +1,13 @@
 use gds::service::remote::{Address, Credentials, Protocol};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+
 const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
     .remove(b'_')
     .remove(b'~');
+pub(super) const DEFAULT_SFTP_PORT: u16 = 22;
+pub(super) const DEFAULT_SMB_PORT: u16 = 445;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Intent {
@@ -35,6 +38,12 @@ pub(super) struct Details {
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Error {
+    #[error("a server protocol must be selected")]
+    Protocol,
+    #[error("a username is required")]
+    User,
+    #[error("an absolute private key path is required")]
+    Key,
     #[error("a server hostname or IP address is required")]
     Host,
     #[error("port must be between 1 and 65535")]
@@ -50,6 +59,9 @@ pub(super) enum Error {
 impl Error {
     pub fn label(&self) -> &'static str {
         match self {
+            Self::Protocol => "remote-choose-protocol",
+            Self::User => "remote-missing-user",
+            Self::Key => "remote-missing-key",
             Self::Host => "remote-invalid-host",
             Self::Port => "remote-invalid-port",
             Self::Path => "remote-invalid-path",
@@ -90,8 +102,8 @@ impl Details {
         url.set_port(
             (port
                 != match self.protocol {
-                    Protocol::Sftp => 22,
-                    Protocol::Smb => 445,
+                    Protocol::Sftp => DEFAULT_SFTP_PORT,
+                    Protocol::Smb => DEFAULT_SMB_PORT,
                 })
             .then_some(port),
         )

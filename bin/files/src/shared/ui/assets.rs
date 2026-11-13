@@ -22,8 +22,9 @@ impl AssetSource for Assets {
         let mut assets = gpui_kit::assets::AllAssets.list(path)?;
         if APP_ICON.starts_with(path) {
             assets.push(APP_ICON.into());
-            assets.sort();
         }
+        assets.sort();
+        assets.dedup();
         Ok(assets)
     }
 }

@@ -18,7 +18,7 @@ pub const DIALOG_CONTEXT: &str = "Dialog";
 const ACTION_GAP: f32 = 8.;
 
 /// Bind the dialog decisions once at startup.
-pub fn register(cx: &mut App) {
+pub(crate) fn register(cx: &mut App) {
     let bindings = DialogCommand::ALL
         .into_iter()
         .map(|command| command.binding(cx))

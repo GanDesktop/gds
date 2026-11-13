@@ -51,9 +51,14 @@ fn cursors(window: &HistoryWindow) -> Vec<u64> {
 }
 
 async fn open(path: &Path) -> Cache {
-    Cache::open_at(path, &ConnectionOptions::default(), DEFAULT_BYTE_LIMIT)
-        .await
-        .expect("open cache")
+    Cache::open_at(
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
+        path,
+        &ConnectionOptions::default(),
+        DEFAULT_BYTE_LIMIT,
+    )
+    .await
+    .expect("open cache")
 }
 
 async fn database(path: &Path) -> Database {
@@ -215,12 +220,22 @@ async fn namespaces_include_auth_references_without_reading_credentials() {
     });
     let mut bob = alice.clone();
     bob.tls.as_mut().expect("tls").private_key = "/nonexistent/bob-key".into();
-    let a = Cache::open_at(&path, &alice, DEFAULT_BYTE_LIMIT)
-        .await
-        .expect("alice cache");
-    let b = Cache::open_at(&path, &bob, DEFAULT_BYTE_LIMIT)
-        .await
-        .expect("bob cache");
+    let a = Cache::open_at(
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
+        &path,
+        &alice,
+        DEFAULT_BYTE_LIMIT,
+    )
+    .await
+    .expect("alice cache");
+    let b = Cache::open_at(
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
+        &path,
+        &bob,
+        DEFAULT_BYTE_LIMIT,
+    )
+    .await
+    .expect("bob cache");
     let id = SessionId::new();
     a.store_window(&window(id, 1, 2, None))
         .await
@@ -343,6 +358,7 @@ async fn byte_limit_evicts_lru_and_skips_oversized_sessions() {
         .await
         .expect("size");
     let cache = Cache::open_at(
+        &gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false),
         &path,
         &ConnectionOptions::default(),
         (size * 2 + 100) as u64,
@@ -500,14 +516,26 @@ async fn private_paths_reject_symlinks_and_never_chmod_existing_directories() {
     let linked = directory.path().join("linked.sqlite");
     symlink(&path, &linked).expect("symlink");
     assert!(
-        Cache::open_at(&linked, &ConnectionOptions::default(), DEFAULT_BYTE_LIMIT)
-            .await
-            .is_err()
+        Cache::open_at(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false
+            ),
+            &linked,
+            &ConnectionOptions::default(),
+            DEFAULT_BYTE_LIMIT
+        )
+        .await
+        .is_err()
     );
     let linked_dir = directory.path().join("linked-dir");
     symlink(&root, &linked_dir).expect("directory symlink");
     assert!(
         Cache::open_at(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false
+            ),
             linked_dir.join("another.sqlite"),
             &ConnectionOptions::default(),
             DEFAULT_BYTE_LIMIT
@@ -520,6 +548,10 @@ async fn private_paths_reject_symlinks_and_never_chmod_existing_directories() {
     std::fs::set_permissions(&public, std::fs::Permissions::from_mode(0o755)).expect("set fixture");
     assert!(
         Cache::open_at(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false
+            ),
             public.join("history.sqlite"),
             &ConnectionOptions::default(),
             DEFAULT_BYTE_LIMIT
@@ -539,8 +571,16 @@ async fn private_paths_reject_symlinks_and_never_chmod_existing_directories() {
     sidecar.push("-wal");
     symlink(directory.path().join("missing"), &sidecar).expect("sidecar symlink");
     assert!(
-        Cache::open_at(&path, &ConnectionOptions::default(), DEFAULT_BYTE_LIMIT)
-            .await
-            .is_err()
+        Cache::open_at(
+            &gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false
+            ),
+            &path,
+            &ConnectionOptions::default(),
+            DEFAULT_BYTE_LIMIT
+        )
+        .await
+        .is_err()
     );
 }

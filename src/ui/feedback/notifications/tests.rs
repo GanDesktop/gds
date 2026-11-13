@@ -115,6 +115,7 @@ fn reduced_motion_preserves_notification_timeout_and_manual_close(
 fn keyboard_cursor_pointer_activation_and_close_restore_the_previous_target(
     cx: &mut gpui_kit::TestAppContext,
 ) {
+    use crate::app::AppExt as _;
     use crate::ui::actions::{CloseNotification, FocusNotifications};
     use gpui_kit::{component::Root, test::TestWindowExt};
 
@@ -140,7 +141,11 @@ fn keyboard_cursor_pointer_activation_and_close_restore_the_previous_target(
     }
     cx.update(|cx| {
         gpui_kit::init(cx);
-        crate::appearance::theme::apply(&Default::default(), cx).expect("application theme");
+        cx.gds_mut()
+            .appearance()
+            .theme()
+            .apply(&Default::default())
+            .expect("application theme");
         cx.set_reduce_motion(true);
         cx.bind_keys([
             gpui_kit::KeyBinding::new("alt-n", FocusNotifications, None),

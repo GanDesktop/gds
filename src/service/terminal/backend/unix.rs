@@ -94,14 +94,20 @@ impl Backend {
         self
     }
 
-    pub(crate) fn run(mut self, shared: Arc<Shared>) {
+    pub(crate) fn run(mut self, shared: Arc<Shared>, tasks: crate::service::task_manager::Scope) {
         let mut parser = Processor::new();
-        // A current-thread driver stays on the existing worker; the UI needs no runtime.
-        let result = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(anyhow::Error::from)
-            .and_then(|runtime| runtime.block_on(self.io_loop(&shared, &mut parser)));
+        let cancel = tasks.token();
+        let result = match tasks.block_on_named("Read and write terminal PTY", async {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => Ok(None),
+                result = self.io_loop(&shared, &mut parser) => result,
+            }
+        }) {
+            Ok(result) => result,
+            Err(crate::service::task_manager::Error::Closed(_)) => Ok(None),
+            Err(error) => Err(error.into()),
+        };
         if let Err(error) = &result {
             shared.state.fail(error);
         }
@@ -440,10 +446,24 @@ impl Backend {
 
     fn shutdown(&mut self) -> io::Result<Option<ExitStatus>> {
         let mut error = None;
+        let mut reaped_status = None;
+        if let Some(child) = self.child.as_mut() {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    self.reaped = true;
+                    self.child = None;
+                    reaped_status = Some(status);
+                }
+                Ok(None) => {}
+                Err(failure) => {
+                    error.get_or_insert(failure);
+                }
+            }
+        }
         let mut groups = match self.process_groups() {
             Ok(groups) => groups,
             Err(failure) => {
-                error = Some(failure);
+                error.get_or_insert(failure);
                 self.pid
                     .filter(|_| !self.reaped)
                     .and_then(|pid| i32::try_from(pid).ok())
@@ -451,12 +471,12 @@ impl Backend {
                     .collect()
             }
         };
-        for signal in [Signal::SIGHUP, Signal::SIGCONT] {
-            if let Err(failure) = Self::signal_groups(&groups, signal) {
-                error.get_or_insert(failure);
-            }
-        }
         if !groups.is_empty() {
+            for signal in [Signal::SIGHUP, Signal::SIGCONT] {
+                if let Err(failure) = Self::signal_groups(&groups, signal) {
+                    error.get_or_insert(failure);
+                }
+            }
             // Only this worker waits; Drop/terminate on the UI never joins it.
             std::thread::sleep(SHUTDOWN_GRACE);
             match self.process_groups() {
@@ -490,7 +510,7 @@ impl Backend {
                 }
             }
         } else {
-            None
+            reaped_status
         };
         error.map_or(Ok(status), Err)
     }

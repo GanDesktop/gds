@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::AppExt as _;
 use gpui_kit::{
     AppContext, Bounds, Context, Entity, Pixels, Render, TestAppContext,
     component::{ActiveTheme, Root, input::InputState, select::SelectState, switch::Switch},
@@ -74,7 +75,7 @@ fn borders_within(window: &Window, bounds: Bounds<Pixels>) -> Vec<gpui_kit::Quad
 
 #[gpui_kit::test]
 fn thin_control_focus_preserves_geometry_contrast_and_activation(cx: &mut TestAppContext) {
-    use crate::appearance::theme::{self, Appearance, BuiltinTheme, ModePreference};
+    use crate::appearance::theme::{Appearance, BuiltinTheme, ModePreference};
     cx.update(|cx| {
         gpui_kit::init(cx);
         cx.set_reduce_motion(true);
@@ -101,15 +102,15 @@ fn thin_control_focus_preserves_geometry_contrast_and_activation(cx: &mut TestAp
     for builtin in [BuiltinTheme::Bamboo, BuiltinTheme::HighContrast] {
         for mode in [ModePreference::Light, ModePreference::Dark] {
             cx.update_window(window.into(), |_, window, cx| {
-                theme::apply(
-                    &Appearance {
+                cx.gds_mut()
+                    .appearance()
+                    .theme()
+                    .apply(&Appearance {
                         builtin,
                         mode,
                         ..Default::default()
-                    },
-                    cx,
-                )
-                .expect("theme");
+                    })
+                    .expect("theme");
                 window.blur(cx);
                 window.render_frame(cx);
                 window.click("switch", cx);
@@ -237,7 +238,7 @@ fn shortcut_button_grows_reverses_and_releases_its_hint_space(cx: &mut TestAppCo
     use std::time::Duration;
     cx.update(|cx| {
         gpui_kit::init(cx);
-        crate::ui::keytips::install(cx);
+        cx.gds_mut().ui().keytips().install();
         cx.bind_keys([KeyBinding::new(
             "alt-n",
             crate::ui::actions::FocusNotifications,

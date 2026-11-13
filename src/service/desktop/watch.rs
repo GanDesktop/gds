@@ -2,10 +2,39 @@
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 use tokio::sync::mpsc::Sender;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DirectoryIdentity {
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+impl DirectoryIdentity {
+    fn of(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        if !metadata.is_dir() {
+            return None;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            Some(Self {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Some(Self {})
+        }
+    }
+}
 
 // Resolve the existing prefix even when the watched file has not been created.
 // This makes parent-link retargeting visible in the cached target identity too.
@@ -19,7 +48,7 @@ fn resolved_target(path: &Path) -> Option<PathBuf> {
 pub struct Sources {
     requested: Vec<PathBuf>,
     targets: Vec<PathBuf>,
-    directories: BTreeSet<PathBuf>,
+    directories: BTreeMap<PathBuf, DirectoryIdentity>,
     sender: Sender<()>,
     watcher: Option<RecommendedWatcher>,
 }
@@ -29,7 +58,7 @@ impl Sources {
         Self {
             requested: Vec::new(),
             targets: Vec::new(),
-            directories: BTreeSet::new(),
+            directories: BTreeMap::new(),
             sender,
             watcher: None,
         }
@@ -54,14 +83,25 @@ impl Sources {
             .iter()
             .flat_map(|path| std::iter::once(path.clone()).chain(resolved_target(path)))
             .collect();
-        let directories: BTreeSet<_> = targets
-            .iter()
+        let mut essential = BTreeSet::new();
+        let mut directories = BTreeMap::new();
+        for target in &targets {
             // A watch on a symlinked directory follows its current inode. Also
-            // watch the ancestors so replacing any path component wakes refresh.
-            .flat_map(|path| path.ancestors().skip(1))
-            .filter(|parent| parent.is_dir())
-            .map(ToOwned::to_owned)
-            .collect();
+            // watch the ancestors and record directory identities so replacing
+            // a real directory at the same path rebinds the platform watch.
+            let mut has_leaf_parent = false;
+            for ancestor in target.ancestors().skip(1) {
+                let Some(identity) = DirectoryIdentity::of(ancestor) else {
+                    continue;
+                };
+                let directory = ancestor.to_path_buf();
+                if !has_leaf_parent {
+                    has_leaf_parent = true;
+                    essential.insert(directory.clone());
+                }
+                directories.insert(directory, identity);
+            }
+        }
         let targets: Vec<_> = targets.into_iter().collect();
         if targets == self.targets && directories == self.directories {
             return Ok(());
@@ -82,14 +122,26 @@ impl Sources {
                 {
                     let _ = sender.try_send(());
                 }
-                Err(error) => eprintln!("desktop file watcher: {error}"),
+                Err(error) => tracing::warn!(%error, "desktop file watcher error"),
                 _ => {}
             })?;
-        for directory in &directories {
-            watcher.watch(directory, RecursiveMode::NonRecursive)?;
+        let mut active_directories = directories.clone();
+        for directory in directories.keys() {
+            if let Err(error) = watcher.watch(directory, RecursiveMode::NonRecursive) {
+                if matches!(error.kind, notify::ErrorKind::PathNotFound) {
+                    tracing::debug!(?directory, %error, "skipping vanished watch directory");
+                    active_directories.remove(directory);
+                } else if !essential.contains(directory)
+                    && !matches!(error.kind, notify::ErrorKind::MaxFilesWatch)
+                {
+                    tracing::debug!(?directory, %error, "skipping inaccessible watch ancestor");
+                } else {
+                    return Err(error);
+                }
+            }
         }
         self.targets = targets;
-        self.directories = directories;
+        self.directories = active_directories;
         self.watcher = Some(watcher);
         Ok(())
     }

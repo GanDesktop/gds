@@ -15,14 +15,15 @@ impl Frame {
         let width = self.sidebar_width;
         let boundary = width.unwrap_or(0.);
         let divider = self.vertical_divider(cx);
+        let theme = cx.gds().appearance().theme();
         el! {
             .div { relative; flex; w_full; h: FOOTER_HEIGHT.px; flex_shrink_0 } [
                 @if (let Some(width) = width)
-                    .div { # "frame-footer-sidebar"; test_support; w: width.px; h_full; flex_shrink_0; bg: $(theme::sidebar_background(cx)) } [sidebar_status],
+                    .div { # "frame-footer-sidebar"; test_support; w: width.px; h_full; flex_shrink_0; bg: $(theme.sidebar_background()) } [sidebar_status],
                 @end,
                 .div {
                     flex_1; min_w_0; h_full; flex; items_center; gap: ITEM_GAP.px;
-                    bg: $(theme::content_background(cx)); px: STATUS_PADDING.px;
+                    bg: $(theme.content_background()); px: STATUS_PADDING.px;
                 } [
                     .div { flex_1; min_w_0; flex; items_center; gap: ITEM_GAP.px } [status],
                     controls,

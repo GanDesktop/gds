@@ -1,0 +1,549 @@
+# MIME presentation rules, embedded in GDS Files at build time.
+# MIME recognition comes from the system shared-mime-info database.
+# category: text, code, document, image, audio, video, archive, executable, font, binary.
+# name is optional; omit it to display the MIME type itself.
+# List all MIME aliases that share the same category and short name together.
+
+[[formats]]
+category = "image"
+name = "PNG"
+mimes = ["image/png"]
+
+[[formats]]
+category = "image"
+name = "JPEG"
+mimes = ["image/jpeg"]
+
+[[formats]]
+category = "image"
+name = "GIF"
+mimes = ["image/gif"]
+
+[[formats]]
+category = "image"
+name = "WebP"
+mimes = ["image/webp"]
+
+[[formats]]
+category = "image"
+name = "SVG"
+mimes = ["image/svg+xml"]
+
+[[formats]]
+category = "image"
+name = "BMP"
+mimes = ["image/bmp", "image/x-bmp"]
+
+[[formats]]
+category = "image"
+name = "TIFF"
+mimes = ["image/tiff"]
+
+[[formats]]
+category = "image"
+name = "ICO"
+mimes = ["image/x-icon", "image/vnd.microsoft.icon"]
+
+[[formats]]
+category = "image"
+name = "AVIF"
+mimes = ["image/avif"]
+
+[[formats]]
+category = "image"
+name = "HEIC"
+mimes = ["image/heic"]
+
+[[formats]]
+category = "image"
+name = "HEIF"
+mimes = ["image/heif"]
+
+[[formats]]
+category = "image"
+name = "JPEG XL"
+mimes = ["image/jxl"]
+
+[[formats]]
+category = "image"
+name = "TGA"
+mimes = ["image/x-tga", "image/x-targa"]
+
+[[formats]]
+category = "image"
+name = "DDS"
+mimes = ["image/vnd-ms.dds", "image/x-dds"]
+
+[[formats]]
+category = "image"
+name = "OpenEXR"
+mimes = ["image/x-exr", "image/openexr"]
+
+[[formats]]
+category = "image"
+name = "Radiance HDR"
+mimes = ["image/vnd.radiance", "image/x-hdr"]
+
+[[formats]]
+category = "image"
+name = "QOI"
+mimes = ["image/qoi"]
+
+[[formats]]
+category = "image"
+name = "PNM"
+mimes = ["image/x-portable-bitmap", "image/x-portable-graymap", "image/x-portable-pixmap", "image/x-portable-anymap"]
+
+[[formats]]
+category = "image"
+name = "XCF"
+mimes = ["image/x-xcf"]
+
+[[formats]]
+category = "image"
+name = "Photoshop"
+mimes = ["image/vnd.adobe.photoshop", "image/x-psd"]
+
+[[formats]]
+category = "video"
+name = "MPEG-4"
+mimes = ["video/mp4", "video/x-m4v"]
+
+[[formats]]
+category = "video"
+name = "WebM"
+mimes = ["video/webm"]
+
+[[formats]]
+category = "video"
+name = "Matroska"
+mimes = ["video/x-matroska"]
+
+[[formats]]
+category = "video"
+name = "QuickTime"
+mimes = ["video/quicktime"]
+
+[[formats]]
+category = "video"
+name = "AVI"
+mimes = ["video/x-msvideo"]
+
+[[formats]]
+category = "video"
+name = "MPEG"
+mimes = ["video/mpeg"]
+
+[[formats]]
+category = "video"
+name = "MPEG-TS"
+mimes = ["video/mp2t"]
+
+[[formats]]
+category = "video"
+name = "Ogg Video"
+mimes = ["video/ogg"]
+
+[[formats]]
+category = "video"
+name = "Flash Video"
+mimes = ["video/x-flv"]
+
+[[formats]]
+category = "video"
+name = "Windows Media"
+mimes = ["video/x-ms-wmv", "video/x-ms-asf"]
+
+[[formats]]
+category = "video"
+name = "3GPP"
+mimes = ["video/3gpp"]
+
+[[formats]]
+category = "audio"
+name = "MP3"
+mimes = ["audio/mpeg"]
+
+[[formats]]
+category = "audio"
+name = "FLAC"
+mimes = ["audio/flac", "audio/x-flac"]
+
+[[formats]]
+category = "audio"
+name = "WAV"
+mimes = ["audio/wav", "audio/x-wav", "audio/vnd.wave"]
+
+[[formats]]
+category = "audio"
+name = "Ogg"
+mimes = ["audio/ogg"]
+
+[[formats]]
+category = "audio"
+name = "Opus"
+mimes = ["audio/opus"]
+
+[[formats]]
+category = "audio"
+name = "AAC"
+mimes = ["audio/aac"]
+
+[[formats]]
+category = "audio"
+name = "M4A"
+mimes = ["audio/mp4", "audio/m4a", "audio/x-m4a"]
+
+[[formats]]
+category = "audio"
+name = "AIFF"
+mimes = ["audio/x-aiff"]
+
+[[formats]]
+category = "audio"
+name = "MIDI"
+mimes = ["audio/midi", "audio/x-midi"]
+
+[[formats]]
+category = "audio"
+name = "Monkey's Audio"
+mimes = ["audio/x-ape"]
+
+[[formats]]
+category = "audio"
+name = "WavPack"
+mimes = ["audio/x-wavpack"]
+
+[[formats]]
+category = "archive"
+name = "ZIP"
+mimes = ["application/zip", "application/x-zip-compressed"]
+
+[[formats]]
+category = "archive"
+name = "Gzip"
+mimes = ["application/gzip", "application/x-gzip"]
+
+[[formats]]
+category = "archive"
+name = "Bzip2"
+mimes = ["application/x-bzip2"]
+
+[[formats]]
+category = "archive"
+name = "XZ"
+mimes = ["application/x-xz"]
+
+[[formats]]
+category = "archive"
+name = "Zstandard"
+mimes = ["application/zstd", "application/x-zstd"]
+
+[[formats]]
+category = "archive"
+name = "7-Zip"
+mimes = ["application/x-7z-compressed"]
+
+[[formats]]
+category = "archive"
+name = "RAR"
+mimes = ["application/vnd.rar", "application/x-rar", "application/x-rar-compressed"]
+
+[[formats]]
+category = "archive"
+name = "tar"
+mimes = ["application/x-tar"]
+
+[[formats]]
+category = "archive"
+name = "LZ4"
+mimes = ["application/x-lz4"]
+
+[[formats]]
+category = "archive"
+name = "LZMA"
+mimes = ["application/x-lzma"]
+
+[[formats]]
+category = "archive"
+name = "ISO"
+mimes = ["application/x-iso9660-image"]
+
+[[formats]]
+category = "archive"
+name = "JAR"
+mimes = ["application/java-archive"]
+
+[[formats]]
+category = "archive"
+name = "Debian package"
+mimes = ["application/vnd.debian.binary-package"]
+
+[[formats]]
+category = "archive"
+name = "RPM"
+mimes = ["application/x-rpm"]
+
+[[formats]]
+category = "document"
+name = "PDF"
+mimes = ["application/pdf"]
+
+[[formats]]
+category = "document"
+name = "RTF"
+mimes = ["application/rtf", "text/rtf"]
+
+[[formats]]
+category = "document"
+name = "Word"
+mimes = ["application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
+
+[[formats]]
+category = "document"
+name = "Excel"
+mimes = ["application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]
+
+[[formats]]
+category = "document"
+name = "PowerPoint"
+mimes = ["application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation"]
+
+[[formats]]
+category = "document"
+name = "EPUB"
+mimes = ["application/epub+zip"]
+
+[[formats]]
+category = "document"
+name = "Mobipocket"
+mimes = ["application/x-mobipocket-ebook"]
+
+[[formats]]
+category = "document"
+name = "ODT"
+mimes = ["application/vnd.oasis.opendocument.text"]
+
+[[formats]]
+category = "document"
+name = "ODS"
+mimes = ["application/vnd.oasis.opendocument.spreadsheet"]
+
+[[formats]]
+category = "document"
+name = "ODP"
+mimes = ["application/vnd.oasis.opendocument.presentation"]
+
+[[formats]]
+category = "document"
+name = "ODG"
+mimes = ["application/vnd.oasis.opendocument.graphics"]
+
+[[formats]]
+category = "document"
+name = "PostScript"
+mimes = ["application/postscript"]
+
+[[formats]]
+category = "executable"
+name = "ELF"
+mimes = ["application/x-executable", "application/x-pie-executable", "application/x-sharedlib", "application/x-elf"]
+
+[[formats]]
+category = "executable"
+name = "PE"
+mimes = ["application/vnd.microsoft.portable-executable", "application/x-dosexec", "application/x-msdownload"]
+
+[[formats]]
+category = "executable"
+name = "Mach-O"
+mimes = ["application/x-mach-binary"]
+
+[[formats]]
+category = "executable"
+name = "WebAssembly"
+mimes = ["application/wasm"]
+
+[[formats]]
+category = "font"
+name = "TrueType"
+mimes = ["font/ttf", "application/x-font-ttf", "application/font-sfnt"]
+
+[[formats]]
+category = "font"
+name = "OpenType"
+mimes = ["font/otf", "application/x-font-otf"]
+
+[[formats]]
+category = "font"
+name = "WOFF"
+mimes = ["font/woff", "application/font-woff"]
+
+[[formats]]
+category = "font"
+name = "WOFF2"
+mimes = ["font/woff2"]
+
+[[formats]]
+category = "font"
+name = "TrueType Collection"
+mimes = ["font/collection"]
+
+[[formats]]
+category = "text"
+mimes = ["text/plain"]
+
+[[formats]]
+category = "text"
+name = "Markdown"
+mimes = ["text/markdown", "text/x-markdown"]
+
+[[formats]]
+category = "text"
+name = "CSV"
+mimes = ["text/csv"]
+
+[[formats]]
+category = "text"
+name = "XML"
+mimes = ["text/xml", "application/xml"]
+
+[[formats]]
+category = "text"
+name = "JSON"
+mimes = ["application/json", "text/x-json"]
+
+[[formats]]
+category = "text"
+name = "TOML"
+mimes = ["application/toml", "text/x-toml"]
+
+[[formats]]
+category = "text"
+name = "YAML"
+mimes = ["application/x-yaml", "text/x-yaml", "text/yaml"]
+
+[[formats]]
+category = "text"
+name = "INI"
+mimes = ["application/x-ini", "text/x-ini"]
+
+[[formats]]
+category = "code"
+name = "HTML"
+mimes = ["text/html"]
+
+[[formats]]
+category = "code"
+name = "CSS"
+mimes = ["text/css"]
+
+[[formats]]
+category = "code"
+name = "Rust"
+mimes = ["text/rust", "text/x-rust"]
+
+[[formats]]
+category = "code"
+name = "Python"
+mimes = ["text/x-python", "application/x-python-code"]
+
+[[formats]]
+category = "code"
+name = "JavaScript"
+mimes = ["text/javascript", "application/javascript", "application/ecmascript"]
+
+[[formats]]
+category = "code"
+name = "TypeScript"
+mimes = ["application/typescript", "text/x-typescript"]
+
+[[formats]]
+category = "code"
+name = "C"
+mimes = ["text/x-c", "text/x-csrc", "text/x-chdr"]
+
+[[formats]]
+category = "code"
+name = "C++"
+mimes = ["text/x-c++src", "text/x-c++hdr"]
+
+[[formats]]
+category = "code"
+name = "C#"
+mimes = ["text/x-csharp"]
+
+[[formats]]
+category = "code"
+name = "Java"
+mimes = ["text/x-java", "text/x-java-source"]
+
+[[formats]]
+category = "code"
+name = "Go"
+mimes = ["text/x-go"]
+
+[[formats]]
+category = "code"
+name = "Shell"
+mimes = ["text/x-shellscript", "application/x-sh"]
+
+[[formats]]
+category = "code"
+name = "Ruby"
+mimes = ["text/x-ruby", "application/x-ruby"]
+
+[[formats]]
+category = "code"
+name = "PHP"
+mimes = ["text/x-php", "application/x-php"]
+
+[[formats]]
+category = "code"
+name = "Perl"
+mimes = ["application/x-perl", "text/x-perl"]
+
+[[formats]]
+category = "code"
+name = "Lua"
+mimes = ["text/x-lua"]
+
+[[formats]]
+category = "code"
+name = "Swift"
+mimes = ["text/x-swift"]
+
+[[formats]]
+category = "code"
+name = "Kotlin"
+mimes = ["text/x-kotlin"]
+
+[[formats]]
+category = "code"
+name = "Zig"
+mimes = ["text/x-zig"]
+
+[[formats]]
+category = "code"
+name = "Haskell"
+mimes = ["text/x-haskell"]
+
+[[formats]]
+category = "code"
+name = "SQL"
+mimes = ["application/sql", "text/x-sql"]
+
+[[formats]]
+category = "code"
+name = "Nix"
+mimes = ["text/x-nix"]
+
+[[formats]]
+category = "code"
+name = "Makefile"
+mimes = ["text/x-makefile"]
+
+[[formats]]
+category = "code"
+name = "CMake"
+mimes = ["text/x-cmake"]

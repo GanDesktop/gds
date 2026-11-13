@@ -7,8 +7,8 @@ use bas::{
     config::agent::{AgentSpec, Command},
     management::{Catalog, Source},
 };
+use gds::service::task_manager::Scope;
 use gpui_kit::{App, AppContext, Context, Entity, Global, Subscription, Task};
-use tokio::runtime::Handle;
 
 #[derive(Clone)]
 struct Shared(Entity<Metadata>);
@@ -26,13 +26,13 @@ struct Server {
 }
 
 pub(crate) struct Metadata {
-    runtime: Option<Handle>,
+    tasks: Option<Scope>,
     servers: BTreeMap<Target, Server>,
     _changes: Subscription,
 }
 
 impl Metadata {
-    fn new(runtime: Option<Handle>, cx: &mut Context<Self>) -> Self {
+    fn new(tasks: Option<Scope>, cx: &mut Context<Self>) -> Self {
         let changes = cx.observe_global::<crate::entities::agent::Changes>(|this, cx| {
             let changes = cx.global::<crate::entities::agent::Changes>();
             let Some(server) = changes.server.clone() else {
@@ -47,7 +47,7 @@ impl Metadata {
             this.refresh(server, cx);
         });
         Self {
-            runtime,
+            tasks,
             servers: BTreeMap::new(),
             _changes: changes,
         }
@@ -67,7 +67,7 @@ impl Metadata {
     }
 
     fn refresh(&mut self, server: Target, cx: &mut Context<Self>) {
-        let Some(runtime) = self.runtime.as_ref() else {
+        let Some(tasks) = self.tasks.as_ref() else {
             return;
         };
         let state = self.servers.entry(server.clone()).or_default();
@@ -75,9 +75,8 @@ impl Metadata {
             state.queued = true;
             return;
         }
-        let request =
-            crate::entities::agent::catalog::Service::new(server.clone(), runtime.clone())
-                .catalog(false);
+        let request = crate::entities::agent::catalog::Service::new(server.clone(), tasks.clone())
+            .catalog(false);
         self.begin_request(server, request, cx);
     }
 
@@ -119,12 +118,12 @@ impl Metadata {
 }
 
 /// Start one cached catalog request; subsequent windows share this entity.
-pub(crate) fn init(server: Target, runtime: Handle, cx: &mut App) {
+pub(crate) fn init(server: Target, tasks: Scope, cx: &mut App) {
     if cx.try_global::<crate::entities::agent::Changes>().is_none() {
         cx.set_global(crate::entities::agent::Changes::default());
     }
     if cx.try_global::<Shared>().is_none() {
-        let metadata = cx.new(|cx| Metadata::new(Some(runtime), cx));
+        let metadata = cx.new(|cx| Metadata::new(Some(tasks), cx));
         cx.set_global(Shared(metadata));
     }
     ensure(server, cx);

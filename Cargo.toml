@@ -58,10 +58,11 @@ required-features = ["nixes"]
 # capability that owns them; every feature enables the packages its own code
 # uses directly.
 default = []
+app = ["task-manager", "dep:gpui-kit", "dep:tracing"]
 task-manager = ["dep:tokio", "dep:tokio-util", "dep:thiserror", "dep:nix"]
 desktop-protocol = ["dep:serde"]
 persistence = ["dep:thiserror", "dep:tempfile", "dep:nix"]
-watch = ["dep:notify", "dep:tokio"]
+watch = ["dep:notify", "dep:tokio", "dep:tracing"]
 desktop = [
     "desktop-protocol", "watch", "dep:tokio", "dep:tracing", "dep:infer",
     "dep:open", "dep:thiserror", "dep:url", "dep:ashpd", "dep:zbus",
@@ -69,6 +70,7 @@ desktop = [
 ]
 file-tags = ["desktop", "dep:rustix"]
 storage = [
+    "task-manager",
     "dep:toasty", "dep:toasty-driver-sqlite", "dep:toasty-core",
     "dep:tokio", "dep:thiserror", "dep:nix",
 ]
@@ -80,7 +82,7 @@ terminal = [
 ]
 file-inspection = [
     "task-manager",
-    "dep:lofty",
+    "dep:lofty", "dep:mp4-atom",
     "dep:tracing", "dep:directories", "dep:image", "dep:png", "dep:resvg",
     "dep:thiserror", "dep:tempfile", "dep:url", "dep:md-5",
 ]
@@ -90,12 +92,14 @@ remote = [
     "dep:percent-encoding",
 ]
 appearance = [
+    "app", "task-manager",
     "watch", "dep:gpui-kit", "dep:font-kit", "dep:directories", "dep:tracing",
     "dep:serde", "dep:serde_json", "dep:thiserror", "dep:toml", "dep:rust-ini",
     "dep:zbus", "dep:futures-lite",
 ]
-i18n = ["dep:fluent-bundle", "dep:gpui-kit", "dep:serde", "dep:thiserror", "dep:unic-langid"]
+i18n = ["dep:fluent-bundle", "dep:fluent-syntax", "dep:gpui-kit", "dep:serde", "dep:thiserror", "dep:unic-langid"]
 ui = [
+    "app",
     "appearance", "i18n", "persistence", "logs", "terminal", "file-inspection",
     "dep:gds-settings-derive", "dep:gds-uim", "dep:gpui", "dep:anyhow",
     "dep:unicode-segmentation", "dep:unicode-width", "dep:chrono", "dep:serde_json",
@@ -186,8 +190,9 @@ toasty-core = { version = "=0.11.0", optional = true }
 portable-pty = { version = "=0.9.0", optional = true }
 alacritty_terminal = { version = "=0.26.0", optional = true }
 
-# Audio metadata and embedded artwork.
+# Audio and ISO-BMFF container metadata.
 lofty = { version = "0.25", optional = true }
+mp4-atom = { version = "0.17", optional = true }
 
 # Thumbnail rendering.
 # Thumbnail filenames and PNG metadata use already locked libraries.
@@ -218,6 +223,7 @@ font-kit = { package = "zed-font-kit", version = "=0.14.1-zed", optional = true 
 gpui-kit = { version = "=0.9.0", optional = true, features = ["gpui-fast"] }
 rust-ini = { version = "0.21", features = ["brackets-in-section-names"], optional = true }
 fluent-bundle = { version = "0.16", optional = true }
+fluent-syntax = { version = "0.12", optional = true }
 unic-langid = { version = "0.9", optional = true }
 
 # Shared UI.
@@ -274,6 +280,7 @@ toml = { version = "0.9" }
 [dev-dependencies]
 futures-lite = "2"
 regex = "1"
+serde_json = "1"
 tempfile = "3"
 bas = { package = "bas-client", git = "https://github.com/GanDesktop/bas", branch = "main" }
 bas-server = { git = "https://github.com/GanDesktop/bas", branch = "main" }

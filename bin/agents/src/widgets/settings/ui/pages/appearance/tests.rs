@@ -1,4 +1,5 @@
 use super::*;
+use gds::app::AppExt as _;
 use gpui_kit::{TestAppContext, component::slider::SliderValue, px, size, test::TestWindowExt};
 
 #[gpui_kit::test]
@@ -112,7 +113,7 @@ fn animations_are_searchable_saved_and_reset_without_changing_other_preferences(
 
 #[gpui_kit::test]
 fn builtin_palette_selection_applies_persists_and_resets_independently(cx: &mut TestAppContext) {
-    use gds::appearance::theme::{BuiltinTheme, Colors};
+    use gds::appearance::theme::BuiltinTheme;
     let directory = tempfile::tempdir().expect("isolated appearance");
     let path = directory.path().join("settings.json");
     std::fs::write(
@@ -133,7 +134,7 @@ fn builtin_palette_selection_applies_persists_and_resets_independently(cx: &mut 
         Root::new(view, window, cx)
     });
     let page = page.expect("appearance page");
-    let original = cx.update(|cx| Colors::current(cx));
+    let original = cx.update(|cx| cx.gds().appearance().theme().colors());
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         let select = page.read(cx).form.builtin.clone();
@@ -148,10 +149,10 @@ fn builtin_palette_selection_applies_persists_and_resets_independently(cx: &mut 
     assert_eq!(saved.builtin_theme, BuiltinTheme::Neon);
     assert_eq!(saved.theme_mode, theme::preferences::ThemeMode::Light);
     cx.update_window(window.into(), |_, window, cx| {
-        assert_ne!(Colors::current(cx), original);
+        assert_ne!(cx.gds().appearance().theme().colors(), original);
         window.render_frame(cx);
         window.click("appearance-builtin-theme-default", cx);
-        assert_eq!(Colors::current(cx), original);
+        assert_eq!(cx.gds().appearance().theme().colors(), original);
     })
     .expect("reset embedded palette");
     let saved = store.load().expect("saved reset").settings.appearance;
@@ -188,8 +189,8 @@ fn background_opacities_apply_save_and_reset_independently(cx: &mut TestAppConte
         page.update(cx, |page, cx| {
             page.apply_number(Field::SidebarOpacity, SliderValue::Single(26.), window, cx);
         });
-        assert_eq!(gds::appearance::theme::content_background(cx).a, 0.74);
-        assert_eq!(gds::appearance::theme::sidebar_background(cx).a, 0.26);
+        assert_eq!(cx.gds().appearance().theme().content_background().a, 0.74);
+        assert_eq!(cx.gds().appearance().theme().sidebar_background().a, 0.26);
         page.update(cx, |page, cx| {
             page.apply_number(Field::Opacity, SliderValue::Single(62.), window, cx);
         });
@@ -202,9 +203,9 @@ fn background_opacities_apply_save_and_reset_independently(cx: &mut TestAppConte
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         window.click("appearance-sidebar-opacity-default", cx);
-        assert_eq!(gds::appearance::theme::content_background(cx).a, 0.62);
+        assert_eq!(cx.gds().appearance().theme().content_background().a, 0.62);
         assert_eq!(
-            gds::appearance::theme::sidebar_background(cx).a,
+            cx.gds().appearance().theme().sidebar_background().a,
             gds::appearance::tokens::SurfaceOpacity::default().sidebar
         );
     })
@@ -215,7 +216,7 @@ fn background_opacities_apply_save_and_reset_independently(cx: &mut TestAppConte
     cx.update_window(window.into(), |_, window, cx| {
         window.click("appearance-opacity-default", cx);
         assert_eq!(
-            gds::appearance::theme::content_background(cx).a,
+            cx.gds().appearance().theme().content_background().a,
             gds::appearance::tokens::SurfaceOpacity::default().content
         );
     })

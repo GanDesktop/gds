@@ -3,6 +3,7 @@ use gpui_kit::WindowAppearance;
 #[cfg(feature = "gui-tests")]
 #[gpui_kit::test]
 fn palette_reinstallation_preserves_thin_semantic_focus(cx: &mut gpui_kit::TestAppContext) {
+    use crate::app::AppExt as _;
     use gpui_kit::{
         Styled,
         component::{Theme, ThemeStyled},
@@ -26,20 +27,27 @@ fn palette_reinstallation_preserves_thin_semantic_focus(cx: &mut gpui_kit::TestA
                     .update(cx, |_, window, cx| {
                         Theme::update(cx, |theme| theme.focus_ring = true);
                         if prepared {
-                            appearance
+                            let prepared = appearance
                                 .prepare(WindowAppearance::Dark)
-                                .expect("prepare palette")
-                                .install(cx)
+                                .expect("prepare palette");
+                            cx.gds_mut()
+                                .appearance()
+                                .theme()
+                                .install(prepared)
                                 .expect("reload palette");
                         } else {
-                            super::apply(&appearance, cx).expect("apply palette");
+                            cx.gds_mut()
+                                .appearance()
+                                .theme()
+                                .apply(&appearance)
+                                .expect("apply palette");
                         }
                         let theme = Theme::global(cx);
                         assert!(
                             !theme.focus_ring,
                             "{builtin:?} {mode:?} must not restore outer halos"
                         );
-                        assert_eq!(theme.ring, cx.global::<super::Colors>().primary);
+                        assert_eq!(theme.ring, cx.gds().appearance().theme().colors().primary);
                         assert!(theme.ring.a > 0.0, "focus ink must remain visible");
                         let mut control = div()
                             .w(px(100.))

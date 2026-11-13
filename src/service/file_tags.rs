@@ -60,11 +60,7 @@ fn read_raw(_: &Path) -> io::Result<Option<Vec<u8>>> {
     ))
 }
 
-/// Replace the target's tags, removing the attribute when empty.
-///
-/// # Errors
-/// Returns invalid-tag, filesystem or unsupported-platform errors.
-pub fn write(path: &Path, tags: &[String]) -> io::Result<()> {
+fn encode(tags: &[String]) -> io::Result<Vec<u8>> {
     for tag in tags {
         validate(tag)?;
     }
@@ -74,7 +70,77 @@ pub fn write(path: &Path, tags: &[String]) -> io::Result<()> {
             unique.push(tag);
         }
     }
-    write_raw(path, unique.join(",").as_bytes())
+    Ok(unique.join(",").into_bytes())
+}
+
+/// Replace the target's tags, removing the attribute when empty.
+///
+/// # Errors
+/// Returns invalid-tag, filesystem or unsupported-platform errors.
+pub fn write(path: &Path, tags: &[String]) -> io::Result<()> {
+    write_raw(path, &encode(tags)?)
+}
+
+#[cfg(target_os = "linux")]
+fn open_target(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    use rustix::{
+        fs::{CWD, FileType, Mode, OFlags, fstat, openat},
+        io::Errno,
+    };
+
+    // O_NONBLOCK prevents opening a FIFO from blocking before fstat rejects special files.
+    let fd = match openat(
+        CWD,
+        path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(Errno::LOOP) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Open the symbolic link target to edit tags",
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let stat = fstat(&fd)?;
+    if !matches!(
+        FileType::from_raw_mode(stat.st_mode),
+        FileType::RegularFile | FileType::Directory
+    ) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Open the symbolic link target to edit tags",
+        ));
+    }
+    Ok(fd)
+}
+
+#[cfg(target_os = "linux")]
+fn read_raw_fd<Fd: rustix::fd::AsFd>(fd: Fd) -> io::Result<Option<Vec<u8>>> {
+    let mut bytes = vec![0; MAX_ATTRIBUTE_SIZE];
+    match rustix::fs::fgetxattr(fd, ATTRIBUTE, bytes.as_mut_slice()) {
+        Ok(count) => {
+            bytes.truncate(count);
+            Ok(Some(bytes))
+        }
+        Err(rustix::io::Errno::NODATA) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn write_raw_fd<Fd: rustix::fd::AsFd>(fd: Fd, bytes: &[u8]) -> io::Result<()> {
+    if bytes.is_empty() {
+        match rustix::fs::fremovexattr(fd, ATTRIBUTE) {
+            Ok(()) | Err(rustix::io::Errno::NODATA) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    } else {
+        rustix::fs::fsetxattr(fd, ATTRIBUTE, bytes, rustix::fs::XattrFlags::empty())
+            .map_err(Into::into)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -120,25 +186,33 @@ pub fn change(path: &Path, tag: &str, add: bool) -> io::Result<()> {
 ///
 /// # Errors
 /// Rejects symbolic links and special files; propagates validation and attribute I/O errors.
+#[cfg(target_os = "linux")]
 pub fn apply_edit(path: &Path, original: &[String], edited: &[String]) -> io::Result<()> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if !metadata.is_file() && !metadata.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Open the symbolic link target to edit tags",
-        ));
-    }
+    let fd = open_target(path)?;
     for tag in edited {
         validate(tag)?;
     }
-    let mut current = read(path)?;
+    let mut current = read_raw_fd(&fd)?.map_or_else(|| Ok(Vec::new()), |bytes| decode(&bytes))?;
     current.retain(|tag| !original.contains(tag) || edited.contains(tag));
     for tag in edited {
         if !original.contains(tag) && !current.contains(tag) {
             current.push(tag.clone());
         }
     }
-    write(path, &current)
+    write_raw_fd(&fd, &encode(&current)?)
+}
+
+/// Apply only the editor's additions/removals, retaining unrelated external edits.
+/// xattrs have no compare-and-swap; concurrent writers still require coordination.
+///
+/// # Errors
+/// Rejects symbolic links and special files; propagates validation and attribute I/O errors.
+#[cfg(not(target_os = "linux"))]
+pub fn apply_edit(_: &Path, _: &[String], _: &[String]) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "File tags require Linux",
+    ))
 }
 
 /// Copy from the same descriptor whose contents the transfer has validated.
@@ -149,7 +223,10 @@ pub fn apply_edit(path: &Path, original: &[String], edited: &[String]) -> io::Re
 pub fn copy_from(source: &std::fs::File, destination: &Path) -> io::Result<()> {
     let mut bytes = vec![0; MAX_ATTRIBUTE_SIZE];
     match rustix::fs::fgetxattr(source, ATTRIBUTE, bytes.as_mut_slice()) {
-        Ok(count) => write_raw(destination, &bytes[..count]),
+        Ok(count) => {
+            let destination = open_target(destination)?;
+            write_raw_fd(&destination, &bytes[..count])
+        }
         Err(rustix::io::Errno::NODATA | rustix::io::Errno::OPNOTSUPP) => Ok(()),
         Err(error) => Err(error.into()),
     }

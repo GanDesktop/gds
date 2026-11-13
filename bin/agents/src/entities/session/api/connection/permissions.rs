@@ -9,7 +9,7 @@ pub(super) async fn watch_session(
     session: SessionId,
     epoch: u64,
 ) {
-    let (store, _) = history::Store::new(None);
+    let (store, _) = history::Store::new(None, &gds::service::task_manager::Scope::default());
     watch_cached(protocol, client, updates, session, epoch, None, store).await;
 }
 

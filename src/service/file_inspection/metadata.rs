@@ -1,25 +1,40 @@
 //! Typed content metadata and bounded header probes.
 //!
-//! Every probe reads at most [`PREFIX_BYTES`] from the start of a regular file.
+//! Signature probes read at most [`PREFIX_BYTES`] from the start of a regular file;
+//! ISO-BMFF containers walk box headers with `Seek` so trailing `moov` metadata is
+//! found without reading `mdat` payloads or sample tables.
 //! Thumbnail decoding runs independently in the shared thumbnail service.
-//! Parsers never walk past their slice: a header that the prefix cut short
-//! simply yields fewer fields instead of a failure.
+//! Parsers never walk past their bounds: a truncated header simply yields fewer
+//! fields instead of a failure.
 //!
-//! Fields that need the end of a file (MP4 `moov` after `mdat`, Ogg granule of
-//! the last page, PDF trailers, ZIP central directories) stay `None`. The panel
-//! shows only what the prefix really contains.
+//! Formats whose metadata lives only in unindexed trailers (Ogg granule of the last
+//! page, PDF trailers, ZIP central directories) stay `None`.
 
 use std::{
     fs::{self, File},
-    io::{self, Cursor, Read},
+    io::{self, BufReader, Cursor, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     time::Duration,
 };
 
-use image::{ExtendedColorType, ImageDecoder, ImageReader};
+use image::{ExtendedColorType, ImageDecoder, ImageReader, Limits};
+use mp4_atom::{
+    Atom as _, Audio as IsoAudioEntry, Decode as _, DecodeMaybe as _, FourCC, Ftyp, Hdlr,
+    Header as IsoHeader, Mdhd, Mdia, Minf, Moov, Mvhd, ReadFrom, Stbl, Stsd, Tkhd, Trak,
+    Visual as IsoVisualEntry,
+};
 
 /// Bytes sampled from a file for format and header metadata.
-pub(super) const PREFIX_BYTES: usize = 256 * 1024;
+const PREFIX_BYTES: usize = 256 * 1024;
+
+/// Maximum leaf atom payload buffered when probing ISO-BMFF headers.
+const MAX_ISO_LEAF_BYTES: u64 = 64 * 1024;
+
+/// Maximum sibling boxes inspected in a single ISO-BMFF container.
+const MAX_ISO_SIBLINGS: usize = 256;
+
+/// Maximum tracks recorded from a movie header.
+const MAX_ISO_TRACKS: usize = 64;
 
 /// Direct children inspected for a folder; counting stops at this bound.
 const DIRECTORY_CHILD_LIMIT: usize = 256;
@@ -262,14 +277,15 @@ pub struct SymlinkFacts {
     pub target: PathBuf,
 }
 
-/// Read at most `limit` bytes from the start of a regular file.
+/// Inspect a regular file from disk, bounding signature reads to [`PREFIX_BYTES`]
+/// and walking ISO-BMFF box headers via `Seek`.
 ///
 /// Directories, FIFOs and device nodes are refused before opening so a preview
 /// never blocks on a special file.
 ///
 /// # Errors
 /// Returns the I/O error when the path is not a regular file or cannot be read.
-pub(super) fn read_prefix(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+pub(super) fn probe_path(path: &Path, size: Option<u64>, hint: ProbeHint) -> io::Result<Metadata> {
     let metadata = fs::metadata(path)?;
     if !metadata.is_file() {
         return Err(io::Error::new(
@@ -277,10 +293,21 @@ pub(super) fn read_prefix(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
             "not a regular file",
         ));
     }
+    let file_len = metadata.len();
     let file = File::open(path)?;
-    let mut bytes = Vec::with_capacity(metadata.len().min(limit as u64) as usize);
-    file.take(limit as u64).read_to_end(&mut bytes)?;
-    Ok(bytes)
+    let mut reader = BufReader::new(file);
+    let mut prefix = Vec::with_capacity(file_len.min(PREFIX_BYTES as u64) as usize);
+    reader
+        .by_ref()
+        .take(PREFIX_BYTES as u64)
+        .read_to_end(&mut prefix)?;
+    Ok(probe_reader(
+        size.or(Some(file_len)),
+        hint,
+        &prefix,
+        &mut reader,
+        file_len,
+    ))
 }
 
 /// What the directory listing already believes about a file's content.
@@ -293,27 +320,53 @@ pub(super) struct ProbeHint {
     pub audio: bool,
 }
 
-/// Inspect the prefix of a regular file.
+#[cfg(test)]
+fn probe_file(size: Option<u64>, hint: ProbeHint, bytes: &[u8]) -> Metadata {
+    let prefix = &bytes[..bytes.len().min(PREFIX_BYTES)];
+    let mut cursor = Cursor::new(bytes);
+    probe_reader(size, hint, prefix, &mut cursor, bytes.len() as u64)
+}
+
+/// Inspect a regular file from its initial prefix and seekable stream.
 ///
 /// `hint` comes from the directory listing's content category and keeps
 /// arbitrary binaries from being presented as text or MP3.
-pub(super) fn probe_file(size: Option<u64>, hint: ProbeHint, bytes: &[u8]) -> Metadata {
-    if bytes.is_empty() {
+fn probe_reader<R: Read + Seek>(
+    size: Option<u64>,
+    hint: ProbeHint,
+    prefix: &[u8],
+    reader: &mut R,
+    stream_len: u64,
+) -> Metadata {
+    if prefix.is_empty() {
         return Metadata::File(FileFacts::Unknown);
     }
-    if let Ok(format) = image::guess_format(bytes)
-        && let Some(image) = image_facts(format, bytes)
+    if let Ok(format) = image::guess_format(prefix)
+        && let Some(image) = image_facts(format, prefix)
     {
         return Metadata::File(FileFacts::Image(image));
     }
-    if let Some(audio) = audio_facts(bytes, size, hint.audio) {
+    if let Some(audio) = prefix_audio_facts(prefix, size) {
         return Metadata::File(FileFacts::Audio(audio));
     }
-    if let Some(video) = video_facts(bytes, size) {
+    if let Some(video) = container_video_facts(prefix) {
         return Metadata::File(FileFacts::Video(video));
     }
+    if is_iso_start(prefix)
+        && let Some(iso) = iso_facts(reader, stream_len)
+    {
+        if iso_is_audio(iso.brand, &iso.info) {
+            return Metadata::File(FileFacts::Audio(audio_from_iso(&iso.info, size)));
+        }
+        return Metadata::File(FileFacts::Video(video_from_iso(&iso)));
+    }
+    if hint.audio
+        && let Some(mp3) = mp3_facts(prefix, size)
+    {
+        return Metadata::File(FileFacts::Audio(mp3));
+    }
     if hint.text
-        && let Some(text) = text_facts(bytes, bytes.len() == PREFIX_BYTES)
+        && let Some(text) = text_facts(prefix, prefix.len() == PREFIX_BYTES)
     {
         return Metadata::File(FileFacts::Text(text));
     }
@@ -349,9 +402,15 @@ fn image_facts(format: image::ImageFormat, bytes: &[u8]) -> Option<ImageFacts> {
         alpha: None,
     };
     if kind == ImageKind::Png {
-        apply_png_header(&mut facts, bytes);
+        probe_png(&mut facts, bytes);
     }
-    if let Ok(decoder) = ImageReader::with_format(Cursor::new(bytes), format).into_decoder() {
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    if let Ok(decoder) = reader.into_decoder() {
         let (width, height) = decoder.dimensions();
         facts.size = facts.size.or_else(|| PixelSize::new(width, height));
         if kind != ImageKind::Png {
@@ -366,58 +425,46 @@ fn image_facts(format: image::ImageFormat, bytes: &[u8]) -> Option<ImageFacts> {
 }
 
 /// PNG states bit depth, colour type and palette transparency in IHDR/tRNS.
-fn apply_png_header(facts: &mut ImageFacts, bytes: &[u8]) {
-    let Some(ihdr) = png_ihdr(bytes) else {
-        return;
-    };
-    facts.size = PixelSize::new(ihdr.width, ihdr.height);
-    facts.bit_depth = Some(ihdr.bit_depth);
-    facts.alpha = match ihdr.color_type {
-        4 | 6 => Some(true),
-        3 => png_has_trns(bytes),
-        0 | 2 => Some(false),
-        _ => None,
-    };
-}
-
-struct PngHeader {
-    width: u32,
-    height: u32,
-    bit_depth: u8,
-    color_type: u8,
-}
-
-fn png_ihdr(bytes: &[u8]) -> Option<PngHeader> {
-    const SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-    if bytes.get(..8)? != SIGNATURE || bytes.get(12..16)? != b"IHDR" {
-        return None;
-    }
-    let width = u32_be(bytes, 16)?;
-    let height = u32_be(bytes, 20)?;
-    Some(PngHeader {
-        width,
-        height,
-        bit_depth: *bytes.get(24)?,
-        color_type: *bytes.get(25)?,
-    })
-}
-
-/// Palette transparency is an optional `tRNS` chunk before the first `IDAT`.
-/// `None` means the prefix ended before the answer was available.
-fn png_has_trns(bytes: &[u8]) -> Option<bool> {
-    let mut offset = 8;
-    while let Some(header) = bytes.get(offset..offset + 8) {
-        let length = u32_be(header, 0)? as usize;
-        let kind = &header[4..8];
-        if kind == b"tRNS" {
-            return Some(true);
+fn probe_png(facts: &mut ImageFacts, bytes: &[u8]) {
+    let decoder = png_header_decoder(bytes);
+    match decoder.read_info() {
+        Ok(reader) => {
+            let info = reader.info();
+            apply_png_info(facts, info, Some(info.trns.is_some()));
         }
-        if kind == b"IDAT" || kind == b"IEND" {
-            return Some(false);
+        Err(_) => {
+            // Prefixes truncated before IDAT fail read_info(); fall back to IHDR so
+            // dimensions, bit depth and non-indexed alpha still appear when valid.
+            let mut header = png_header_decoder(bytes);
+            if let Ok(info) = header.read_header_info() {
+                apply_png_info(facts, info, None);
+            }
         }
-        offset = offset.checked_add(12 + length)?;
     }
-    None
+}
+
+fn png_header_decoder(bytes: &[u8]) -> png::Decoder<Cursor<&[u8]>> {
+    let mut decoder =
+        png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: 1024 * 1024 });
+    decoder.set_ignore_text_chunk(true);
+    decoder.set_ignore_iccp_chunk(true);
+    decoder
+}
+
+fn apply_png_info(facts: &mut ImageFacts, info: &png::Info<'_>, trns: Option<bool>) {
+    facts.size = PixelSize::new(info.width, info.height);
+    facts.bit_depth = Some(match info.bit_depth {
+        png::BitDepth::One => 1,
+        png::BitDepth::Two => 2,
+        png::BitDepth::Four => 4,
+        png::BitDepth::Eight => 8,
+        png::BitDepth::Sixteen => 16,
+    });
+    facts.alpha = match info.color_type {
+        png::ColorType::GrayscaleAlpha | png::ColorType::Rgba => Some(true),
+        png::ColorType::Grayscale | png::ColorType::Rgb => Some(false),
+        png::ColorType::Indexed => trns,
+    };
 }
 
 fn bits_per_channel(color: ExtendedColorType) -> Option<u8> {
@@ -445,25 +492,14 @@ fn has_alpha(color: ExtendedColorType) -> bool {
     )
 }
 
-fn audio_facts(bytes: &[u8], size: Option<u64>, mp3_allowed: bool) -> Option<AudioFacts> {
+fn prefix_audio_facts(bytes: &[u8], size: Option<u64>) -> Option<AudioFacts> {
     if let Some(facts) = wav_facts(bytes) {
         return Some(facts);
     }
     if let Some(facts) = flac_facts(bytes, size) {
         return Some(facts);
     }
-    if let Some(facts) = ogg_facts(bytes) {
-        return Some(facts);
-    }
-    if let Some(iso) = iso_facts(bytes)
-        && iso_is_audio(iso.brand, &iso.info)
-    {
-        return Some(audio_from_iso(&iso.info, size));
-    }
-    if mp3_allowed && let Some(facts) = mp3_facts(bytes, size) {
-        return Some(facts);
-    }
-    None
+    ogg_facts(bytes)
 }
 
 fn wav_facts(bytes: &[u8]) -> Option<AudioFacts> {
@@ -502,13 +538,7 @@ fn wav_facts(bytes: &[u8]) -> Option<AudioFacts> {
             break;
         }
     }
-    if let (Some(data_size), Some(byte_rate)) = (data_size, byte_rate) {
-        if byte_rate > 0 {
-            facts.duration = Some(Duration::from_secs_f64(
-                data_size as f64 / f64::from(byte_rate),
-            ));
-        }
-    }
+    facts.duration = duration_of(byte_rate, data_size);
     Some(facts)
 }
 
@@ -536,8 +566,7 @@ fn flac_facts(bytes: &[u8], size: Option<u64>) -> Option<AudioFacts> {
     let channels = (((packed >> 41) & 0x7) + 1) as u16;
     let bit_depth = (((packed >> 36) & 0x1f) + 1) as u16;
     let total_samples = packed & 0x0000_000f_ffff_ffff;
-    let duration = (sample_rate > 0 && total_samples > 0)
-        .then(|| Duration::from_secs_f64(total_samples as f64 / f64::from(sample_rate)));
+    let duration = duration_of(Some(sample_rate), Some(total_samples));
     Some(AudioFacts {
         format: AudioKind::Flac,
         tags: Default::default(),
@@ -716,11 +745,8 @@ fn mp3_duration(bytes: &[u8], frame_start: usize, frame: &Mp3Frame) -> Option<Du
         return None;
     }
     let frames = u32_be(bytes, tag + 8)?;
-    (frames > 0 && frame.sample_rate > 0).then(|| {
-        Duration::from_secs_f64(
-            f64::from(frames) * f64::from(frame.samples_per_frame) / f64::from(frame.sample_rate),
-        )
-    })
+    let total_samples = u64::from(frames) * u64::from(frame.samples_per_frame);
+    duration_of(Some(frame.sample_rate), Some(total_samples))
 }
 
 fn average_bitrate(size: Option<u64>, duration: Option<Duration>) -> Option<u64> {
@@ -757,60 +783,99 @@ struct IsoInfo {
     tracks: Vec<IsoTrack>,
 }
 
-struct IsoBox<'a> {
-    kind: [u8; 4],
-    payload: &'a [u8],
+struct BoxSpan {
+    kind: FourCC,
+    body_start: u64,
+    box_end: u64,
 }
 
-struct IsoBoxes<'a> {
-    data: &'a [u8],
-}
-
-impl<'a> IsoBoxes<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data }
+impl BoxSpan {
+    fn body_len(&self) -> u64 {
+        self.box_end - self.body_start
     }
 }
 
-impl<'a> Iterator for IsoBoxes<'a> {
-    type Item = IsoBox<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let header = self.data.get(..8)?;
-        let kind: [u8; 4] = header[4..8].try_into().ok()?;
-        let size32 = u32::from_be_bytes(header[..4].try_into().ok()?);
-        let (header_len, size) = match size32 {
-            0 => (8usize, self.data.len()),
-            1 => {
-                let large = u64::from_be_bytes(self.data.get(8..16)?.try_into().ok()?);
-                let size = usize::try_from(large).ok()?;
-                (16usize, size)
-            }
-            size => (8usize, size as usize),
-        };
-        if size < header_len || size > self.data.len() {
-            self.data = &[];
-            return None;
-        }
-        let payload = &self.data[header_len..size];
-        self.data = &self.data[size..];
-        Some(IsoBox { kind, payload })
-    }
+fn is_iso_start(prefix: &[u8]) -> bool {
+    let mut slice = prefix;
+    let Ok(Some(header)) = IsoHeader::decode_maybe(&mut slice) else {
+        return false;
+    };
+    matches!(
+        &<[u8; 4]>::from(header.kind),
+        b"ftyp" | b"styp" | b"pdin" | b"free" | b"skip" | b"wide" | b"moov" | b"mdat"
+    )
 }
 
-fn iso_facts(bytes: &[u8]) -> Option<IsoFile> {
+fn seek_to<R: Read + Seek>(reader: &mut R, target: u64) -> Option<()> {
+    let current = reader.stream_position().ok()?;
+    if current == target {
+        return Some(());
+    }
+    if let Ok(delta) = i64::try_from(i128::from(target) - i128::from(current)) {
+        reader.seek(SeekFrom::Current(delta)).ok()?;
+    } else {
+        reader.seek(SeekFrom::Start(target)).ok()?;
+    }
+    Some(())
+}
+
+fn next_box<R: Read + Seek>(
+    reader: &mut R,
+    cursor: &mut u64,
+    container_end: u64,
+) -> Option<BoxSpan> {
+    if *cursor >= container_end || container_end - *cursor < 8 {
+        return None;
+    }
+    seek_to(reader, *cursor)?;
+    let header = <Option<IsoHeader> as ReadFrom>::read_from(reader).ok()??;
+    let body_start = reader.stream_position().ok()?;
+    let box_end = match header.size {
+        Some(payload) => body_start.checked_add(u64::try_from(payload).ok()?)?,
+        None => container_end,
+    };
+    if box_end < body_start || box_end > container_end {
+        return None;
+    }
+    *cursor = box_end;
+    Some(BoxSpan {
+        kind: header.kind,
+        body_start,
+        box_end,
+    })
+}
+
+fn read_leaf_body<R: Read + Seek>(reader: &mut R, span: &BoxSpan) -> Option<Vec<u8>> {
+    let len = span.body_len();
+    if len > MAX_ISO_LEAF_BYTES {
+        return None;
+    }
+    let len_usize = usize::try_from(len).ok()?;
+    seek_to(reader, span.body_start)?;
+    let mut body = vec![0u8; len_usize];
+    reader.read_exact(&mut body).ok()?;
+    Some(body)
+}
+
+fn iso_facts<R: Read + Seek>(reader: &mut R, stream_len: u64) -> Option<IsoFile> {
     let mut major = None;
+    let mut has_moov = false;
     let mut info = IsoInfo::default();
-    for block in IsoBoxes::new(bytes) {
-        match &block.kind {
-            b"ftyp" if major.is_none() => {
-                major = block
-                    .payload
-                    .get(..4)
-                    .and_then(|brand| brand.try_into().ok());
+    let mut cursor = 0;
+    for _ in 0..MAX_ISO_SIBLINGS {
+        let Some(span) = next_box(reader, &mut cursor, stream_len) else {
+            break;
+        };
+        if span.kind == Ftyp::KIND && major.is_none() {
+            if let Some(body) = read_leaf_body(reader, &span) {
+                major = decode_ftyp(&body);
             }
-            b"moov" => read_moov(block.payload, &mut info),
-            _ => {}
+        } else if span.kind == Moov::KIND {
+            read_moov(reader, span.body_start, span.box_end, &mut info);
+            has_moov = true;
+        }
+        if major.is_some() && has_moov {
+            break;
         }
     }
     Some(IsoFile {
@@ -819,21 +884,38 @@ fn iso_facts(bytes: &[u8]) -> Option<IsoFile> {
     })
 }
 
-fn read_moov(payload: &[u8], info: &mut IsoInfo) {
-    for block in IsoBoxes::new(payload) {
-        match &block.kind {
-            b"mvhd" => {
-                let header = media_header(block.payload);
-                info.movie_timescale = header.timescale;
-                info.movie_duration = header.duration;
+fn decode_ftyp(body: &[u8]) -> Option<[u8; 4]> {
+    let mut slice = body;
+    if let Ok(ftyp) = Ftyp::decode_body(&mut slice) {
+        return Some(ftyp.major_brand.into());
+    }
+    body.get(..4)?.try_into().ok()
+}
+
+fn read_moov<R: Read + Seek>(reader: &mut R, start: u64, end: u64, info: &mut IsoInfo) {
+    let mut cursor = start;
+    for _ in 0..MAX_ISO_SIBLINGS {
+        let Some(span) = next_box(reader, &mut cursor, end) else {
+            break;
+        };
+        if span.kind == Mvhd::KIND {
+            if let Some(body) = read_leaf_body(reader, &span)
+                && let Some(&version) = body.first()
+            {
+                let mut slice = body.as_slice();
+                if let Ok(mvhd) = Mvhd::decode_body(&mut slice) {
+                    info.movie_timescale = Some(mvhd.timescale);
+                    info.movie_duration = clean_iso_duration(version, mvhd.duration);
+                }
             }
-            b"trak" => info.tracks.push(read_trak(block.payload)),
-            _ => {}
+        } else if span.kind == Trak::KIND && info.tracks.len() < MAX_ISO_TRACKS {
+            info.tracks
+                .push(read_trak(reader, span.body_start, span.box_end));
         }
     }
 }
 
-fn read_trak(payload: &[u8]) -> IsoTrack {
+fn read_trak<R: Read + Seek>(reader: &mut R, start: u64, end: u64) -> IsoTrack {
     let mut track = IsoTrack {
         handler: None,
         timescale: None,
@@ -844,46 +926,81 @@ fn read_trak(payload: &[u8]) -> IsoTrack {
         bit_depth: None,
         sample_rate: None,
     };
-    for block in IsoBoxes::new(payload) {
-        match &block.kind {
-            b"tkhd" => track.dimensions = track_dimensions(block.payload),
-            b"mdia" => read_mdia(block.payload, &mut track),
-            _ => {}
+    let mut cursor = start;
+    for _ in 0..MAX_ISO_SIBLINGS {
+        let Some(span) = next_box(reader, &mut cursor, end) else {
+            break;
+        };
+        if span.kind == Tkhd::KIND {
+            if let Some(body) = read_leaf_body(reader, &span) {
+                let mut slice = body.as_slice();
+                if let Ok(tkhd) = Tkhd::decode_body(&mut slice)
+                    && !tkhd.size_is_aspect_ratio
+                {
+                    track.dimensions = PixelSize::new(
+                        u32::from(tkhd.width.integer()),
+                        u32::from(tkhd.height.integer()),
+                    );
+                }
+            }
+        } else if span.kind == Mdia::KIND {
+            read_mdia(reader, span.body_start, span.box_end, &mut track);
         }
     }
     track
 }
 
-fn read_mdia(payload: &[u8], track: &mut IsoTrack) {
-    for block in IsoBoxes::new(payload) {
-        match &block.kind {
-            b"mdhd" => {
-                let header = media_header(block.payload);
-                track.timescale = header.timescale;
-                track.duration = header.duration;
-            }
-            b"hdlr" => {
-                track.handler = block
-                    .payload
-                    .get(8..12)
-                    .and_then(|kind| kind.try_into().ok());
-            }
-            b"minf" => {
-                for inner in IsoBoxes::new(block.payload) {
-                    if inner.kind == *b"stbl" {
-                        read_stbl(inner.payload, track);
-                    }
+fn read_mdia<R: Read + Seek>(reader: &mut R, start: u64, end: u64, track: &mut IsoTrack) {
+    let mut cursor = start;
+    for _ in 0..MAX_ISO_SIBLINGS {
+        let Some(span) = next_box(reader, &mut cursor, end) else {
+            break;
+        };
+        if span.kind == Mdhd::KIND {
+            if let Some(body) = read_leaf_body(reader, &span)
+                && let Some(&version) = body.first()
+            {
+                let mut slice = body.as_slice();
+                if let Ok(mdhd) = Mdhd::decode_body(&mut slice) {
+                    track.timescale = Some(mdhd.timescale);
+                    track.duration = clean_iso_duration(version, mdhd.duration);
                 }
             }
-            _ => {}
+        } else if span.kind == Hdlr::KIND {
+            if let Some(body) = read_leaf_body(reader, &span) {
+                let mut slice = body.as_slice();
+                if let Ok(hdlr) = Hdlr::decode_body(&mut slice) {
+                    track.handler = Some(hdlr.handler.into());
+                }
+            }
+        } else if span.kind == Minf::KIND {
+            read_minf(reader, span.body_start, span.box_end, track);
         }
     }
 }
 
-fn read_stbl(payload: &[u8], track: &mut IsoTrack) {
-    for block in IsoBoxes::new(payload) {
-        if block.kind == *b"stsd" {
-            read_stsd(block.payload, track);
+fn read_minf<R: Read + Seek>(reader: &mut R, start: u64, end: u64, track: &mut IsoTrack) {
+    let mut cursor = start;
+    for _ in 0..MAX_ISO_SIBLINGS {
+        let Some(span) = next_box(reader, &mut cursor, end) else {
+            break;
+        };
+        if span.kind == Stbl::KIND {
+            read_stbl(reader, span.body_start, span.box_end, track);
+        }
+    }
+}
+
+fn read_stbl<R: Read + Seek>(reader: &mut R, start: u64, end: u64, track: &mut IsoTrack) {
+    let mut cursor = start;
+    for _ in 0..MAX_ISO_SIBLINGS {
+        let Some(span) = next_box(reader, &mut cursor, end) else {
+            break;
+        };
+        if span.kind == Stsd::KIND
+            && let Some(body) = read_leaf_body(reader, &span)
+        {
+            read_stsd(&body, track);
         }
     }
 }
@@ -891,61 +1008,44 @@ fn read_stbl(payload: &[u8], track: &mut IsoTrack) {
 /// Only the first sample entry is inspected; a file with several entries still
 /// reports its main track codec.
 fn read_stsd(payload: &[u8], track: &mut IsoTrack) {
-    let Some(entries) = IsoBoxes::new(payload.get(8..).unwrap_or_default()).next() else {
+    if u32_be(payload, 4).unwrap_or(0) == 0 {
+        return;
+    }
+    let Some(mut rest) = payload.get(8..) else {
         return;
     };
-    track.codec = Some(entries.kind);
-    match &entries.kind {
-        // Visual sample entries: width/height follow the 32-byte base fields.
-        b"avc1" | b"avc3" | b"hvc1" | b"hev1" | b"av01" | b"vp09" | b"mp4v" => {
-            let width = u16_be(entries.payload, 24);
-            let height = u16_be(entries.payload, 26);
-            track.dimensions = width
-                .zip(height)
-                .and_then(|(width, height)| PixelSize::new(u32::from(width), u32::from(height)))
-                .or(track.dimensions);
+    let Ok(Some(header)) = IsoHeader::decode_maybe(&mut rest) else {
+        return;
+    };
+    let entry_len = header.size.unwrap_or(rest.len()).min(rest.len());
+    let mut entry = &rest[..entry_len];
+    let kind: [u8; 4] = header.kind.into();
+    track.codec = Some(kind);
+    match &kind {
+        b"avc1" | b"avc3" | b"hvc1" | b"hev1" | b"av01" | b"vp09" | b"mp4v" | b"apch" | b"apcn"
+        | b"apcs" | b"apco" | b"ap4h" => {
+            if let Ok(visual) = IsoVisualEntry::decode(&mut entry) {
+                track.dimensions =
+                    PixelSize::new(u32::from(visual.width), u32::from(visual.height))
+                        .or(track.dimensions);
+            }
         }
-        // Audio sample entries: channel count, sample size, 16.16 sample rate.
         b"mp4a" | b"alac" | b"Opus" | b"fLaC" => {
-            track.channels = u16_be(entries.payload, 16);
-            track.bit_depth = u16_be(entries.payload, 18);
-            track.sample_rate = u32_be(entries.payload, 24).map(|rate| rate >> 16);
+            if let Ok(audio) = IsoAudioEntry::decode(&mut entry) {
+                track.channels = Some(audio.channel_count);
+                track.bit_depth = Some(audio.sample_size);
+                track.sample_rate = Some(u32::from(audio.sample_rate.integer()));
+            }
         }
         _ => {}
     }
 }
 
-struct MediaHeader {
-    timescale: Option<u32>,
-    duration: Option<u64>,
-}
-
-fn media_header(payload: &[u8]) -> MediaHeader {
-    match payload.first() {
-        Some(0) => MediaHeader {
-            timescale: u32_be(payload, 12),
-            duration: u32_be(payload, 16).map(u64::from),
-        },
-        Some(1) => MediaHeader {
-            timescale: u32_be(payload, 20),
-            duration: u64_be(payload, 24),
-        },
-        _ => MediaHeader {
-            timescale: None,
-            duration: None,
-        },
-    }
-}
-
-fn track_dimensions(payload: &[u8]) -> Option<PixelSize> {
-    let offset = match payload.first()? {
-        0 => 76,
-        1 => 88,
-        _ => return None,
-    };
-    let width = u32_be(payload, offset)? >> 16;
-    let height = u32_be(payload, offset + 4)? >> 16;
-    PixelSize::new(width, height)
+/// ISO/IEC 14496-12 reserves all-ones (`u32::MAX` in v0, `u64::MAX` in v1) for
+/// indeterminate movie and media durations.
+fn clean_iso_duration(version: u8, duration: u64) -> Option<u64> {
+    let indeterminate = (version == 0 && duration == u64::from(u32::MAX)) || duration == u64::MAX;
+    (!indeterminate && duration > 0).then_some(duration)
 }
 
 fn iso_is_audio(brand: [u8; 4], info: &IsoInfo) -> bool {
@@ -993,7 +1093,7 @@ fn audio_from_iso(info: &IsoInfo, size: Option<u64>) -> AudioFacts {
     }
 }
 
-fn video_facts(bytes: &[u8], _size: Option<u64>) -> Option<VideoFacts> {
+fn container_video_facts(bytes: &[u8]) -> Option<VideoFacts> {
     if bytes.get(..4)? == b"RIFF" && bytes.get(8..12)? == b"AVI " {
         return Some(VideoFacts {
             format: VideoKind::Avi,
@@ -1017,10 +1117,10 @@ fn video_facts(bytes: &[u8], _size: Option<u64>) -> Option<VideoFacts> {
             codec: None,
         });
     }
-    let iso = iso_facts(bytes)?;
-    if iso_is_audio(iso.brand, &iso.info) {
-        return None;
-    }
+    None
+}
+
+fn video_from_iso(iso: &IsoFile) -> VideoFacts {
     let info = &iso.info;
     let track = info
         .tracks
@@ -1032,18 +1132,20 @@ fn video_facts(bytes: &[u8], _size: Option<u64>) -> Option<VideoFacts> {
         .or_else(|| duration_of(info.movie_timescale, info.movie_duration));
     let dimensions = track.and_then(|track| track.dimensions);
     let codec = track.and_then(|track| track.codec).map(codec_label);
-    Some(VideoFacts {
+    VideoFacts {
         format: iso_kind(iso.brand),
         duration,
         dimensions,
         codec,
-    })
+    }
 }
 
 fn duration_of(timescale: Option<u32>, units: Option<u64>) -> Option<Duration> {
-    let timescale = timescale.filter(|value| *value > 0)?;
+    let scale = u64::from(timescale.filter(|value| *value > 0)?);
     let units = units.filter(|value| *value > 0)?;
-    Some(Duration::from_secs_f64(units as f64 / f64::from(timescale)))
+    let secs = units / scale;
+    let nanos = ((u128::from(units % scale) * 1_000_000_000) / u128::from(scale)) as u32;
+    Some(Duration::new(secs, nanos))
 }
 
 fn codec_label(fourcc: [u8; 4]) -> String {
@@ -1200,10 +1302,6 @@ fn u16_le(bytes: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
 }
 
-fn u16_be(bytes: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
-}
-
 fn u32_le(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
@@ -1218,4 +1316,887 @@ fn u32_be(bytes: &[u8], at: usize) -> Option<u32> {
 
 fn u64_be(bytes: &[u8], at: usize) -> Option<u64> {
     Some(u64::from_be_bytes(bytes.get(at..at + 8)?.try_into().ok()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode_png(
+        width: u32,
+        height: u32,
+        color: png::ColorType,
+        depth: png::BitDepth,
+        palette: Option<&[u8]>,
+        trns: Option<&[u8]>,
+        pixels: &[u8],
+    ) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(color);
+        encoder.set_depth(depth);
+        if let Some(palette) = palette {
+            encoder.set_palette(palette);
+        }
+        if let Some(trns) = trns {
+            encoder.set_trns(trns);
+        }
+        let mut writer = encoder.write_header().expect("PNG header");
+        writer.write_image_data(pixels).expect("PNG image data");
+        writer.finish().expect("PNG footer");
+        bytes
+    }
+
+    fn probe_png_facts(bytes: &[u8]) -> ImageFacts {
+        match probe_file(Some(bytes.len() as u64), ProbeHint::default(), bytes) {
+            Metadata::File(FileFacts::Image(facts)) => facts,
+            other => panic!("expected image metadata, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn png_header_probe_extracts_depth_dimensions_and_alpha() {
+        let rgba = encode_png(
+            3,
+            2,
+            png::ColorType::Rgba,
+            png::BitDepth::Eight,
+            None,
+            None,
+            &[0; 3 * 2 * 4],
+        );
+        assert_eq!(
+            probe_png_facts(&rgba),
+            ImageFacts {
+                format: ImageKind::Png,
+                size: PixelSize::new(3, 2),
+                bit_depth: Some(8),
+                alpha: Some(true),
+            }
+        );
+
+        let rgb = encode_png(
+            4,
+            5,
+            png::ColorType::Rgb,
+            png::BitDepth::Eight,
+            None,
+            None,
+            &[0; 4 * 5 * 3],
+        );
+        assert_eq!(
+            probe_png_facts(&rgb),
+            ImageFacts {
+                format: ImageKind::Png,
+                size: PixelSize::new(4, 5),
+                bit_depth: Some(8),
+                alpha: Some(false),
+            }
+        );
+
+        let indexed_opaque = encode_png(
+            2,
+            2,
+            png::ColorType::Indexed,
+            png::BitDepth::Eight,
+            Some(&[10, 20, 30]),
+            None,
+            &[0; 4],
+        );
+        assert_eq!(
+            probe_png_facts(&indexed_opaque),
+            ImageFacts {
+                format: ImageKind::Png,
+                size: PixelSize::new(2, 2),
+                bit_depth: Some(8),
+                alpha: Some(false),
+            }
+        );
+
+        let indexed_trns = encode_png(
+            2,
+            2,
+            png::ColorType::Indexed,
+            png::BitDepth::Eight,
+            Some(&[10, 20, 30]),
+            Some(&[128]),
+            &[0; 4],
+        );
+        assert_eq!(
+            probe_png_facts(&indexed_trns),
+            ImageFacts {
+                format: ImageKind::Png,
+                size: PixelSize::new(2, 2),
+                bit_depth: Some(8),
+                alpha: Some(true),
+            }
+        );
+
+        let rgb16 = encode_png(
+            2,
+            1,
+            png::ColorType::Rgb,
+            png::BitDepth::Sixteen,
+            None,
+            None,
+            &[0; 2 * 3 * 2],
+        );
+        assert_eq!(
+            probe_png_facts(&rgb16),
+            ImageFacts {
+                format: ImageKind::Png,
+                size: PixelSize::new(2, 1),
+                bit_depth: Some(16),
+                alpha: Some(false),
+            }
+        );
+
+        // 33 bytes = PNG signature (8) + IHDR chunk (25), truncated before PLTE/tRNS/IDAT.
+        assert_eq!(
+            probe_png_facts(&rgba[..33]),
+            ImageFacts {
+                format: ImageKind::Png,
+                size: PixelSize::new(3, 2),
+                bit_depth: Some(8),
+                alpha: Some(true),
+            }
+        );
+        assert_eq!(
+            probe_png_facts(&rgb[..33]),
+            ImageFacts {
+                format: ImageKind::Png,
+                size: PixelSize::new(4, 5),
+                bit_depth: Some(8),
+                alpha: Some(false),
+            }
+        );
+        assert_eq!(
+            probe_png_facts(&indexed_trns[..33]),
+            ImageFacts {
+                format: ImageKind::Png,
+                size: PixelSize::new(2, 2),
+                bit_depth: Some(8),
+                alpha: None,
+            }
+        );
+        // Truncated inside IDAT after header chunks preserves tRNS detection.
+        let idat_offset = indexed_trns
+            .windows(4)
+            .position(|window| window == b"IDAT")
+            .expect("IDAT chunk");
+        assert_eq!(
+            probe_png_facts(&indexed_trns[..idat_offset + 8]),
+            ImageFacts {
+                format: ImageKind::Png,
+                size: PixelSize::new(2, 2),
+                bit_depth: Some(8),
+                alpha: Some(true),
+            }
+        );
+    }
+
+    fn probe_audio_facts(size: Option<u64>, hint: ProbeHint, bytes: &[u8]) -> AudioFacts {
+        match probe_file(size, hint, bytes) {
+            Metadata::File(FileFacts::Audio(facts)) => facts,
+            other => panic!("expected audio metadata, got {other:?}"),
+        }
+    }
+
+    fn probe_video_facts(bytes: &[u8]) -> VideoFacts {
+        match probe_file(Some(bytes.len() as u64), ProbeHint::default(), bytes) {
+            Metadata::File(FileFacts::Video(facts)) => facts,
+            other => panic!("expected video metadata, got {other:?}"),
+        }
+    }
+
+    fn push_riff_chunk(out: &mut Vec<u8>, id: &[u8; 4], body: &[u8]) {
+        out.extend_from_slice(id);
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(body);
+        if body.len() & 1 == 1 {
+            out.push(0);
+        }
+    }
+
+    fn wav_fmt_body(channels: u16, sample_rate: u32, byte_rate: u32, bit_depth: u16) -> [u8; 16] {
+        let mut body = [0u8; 16];
+        body[..2].copy_from_slice(&1u16.to_le_bytes());
+        body[2..4].copy_from_slice(&channels.to_le_bytes());
+        body[4..8].copy_from_slice(&sample_rate.to_le_bytes());
+        body[8..12].copy_from_slice(&byte_rate.to_le_bytes());
+        body[12..14].copy_from_slice(&(channels * bit_depth / 8).to_le_bytes());
+        body[14..16].copy_from_slice(&bit_depth.to_le_bytes());
+        body
+    }
+
+    fn iso_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(8 + payload.len());
+        out.extend_from_slice(&((8 + payload.len()) as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    fn iso_box_64(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(16 + payload.len());
+        out.extend_from_slice(&1u32.to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(&((16 + payload.len()) as u64).to_be_bytes());
+        out.extend_from_slice(payload);
+        out
+    }
+
+    #[test]
+    fn wav_parser_handles_valid_padded_and_malformed_chunks() {
+        let mut wav = b"RIFF\x00\x00\x00\x00WAVE".to_vec();
+        // Odd-length JUNK chunk must align by 1 padding byte before fmt.
+        push_riff_chunk(&mut wav, b"JUNK", b"abcde");
+        push_riff_chunk(&mut wav, b"fmt ", &wav_fmt_body(2, 48_000, 192_000, 16));
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&384_000u32.to_le_bytes());
+        wav.extend_from_slice(&[0u8; 16]);
+        assert_eq!(
+            probe_audio_facts(Some(wav.len() as u64), ProbeHint::default(), &wav),
+            AudioFacts {
+                format: AudioKind::Wav,
+                tags: Default::default(),
+                duration: Some(Duration::from_secs(2)),
+                sample_rate: Some(48_000),
+                channels: Some(2),
+                bit_depth: Some(16),
+                bitrate: Some(1_536_000),
+            }
+        );
+
+        // data chunk before fmt still computes duration.
+        let mut reordered = b"RIFF\x00\x00\x00\x00WAVE".to_vec();
+        push_riff_chunk(&mut reordered, b"data", &[0u8; 96_000]);
+        push_riff_chunk(
+            &mut reordered,
+            b"fmt ",
+            &wav_fmt_body(1, 48_000, 96_000, 16),
+        );
+        assert_eq!(
+            probe_audio_facts(None, ProbeHint::default(), &reordered).duration,
+            Some(Duration::from_secs(1))
+        );
+
+        // Zero byte_rate avoids division by zero and yields duration: None.
+        let mut zero_rate = b"RIFF\x00\x00\x00\x00WAVE".to_vec();
+        push_riff_chunk(&mut zero_rate, b"fmt ", &wav_fmt_body(2, 44_100, 0, 16));
+        push_riff_chunk(&mut zero_rate, b"data", &[0u8; 64]);
+        let facts = probe_audio_facts(None, ProbeHint::default(), &zero_rate);
+        assert_eq!(facts.duration, None);
+        assert_eq!(facts.bitrate, Some(0));
+
+        // Truncated fmt chunk and u32::MAX JUNK length stop cleanly without panicking.
+        let mut truncated_fmt = b"RIFF\x00\x00\x00\x00WAVE".to_vec();
+        push_riff_chunk(&mut truncated_fmt, b"fmt ", &[1, 0, 2, 0]);
+        let facts = probe_audio_facts(None, ProbeHint::default(), &truncated_fmt);
+        assert_eq!(facts.channels, Some(2));
+        assert_eq!(facts.sample_rate, None);
+        assert_eq!(facts.duration, None);
+
+        let mut huge_chunk = b"RIFF\x00\x00\x00\x00WAVEJUNK".to_vec();
+        huge_chunk.extend_from_slice(&u32::MAX.to_le_bytes());
+        huge_chunk.extend_from_slice(&[0u8; 8]);
+        assert_eq!(
+            probe_audio_facts(None, ProbeHint::default(), &huge_chunk),
+            AudioFacts {
+                format: AudioKind::Wav,
+                tags: Default::default(),
+                duration: None,
+                sample_rate: None,
+                channels: None,
+                bit_depth: None,
+                bitrate: None,
+            }
+        );
+
+        assert_eq!(
+            probe_file(None, ProbeHint::default(), b"RIFF\x24\x00\x00\x00WAV"),
+            Metadata::File(FileFacts::Unknown)
+        );
+    }
+
+    #[test]
+    fn flac_parser_extracts_streaminfo_and_guards_zero_and_truncation() {
+        let build_flac = |block_header: [u8; 4],
+                          sample_rate: u32,
+                          channels: u16,
+                          bit_depth: u16,
+                          total_samples: u64| {
+            let mut flac = b"fLaC".to_vec();
+            flac.extend_from_slice(&block_header);
+            let mut streaminfo = [0u8; 34];
+            let packed = (u64::from(sample_rate & 0x000f_ffff) << 44)
+                | (u64::from((channels - 1) & 0x7) << 41)
+                | (u64::from((bit_depth - 1) & 0x1f) << 36)
+                | (total_samples & 0x0000_000f_ffff_ffff);
+            streaminfo[10..18].copy_from_slice(&packed.to_be_bytes());
+            flac.extend_from_slice(&streaminfo);
+            flac
+        };
+
+        let valid = build_flac([0x80, 0, 0, 34], 44_100, 2, 16, 88_200);
+        assert_eq!(
+            probe_audio_facts(Some(88_200), ProbeHint::default(), &valid),
+            AudioFacts {
+                format: AudioKind::Flac,
+                tags: Default::default(),
+                duration: Some(Duration::from_secs(2)),
+                sample_rate: Some(44_100),
+                channels: Some(2),
+                bit_depth: Some(16),
+                bitrate: Some(352_800),
+            }
+        );
+
+        // Zero sample_rate avoids division by zero; zero total_samples leaves duration None.
+        let zero_rate = build_flac([0x80, 0, 0, 34], 0, 2, 24, 88_200);
+        let facts = probe_audio_facts(Some(10_000), ProbeHint::default(), &zero_rate);
+        assert_eq!(facts.sample_rate, None);
+        assert_eq!(facts.duration, None);
+        assert_eq!(facts.bitrate, None);
+        assert_eq!(facts.channels, Some(2));
+        assert_eq!(facts.bit_depth, Some(24));
+
+        let zero_samples = build_flac([0x80, 0, 0, 34], 48_000, 1, 16, 0);
+        let facts = probe_audio_facts(Some(10_000), ProbeHint::default(), &zero_samples);
+        assert_eq!(facts.sample_rate, Some(48_000));
+        assert_eq!(facts.duration, None);
+
+        // Wrong block type or short STREAMINFO length returns bare FLAC metadata.
+        let wrong_type = build_flac([0x84, 0, 0, 34], 44_100, 2, 16, 44_100);
+        assert_eq!(
+            probe_audio_facts(None, ProbeHint::default(), &wrong_type).sample_rate,
+            None
+        );
+        let short_len = build_flac([0x80, 0, 0, 33], 44_100, 2, 16, 44_100);
+        assert_eq!(
+            probe_audio_facts(None, ProbeHint::default(), &short_len).sample_rate,
+            None
+        );
+
+        // Truncated STREAMINFO (< 42 bytes) fails cleanly.
+        assert_eq!(
+            probe_file(None, ProbeHint::default(), &valid[..41]),
+            Metadata::File(FileFacts::Unknown)
+        );
+    }
+
+    #[test]
+    fn ogg_parser_handles_vorbis_opus_and_truncated_pages() {
+        let build_ogg = |packet: &[u8]| {
+            let mut page = Vec::with_capacity(28 + packet.len());
+            page.extend_from_slice(b"OggS");
+            page.extend_from_slice(&[0u8; 22]);
+            page.push(1);
+            page.push(packet.len() as u8);
+            page.extend_from_slice(packet);
+            page
+        };
+
+        let mut opus_packet = b"OpusHead".to_vec();
+        opus_packet.extend_from_slice(&[1, 2, 0x38, 0x01, 0x80, 0xbb, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            probe_audio_facts(None, ProbeHint::default(), &build_ogg(&opus_packet)),
+            AudioFacts {
+                format: AudioKind::Opus,
+                tags: Default::default(),
+                duration: None,
+                sample_rate: Some(48_000),
+                channels: Some(2),
+                bit_depth: None,
+                bitrate: None,
+            }
+        );
+
+        // Truncated OpusHead without channel byte still yields Opus at 48 kHz.
+        assert_eq!(
+            probe_audio_facts(None, ProbeHint::default(), &build_ogg(b"OpusHead")).channels,
+            None
+        );
+
+        let build_vorbis = |channels: u8, sample_rate: u32, nominal_bitrate: i32| {
+            let mut pkt = b"\x01vorbis".to_vec();
+            pkt.extend_from_slice(&0u32.to_le_bytes());
+            pkt.push(channels);
+            pkt.extend_from_slice(&sample_rate.to_le_bytes());
+            pkt.extend_from_slice(&0i32.to_le_bytes());
+            pkt.extend_from_slice(&nominal_bitrate.to_le_bytes());
+            pkt.extend_from_slice(&0i32.to_le_bytes());
+            pkt.extend_from_slice(&[0x88, 1]);
+            build_ogg(&pkt)
+        };
+        assert_eq!(
+            probe_audio_facts(
+                None,
+                ProbeHint::default(),
+                &build_vorbis(2, 44_100, 128_000)
+            ),
+            AudioFacts {
+                format: AudioKind::OggVorbis,
+                tags: Default::default(),
+                duration: None,
+                sample_rate: Some(44_100),
+                channels: Some(2),
+                bit_depth: None,
+                bitrate: Some(128_000),
+            }
+        );
+
+        // Zero sample rate and negative nominal bitrate are filtered out.
+        let invalid_vorbis = build_vorbis(2, 0, -1);
+        let facts = probe_audio_facts(None, ProbeHint::default(), &invalid_vorbis);
+        assert_eq!(facts.sample_rate, None);
+        assert_eq!(facts.bitrate, None);
+        assert_eq!(facts.channels, Some(2));
+
+        // Truncated packet body keeps partial fields, while truncated header / unknown codec yields Unknown.
+        let valid_vorbis = build_vorbis(2, 48_000, 192_000);
+        let partial = probe_audio_facts(None, ProbeHint::default(), &valid_vorbis[..40]);
+        assert_eq!(partial.format, AudioKind::OggVorbis);
+        assert_eq!(partial.channels, Some(2));
+        assert_eq!(partial.sample_rate, None);
+
+        assert_eq!(
+            probe_file(None, ProbeHint::default(), &valid_vorbis[..26]),
+            Metadata::File(FileFacts::Unknown)
+        );
+        assert_eq!(
+            probe_file(None, ProbeHint::default(), &build_ogg(b"\x80theora")),
+            Metadata::File(FileFacts::Unknown)
+        );
+    }
+
+    #[test]
+    fn mp3_parser_handles_id3v2_xing_cbr_and_invalid_headers() {
+        let audio_hint = ProbeHint {
+            audio: true,
+            text: false,
+        };
+        // MPEG-1 Layer III, 128 kbps (idx 9), 44100 Hz (idx 0), stereo (mode 0, side_info = 32).
+        let frame_header = [0xff, 0xfb, 0x90, 0x00];
+
+        // CBR frame without Xing/Info header: recognized only when hint.audio is true.
+        assert_eq!(
+            probe_file(Some(64_000), ProbeHint::default(), &frame_header),
+            Metadata::File(FileFacts::Unknown)
+        );
+        assert_eq!(
+            probe_audio_facts(Some(64_000), audio_hint, &frame_header),
+            AudioFacts {
+                format: AudioKind::Mp3,
+                tags: Default::default(),
+                duration: None,
+                sample_rate: Some(44_100),
+                channels: Some(2),
+                bit_depth: None,
+                bitrate: Some(128_000),
+            }
+        );
+
+        // ID3v2 (128-byte syncsafe body) + Xing VBR tag (100 frames).
+        let mut xing = b"ID3\x03\x00\x00\x00\x00\x01\x00".to_vec();
+        xing.extend_from_slice(&[0u8; 128]);
+        xing.extend_from_slice(&frame_header);
+        xing.extend_from_slice(&[0u8; 32]);
+        xing.extend_from_slice(b"Xing");
+        xing.extend_from_slice(&1u32.to_be_bytes());
+        xing.extend_from_slice(&100u32.to_be_bytes());
+        let expected_duration = Duration::new(2, 612_244_897);
+        let expected_bitrate = (200_000f64 * 8.0 / expected_duration.as_secs_f64()) as u64;
+        assert_eq!(
+            probe_audio_facts(Some(200_000), audio_hint, &xing),
+            AudioFacts {
+                format: AudioKind::Mp3,
+                tags: Default::default(),
+                duration: Some(expected_duration),
+                sample_rate: Some(44_100),
+                channels: Some(2),
+                bit_depth: None,
+                bitrate: Some(expected_bitrate),
+            }
+        );
+
+        // Mono Info tag with frames = 0 falls back to frame bitrate and duration: None.
+        let mut zero_info = vec![0xff, 0xfb, 0x90, 0xc0];
+        zero_info.extend_from_slice(&[0u8; 17]);
+        zero_info.extend_from_slice(b"Info");
+        zero_info.extend_from_slice(&1u32.to_be_bytes());
+        zero_info.extend_from_slice(&0u32.to_be_bytes());
+        let facts = probe_audio_facts(Some(200_000), audio_hint, &zero_info);
+        assert_eq!(facts.channels, Some(1));
+        assert_eq!(facts.duration, None);
+        assert_eq!(facts.bitrate, Some(128_000));
+
+        // Malformed sync headers and ID3v2 sizes extending past the prefix fail cleanly.
+        for bad in [
+            [0xff, 0xeb, 0x90, 0x00].as_slice(), // reserved MPEG version 1
+            &[0xff, 0xf9, 0x90, 0x00],           // reserved layer 0
+            &[0xff, 0xfb, 0x00, 0x00],           // free bitrate index 0
+            &[0xff, 0xfb, 0xf0, 0x00],           // invalid bitrate index 15
+            &[0xff, 0xfb, 0x9c, 0x00],           // reserved sample rate index 3
+            b"ID3\x03\x00\x00\x7f\x7f\x7f\x7f",  // syncsafe tag larger than slice
+            b"ID3\x03\x00",                      // truncated ID3v2 header
+        ] {
+            assert_eq!(
+                probe_file(None, audio_hint, bad),
+                Metadata::File(FileFacts::Unknown)
+            );
+        }
+    }
+
+    #[test]
+    fn iso_bmff_parser_handles_video_audio_box_variants_and_malformed_boxes() {
+        let mvhd_v0 = |timescale: u32, duration: u32| {
+            let mut payload = vec![0u8; 100];
+            payload[0] = 0;
+            payload[12..16].copy_from_slice(&timescale.to_be_bytes());
+            payload[16..20].copy_from_slice(&duration.to_be_bytes());
+            iso_box(b"mvhd", &payload)
+        };
+        let tkhd_v0 = |width: u32, height: u32| {
+            let mut payload = vec![0u8; 84];
+            payload[0] = 0;
+            payload[76..80].copy_from_slice(&(width << 16).to_be_bytes());
+            payload[80..84].copy_from_slice(&(height << 16).to_be_bytes());
+            iso_box(b"tkhd", &payload)
+        };
+        let hdlr = |handler: &[u8; 4]| {
+            let mut payload = vec![0u8; 24];
+            payload[8..12].copy_from_slice(handler);
+            iso_box(b"hdlr", &payload)
+        };
+        let stsd = |entry: Vec<u8>| {
+            let mut payload = vec![0u8; 8];
+            payload[7] = 1;
+            payload.extend_from_slice(&entry);
+            iso_box(b"stsd", &payload)
+        };
+        let visual_entry = |fourcc: &[u8; 4], width: u16, height: u16| {
+            let mut payload = vec![0u8; 78];
+            payload[24..26].copy_from_slice(&width.to_be_bytes());
+            payload[26..28].copy_from_slice(&height.to_be_bytes());
+            iso_box(fourcc, &payload)
+        };
+        let audio_entry = |fourcc: &[u8; 4], channels: u16, bits: u16, rate: u32| {
+            let mut payload = vec![0u8; 28];
+            payload[16..18].copy_from_slice(&channels.to_be_bytes());
+            payload[18..20].copy_from_slice(&bits.to_be_bytes());
+            payload[24..28].copy_from_slice(&(rate << 16).to_be_bytes());
+            iso_box(fourcc, &payload)
+        };
+
+        let mdhd_v0 = |timescale: u32, duration: u32| {
+            let mut payload = vec![0u8; 24];
+            payload[0] = 0;
+            payload[12..16].copy_from_slice(&timescale.to_be_bytes());
+            payload[16..20].copy_from_slice(&duration.to_be_bytes());
+            iso_box(b"mdhd", &payload)
+        };
+
+        // Valid MP4 video: track mdhd + stsd overrides mvhd + tkhd.
+        let mdia_video = [
+            mdhd_v0(90_000, 180_000),
+            hdlr(b"vide"),
+            iso_box(
+                b"minf",
+                &iso_box(b"stbl", &stsd(visual_entry(b"avc1", 1920, 1080))),
+            ),
+        ]
+        .concat();
+        let trak_video = iso_box(
+            b"trak",
+            &[tkhd_v0(1280, 720), iso_box(b"mdia", &mdia_video)].concat(),
+        );
+        let mp4 = [
+            iso_box(b"ftyp", b"isom\x00\x00\x02\x00isom"),
+            iso_box(b"moov", &[mvhd_v0(1000, 5000), trak_video].concat()),
+        ]
+        .concat();
+        assert_eq!(
+            probe_video_facts(&mp4),
+            VideoFacts {
+                format: VideoKind::Mp4,
+                duration: Some(Duration::from_secs(2)),
+                dimensions: PixelSize::new(1920, 1080),
+                codec: Some("H.264".into()),
+            }
+        );
+
+        // QuickTime with 64-bit box size, v1 mvhd/tkhd, and tkhd dimensions fallback for ProRes.
+        let mut mvhd_v1 = vec![0u8; 112];
+        mvhd_v1[0] = 1;
+        mvhd_v1[20..24].copy_from_slice(&1000u32.to_be_bytes());
+        mvhd_v1[24..32].copy_from_slice(&4000u64.to_be_bytes());
+        let mut tkhd_v1 = vec![0u8; 96];
+        tkhd_v1[0] = 1;
+        tkhd_v1[88..92].copy_from_slice(&(640u32 << 16).to_be_bytes());
+        tkhd_v1[92..96].copy_from_slice(&(480u32 << 16).to_be_bytes());
+        let prores_entry = iso_box(b"apch", &[0u8; 32]);
+        let qt_trak = iso_box(
+            b"trak",
+            &[
+                iso_box(b"tkhd", &tkhd_v1),
+                iso_box(
+                    b"mdia",
+                    &[
+                        hdlr(b"vide"),
+                        iso_box(b"minf", &iso_box(b"stbl", &stsd(prores_entry))),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+        );
+        let qt = [
+            iso_box_64(b"ftyp", b"qt  \x00\x00\x00\x00"),
+            iso_box_64(b"moov", &[iso_box(b"mvhd", &mvhd_v1), qt_trak].concat()),
+        ]
+        .concat();
+        assert_eq!(
+            probe_video_facts(&qt),
+            VideoFacts {
+                format: VideoKind::QuickTime,
+                duration: Some(Duration::from_secs(4)),
+                dimensions: PixelSize::new(640, 480),
+                codec: Some("ProRes".into()),
+            }
+        );
+
+        // Valid M4A audio with size=0 trailing moov box.
+        let m4a_moov_body = iso_box(
+            b"trak",
+            &iso_box(
+                b"mdia",
+                &[
+                    mdhd_v0(44_100, 88_200),
+                    hdlr(b"soun"),
+                    iso_box(
+                        b"minf",
+                        &iso_box(b"stbl", &stsd(audio_entry(b"mp4a", 2, 16, 44_100))),
+                    ),
+                ]
+                .concat(),
+            ),
+        );
+        let mut m4a = iso_box(b"ftyp", b"M4A \x00\x00\x00\x00");
+        m4a.extend_from_slice(&0u32.to_be_bytes()); // size == 0 means "to end of buffer"
+        m4a.extend_from_slice(b"moov");
+        m4a.extend_from_slice(&m4a_moov_body);
+        assert_eq!(
+            probe_audio_facts(Some(64_000), ProbeHint::default(), &m4a),
+            AudioFacts {
+                format: AudioKind::M4a,
+                tags: Default::default(),
+                duration: Some(Duration::from_secs(2)),
+                sample_rate: Some(44_100),
+                channels: Some(2),
+                bit_depth: Some(16),
+                bitrate: Some(256_000),
+            }
+        );
+
+        // M4A brand without moov in prefix still classifies as M4a; 3GPP brand classifies as ThreeGpp.
+        let mut m4a_mdat_only = iso_box(b"ftyp", b"M4A ");
+        m4a_mdat_only.extend_from_slice(&1024u32.to_be_bytes());
+        m4a_mdat_only.extend_from_slice(b"mdat");
+        assert_eq!(
+            probe_audio_facts(None, ProbeHint::default(), &m4a_mdat_only).format,
+            AudioKind::M4a
+        );
+        assert_eq!(
+            probe_video_facts(&iso_box(b"ftyp", b"3gp4")).format,
+            VideoKind::ThreeGpp
+        );
+
+        // Zero timescale, zero dimensions, and overflow/undersized boxes do not divide by zero or panic.
+        let zero_scale_mp4 = [
+            iso_box(b"ftyp", b"isom"),
+            iso_box(
+                b"moov",
+                &[
+                    mvhd_v0(0, 5000),
+                    iso_box(
+                        b"trak",
+                        &[tkhd_v0(0, 0), iso_box(b"mdia", &[hdlr(b"vide")].concat())].concat(),
+                    ),
+                ]
+                .concat(),
+            ),
+        ]
+        .concat();
+        assert_eq!(
+            probe_video_facts(&zero_scale_mp4),
+            VideoFacts {
+                format: VideoKind::Mp4,
+                duration: None,
+                dimensions: None,
+                codec: None,
+            }
+        );
+
+        for bad_box in [
+            [0, 0, 0, 4, b'f', b'r', b'e', b'e'].as_slice(), // size < 8
+            &[0, 0, 0, 1, b'f', b'r', b'e', b'e', 0, 0, 0, 0, 0, 0, 0, 10], // large size < 16
+            &[
+                0, 0, 0, 1, b'f', b'r', b'e', b'e', 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            ], // u64::MAX large size overflow
+        ] {
+            let mut bytes = iso_box(b"ftyp", b"isom");
+            bytes.extend_from_slice(bad_box);
+            assert_eq!(probe_video_facts(&bytes).format, VideoKind::Mp4);
+        }
+    }
+
+    #[test]
+    fn ebml_and_avi_parsers_classify_containers_and_bounds() {
+        assert_eq!(
+            probe_video_facts(b"\x1aE\xdf\xa3\x9fB\x82\x84webm"),
+            VideoFacts {
+                format: VideoKind::WebM,
+                duration: None,
+                dimensions: None,
+                codec: None,
+            }
+        );
+        assert_eq!(
+            probe_video_facts(b"\x1aE\xdf\xa3\x9fB\x82\x88matroska").format,
+            VideoKind::Matroska
+        );
+        assert_eq!(
+            probe_video_facts(b"\x1aE\xdf\xa3").format,
+            VideoKind::Matroska
+        );
+
+        // DocType beyond the 4096-byte head scan stays Matroska.
+        let mut late_webm = b"\x1aE\xdf\xa3".to_vec();
+        late_webm.resize(4100, 0);
+        late_webm.extend_from_slice(b"webm");
+        assert_eq!(probe_video_facts(&late_webm).format, VideoKind::Matroska);
+
+        assert_eq!(
+            probe_file(None, ProbeHint::default(), b"\x1aE\xdf"),
+            Metadata::File(FileFacts::Unknown)
+        );
+        assert_eq!(
+            probe_video_facts(b"RIFF\x00\x00\x00\x00AVI "),
+            VideoFacts {
+                format: VideoKind::Avi,
+                duration: None,
+                dimensions: None,
+                codec: None,
+            }
+        );
+        assert_eq!(
+            probe_file(None, ProbeHint::default(), b"RIFF\x00\x00\x00\x00AVI"),
+            Metadata::File(FileFacts::Unknown)
+        );
+    }
+
+    fn mp4_with_mvhd_v1(body_len: usize, timescale: u32, duration: u64) -> Vec<u8> {
+        let mut mvhd = vec![0u8; body_len];
+        mvhd[0] = 1;
+        mvhd[20..24].copy_from_slice(&timescale.to_be_bytes());
+        mvhd[24..32].copy_from_slice(&duration.to_be_bytes());
+        [
+            iso_box(b"ftyp", b"isom\x00\x00\x02\x00isom"),
+            iso_box(b"moov", &iso_box(b"mvhd", &mvhd)),
+        ]
+        .concat()
+    }
+
+    fn mp4_with_mvhd_v0(timescale: u32, duration: u32) -> Vec<u8> {
+        let mut mvhd = vec![0u8; 100];
+        mvhd[0] = 0;
+        mvhd[12..16].copy_from_slice(&timescale.to_be_bytes());
+        mvhd[16..20].copy_from_slice(&duration.to_be_bytes());
+        [
+            iso_box(b"ftyp", b"isom\x00\x00\x02\x00isom"),
+            iso_box(b"moov", &iso_box(b"mvhd", &mvhd)),
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn iso_bmff_duration_handles_sentinels_large_u64_and_truncated_mvhd() {
+        assert_eq!(
+            probe_video_facts(&mp4_with_mvhd_v0(1_000, u32::MAX)).duration,
+            None
+        );
+        assert_eq!(
+            probe_video_facts(&mp4_with_mvhd_v1(112, 1, u64::MAX)).duration,
+            None
+        );
+        assert_eq!(
+            probe_video_facts(&mp4_with_mvhd_v1(112, 1, u64::MAX - 1)).duration,
+            Some(Duration::from_secs(u64::MAX - 1))
+        );
+        assert_eq!(
+            probe_video_facts(&mp4_with_mvhd_v1(32, 1, u64::MAX)).duration,
+            None
+        );
+    }
+
+    #[test]
+    fn probe_path_seeks_past_large_mdat_to_trailing_moov() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("trailing-moov.mp4");
+
+        let mut tkhd = vec![0u8; 84];
+        tkhd[76..80].copy_from_slice(&(1920u32 << 16).to_be_bytes());
+        tkhd[80..84].copy_from_slice(&(1080u32 << 16).to_be_bytes());
+
+        let mut mdhd = vec![0u8; 24];
+        mdhd[12..16].copy_from_slice(&90_000u32.to_be_bytes());
+        mdhd[16..20].copy_from_slice(&270_000u32.to_be_bytes());
+
+        let mut hdlr = vec![0u8; 24];
+        hdlr[8..12].copy_from_slice(b"vide");
+
+        let mut visual = vec![0u8; 78];
+        visual[24..26].copy_from_slice(&1920u16.to_be_bytes());
+        visual[26..28].copy_from_slice(&1080u16.to_be_bytes());
+        let mut stsd = vec![0u8; 8];
+        stsd[7] = 1;
+        stsd.extend_from_slice(&iso_box(b"avc1", &visual));
+
+        let trak = iso_box(
+            b"trak",
+            &[
+                iso_box(b"tkhd", &tkhd),
+                iso_box(
+                    b"mdia",
+                    &[
+                        iso_box(b"mdhd", &mdhd),
+                        iso_box(b"hdlr", &hdlr),
+                        iso_box(b"minf", &iso_box(b"stbl", &iso_box(b"stsd", &stsd))),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+        );
+        let bytes = [
+            iso_box(b"ftyp", b"mp42\x00\x00\x00\x00mp42isom"),
+            iso_box(b"mdat", &vec![0u8; PREFIX_BYTES * 2]),
+            iso_box(b"moov", &trak),
+        ]
+        .concat();
+        fs::write(&path, &bytes).expect("write mp4");
+
+        let metadata =
+            probe_path(&path, Some(bytes.len() as u64), ProbeHint::default()).expect("probe_path");
+        assert_eq!(
+            metadata,
+            Metadata::File(FileFacts::Video(VideoFacts {
+                format: VideoKind::Mp4,
+                duration: Some(Duration::from_secs(3)),
+                dimensions: PixelSize::new(1920, 1080),
+                codec: Some("H.264".into()),
+            }))
+        );
+    }
 }

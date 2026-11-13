@@ -5,7 +5,7 @@ use gpui_kit::{
         ActiveTheme, IndexPath, Sizable,
         input::{InputEvent, InputState, Textarea, TextareaState},
         select::{SearchableVec, SelectEvent, SelectState},
-        slider::{SliderEvent, SliderValue},
+        slider::SliderValue,
         switch::Switch,
     },
     prelude::*,
@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use super::{Choice, Field, Kind, Model};
 use crate::{
+    app::AppExt as _,
     i18n,
     ui::{self, settings::*},
 };
@@ -62,20 +63,17 @@ impl<T: Model> Editor<T> {
                         let value =
                             field.effective(&value).as_f64().unwrap_or(number.min) * number.scale;
                         let control = NumberControl::new(value as f32, number.range(), cx);
-                        subscriptions.push(cx.subscribe_in(
-                            &control.state,
-                            window,
-                            move |this, _, event: &SliderEvent, window, cx| {
-                                if let SliderEvent::Change(value) = event {
-                                    this.number_changed(index, *value, window, cx);
-                                }
-                            },
-                        ));
                         subscriptions.push(cx.observe_in(
                             &control.state,
                             window,
                             move |this, state, window, cx| {
-                                this.number_changed(index, state.read(cx).value(), window, cx);
+                                let value = state.read(cx).value();
+                                let Control::Number(control) = &this.controls[index] else {
+                                    return;
+                                };
+                                if !control.notification_is_programmatic(value) {
+                                    this.number_changed(index, value, window, cx);
+                                }
                             },
                         ));
                         Control::Number(control)
@@ -169,7 +167,7 @@ impl<T: Model> Editor<T> {
             value,
             fields,
             controls,
-            language: i18n::language(cx),
+            language: cx.gds().i18n().language(),
             _subscriptions: subscriptions,
         }
     }
@@ -180,7 +178,7 @@ impl<T: Model> Editor<T> {
 
     /// Application acceptance or rollback synchronizes native widgets without emitting changes.
     pub fn set_value(&mut self, value: T, window: &mut Window, cx: &mut Context<Self>) {
-        if self.value == value && self.language == i18n::language(cx) {
+        if self.value == value && self.language == cx.gds().i18n().language() {
             return;
         }
         self.value = value;
@@ -190,7 +188,7 @@ impl<T: Model> Editor<T> {
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.language = i18n::language(cx);
+        self.language = cx.gds().i18n().language();
         for (field, control) in self.fields.iter().zip(&mut self.controls) {
             let current = (field.get)(&self.value);
             match control {
@@ -215,23 +213,45 @@ impl<T: Model> Editor<T> {
                     }
                 }
                 Control::Choice { state, choices } => {
-                    let next = field.choices(&self.value, cx);
-                    if *choices != next {
-                        *choices = next;
-                        state.update(cx, |state, cx| {
-                            state.set_items(SearchableVec::new(choices.clone()), window, cx)
-                        });
-                    }
-                    if state.read(cx).selected_value() != Some(&current) {
-                        let index = choices
-                            .iter()
-                            .position(|choice| choice.value == current)
-                            .map(IndexPath::new);
-                        state.update(cx, |state, cx| state.set_selected_index(index, window, cx));
-                    }
+                    Self::sync_choice(field, &self.value, &current, state, choices, window, cx);
                 }
                 Control::Toggle => {}
             }
+        }
+    }
+
+    fn sync_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.language = cx.gds().i18n().language();
+        for (field, control) in self.fields.iter().zip(&mut self.controls) {
+            if let Control::Choice { state, choices } = control {
+                let current = (field.get)(&self.value);
+                Self::sync_choice(field, &self.value, &current, state, choices, window, cx);
+            }
+        }
+    }
+
+    fn sync_choice(
+        field: &Field<T>,
+        model: &T,
+        current: &Value,
+        state: &Entity<SelectState<SearchableVec<Choice>>>,
+        choices: &mut Vec<Choice>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let next = field.choices(model, cx);
+        if *choices != next {
+            *choices = next;
+            state.update(cx, |state, cx| {
+                state.set_items(SearchableVec::new(choices.clone()), window, cx)
+            });
+        }
+        if state.read(cx).selected_value() != Some(current) {
+            let index = choices
+                .iter()
+                .position(|choice| &choice.value == current)
+                .map(IndexPath::new);
+            state.update(cx, |state, cx| state.set_selected_index(index, window, cx));
         }
     }
 
@@ -276,12 +296,25 @@ impl<T: Model> Editor<T> {
         if control.range.equivalent(current as f32, display) {
             return;
         }
-        match number.value(display) {
+        match number.value(display, cx) {
             Ok(value) => self.change(index, value, window, cx),
             Err(error) => {
                 self.errors[index] = Some(error);
                 cx.notify();
             }
+        }
+    }
+
+    #[cfg(all(test, feature = "gui-tests"))]
+    pub(super) fn number_control(&self, id: &str) -> &NumberControl {
+        let index = self
+            .fields
+            .iter()
+            .position(|field| field.id == id)
+            .expect("settings field");
+        match &self.controls[index] {
+            Control::Number(control) => control,
+            _ => panic!("field {id} is not a numeric control"),
         }
     }
 
@@ -311,7 +344,7 @@ impl<T: Model> Editor<T> {
                         .small()
                         .w_full()
                         .aria_label(label)
-                        .bg(crate::appearance::theme::Colors::current(cx).content)),
+                        .bg(cx.gds().appearance().theme().colors().content)),
                 ]
             }
             .into_any_element(),
@@ -344,8 +377,8 @@ impl<T: Model> Editor<T> {
 
 impl<T: Model> Render for Editor<T> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.language != i18n::language(cx) {
-            self.sync(window, cx);
+        if self.language != cx.gds().i18n().language() {
+            self.sync_language(window, cx);
         }
         let mut rows = Vec::new();
         let mut group = "";

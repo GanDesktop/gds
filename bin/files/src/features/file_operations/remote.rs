@@ -10,10 +10,44 @@ pub(crate) enum Error {
     Remote(#[from] gds::service::remote::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Task(#[from] gds::service::task_manager::Error),
+    #[error(transparent)]
+    Transfer(#[from] super::transfer::Error),
     #[error("operation cancelled")]
     Cancelled,
     #[error("unsupported transfer: {0}")]
     Unsupported(&'static str),
-    #[error("{0}")]
-    Failed(String),
+    #[error("{operation}; cannot remove remote staging {stage}: {cleanup}")]
+    StagingCleanup {
+        stage: gds::service::remote::Address,
+        #[source]
+        operation: Box<Self>,
+        cleanup: Box<Self>,
+    },
+    #[error("{operation}; cannot remove local staging {path}: {cleanup}")]
+    LocalStagingCleanup {
+        path: std::path::PathBuf,
+        #[source]
+        operation: Box<Self>,
+        cleanup: std::io::Error,
+    },
+    #[error("{primary}; stream close failed: {close}")]
+    StreamClose {
+        #[source]
+        primary: Box<Self>,
+        close: Box<Self>,
+    },
+}
+
+impl Error {
+    pub(super) fn combine_close(self, close: Result<(), Self>) -> Self {
+        match close {
+            Ok(()) => self,
+            Err(close) => Self::StreamClose {
+                primary: Box::new(self),
+                close: Box::new(close),
+            },
+        }
+    }
 }

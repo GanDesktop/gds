@@ -1,10 +1,12 @@
 use super::{Cache, Request, Source, State};
 use crate::service::file_inspection::Kind;
+use gds::app::AppExt as _;
 use gpui_kit::{AppContext, TestAppContext};
 use std::sync::Arc;
 
 #[gpui_kit::test]
 fn cached_images_are_shared_and_replacing_a_file_requests_a_new_preview(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("thumbnail directory");
     let path = directory.path().join("photo.png");
@@ -88,6 +90,7 @@ fn cached_images_are_shared_and_replacing_a_file_requests_a_new_preview(cx: &mut
 
 #[gpui_kit::test]
 fn paging_keeps_previous_previews_ready(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("thumbnail directory");
     let pages: Vec<Vec<Source>> = (0..3)
@@ -159,6 +162,7 @@ fn paging_keeps_previous_previews_ready(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn metadata_requested_during_thumbnail_loading_is_completed_and_reused(cx: &mut TestAppContext) {
     use crate::service::file_inspection::{FileFacts, Metadata};
+    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("inspection directory");
     let path = directory.path().join("photo.png");
@@ -205,6 +209,7 @@ fn metadata_requested_during_thumbnail_loading_is_completed_and_reused(cx: &mut 
 
 #[gpui_kit::test]
 fn thumbnail_failure_keeps_readable_metadata(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
     cx.executor().allow_parking();
     let directory = tempfile::tempdir().expect("inspection directory");
     let path = directory.path().join("truncated.png");
@@ -231,6 +236,83 @@ fn thumbnail_failure_keeps_readable_metadata(cx: &mut TestAppContext) {
             let snapshot = cache.request(source, Request::Both, cx);
             assert!(matches!(snapshot.metadata, State::Ready(_)));
             assert!(matches!(snapshot.thumbnail, State::Failed(_)));
+        })
+    });
+}
+
+#[test]
+fn pending_queue_pops_most_recently_prioritized_item_first() {
+    let mut cache = Cache::default();
+    let make = |name: &str| Source {
+        path: std::path::PathBuf::from(name),
+        kind: Kind::Image,
+        size: Some(1),
+        modified: None,
+    };
+    let a = make("a.png");
+    let b = make("b.png");
+    let c = make("c.png");
+    cache.enqueue_pending(a.clone());
+    cache.enqueue_pending(b.clone());
+    cache.enqueue_pending(c.clone());
+    // Re-prioritizing `a` moves it to the back without inserting a duplicate.
+    cache.enqueue_pending(a.clone());
+    assert_eq!(cache.next_pending(), Some(a));
+    assert_eq!(cache.next_pending(), Some(c));
+    assert_eq!(cache.next_pending(), Some(b));
+    assert_eq!(cache.next_pending(), None);
+}
+
+#[gpui_kit::test]
+fn re_requested_pending_items_move_to_the_front_of_lifo_priority(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
+    cx.executor().allow_parking();
+    let directory = tempfile::tempdir().expect("priority directory");
+    let sources: Vec<Source> = (0..5)
+        .map(|index| {
+            let path = directory.path().join(format!("{index}.png"));
+            image::RgbImage::from_pixel(4, 4, image::Rgb([index, 20, 30]))
+                .save(&path)
+                .expect("image fixture");
+            Source {
+                path,
+                kind: Kind::Image,
+                size: Some(1),
+                modified: None,
+            }
+        })
+        .collect();
+    let cache = cx.update(|cx| cx.new(|_| Cache::default()));
+    cx.update(|cx| {
+        cache.update(cx, |cache, cx| {
+            for source in &sources {
+                cache.request(source.clone(), Request::Thumbnail, cx);
+            }
+            assert_eq!(cache.running, super::WORKERS);
+            assert_eq!(
+                cache.pending,
+                std::collections::VecDeque::from(sources[super::WORKERS..].to_vec())
+            );
+            // Re-requesting an already-pending item promotes it to the back (next popped).
+            cache.request(sources[super::WORKERS].clone(), Request::Thumbnail, cx);
+            let mut expected = sources[(super::WORKERS + 1)..].to_vec();
+            expected.push(sources[super::WORKERS].clone());
+            assert_eq!(cache.pending, std::collections::VecDeque::from(expected));
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        cache.update(cx, |cache, cx| {
+            for source in &sources {
+                assert!(matches!(
+                    cache
+                        .request(source.clone(), Request::Thumbnail, cx)
+                        .thumbnail,
+                    State::Ready(_)
+                ));
+            }
+            assert!(cache.pending.is_empty());
+            assert_eq!(cache.running, 0);
         })
     });
 }

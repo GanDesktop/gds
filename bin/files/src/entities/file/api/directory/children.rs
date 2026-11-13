@@ -19,40 +19,42 @@ pub struct ChildCount {
     pub truncated: bool,
 }
 
-/// Count the direct children of `path`.
-///
-/// Returns `None` when the directory cannot be read or its entries cannot be
-/// enumerated. A missing count is never shown or sorted as zero.
-pub(super) fn count(path: &Path) -> Option<ChildCount> {
-    count_with_limit(path, CHILD_COUNT_LIMIT)
-}
-
-fn count_with_limit(path: &Path, limit: u32) -> Option<ChildCount> {
-    let entries = fs::read_dir(path).ok()?;
-    count_entries(entries, limit)
-}
-
-/// Count the items an entry iterator yields successfully.
-///
-/// An iteration error means the directory content is unknown, not that one more
-/// child exists, so it yields `None` instead of a count.
-fn count_entries<I, T>(entries: I, limit: u32) -> Option<ChildCount>
-where
-    I: IntoIterator<Item = io::Result<T>>,
-{
-    let mut count = 0;
-    for entry in entries {
-        entry.ok()?;
-        count += 1;
-        if count > limit {
-            return Some(ChildCount {
-                count: limit,
-                truncated: true,
-            });
-        }
+impl ChildCount {
+    /// Count the direct children of `path`.
+    ///
+    /// Returns `None` when the directory cannot be read or its entries cannot be
+    /// enumerated. A missing count is never shown or sorted as zero.
+    pub(super) fn from_path(path: &Path) -> Option<Self> {
+        Self::count_with_limit(path, CHILD_COUNT_LIMIT)
     }
-    Some(ChildCount {
-        count,
-        truncated: false,
-    })
+
+    fn count_with_limit(path: &Path, limit: u32) -> Option<Self> {
+        let entries = fs::read_dir(path).ok()?;
+        Self::count_entries(entries, limit)
+    }
+
+    /// Count the items an entry iterator yields successfully.
+    ///
+    /// An iteration error means the directory content is unknown, not that one more
+    /// child exists, so it yields `None` instead of a count.
+    fn count_entries<I, T>(entries: I, limit: u32) -> Option<Self>
+    where
+        I: IntoIterator<Item = io::Result<T>>,
+    {
+        let mut count = 0;
+        for entry in entries {
+            entry.ok()?;
+            count += 1;
+            if count > limit {
+                return Some(Self {
+                    count: limit,
+                    truncated: true,
+                });
+            }
+        }
+        Some(Self {
+            count,
+            truncated: false,
+        })
+    }
 }

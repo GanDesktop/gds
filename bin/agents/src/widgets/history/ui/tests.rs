@@ -1,5 +1,6 @@
 use super::*;
 use bas::model::{Owner, SessionMeta};
+use gds::app::AppExt as _;
 use gpui_kit::{TestAppContext, WeakEntity};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -46,6 +47,7 @@ fn fixture_with_agents(agents: Vec<AgentSummary>, cx: &mut TestAppContext) -> Fi
     let server: bas::service::tls::ConnectionOptions = "127.0.0.1".parse().expect("server");
     let (window, browser) = cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::config::init(Some(path), cx);
         crate::shared::lib::appearance::init(cx);
         crate::app::init(cx);

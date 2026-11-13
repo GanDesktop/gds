@@ -1,6 +1,13 @@
-use std::{io, path::Path};
+use std::{
+    io,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use super::Error;
+
+const LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+const LOCK_POLL: Duration = Duration::from_millis(10);
 
 pub(super) async fn prepare(path: &Path, private_directory: bool) -> Result<(), Error> {
     let parent = path
@@ -12,18 +19,23 @@ pub(super) async fn prepare(path: &Path, private_directory: bool) -> Result<(), 
                 "database requires a parent directory",
             )
         })?;
-    // Inspect ancestors before creating/opening anything; do not silently follow
-    // an existing directory symlink, including outside the private leaf.
-    for ancestor in parent.ancestors() {
-        if ancestor.as_os_str().is_empty() {
-            continue;
+    // Ancestors above `parent` may be symlinks (such as `/var -> private/var`
+    // or `~/.local/state -> /persist/...`) provided any existing entry resolves
+    // to a directory.
+    if let Some(above) = parent.parent() {
+        for ancestor in above.ancestors() {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            check_ancestor(ancestor).await?;
         }
-        match tokio::fs::symlink_metadata(ancestor).await {
-            Ok(info) if !info.is_dir() || info.file_type().is_symlink() => return Err(private()),
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
+    }
+    // Keep strict no-symlink enforcement on the immediate leaf directory `parent`.
+    match tokio::fs::symlink_metadata(parent).await {
+        Ok(info) if !info.is_dir() || info.file_type().is_symlink() => return Err(private()),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     let mut builder = tokio::fs::DirBuilder::new();
     builder.recursive(true);
@@ -32,17 +44,14 @@ pub(super) async fn prepare(path: &Path, private_directory: bool) -> Result<(), 
         builder.mode(0o700);
     }
     builder.create(parent).await?;
+    let parent_info = tokio::fs::symlink_metadata(parent).await?;
+    if !parent_info.is_dir() || parent_info.file_type().is_symlink() {
+        return Err(private());
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if private_directory
-            && tokio::fs::symlink_metadata(parent)
-                .await?
-                .permissions()
-                .mode()
-                & 0o077
-                != 0
-        {
+        if private_directory && parent_info.permissions().mode() & 0o077 != 0 {
             return Err(private());
         }
     }
@@ -57,10 +66,41 @@ pub(super) async fn prepare(path: &Path, private_directory: bool) -> Result<(), 
     open.write(true).create(true).truncate(false);
     #[cfg(unix)]
     {
-        open.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
+        open.mode(0o600)
+            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC);
     }
-    open.open(path).await?;
+    open.open(path).await.map_err(map_open_error)?;
     Ok(())
+}
+
+async fn check_ancestor(ancestor: &Path) -> Result<(), Error> {
+    match tokio::fs::metadata(ancestor).await {
+        Ok(info) if !info.is_dir() => Err(private()),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match tokio::fs::symlink_metadata(ancestor).await {
+                Ok(info) if info.file_type().is_symlink() || !info.is_dir() => Err(private()),
+                Ok(_) => Ok(()),
+                Err(link_error) if link_error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(link_error) => Err(link_error.into()),
+            }
+        }
+        Err(error) => {
+            #[cfg(unix)]
+            if error.raw_os_error() == Some(nix::libc::ENOTDIR) {
+                return Err(private());
+            }
+            Err(error.into())
+        }
+    }
+}
+
+fn map_open_error(error: io::Error) -> Error {
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(nix::libc::ELOOP) {
+        return private();
+    }
+    error.into()
 }
 
 async fn check_file(path: &Path) -> Result<(), Error> {
@@ -83,7 +123,39 @@ async fn check_file(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-pub(super) async fn lock(path: &Path) -> Result<std::fs::File, Error> {
+pub(super) fn acquire_lock(
+    file: std::fs::File,
+    timeout: Duration,
+    is_cancelled: impl Fn() -> bool,
+) -> io::Result<std::fs::File> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if is_cancelled() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "database initialization lock cancelled",
+            ));
+        }
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "timed out waiting for database initialization lock",
+                    ));
+                }
+                std::thread::sleep(LOCK_POLL);
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        }
+    }
+}
+
+pub(super) async fn lock(
+    tasks: &crate::service::task_manager::Scope,
+    path: &Path,
+) -> Result<std::fs::File, Error> {
     let mut name = path.as_os_str().to_owned();
     name.push(".lock");
     let path = Path::new(&name);
@@ -91,16 +163,36 @@ pub(super) async fn lock(path: &Path) -> Result<std::fs::File, Error> {
     let mut open = tokio::fs::OpenOptions::new();
     open.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
-    open.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
-    let file = open.open(path).await?.into_std().await;
+    open.mode(0o600)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC);
+    let file = open
+        .open(path)
+        .await
+        .map_err(map_open_error)?
+        .into_std()
+        .await;
     // MigrationSet reads applied IDs before executing migrations. Serialize
     // initialization across processes; closing this file releases the lock.
-    let file = tokio::task::spawn_blocking(move || {
-        file.lock()?;
-        Ok::<_, io::Error>(file)
-    })
-    .await
-    .map_err(io::Error::other)??;
+    let cancel = tasks.token();
+    if cancel.is_cancelled() {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "database initialization lock cancelled",
+        )
+        .into());
+    }
+    let file = tasks
+        .spawn_blocking_named("Lock database initialization", move || {
+            acquire_lock(file, LOCK_TIMEOUT, || cancel.is_cancelled())
+        })
+        .await
+        .map_err(|error| {
+            if matches!(error, crate::service::task_manager::Error::Closed(_)) {
+                io::Error::new(io::ErrorKind::Interrupted, error)
+            } else {
+                io::Error::other(error)
+            }
+        })??;
     Ok(file)
 }
 

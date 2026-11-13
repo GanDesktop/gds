@@ -2,21 +2,33 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A file table column whose visibility and order the user can configure.
+/// A file table column and sort key whose visibility and order the user can configure.
 ///
 /// The identifiers returned by [`Column::id`] are persisted, so they must stay
 /// stable when variants are added or renamed in the UI.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Column {
+    #[default]
+    #[serde(alias = "Name")]
     Name,
+    /// Broad content category, with symlinks ordered by their target.
+    #[serde(alias = "Type")]
     Type,
+    #[serde(alias = "Size")]
     Size,
+    #[serde(alias = "Owner")]
     Owner,
+    #[serde(alias = "Group")]
     Group,
+    #[serde(alias = "Permissions")]
     Permissions,
+    #[serde(alias = "Modified")]
     Modified,
+    #[serde(alias = "Accessed")]
     Accessed,
+    /// Concrete format name, e.g. `PNG`, `Rust` or `MPEG-4`.
+    #[serde(alias = "DetailedType", alias = "detailed_type")]
     DetailedType,
 }
 
@@ -60,7 +72,18 @@ impl Column {
 
     /// Resolve a persisted identifier.
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|column| column.id() == id)
+        match id {
+            "name" | "Name" => Some(Self::Name),
+            "type" | "Type" => Some(Self::Type),
+            "size" | "Size" => Some(Self::Size),
+            "owner" | "Owner" => Some(Self::Owner),
+            "group" | "Group" => Some(Self::Group),
+            "permissions" | "Permissions" => Some(Self::Permissions),
+            "modified" | "Modified" => Some(Self::Modified),
+            "accessed" | "Accessed" => Some(Self::Accessed),
+            "detailed-type" | "DetailedType" | "detailed_type" => Some(Self::DetailedType),
+            _ => None,
+        }
     }
 
     /// The name column is always visible.

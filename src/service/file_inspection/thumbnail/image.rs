@@ -72,9 +72,30 @@ fn render_svg(bytes: &[u8]) -> Result<RgbaImage, Error> {
     };
     let tree = usvg::Tree::from_data(bytes, &options)?;
     let dimensions = tree.size();
-    let scale = (EDGE as f32 / dimensions.width().max(dimensions.height())).min(1.);
-    let width = (dimensions.width() * scale).ceil() as u32;
-    let height = (dimensions.height() * scale).ceil() as u32;
+    let source_width = dimensions.width();
+    let source_height = dimensions.height();
+    if !source_width.is_finite()
+        || !source_height.is_finite()
+        || source_width <= 0.
+        || source_height <= 0.
+    {
+        return Err(Error::Svg(usvg::Error::InvalidSize));
+    }
+    let scale = (EDGE as f32 / source_width.max(source_height)).min(1.);
+    let scaled_width = source_width * scale;
+    let scaled_height = source_height * scale;
+    if !scaled_width.is_finite()
+        || !scaled_height.is_finite()
+        || scaled_width <= 0.
+        || scaled_height <= 0.
+    {
+        return Err(Error::Svg(usvg::Error::InvalidSize));
+    }
+    let width = scaled_width.ceil() as u32;
+    let height = scaled_height.ceil() as u32;
+    if width == 0 || height == 0 {
+        return Err(Error::Svg(usvg::Error::InvalidSize));
+    }
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(Error::TooLarge)?;
     resvg::render(
         &tree,

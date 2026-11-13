@@ -10,6 +10,7 @@ let
     export PATH="${pkgs.lib.makeBinPath runtimePrograms}''${PATH:+:$PATH}"
     export LD_LIBRARY_PATH="${libraryPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export TERMINFO_DIRS="''${TERMINFO_DIRS:+$TERMINFO_DIRS:}${pkgs.ncurses}/share/terminfo"
+    export XDG_DATA_DIRS="''${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:${pkgs.shared-mime-info}/share"
     exec "$@"
   '';
 in
@@ -26,5 +27,6 @@ pkgs.mkShell {
   shellHook = ''
     export LD_LIBRARY_PATH="${libraryPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export TERMINFO_DIRS="''${TERMINFO_DIRS:+$TERMINFO_DIRS:}${pkgs.ncurses}/share/terminfo"
+    export XDG_DATA_DIRS="''${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:${pkgs.shared-mime-info}/share"
   '';
 }

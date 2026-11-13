@@ -1,4 +1,5 @@
 use super::View;
+use crate::app::AppExt as _;
 use crate::service::terminal::{Session, SpawnOptions};
 use crate::ui::terminal::Preferences;
 use gpui_kit::{
@@ -45,8 +46,12 @@ impl Render for Host {
 fn single_terminal_respects_its_hosts_key_map(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        crate::ui::terminal::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
         // The host, not the reusable terminal, chooses all these bindings.
         cx.bind_keys([
             KeyBinding::new(
@@ -59,11 +64,15 @@ fn single_terminal_respects_its_hosts_key_map(cx: &mut TestAppContext) {
             KeyBinding::new("f6", ReturnToHost, Some("TerminalFocusTest > GdsTerminal")),
         ]);
     });
-    let session = Session::spawn(SpawnOptions {
-        cwd: std::env::temp_dir(),
-        args: vec!["-c".into(), "exit 0".into()],
-        ..SpawnOptions::default()
-    })
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: std::env::temp_dir(),
+            args: vec!["-c".into(), "exit 0".into()],
+            ..SpawnOptions::default()
+        },
+    )
     .expect("local shell for terminal focus test");
     let mut host = None;
     let window = cx.open_window(size(px(800.), px(480.)), |window, cx| {
@@ -134,10 +143,15 @@ fn screen(session: &Session) -> String {
 fn tab_routes_to_pty_and_outside_terminal_traversal_still_works(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        crate::ui::terminal::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
     });
-    let session = Session::spawn(SpawnOptions {
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(&tasks, SpawnOptions {
         cwd: std::env::temp_dir(),
         args: vec!["-c".into(),
             "stty -echo -icanon min 1 time 0; printf '\\033]0;ready\\007'; dd bs=1 count=4 2>/dev/null | od -An -tx1".into()],
@@ -198,8 +212,12 @@ fn tab_routes_to_pty_and_outside_terminal_traversal_still_works(cx: &mut TestApp
 fn tab_completes_a_filename_in_a_real_interactive_shell(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        crate::ui::terminal::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
     });
     let account_shell = nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .expect("test account lookup")
@@ -224,12 +242,16 @@ fn tab_completes_a_filename_in_a_real_interactive_shell(cx: &mut TestAppContext)
         "COMPLETION_SUCCEEDED\n",
     )
     .expect("completion fixture");
-    let session = Session::spawn(SpawnOptions {
-        cwd: directory.path().to_owned(),
-        shell: Some(bash),
-        args: vec!["--noprofile".into(), "--norc".into(), "-i".into()],
-        ..SpawnOptions::default()
-    })
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: directory.path().to_owned(),
+            shell: Some(bash),
+            args: vec!["--noprofile".into(), "--norc".into(), "-i".into()],
+            ..SpawnOptions::default()
+        },
+    )
     .expect("interactive bash for completion");
     session
         .write(b"PS1=''; stty -echo; bind '\"\\C-i\": complete'; printf '\\033]0;ready\\007'\r")
@@ -260,14 +282,22 @@ fn tab_completes_a_filename_in_a_real_interactive_shell(cx: &mut TestAppContext)
 fn changing_terminal_typography_updates_existing_grid_metrics(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        crate::ui::terminal::init(cx);
-        crate::i18n::install(crate::i18n::Language::English, cx).expect("test messages");
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
     });
-    let session = Session::spawn(SpawnOptions {
-        cwd: std::env::temp_dir(),
-        args: vec!["-c".into(), "exit 0".into()],
-        ..SpawnOptions::default()
-    })
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: std::env::temp_dir(),
+            args: vec!["-c".into(), "exit 0".into()],
+            ..SpawnOptions::default()
+        },
+    )
     .expect("local shell for typography test");
     let mut terminal = None;
     let window = cx.open_window(size(px(800.), px(480.)), |window, cx| {
@@ -308,5 +338,158 @@ fn changing_terminal_typography_updates_existing_grid_metrics(cx: &mut TestAppCo
         assert_eq!(view.preferences, preferences);
     })
     .expect("terminal typography update");
+    session.terminate();
+}
+
+#[gpui_kit::test]
+fn cursor_blink_task_tracks_focus_preferences_and_reduced_motion(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
+    });
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: std::env::temp_dir(),
+            args: vec!["-c".into(), "sleep 60".into()],
+            ..SpawnOptions::default()
+        },
+    )
+    .expect("local shell for blink lifecycle test");
+    let mut host = None;
+    let window = cx.open_window(size(px(800.), px(480.)), |window, cx| {
+        let view = cx.new(|cx| View::new(session.clone(), Preferences::default(), window, cx));
+        let entity = cx.new(|cx| Host {
+            view,
+            focus: cx.focus_handle().tab_stop(true),
+            next_focus: cx.focus_handle().tab_stop(true),
+            workspace_actions: 0,
+            settings: 0,
+            toggles: 0,
+            exits: 0,
+        });
+        host = Some(entity.clone());
+        Root::new(entity, window, cx)
+    });
+    let host = host.expect("host entity");
+    cx.update_window(window.into(), |_, window, _| window.activate_window())
+        .expect("activate terminal window");
+    cx.run_until_parked();
+
+    cx.update_window(window.into(), |_, window, cx| {
+        let terminal = host.read(cx).view.clone();
+        window.render_frame(cx);
+        {
+            let view = terminal.read(cx);
+            assert!(!view.focused);
+            assert!(view._blink.is_none());
+            assert!(view.cursor_on);
+        }
+
+        let inside = terminal.read(cx).focus_handle();
+        inside.focus(window, cx);
+        window.render_frame(cx);
+        {
+            let view = terminal.read(cx);
+            assert!(view.focused);
+            assert!(view._blink.is_some());
+            assert!(view.cursor_on);
+        }
+
+        terminal.update(cx, |view, cx| {
+            view.cursor_on = false;
+            view.set_preferences(
+                Preferences {
+                    cursor_blink: false,
+                    ..Preferences::default()
+                },
+                cx,
+            );
+        });
+        {
+            let view = terminal.read(cx);
+            assert!(view._blink.is_none());
+            assert!(view.cursor_on);
+        }
+
+        terminal.update(cx, |view, cx| {
+            view.set_preferences(Preferences::default(), cx);
+        });
+        assert!(terminal.read(cx)._blink.is_some());
+
+        terminal.update(cx, |view, _| view.cursor_on = false);
+        cx.set_reduce_motion(true);
+        window.refresh();
+        window.render_frame(cx);
+        {
+            let view = terminal.read(cx);
+            assert!(view._blink.is_none());
+            assert!(view.cursor_on);
+        }
+
+        cx.set_reduce_motion(false);
+        window.refresh();
+        window.render_frame(cx);
+        assert!(terminal.read(cx)._blink.is_some());
+
+        terminal.update(cx, |view, _| view.cursor_on = false);
+        let outside = host.read(cx).next_focus.clone();
+        outside.focus(window, cx);
+        window.render_frame(cx);
+        {
+            let view = terminal.read(cx);
+            assert!(!view.focused);
+            assert!(view._blink.is_none());
+            assert!(view.cursor_on);
+        }
+    })
+    .expect("cursor blink lifecycle assertions");
+    session.terminate();
+}
+
+#[gpui_kit::test]
+fn terminal_grid_renders_tabs_and_combining_marks(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
+            .i18n()
+            .install(crate::i18n::Language::English)
+            .expect("test messages");
+    });
+    let tasks = cx.update(|cx| cx.gds().tasks().scope());
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: std::env::temp_dir(),
+            args: vec![
+                "-c".into(),
+                "printf '%s\\r\\n' 'A\te\u{0301}DONE'; sleep 60".into(),
+            ],
+            ..SpawnOptions::default()
+        },
+    )
+    .expect("local shell for combining glyph test");
+    wait_for_pty(|| screen(&session).contains("DONE"));
+    let mut terminal = None;
+    let window = cx.open_window(size(px(800.), px(480.)), |window, cx| {
+        let view = cx.new(|cx| View::new(session.clone(), Preferences::default(), window, cx));
+        terminal = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let terminal = terminal.expect("terminal view");
+    cx.update_window(window.into(), |_, window, cx| {
+        terminal.read(cx).focus_handle().focus(window, cx);
+        window.render_frame(cx);
+        assert!(terminal.read(cx).geometry.columns > 0);
+    })
+    .expect("combining glyph render");
     session.terminate();
 }

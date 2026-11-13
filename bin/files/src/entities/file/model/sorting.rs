@@ -1,28 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-use super::super::directory::{Entry, EntryKind, LinkStatus};
+use super::super::directory::{Entry, EntryKind, LinkTarget};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Key {
-    #[default]
-    Name,
-    Modified,
-    /// Broad content category, with symlinks ordered by their target.
-    Type,
-    Size,
-    Owner,
-    Group,
-    Permissions,
-    Accessed,
-    /// Concrete format name, e.g. `PNG`, `Rust` or `MPEG-4`.
-    DetailedType,
-}
+pub use super::columns::Column as Key;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
     #[default]
+    #[serde(alias = "ascending")]
     Ascending,
+    #[serde(alias = "descending")]
     Descending,
 }
 
@@ -49,6 +37,12 @@ pub struct Sort {
 }
 
 impl Sort {
+    /// Whether the sort matches the canonical directories-first, ascending-name order
+    /// already maintained by [`super::super::directory::DirectorySnapshot`].
+    pub const fn is_canonical(self) -> bool {
+        matches!(self.key, Key::Name) && matches!(self.direction, Direction::Ascending)
+    }
+
     pub fn next(self, key: Key) -> Self {
         Self {
             key,
@@ -64,6 +58,11 @@ impl Sort {
     /// Directories and available metadata retain their priority in both directions.
     pub fn sort_indices(&self, entries: &[Entry], visible: &mut [usize]) {
         visible.sort_by(|&left, &right| self.compare(&entries[left], &entries[right]));
+    }
+
+    /// Whether `entries` already satisfy this ordering without requiring a resort.
+    pub fn is_sorted(&self, entries: &[Entry]) -> bool {
+        entries.is_sorted_by(|left, right| self.compare(left, right) != Ordering::Greater)
     }
 
     fn compare(&self, left: &Entry, right: &Entry) -> Ordering {
@@ -232,18 +231,20 @@ impl Sort {
 
     fn target_status_rank(entry: &Entry) -> Option<u8> {
         let target = entry.details.target.as_ref()?;
-        Some(match target.status {
-            LinkStatus::Resolved => 0,
-            LinkStatus::Broken => 1,
-            LinkStatus::Unreachable => 2,
+        Some(match target {
+            LinkTarget::Resolved { .. } => 0,
+            LinkTarget::Broken => 1,
+            LinkTarget::Unreachable => 2,
         })
     }
 
     /// Directories first, then files grouped by content category; anything else
     /// the target could be stays last.
     fn target_category_rank(entry: &Entry) -> Option<u8> {
-        let target = entry.details.target.as_ref()?;
-        match target.kind {
+        let LinkTarget::Resolved { kind, .. } = entry.details.target.as_ref()? else {
+            return None;
+        };
+        match kind {
             EntryKind::Directory => Some(0),
             EntryKind::File => Some(1 + Self::category_rank(entry)?),
             _ => None,

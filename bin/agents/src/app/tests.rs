@@ -4,6 +4,7 @@ use gpui_kit::{TestAppContext, test::TestWindowExt};
 fn init(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         theme::init_default(cx);
         super::init(cx);
     });
@@ -121,6 +122,7 @@ fn quit_flushes_valid_settings_before_debounce_without_a_workspace(cx: &mut Test
     std::fs::write(&path, r#"{"appearance":{"theme_source":"builtin"}}"#).expect("test config");
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::config::init(Some(path.clone()), cx);
         theme::init(cx);
     });

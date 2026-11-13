@@ -5,3 +5,12 @@ pub(crate) mod location {
     pub(crate) use super::super::directory::{self, DirectorySnapshot, ReadOptions};
     pub(crate) use super::super::sorting::Sort;
 }
+
+pub(crate) mod preferences {
+    pub(crate) use super::super::directory::{
+        DEFAULT_COALESCE_MAX_UPDATES, DEFAULT_COALESCE_MS, DEFAULT_MAX_CONCURRENT_BATCHES,
+        DEFAULT_PRIORITY_LIMIT, DEFAULT_PROBE_BUDGET, DEFAULT_REORDER_COALESCE_MS,
+        DEFAULT_STREAM_INITIAL_DELAY_MS, DEFAULT_STREAM_INTERVAL_MS, DEFAULT_STREAM_MIN_ENTRIES,
+        StreamOptions,
+    };
+}

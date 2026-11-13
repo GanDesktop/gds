@@ -1,7 +1,7 @@
 //! Shared column geometry for the toolbar, content and footer.
 
 use super::*;
-use crate::appearance::theme;
+use crate::app::AppExt as _;
 use crate::appearance::tokens::{ICON_BUTTON_SIZE, SIDEBAR_WIDTH};
 use gds_uim::el;
 use gpui_kit::component::ActiveTheme;

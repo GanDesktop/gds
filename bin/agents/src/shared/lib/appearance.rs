@@ -6,6 +6,7 @@ pub(crate) mod preferences;
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
 
+use gds::app::AppExt as _;
 use gpui_kit::{
     AnyView, App, Context, Global, Pixels, Styled, Subscription, Task, Window,
     WindowBackgroundAppearance,
@@ -65,10 +66,6 @@ pub(crate) fn content_font_size(cx: &App) -> Pixels {
 
 pub(crate) fn content_line_height(cx: &App) -> f32 {
     cx.global::<Appearance>().content_line_height
-}
-
-pub(crate) fn content_background(cx: &App) -> gpui_kit::Hsla {
-    gds::appearance::theme::content_background(cx)
 }
 
 #[derive(Clone)]
@@ -142,7 +139,7 @@ pub(crate) fn watch(cx: &mut App) {
         return;
     }
     let config = cx.global::<WatchConfig>().clone();
-    let observer = gds::appearance::theme::Observer::shared(cx);
+    let observer = cx.gds_mut().appearance().theme().observer();
     let mut paths = vec![config.loader.store.path().to_owned()];
     if let Ok(document) = config.loader.document() {
         paths.extend(preferences::appearance(&document.preferences).source_paths());
@@ -205,17 +202,23 @@ pub(crate) fn watch(cx: &mut App) {
 fn apply(resolved: loader::Resolved, window: Option<&mut Window>, cx: &mut App) {
     let effective = resolved.effective;
     let preferences = &effective.preferences;
-    gds::appearance::motion::set_animations_enabled(
-        preferences.animations_enabled.unwrap_or(true),
-        cx,
-    );
+    cx.gds_mut()
+        .appearance()
+        .motion()
+        .set_enabled(preferences.animations_enabled.unwrap_or(true));
     let opacity = gds::appearance::tokens::SurfaceOpacity::default();
     crate::shared::i18n::install(preferences.language, cx);
-    let applied = resolved
-        .palette
-        .install(cx)
+    let applied = cx
+        .gds_mut()
+        .appearance()
+        .theme()
+        .install(resolved.palette)
         .expect("prepared palettes have validated opacity");
-    let font = gds::appearance::typography::install(&effective.font, cx)
+    let font = cx
+        .gds_mut()
+        .appearance()
+        .typography()
+        .apply(&effective.font)
         .expect("resolved typography is validated");
     if let Some(family) = font.unavailable {
         tracing::warn!(%family, "font is unavailable; using the system font");
@@ -267,7 +270,7 @@ pub(crate) fn window_root(
     window: &mut Window,
     cx: &mut Context<Root>,
 ) -> Root {
-    gds::appearance::theme::Observer::attach(window, cx);
+    cx.gds_mut().appearance().theme().attach_observer(window);
     cx.observe_global::<Appearance>(|root, cx| {
         root.style().text = font_style(cx).text;
         cx.notify();

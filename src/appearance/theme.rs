@@ -160,7 +160,7 @@ impl Error {
 }
 
 /// Update client-side window corners without reloading the palette.
-pub fn update_window_corners(rounded: bool, cx: &mut App) {
+pub(crate) fn update_window_corners(rounded: bool, cx: &mut App) {
     cx.set_global(
         gpui_kit::component::WindowBorderStyle::default().with_corner_radius(gpui_kit::px(
             if rounded {
@@ -195,7 +195,7 @@ impl Global for Material {}
 /// Returns an error for invalid opacity, unavailable source files, disabled Qt
 /// custom palettes, or unsupported/malformed palette data. The previous valid
 /// theme and material settings are retained on every such failure.
-pub fn apply(appearance: &Appearance, cx: &mut App) -> Result<Applied, Error> {
+pub(crate) fn apply(appearance: &Appearance, cx: &mut App) -> Result<Applied, Error> {
     appearance.prepare(cx.window_appearance())?.install(cx)
 }
 
@@ -220,7 +220,7 @@ impl Prepared {
     ///
     /// # Errors
     /// Reports invalid surface opacity; the previous palette remains installed.
-    pub fn install(self, cx: &mut App) -> Result<Applied, Error> {
+    pub(crate) fn install(self, cx: &mut App) -> Result<Applied, Error> {
         apply_loaded(&self.appearance, self.loaded, cx)
     }
 }
@@ -240,15 +240,10 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
         source_path,
     } = loaded;
 
-    // A mode change reloads Kit's registered palette. Apply custom colors only
-    // afterwards; Theme::update reconciles its colors/tokens/Base projection.
+    // A mode change reloads Kit's registered palette. Re-assert globals,
+    // materials, window corners, and user typography before applying our
+    // final theme overrides in a single Theme::update pass.
     Theme::change(ThemeMode::from(mode), None, cx);
-    Theme::update(cx, |theme| {
-        palette.apply_to(&mut theme.colors);
-        // Keep Kit's tinted border/inset line, not its outer 3px halo: our
-        // scrolling surfaces clip at their edges. Reapply on every palette load.
-        theme.focus_ring = false;
-    });
     cx.set_global(palette);
     cx.set_global(Material {
         content: palette.content,
@@ -258,9 +253,18 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
     });
     update_window_corners(appearance.rounded_corners, cx);
     material::Material::install(cx);
-    // Tables inherit their surrounding content material. Keep the background
-    // role opaque: native dialogs and other raised surfaces use it directly.
+    // Kit reloads the registered theme on a mode change, and a theme file may
+    // name its own fonts. Re-assert the user's typography so switching theme,
+    // mode or opacity never resets the font family or size.
+    crate::appearance::typography::reapply(cx);
     Theme::update(cx, |theme| {
+        palette.apply_to(&mut theme.colors);
+        // Keep Kit's tinted border/inset line, not its outer 3px halo: our
+        // scrolling surfaces clip at their edges. Reapply on every palette load.
+        theme.focus_ring = false;
+
+        // Tables inherit their surrounding content material. Keep the background
+        // role opaque: native dialogs and other raised surfaces use it directly.
         let mut clear = palette.content;
         clear.a = 0.0;
         // Data tables share the surrounding content material, not a second underlay.
@@ -274,14 +278,9 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
         theme.tokens.table_row_border = clear.into();
         theme.colors.scrollbar = clear;
         theme.tokens.scrollbar = clear.into();
-    });
-    // Kit reloads the registered theme on a mode change, and a theme file may
-    // name its own fonts. Re-assert the user's typography so switching theme,
-    // mode or opacity never resets the font family or size.
-    crate::appearance::typography::reapply(cx);
-    // Every theme application re-aligns the shared toast column, so switching
-    // themes cannot move it or leave it under the toolbar.
-    Theme::update(cx, |theme| {
+
+        // Every theme application re-aligns the shared toast column, so switching
+        // themes cannot move it or leave it under the toolbar.
         theme.notification.placement = gpui_kit::Anchor::TopRight;
         theme.notification.margins = gpui_kit::base::Edges {
             top: gpui_kit::px(super::tokens::TOOLBAR_HEIGHT + super::tokens::NOTIFICATION_TOP_GAP),
@@ -305,7 +304,7 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
 /// # Errors
 /// Returns an error for non-finite/out-of-range alpha or when no appearance has
 /// been applied yet. Neither opacity is changed if validation fails.
-pub fn update_opacity(content: f32, sidebar: f32, cx: &mut App) -> Result<(), Error> {
+pub(crate) fn update_opacity(content: f32, sidebar: f32, cx: &mut App) -> Result<(), Error> {
     validate_opacity("content_opacity", content)?;
     validate_opacity("sidebar_opacity", sidebar)?;
     if !cx.has_global::<Material>() {
@@ -320,7 +319,7 @@ pub fn update_opacity(content: f32, sidebar: f32, cx: &mut App) -> Result<(), Er
 
 /// Background for the application-owned content surface, not text or controls.
 /// The window/root must permit transparency for alpha to reach the desktop.
-pub fn content_background(cx: &App) -> Hsla {
+pub(crate) fn content_background(cx: &App) -> Hsla {
     let Some(material) = cx.try_global::<Material>() else {
         return Theme::global(cx).background;
     };
@@ -330,7 +329,7 @@ pub fn content_background(cx: &App) -> Hsla {
 }
 
 /// Background for the application-owned sidebar and toolbar surfaces.
-pub fn sidebar_background(cx: &App) -> Hsla {
+pub(crate) fn sidebar_background(cx: &App) -> Hsla {
     let Some(material) = cx.try_global::<Material>() else {
         return Theme::global(cx).sidebar;
     };

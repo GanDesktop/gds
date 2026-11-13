@@ -1,15 +1,15 @@
 mod directory;
 use crate::shared::i18n::tr;
 use bas::service::{Client, pb, tls::ConnectionOptions};
+use gds::service::task_manager::Scope;
+use gds::service::task_manager::Task as IoTask;
 use std::time::Duration;
-use tokio::runtime::Handle;
-use tokio_util::task::AbortOnDropHandle;
 
 #[derive(Clone)]
 pub(super) struct Service {
     pub target: ConnectionOptions,
     pub local: bool,
-    pub runtime: Handle,
+    pub tasks: Scope,
 }
 
 impl Service {
@@ -23,16 +23,19 @@ impl Service {
             + 'static,
     {
         let target = self.target.clone();
-        let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
-            tokio::time::timeout(Duration::from_secs(60), async {
-                let client = Client::connect_options(&target)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                operation(client).await
-            })
-            .await
-            .map_err(|error| error.to_string())?
-        }));
+        let task = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Load workspace launch options",
+            async move {
+                tokio::time::timeout(Duration::from_secs(60), async {
+                    let client = Client::connect_options(&target)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    operation(client).await
+                })
+                .await
+                .map_err(|error| error.to_string())?
+            },
+        ));
         async move { task.await.map_err(|error| error.to_string())? }
     }
 

@@ -36,7 +36,7 @@ fn branch_selection_renders_fields_and_invalid_parameters_stay_in_the_form(
                 service: Service {
                     target: bas::service::Target::Local.into(),
                     local: false,
-                    runtime: runtime.handle().clone(),
+                    tasks: gds::service::task_manager::Scope::with_runtime(&runtime, false),
                 },
                 active: true,
                 dialog_open: false,
@@ -113,7 +113,7 @@ fn local_folder_requests_existing_chooser_without_a_dialog_and_cancel_finishes(
                 service: Service {
                     target: bas::service::Target::Local.into(),
                     local: true,
-                    runtime: runtime.handle().clone(),
+                    tasks: gds::service::task_manager::Scope::with_runtime(&runtime, false),
                 },
                 active: true,
                 dialog_open: false,

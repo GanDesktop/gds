@@ -1,9 +1,7 @@
 remote-connect = 连接服务器
 remote-connect-action = 连接
 remote-state-unavailable = 无法访问用户状态目录
-remote-user = 用户名（SMB 可填 域名\用户名）
 remote-password = 密码
-remote-key = SSH 私钥路径（可选）
 remote-passphrase = SSH 私钥口令（可选）
 remote-host-new = 信任此 SSH 主机密钥？
 remote-host-changed = SSH 主机密钥已改变，是否信任新密钥？
@@ -53,7 +51,6 @@ remote-connecting = 正在连接…
 remote-connected = 已连接
 remote-disconnected = 未连接
 remote-adding = 正在添加网络位置…
-remote-loading-folder = 正在读取文件夹…
 remote-saved-locations = 保存的网络位置
 remote-connected-servers = 已连接的服务器
 remote-mounted-folders = 已挂载的网络目录

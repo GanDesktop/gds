@@ -3,7 +3,7 @@ use super::{
     input,
 };
 use crate::service::terminal::Session;
-use crate::{appearance::theme::Colors, i18n};
+use crate::{app::AppExt as _, i18n};
 use alacritty_terminal::{
     grid::Scroll,
     index::{Column, Line, Point as GridPoint, Side},
@@ -20,6 +20,8 @@ pub(super) mod palette;
 #[cfg(all(test, feature = "gui-tests", unix))]
 mod tests;
 
+const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(600);
+
 pub(super) struct View {
     pub(super) session: Session,
     focus: FocusHandle,
@@ -35,7 +37,7 @@ pub(super) struct View {
     focused: bool,
     pub(super) error: Option<String>,
     _updates: Task<()>,
-    _blink: Task<()>,
+    _blink: Option<Task<()>>,
     _focus_subscriptions: Vec<Subscription>,
 }
 
@@ -50,7 +52,12 @@ impl View {
         let mut updates = session.updates();
         let task = cx.spawn(async move |view, cx| {
             loop {
-                if *updates.borrow_and_update() {
+                if *updates.borrow() {
+                    // Completion may drop between subscribing/observing and polling this loop.
+                    let _ = view.update(cx, |view, cx| {
+                        view.cursor_on = true;
+                        cx.notify();
+                    });
                     break;
                 }
                 if updates.changed().await.is_err() {
@@ -60,6 +67,7 @@ impl View {
                 cx.background_executor()
                     .timer(Duration::from_millis(16))
                     .await;
+                let stopped = *updates.borrow_and_update();
                 if view
                     .update(cx, |view, cx| {
                         view.cursor_on = true;
@@ -69,22 +77,7 @@ impl View {
                 {
                     break;
                 }
-            }
-        });
-        let blink = cx.spawn(async move |view, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(600))
-                    .await;
-                if view
-                    .update(cx, |view, cx| {
-                        if view.focused && view.preferences.cursor_blink {
-                            view.cursor_on = !view.cursor_on;
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
-                {
+                if stopped {
                     break;
                 }
             }
@@ -93,6 +86,7 @@ impl View {
             cx.on_focus(&focus, window, |view, _, cx| {
                 view.focused = true;
                 view.cursor_on = true;
+                view.sync_blink(cx);
                 if view.mode().contains(TermMode::FOCUS_IN_OUT) {
                     view.send(b"\x1b[I", cx);
                 }
@@ -103,6 +97,7 @@ impl View {
                 view.preedit.clear();
                 view.preedit_selection = 0..0;
                 view.selecting = false;
+                view.sync_blink(cx);
                 if view.mode().contains(TermMode::FOCUS_IN_OUT) {
                     view.send(b"\x1b[O", cx);
                 }
@@ -124,7 +119,7 @@ impl View {
             focused: false,
             error: None,
             _updates: task,
-            _blink: blink,
+            _blink: None,
             _focus_subscriptions: subscriptions,
         }
     }
@@ -134,7 +129,43 @@ impl View {
     }
     pub(super) fn set_preferences(&mut self, preferences: Preferences, cx: &mut Context<Self>) {
         self.preferences = preferences;
+        self.sync_blink(cx);
         cx.notify();
+    }
+    fn should_blink(&self, cx: &App) -> bool {
+        self.focused && self.preferences.cursor_blink && !cx.reduce_motion()
+    }
+    fn sync_blink(&mut self, cx: &mut Context<Self>) {
+        if !self.should_blink(cx) {
+            self._blink = None;
+            self.cursor_on = true;
+            return;
+        }
+        if self._blink.is_some() {
+            return;
+        }
+        self._blink = Some(cx.spawn(async move |view, cx| {
+            loop {
+                cx.background_executor().timer(CURSOR_BLINK_INTERVAL).await;
+                let keep_running = view.update(cx, |view, cx| {
+                    if !view.should_blink(cx) {
+                        view._blink = None;
+                        let was_off = !view.cursor_on;
+                        view.cursor_on = true;
+                        if was_off {
+                            cx.notify();
+                        }
+                        return false;
+                    }
+                    view.cursor_on = !view.cursor_on;
+                    cx.notify();
+                    true
+                });
+                if !matches!(keep_running, Ok(true)) {
+                    break;
+                }
+            }
+        }));
     }
     fn mode(&self) -> TermMode {
         self.session.with_term(|term| *term.mode())
@@ -343,7 +374,10 @@ fn mouse_button(button: MouseButton) -> u8 {
 }
 impl Render for View {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = Colors::current(cx);
+        self.sync_blink(cx);
+        let theme = cx.gds().appearance().theme();
+        let colors = theme.colors();
+        let content_background = theme.content_background();
         let status = match self.session.status() {
             crate::service::terminal::ProcessStatus::Running => None,
             crate::service::terminal::ProcessStatus::Stopping => {
@@ -388,7 +422,7 @@ impl Render for View {
             .when_some(self.error.clone(), |this, error| {
                 this.child(
                     div()
-                        .bg(crate::appearance::theme::content_background(cx))
+                        .bg(content_background)
                         .text_xs()
                         .text_color(colors.error)
                         .child(error),
@@ -397,7 +431,7 @@ impl Render for View {
             .when_some(status, |this, status| {
                 this.child(
                     div()
-                        .bg(crate::appearance::theme::content_background(cx))
+                        .bg(content_background)
                         .text_xs()
                         .text_color(colors.muted_foreground)
                         .child(status),

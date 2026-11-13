@@ -21,7 +21,7 @@
 
 公共库默认 feature 为空。依赖声明为 optional，模块与依赖按同一能力 feature 启用；`files`、`agents`、`portal` 只组装各自需要的能力。所有应用在根 `Cargo.toml` 中声明 `[[bin]]` 与 `required-features`，不为普通应用另建 package 或 manifest。共享的纯协议通过 `desktop-protocol` 独立使用；Portal 通过 `portal` feature 使用本库，不能因此带入 GPUI、SQLite、终端或远程文件后端。
 
-应用自有的异步 I/O 统一用 Tokio，包括进程、信号、计时和 zbus 后端；不再引入 async-io、async-process、async-signal 等另一套应用 I/O 运行时。GPUI 的界面执行器与 Tokio 的职责保持分离。
+应用自有的异步 I/O 统一用 Tokio，包括进程、信号、计时和 zbus 后端；不再引入 async-io、async-process、async-signal 等另一套应用 I/O 运行时。GPUI 的界面执行器与 Tokio 的职责保持分离。图形应用由 `service::task_manager::Supervisor` 持有 Tokio Runtime；服务只接收 TM 作用域，通过作用域派生任务，不直接访问 Runtime Handle。应用决定配置与服务启动顺序，TM 管理准入、取消和完成，服务负责资源清理。
 
 ## UI设计
 1. 不要过多描述一个东西有什么用，让icon与UI自己去说话
@@ -244,7 +244,7 @@ fn make_some_big_news(&self, target_id: &str, by: &str, content: &str, timestamp
 3. UIM 中元素 ID 使用 `# expression`，如 `# format!("audio-{id}")`；常量路径、变量和宏调用直接作为 DSL 值，不加多余的 `$()`。仅在需要 Rust 字段访问、方法链或运算等语义时使用 Rust 转义。
 4. UI 二进制采用 FSD：`app → pages → widgets → features → entities → shared`，只建立实际需要的层。业务差异集中在二级切片；`app` 负责启动、组装与生命周期，`shared/i18n` 提供翻译能力。跨切片只访问 `<slice>.rs` 的显式公开入口；同层切片不互相依赖，实体关系通过 `x/<consumer>`（Rust 对 FSD `@x` 的适配）明确暴露。`app` 和 `shared` 使用职责分段。具体边界和标准链接见 `docs/development.md`。
 
-5. 公共 `gds` 库的根能力为 `appearance`、`service`、`ui`、`persistence`、`i18n`。`appearance` 保存主题、字体与视觉 tokens；`ui` 只保存组件及其专属状态、事件和辅助实现，不转导出外观基础能力。`service/terminal`、`service/desktop`、`service/logs` 提供服务，服务代码不反向引用 `ui` 或 GPUI 类型；终端呈现、焦点、字体、IME 与输入类型适配位于 `ui/terminal`，日志查看器位于 `ui/logs`。应用组装层安装服务退出清理钩子与本进程日志；配置结构与保存策略留在应用，公共 `persistence` 只提供存储机制。
+5. 公共 `gds` 库的根能力为 `app`、`appearance`、`service`、`ui`、`persistence`、`i18n`。`app` 通过唯一扩展 trait `AppExt` 提供 `cx.gds()`（只读）与 `cx.gds_mut()`（可变）访问器，下挂 `tasks()`、`appearance()`、`i18n()`、`ui()` 等固有子访问器，统一承载 GPUI App 上下文的全局读写、启动组装与服务生命周期；应用内各 FSD 切片通过各自公开入口导出的局部扩展 trait（如 `PreferencesExt` 的 `cx.gds().preferences()` / `cx.gds_mut().preferences()`、`VolumesExt` 的 `volumes()`、`ClipboardExt` 的 `clipboard()`）将固有访问器挂在 `Gds` 上，由 `use` 导入显式约束切片依赖方向，trait 只声明访问入口，初始化和操作放在访问器的固有方法中；访问器只借用上下文，配置作为输入；`appearance` 保存主题、字体与视觉 tokens；`ui` 只保存组件及其专属状态、事件和辅助实现，不转导出外观基础能力。`service/task_manager`、`service/terminal`、`service/desktop`、`service/logs` 提供服务，服务代码不反向引用 `ui` 或 GPUI 类型；终端呈现、焦点、字体、IME 与输入类型适配位于 `ui/terminal`，日志查看器位于 `ui/logs`。应用组装层安装服务退出清理钩子与本进程日志；配置结构与保存策略留在应用，公共 `persistence` 只提供存储机制。
 6. 图形应用使用 clap 管理启动参数；内存日志与日志面板仅通过 `--enable-logs` 显式开启。关闭时不得隐式创建日志队列，也不显示日志入口或注册日志窗口快捷键；普通通知与 stderr 诊断独立于此开关。
 
 ## 文档与i18n

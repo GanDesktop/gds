@@ -140,6 +140,40 @@ impl Formats {
     }
 
     /// # Errors
+    /// Rejects oversized, empty, malformed or password-bearing URI lists.
+    pub fn parse_uri_list(text: &str) -> Result<Vec<String>, Error> {
+        if text.len() > MAX_PAYLOAD_BYTES {
+            return Err(Error::TooLarge);
+        }
+        let uris = text
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| {
+                let uri =
+                    Url::parse(line).map_err(|error| Error::InvalidPayload(error.to_string()))?;
+                if uri.password().is_some() {
+                    return Err(Error::InvalidPayload(
+                        "passwords are not allowed in file URIs".into(),
+                    ));
+                }
+                Ok(uri.to_string())
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        if uris.is_empty() {
+            return Err(Error::InvalidPayload("empty URI list".into()));
+        }
+        Ok(uris)
+    }
+
+    pub fn copyable_uris(uris: &[String]) -> bool {
+        !uris.is_empty()
+            && uris.iter().all(|uri| {
+                gds::service::remote::Address::parse(uri).is_ok()
+                    || Url::parse(uri).is_ok_and(|uri| uri.to_file_path().is_ok())
+            })
+    }
+
+    /// # Errors
     /// Rejects non-local, relative or parameterized file URLs.
     fn local_file_uri(text: &str) -> Result<PathBuf, Error> {
         let uri = Url::parse(text).map_err(|_| Error::InvalidUri(text.into()))?;

@@ -53,10 +53,14 @@ impl Options {
     ///
     /// # Errors
     /// Reports unsafe paths and database or migration failures.
-    pub async fn open(self, path: impl AsRef<Path>) -> Result<Database, Error> {
+    pub async fn open(
+        self,
+        tasks: &crate::service::task_manager::Scope,
+        path: impl AsRef<Path>,
+    ) -> Result<Database, Error> {
         let path = path.as_ref();
         paths::prepare(path, self.private_directory).await?;
-        let _initialization = paths::lock(path).await?;
+        let _initialization = paths::lock(tasks, path).await?;
         let mut db = Database::builder()
             .models(self.models)
             .max_pool_size(1)

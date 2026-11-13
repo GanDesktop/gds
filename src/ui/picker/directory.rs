@@ -58,7 +58,9 @@ impl DirectoryPicker {
         cx.subscribe_in(&filter, window, |this, _, event, window, cx| {
             if matches!(event, InputEvent::Change) {
                 this.sync_table(true, cx);
-                this.load_more(window, cx);
+                if this.needs_more_rows(cx) {
+                    this.load_more(window, cx);
+                }
             }
         })
         .detach();
@@ -215,9 +217,7 @@ impl DirectoryPicker {
             self.table.focus_handle(cx).focus(window, cx);
         }
         // A filtered or hidden-only page must not prevent discovering later pages.
-        if self.table.read(cx).delegate().rows.len() < 20
-            || !self.filter.read(cx).value().is_empty()
-        {
+        if self.needs_more_rows(cx) {
             cx.on_next_frame(window, |this, window, cx| this.load_more(window, cx));
         }
     }
@@ -307,10 +307,18 @@ impl DirectoryPicker {
         self.address.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
+    /// Return whether the visible table rows remain below the viewport
+    /// overflow threshold and should trigger automatic page prefetching.
+    fn needs_more_rows(&self, cx: &App) -> bool {
+        self.table.read(cx).delegate().rows.len() < view::MIN_SCROLLABLE_ROWS
+    }
+
     fn toggle_hidden(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.hidden = !self.hidden;
         self.sync_table(true, cx);
-        self.load_more(window, cx);
+        if self.needs_more_rows(cx) {
+            self.load_more(window, cx);
+        }
     }
 }
 

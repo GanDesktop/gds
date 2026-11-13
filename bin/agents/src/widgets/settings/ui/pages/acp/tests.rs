@@ -1,5 +1,6 @@
 use super::*;
 use bas::config::{AgentSpec, agent::Command};
+use gds::app::AppExt as _;
 use gpui_kit::{TestAppContext, component::Root, px, size, test::TestWindowExt};
 
 fn snapshot() -> pb::AcpConfiguration {
@@ -20,6 +21,7 @@ fn snapshot() -> pb::AcpConfiguration {
 fn form_preserves_disable_override_and_rejects_invalid_reserves(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::lib::appearance::init_default(cx);
     });
     let mut page = None;
@@ -108,6 +110,7 @@ fn explicit_pools_load_without_empty_rows_and_removal_restores_automatic_policy(
 ) {
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::lib::appearance::init_default(cx);
     });
     let mut saved = snapshot();
@@ -162,6 +165,7 @@ fn explicit_pools_load_without_empty_rows_and_removal_restores_automatic_policy(
 fn disconnected_page_never_loads_local_preferences(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::lib::appearance::init_default(cx);
     });
     let mut entity = None;

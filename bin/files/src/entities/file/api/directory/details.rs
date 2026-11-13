@@ -4,7 +4,7 @@
 //! such a value as unknown instead of inventing one; in particular an entry whose
 //! metadata could not be read keeps its place in the listing with empty details.
 
-use std::{borrow::Cow, fs, time::SystemTime};
+use std::{borrow::Cow, fs, sync::Arc, time::SystemTime};
 
 use super::{ChildCount, EntryKind, identity::IdentityCache};
 
@@ -73,7 +73,10 @@ impl EntryDetails {
     pub fn display_content(&self) -> Option<&ContentType> {
         self.content
             .as_ref()
-            .or_else(|| self.target.as_ref()?.content.as_ref())
+            .or_else(|| match self.target.as_ref()? {
+                LinkTarget::Resolved { content, .. } => content.as_ref(),
+                LinkTarget::Broken | LinkTarget::Unreachable => None,
+            })
     }
 }
 
@@ -82,7 +85,7 @@ impl EntryDetails {
 pub struct Owner {
     pub uid: u32,
     /// Login name; `None` when the id has no database entry or lookup failed.
-    pub name: Option<String>,
+    pub name: Option<Arc<str>>,
     /// Compared against the effective user id of the process, not `$USER`.
     pub is_current_user: bool,
 }
@@ -102,7 +105,7 @@ impl Owner {
 pub struct Group {
     pub gid: u32,
     /// Group name; `None` when the id has no database entry or lookup failed.
-    pub name: Option<String>,
+    pub name: Option<Arc<str>>,
 }
 
 impl Group {
@@ -130,6 +133,19 @@ impl Access {
             write: mode & write != 0,
             execute: mode & execute != 0,
         }
+    }
+
+    fn symbols(self, special: bool, special_char: char) -> [char; 3] {
+        [
+            if self.read { 'r' } else { '-' },
+            if self.write { 'w' } else { '-' },
+            match (self.execute, special) {
+                (true, true) => special_char,
+                (false, true) => special_char.to_ascii_uppercase(),
+                (true, false) => 'x',
+                (false, false) => '-',
+            },
+        ]
     }
 }
 
@@ -165,9 +181,9 @@ impl Permissions {
     /// `ls -l` does.
     pub fn symbols(&self) -> String {
         let mut symbols = String::with_capacity(9);
-        push_class(&mut symbols, self.owner, self.setuid, 's');
-        push_class(&mut symbols, self.group, self.setgid, 's');
-        push_class(&mut symbols, self.other, self.sticky, 't');
+        symbols.extend(self.owner.symbols(self.setuid, 's'));
+        symbols.extend(self.group.symbols(self.setgid, 's'));
+        symbols.extend(self.other.symbols(self.sticky, 't'));
         symbols
     }
 
@@ -177,22 +193,12 @@ impl Permissions {
     }
 }
 
-fn push_class(out: &mut String, access: Access, special: bool, special_char: char) {
-    out.push(if access.read { 'r' } else { '-' });
-    out.push(if access.write { 'w' } else { '-' });
-    out.push(match (access.execute, special) {
-        (true, true) => special_char,
-        (false, true) => special_char.to_ascii_uppercase(),
-        (true, false) => 'x',
-        (false, false) => '-',
-    });
-}
-
 /// Broad kind of content shown in the type column.
 ///
 /// The declaration order is the order used when sorting by type, so variants are
 /// grouped from text to binary rather than alphabetically.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContentCategory {
     Text,
     Code,
@@ -213,17 +219,17 @@ pub struct ContentType {
     pub category: ContentCategory,
     /// Format name shown verbatim by the interface, e.g. `PNG`, `Rust`, `MPEG-4`.
     /// `None` when only the broad category is known.
-    pub format: Option<String>,
+    pub format: Option<Arc<str>>,
     /// MIME type, used as the fallback label when no friendly name is known.
-    pub mime: Option<String>,
+    pub mime: Option<Arc<str>>,
 }
 
 impl ContentType {
     pub(super) fn new(category: ContentCategory, format: Option<&str>, mime: Option<&str>) -> Self {
         Self {
             category,
-            format: format.map(str::to_owned),
-            mime: mime.map(str::to_owned),
+            format: format.map(Arc::from),
+            mime: mime.map(Arc::from),
         }
     }
 
@@ -236,18 +242,13 @@ impl ContentType {
 
 /// Result of inspecting a symlink without replacing the link with its target.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinkTarget {
-    pub status: LinkStatus,
-    /// Target entry kind; `Unknown` unless `status` is [`LinkStatus::Resolved`].
-    pub kind: EntryKind,
-    /// Content of a resolved regular-file target.
-    pub content: Option<ContentType>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkStatus {
+pub enum LinkTarget {
     /// The target exists; `kind` and `content` describe it.
-    Resolved,
+    Resolved {
+        kind: EntryKind,
+        /// Content of a resolved regular-file target.
+        content: Option<ContentType>,
+    },
     /// The target does not exist.
     Broken,
     /// The target could not be inspected, for example a permission error or a loop.

@@ -1,5 +1,6 @@
 use crate::shared::i18n::tr;
 use futures::FutureExt as _;
+use gds::app::AppExt as _;
 use std::collections::HashMap;
 
 use bas::service::tls::ConnectionOptions;
@@ -393,13 +394,13 @@ impl Host {
                 let launch = cx
                     .try_global::<super::Launch>()
                     .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("The workspace runtime is unavailable"))?;
+                    .ok_or_else(|| anyhow::anyhow!("The workspace task service is unavailable"))?;
                 let view = cx.new(|cx| {
                     Workspace::new(
                         target.clone(),
                         launch.cwd,
                         compact,
-                        &launch.runtime,
+                        &launch.tasks,
                         window,
                         cx,
                     )
@@ -500,7 +501,7 @@ impl Host {
             .flex()
             .flex_col()
             .when(!matches!(page.content, Content::Help), |surface| {
-                surface.bg(gds::appearance::theme::content_background(cx))
+                surface.bg(cx.gds().appearance().theme().content_background())
             })
             .key_context("BasWorkspacePage")
             .track_focus(&self.focus)

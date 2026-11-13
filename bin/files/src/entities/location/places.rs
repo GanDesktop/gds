@@ -22,6 +22,7 @@ pub(crate) use super::api::places::Error;
 pub(crate) struct Storage {
     path: PathBuf,
     store: tokio::sync::OnceCell<Arc<Store>>,
+    windows: Mutex<Vec<Shutdown>>,
 }
 
 impl Storage {
@@ -29,23 +30,52 @@ impl Storage {
         Self {
             path,
             store: tokio::sync::OnceCell::new(),
+            windows: Mutex::default(),
         }
+    }
+
+    /// Start one application-owned flush hook before opening any windows.
+    pub(crate) fn start(path: PathBuf, tasks: &gds::service::task_manager::Scope) -> Arc<Self> {
+        let storage = Arc::new(Self::new(path));
+        let weak = Arc::downgrade(&storage);
+        let cancel = tasks.token();
+        tasks.spawn_named("Flush saved locations on exit", async move {
+            cancel.cancelled().await;
+            let Some(storage) = weak.upgrade() else {
+                return;
+            };
+            let windows =
+                std::mem::take(&mut *storage.windows.lock().expect("places windows lock"));
+            for shutdown in windows {
+                if let Err(error) = shutdown.run().await {
+                    tracing::error!(%error, "Cannot save Files state during shutdown");
+                }
+            }
+        });
+        storage
     }
 
     /// Load a window's snapshot, initializing the shared pool once on success.
     ///
     /// # Errors
     /// Reports storage or invalid-record errors. Failed initialization can be retried.
-    pub(crate) async fn load(&self) -> Result<Places, Error> {
+    pub(crate) async fn load(
+        &self,
+        tasks: &gds::service::task_manager::Scope,
+    ) -> Result<Places, Error> {
         let store = self
             .store
-            .get_or_try_init(|| async { Store::open_at(&self.path).await.map(Arc::new) })
+            .get_or_try_init(|| async { Store::open_at(tasks, &self.path).await.map(Arc::new) })
             .await?;
-        Ok(Places {
+        let places = Places {
             snapshot: store.read().await?,
             store: Some(store.clone()),
             pending: Arc::default(),
-        })
+        };
+        let mut windows = self.windows.lock().expect("places windows lock");
+        windows.retain(|window| window.pending.strong_count() > 0);
+        windows.push(places.shutdown().expect("loaded places have storage"));
+        Ok(places)
     }
 }
 
@@ -115,6 +145,18 @@ impl Save {
 }
 
 impl Places {
+    #[cfg(all(test, feature = "gui-tests"))]
+    pub(crate) fn for_tests(pinned: Vec<Location>, recent: Vec<Location>) -> Self {
+        Self {
+            snapshot: Snapshot {
+                pinned,
+                recent,
+                ..Snapshot::default()
+            },
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn shutdown(&self) -> Option<Shutdown> {
         Some(Shutdown {
             store: Arc::downgrade(self.store.as_ref()?),

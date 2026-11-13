@@ -1,5 +1,5 @@
 //! Terminal color semantics, shared by painting and OSC color-query replies.
-use crate::appearance::theme;
+use crate::{app::AppExt as _, appearance::theme};
 use alacritty_terminal::{
     term::{
         cell::Flags,
@@ -20,8 +20,9 @@ pub(in crate::ui::terminal) struct Palette {
 
 impl Palette {
     pub fn new(cx: &App) -> Self {
-        let roles = theme::Colors::current(cx).terminal;
-        Self::from_roles(roles, theme::content_background(cx).a)
+        let theme = cx.gds().appearance().theme();
+        let roles = theme.colors().terminal;
+        Self::from_roles(roles, theme.content_background().a)
     }
 
     fn from_roles(roles: theme::TerminalColors, opacity: f32) -> Self {

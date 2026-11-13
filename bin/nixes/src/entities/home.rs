@@ -148,7 +148,7 @@ async fn evaluate<T: serde::de::DeserializeOwned>(
             &expression,
         ])
         .kill_on_drop(true);
-    let output = gds::task_manager::process::output(
+    let output = gds::service::task_manager::process::output(
         &mut command,
         cancel,
         std::time::Duration::from_secs(180),

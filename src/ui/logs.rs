@@ -1,4 +1,5 @@
 //! An independent Debug window for logs and registered application tasks.
+use crate::app::AppExt as _;
 
 use crate::i18n::t;
 use crate::service::logs::{Entry, Level, Snapshot, Store};
@@ -20,7 +21,6 @@ use std::time::Duration;
 
 mod filters;
 mod navigation;
-mod tasks;
 mod window;
 
 #[cfg(all(test, feature = "gui-tests"))]
@@ -42,7 +42,8 @@ actions!(
     ]
 );
 
-pub use window::{OpenLogs, Options, init, install, is_enabled, open, store};
+pub use window::{OpenLogs, Options};
+pub(crate) use window::{init, install, is_enabled, open, store};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -52,7 +53,7 @@ enum Tab {
 
 pub struct Viewer {
     tab: Tab,
-    tasks: Entity<tasks::View>,
+    tasks: Option<Entity<crate::ui::task_manager::View>>,
     store: Store,
     snapshot: Snapshot,
     visible: Vec<usize>,
@@ -106,8 +107,11 @@ impl Viewer {
                 }
             }
         });
-        let task_scope = crate::ui::task_manager::scope(cx);
-        let tasks = cx.new(|cx| tasks::View::new(task_scope, cx));
+        let tasks = cx
+            .gds()
+            .tasks()
+            .inspector()
+            .map(|inspector| cx.new(|cx| crate::ui::task_manager::View::new(inspector, cx)));
         let mut viewer = Self {
             tab: Tab::Logs,
             tasks,
@@ -271,7 +275,7 @@ impl Render for Viewer {
                 size_full;
                 flex;
                 flex_col;
-                bg: $(crate::appearance::theme::content_background(cx));
+                bg: $(cx.gds().appearance().theme().content_background());
                 text_color: $(cx.theme().foreground);
                 on_action: $(cx.listener(|_, _: &CloseLogs, window, _| window.remove_window()));
                 on_action: $(cx.listener(|this, _: &PreviousLog, _, cx| this.move_selection(false, false, cx)));
@@ -288,11 +292,11 @@ impl Render for Viewer {
                     .underline().px_3().flex_shrink_0()
                     .selected_index(if self.tab == Tab::Logs { 0 } else { 1 })
                     .child(gpui_kit::component::tab::Tab::new().label(t!(@cx, "logs-tab-logs")))
-                    .child(gpui_kit::component::tab::Tab::new().label(t!(@cx, "logs-tab-tasks")))
+                    .when(self.tasks.is_some(), |tabs| tabs.child(gpui_kit::component::tab::Tab::new().label(t!(@cx, "logs-tab-tasks"))))
                     .on_click(cx.listener(|this, index: &usize, window, cx| {
                         this.switch_tab(if *index == 0 { Tab::Logs } else { Tab::Tasks }, window, cx);
                     }))),
-                $(if self.tab == Tab::Logs { self.log_content(cx) } else { self.tasks.clone().into_any_element() }),
+                $(match (&self.tab, &self.tasks) { (Tab::Tasks, Some(tasks)) => tasks.clone().into_any_element(), _ => self.log_content(cx) }),
             ]
         }
     }
@@ -300,9 +304,13 @@ impl Render for Viewer {
 
 impl Viewer {
     fn switch_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        if tab == Tab::Tasks && self.tasks.is_none() {
+            return;
+        }
         self.tab = tab;
-        self.tasks
-            .update(cx, |view, cx| view.set_active(tab == Tab::Tasks, cx));
+        if let Some(tasks) = &self.tasks {
+            tasks.update(cx, |view, cx| view.set_active(tab == Tab::Tasks, cx));
+        }
         self.focus_tab(window, cx);
         cx.notify();
     }
@@ -311,8 +319,8 @@ impl Viewer {
         if self.tab == Tab::Logs {
             self.search
                 .update(cx, |search, cx| search.focus(window, cx));
-        } else {
-            self.tasks.read(cx).focus.clone().focus(window, cx);
+        } else if let Some(tasks) = &self.tasks {
+            tasks.read(cx).focus.clone().focus(window, cx);
         }
     }
 

@@ -1,23 +1,33 @@
 # Task ownership and application shutdown
 
-UI and services own work. Executors run it. The shared `gds::task_manager` module
-connects these responsibilities without requiring a single executor.
+The application owns its services and decides their startup order from configuration.
+`gds::service::task_manager::Supervisor` owns the Tokio runtime and the root task
+scope. Services receive scopes, never runtime handles. TM controls admission,
+execution, cancellation and completion; each service implements its resource cleanup.
+Desktop integration (D-Bus and FileManager1) is one application service.
+
+The GPUI App context binds this service through `cx.gds().tasks()` and `cx.gds_mut().tasks()` using
+`gds::app::AppExt`. GPUI continues to own windows and UI tasks. The independent
+`gds::ui::task_manager` view receives only a read-only `Inspector`; the core service
+has no GPUI, logging or rendering dependency.
 
 ```text
-Application scope
-├── UI-owned scopes: terminal surfaces, preview caches, audio players
-├── Service scopes: connections and their history writers
-└── Accepted operations: file mutations and persistence
-          │
-          ├── GPUI foreground / background executors
-          ├── Tokio asynchronous / blocking tasks
-          ├── Dedicated system threads
-          └── Supervised child processes
+Application assembly: configuration → TM → required services → listen
+├── TM Supervisor → private Tokio runtime
+│   └── root scope → service/window scopes → registered work
+├── desktop integration, storage, connections, terminal services
+└── GPUI windows and optional diagnostic views
 ```
 
 ## Ownership before execution
 
-`Scope::default()` creates a root. `scope.child()` returns an `Owner` for a
+Desktop applications install one root in their App context and obtain it through
+`cx.gds().tasks().scope()`. Services receive a scope derived from that
+root; they do not create independent roots. `Supervisor::new(inspect)` creates the application executor; keep the supervisor
+alive until the UI loop and service drain have completed. `Scope::with_runtime`
+and `Scope::with_handle` support integration with an existing executor at a
+process bootstrap or test boundary. `Scope::default()` is a tracking-only root;
+it cannot schedule Tokio work. `scope.child()` returns an `Owner` for a
 subtree. Store that owner in the view or service responsible for the work.
 Dropping the owner requests cancellation. Workers receive cloned tokens or
 scopes, **not the owner**: retaining the owner in its worker would prevent
@@ -27,7 +37,7 @@ Scopes can be nested by window, service or operation. They do not create new
 thread pools. A service using both Tokio and a dedicated thread still has one
 scope. Closing a subtree leaves its siblings running.
 
-Register work **before** scheduling it. `track`, `spawn`, `spawn_blocking`, and
+Register work **before** scheduling it. `track`, `spawn`, `spawn_cancellable`, `spawn_blocking`, and
 `spawn_thread` register completion with the scope and every ancestor. Registration
 and scope shutdown serialize admission: shutdown rejects new work, including work
 started through an existing descendant handle. A dropped or unpolled tracked
@@ -65,7 +75,7 @@ the supervisor and run its cleanup after the branch.
 ```rust,ignore
 let owner = application.child();
 let cancel = owner.token();
-let task = owner.spawn(&runtime, async move {
+let task = owner.spawn(async move {
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
@@ -76,7 +86,7 @@ let task = owner.spawn(&runtime, async move {
         }
     }
     writer.flush().await;
-})?;
+});
 // Store owner in the service. The root tracks completion even if task is detached.
 ```
 
@@ -84,6 +94,14 @@ For GPUI, wrap a resource-owning future with `scope.track(work)` before handing
 it to the foreground or background executor. Use foreground execution only for
 UI access. For an existing supervisor, `scope.register()` provides a completion
 guard that must remain alive through the final cleanup.
+
+`spawn` returns a `Task<T>` whose await result distinguishes closed admission,
+missing executor and execution failure. Dropping it detaches already registered
+work. `spawn_cancellable` is for disposable I/O: root/subtree cancellation drops
+the future and returns a closed-scope error, even while its handle is retained.
+Use it only when dropping the future safely releases its resources.
+`cancel_on_drop` additionally aborts disposable work when its caller disappears.
+`Group` provides a service-owned set of child tasks through the same admission gate.
 
 Tokio `spawn_blocking` suits finite blocking operations. A started blocking task
 cannot be stopped by aborting its join handle. Dedicated threads remain suitable
@@ -101,13 +119,76 @@ implementation thread inside it.
 
 ## Desktop application integration
 
-Use `gds::ui::task_manager::init(cx)` and obtain the root with `scope(cx)`. Route the
-last-window callback to `quit_when_idle(cx)`. Explicit quit should:
+Import `gds::app::AppExt` and initialize through the context accessor at the
+start of the GPUI application callback:
+
+```rust,ignore
+use gds::app::AppExt as _;
+
+// Before the GPUI callback: let supervisor = Supervisor::new(enable_logs)?;
+cx.gds_mut().initialize(supervisor.scope(), logs);
+let scope = cx.gds().tasks().scope();
+// Construct services, install request handlers, then mark startup complete.
+cx.gds_mut().tasks().ready(keep_alive);
+```
+
+`initialize` installs task ownership, appearance foundations, keytips, terminal
+input bindings and the optional log store, in that order (applications that bind
+`tasks().init(scope)` ahead of asynchronous startup I/O call `init_ui(logs)` once
+ready to mount the UI). Startup passes
+`enable_logs` to both the supervisor and the log collector; diagnostic collection
+is fixed when the root is constructed. `AppExt` is the single extension trait in
+`gds`, providing `cx.gds()` for read-only queries and `cx.gds_mut()` for mutable
+operations across `tasks()`, `appearance()`, `i18n()` and `ui()`. Inside an FSD
+application, each slice exports its own local extension trait on `Gds` (in Files:
+`PreferencesExt` for `preferences()`, `VolumesExt` for `volumes()`, and
+`ClipboardExt` for `clipboard()`), so callers keep chained ergonomics while `use`
+imports make slice dependencies explicit. Each extension trait only returns a
+concrete borrowed accessor; service operations are inherent methods. Obtaining an
+accessor starts no services and transfers no ownership. Configuration remains
+input data.
+Services and lifecycle operations use `cx.gds_mut().tasks()`, including
+`quit_when_idle`, `request_quit` and `signals`. The task-only entry point is
+`cx.gds_mut().tasks().init(scope)` and needs only the `app` feature.
+Obtaining either accessor does not install any globals. `scope()` requires an
+installed service and never creates one implicitly. The diagnostics choice is fixed for that application's lifetime.
+Installing a log store or opening a diagnostic window cannot change it. Build native
+applications with `with_quit_mode(gpui_kit::QuitMode::Explicit)` so closing the last
+window does not stop the event loop before TM finishes draining. Route the
+last-window callback to `cx.gds_mut().tasks().quit_when_idle()`.
+
+The binding has three phases: Starting, Running and Closing. `ready(keep_alive)`
+transitions Starting to Running only after required services are ready.
+`quit_when_idle` acts only in Running, with no windows and `keep_alive == false`.
+Explicit quit works in every phase; a late startup continuation cannot reopen
+admission. Files resolves Browser, Picker or Service mode from configuration,
+claims desktop integration, loads storage, installs the UI and initial window,
+marks readiness and then starts desktop request handling. Service mode stays alive
+without windows. Startup failures route through the same shutdown path and return failure.
+
+Files keeps the orchestration in `bin/files/src/app.rs` and `bin/files/src/app/{cli, config, desktop, ui, windows}.rs`: `Bootstrap::init` resolves
+configuration, logging and the supervisor; `Bootstrap::run_event_loop` enters the GPUI callback,
+calls `Bootstrap::bind_lifecycle` for TM and shutdown handling, awaits `Bootstrap::prepare_io`
+for desktop integration (`DesktopIntegration::acquire`) and storage I/O (`Storage::start`, preloading initial window places only when the mode opens an initial window), then runs `PreparedIo::mount` on the main thread.
+`app/ui.rs` (`ui::Initializer::run`) installs presentation, the preferences
+service, volume discovery, theme hot reload and global keybindings (`Command::register`) before any window is created, and `app/windows.rs` (`windows::Host::install` and `Host::open_initial`) registers the global window manager, opens the initial window when required and flushes startup notices onto the first opened window.
+`cx.gds().preferences()` and `cx.gds_mut().preferences()` read or edit the application's current preferences;
+its ordered background writer drains accepted snapshots on shutdown. Failed saves
+leave the published in-memory state active and report the persistence error.
+Location storage owns a single flush hook for its live window queues.
+`DesktopIntegration::listen` only receives commands and routes them through `windows::Host::dispatch_desktop` to ready windows.
+GPUI supplies its App context inside `run`, so its event loop remains available
+during asynchronous startup; business request handling begins after readiness.
+A one-shot channel at the GPUI entry boundary returns the startup result to the
+process entry point after the event loop exits; initialization methods do not
+receive shared error containers.
+
+Explicit quit should:
 
 1. Flush pending UI edits and perform application-specific close preparation.
 2. Remove native windows. If entity-owned quit callbacks are needed, retain their
    views with `retain_until_quit`.
-3. Call `quit_when_idle`. It cancels the root and drains tracked work while the
+3. Call `request_quit`. It cancels the root and drains tracked work while the
    event loop and executors remain alive, then calls `cx.quit()`.
 
 `request_quit` supplies the generic close path. Applications with preparation
@@ -125,7 +206,10 @@ must remain outside the scope it drains.
 Terminal supervisors, Agents connections/history workers and audio threads,
 preview generation/FFmpeg, Files storage shutdown and accepted file operations,
 Agents accepted navigation/ACP writes, and Nixes evaluation use the shared root.
-Service-specific cancellation and cleanup stay in those services. Pure UI tasks
+Service-specific cancellation and cleanup stay in those services. Terminal I/O
+uses a tracked native worker and the shared executor, without creating a second
+runtime. Startup registers Files persistence cleanup before admission closes;
+cleanup runs inline instead of attempting to spawn after shutdown. Pure UI tasks
 and existing owner-held subscriptions continue to use GPUI ownership.
 
 This is not a blanket guarantee for every `spawn` in the repository. When adding
@@ -138,15 +222,24 @@ tracked elsewhere or when the work is deliberately disposable/handoff work.
 The Debug window's **Tasks** tab shows the application's registered scope tree,
 execution kinds, cancellation state, lifetime and registration sites. Open it
 with Ctrl+Shift+L (Cmd+Shift+L on macOS) when started with `--enable-logs`.
-Snapshots refresh while the Tasks tab is selected. They contain metadata only;
+The view is created only when a diagnostic window is opened and an inspector is
+available. Snapshots refresh while the Tasks tab is selected. They contain metadata only;
 opening or closing the inspector does not own or cancel the observed work.
 
 Diagnostic collection is off by default, including in development builds.
 `--enable-logs` enables it before services start. Without this option, scopes
 still cancel and drain work, but do not register diagnostic entries, format
-labels or record start times and source locations. Standalone users of the
-task-manager module opt in with `Scope::new(true)` when creating the root;
-`Scope::default()` keeps inspection disabled.
+labels or record start times and source locations. There is no inspector handle,
+task view, polling timer, or diagnostic reporting channel in this mode. The
+`app` feature includes context binding without loading the `ui` module; the
+`task-manager` feature can still be used without GPUI. Standalone users of the
+task-manager module opt in with `Supervisor::new(true)` when creating the root;
+`Supervisor::new(false)` keeps inspection disabled. Tracking-only roots use
+`Scope::new(inspect)`.
+
+`scope.inspector()` returns an optional read-only handle. Its weak reference does
+not retain the service or its scopes; it returns empty snapshots after they are
+released. It cannot derive work or request cancellation.
 
 Use `named_child` for resource or service names. For externally scheduled work,
 `track_named` and `register_named` attach a task label and execution kind. Tokio,
@@ -168,3 +261,14 @@ completion after actual process reaping. Use controllable channels rather than
 timing assertions to keep cleanup pending. UI tests should verify that windows
 disappear while cleanup is pending and that another window keeps the application
 alive. Preserve service tests for data flush and process-group ownership.
+
+## Task names
+
+Application and service call sites supply responsibility-based diagnostic names with
+`spawn_named`, `spawn_cancellable_named`, `spawn_blocking_named`,
+`spawn_thread_named`, `block_on_named` or `Group::spawn_named`. Names describe the
+work, such as `Watch storage volumes`, `Save preferences` or `Read directory`;
+source files and line numbers remain separate diagnostic metadata. The unnamed
+adapters retain the filename fallback for compatibility. Naming does not enable
+inspection: without `--enable-logs`, names are not copied into task records and no
+inspection records are created.

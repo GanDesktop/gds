@@ -1,5 +1,6 @@
 //! Read-only help content. Shortcut badges always resolve the live keymap.
 use super::{Shortcut, ShortcutBadge, container::container_traits};
+use crate::app::AppExt as _;
 use gds_uim::el;
 use gpui_kit::{
     IntoElement,
@@ -25,7 +26,7 @@ container_traits!(HelpPage);
 impl RenderOnce for HelpPage {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         self.base
-            .bg(crate::appearance::theme::content_background(cx))
+            .bg(cx.gds().appearance().theme().content_background())
             .test_support()
     }
 }

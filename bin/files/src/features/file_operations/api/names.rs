@@ -42,6 +42,8 @@ impl NameError {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
+    Task(#[from] gds::service::task_manager::Error),
+    #[error(transparent)]
     Name(#[from] NameError),
     #[error("cannot inspect {path}: {source}")]
     Filesystem {
@@ -200,10 +202,14 @@ pub fn collisions(
     Ok(collisions)
 }
 
+/// # Errors
+/// Propagates filesystem errors other than `NotFound` when probing `directory`.
 fn is_free(directory: &Path, name: &OsStr, reserved: &HashSet<OsString>) -> Result<bool, Error> {
     Ok(!reserved.contains(name) && !exists(directory.join(name))?)
 }
 
+/// # Errors
+/// Propagates filesystem inspection errors other than `NotFound`.
 fn exists(path: PathBuf) -> Result<bool, Error> {
     match fs::symlink_metadata(&path) {
         Ok(_) => Ok(true),

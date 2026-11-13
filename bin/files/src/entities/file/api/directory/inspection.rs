@@ -2,34 +2,36 @@
 use super::{ContentCategory, Entry, EntryKind};
 use gds::service::file_inspection::{Kind, Source};
 
-pub fn inspection_source(entry: &Entry) -> Source {
-    let kind = match entry.kind {
-        EntryKind::Directory => Kind::Directory,
-        EntryKind::SymbolicLink => Kind::Symlink,
-        _ => match entry
-            .details
-            .content
-            .as_ref()
-            .map(|content| content.category)
-        {
-            Some(ContentCategory::Image) => Kind::Image,
-            Some(ContentCategory::Audio) => Kind::Audio,
-            Some(ContentCategory::Video) => Kind::Video,
-            Some(ContentCategory::Text | ContentCategory::Code | ContentCategory::Document) => {
-                Kind::Text
-            }
-            _ => Kind::Other,
-        },
-    };
-    Source {
-        path: entry.path.clone(),
-        kind,
-        size: entry.size,
-        modified: entry.modified,
+impl Entry {
+    pub fn inspection_source(&self) -> Source {
+        let kind = match self.kind {
+            EntryKind::Directory => Kind::Directory,
+            EntryKind::SymbolicLink => Kind::Symlink,
+            _ => match self
+                .details
+                .content
+                .as_ref()
+                .map(|content| content.category)
+            {
+                Some(ContentCategory::Image) => Kind::Image,
+                Some(ContentCategory::Audio) => Kind::Audio,
+                Some(ContentCategory::Video) => Kind::Video,
+                Some(ContentCategory::Text | ContentCategory::Code | ContentCategory::Document) => {
+                    Kind::Text
+                }
+                _ => Kind::Other,
+            },
+        };
+        Source {
+            path: self.path.clone(),
+            kind,
+            size: self.size,
+            modified: self.modified,
+        }
     }
-}
 
-pub fn thumbnail_source(entry: &Entry) -> Option<Source> {
-    let source = inspection_source(entry);
-    (entry.kind == EntryKind::File && source.kind.supports_thumbnail()).then_some(source)
+    pub fn thumbnail_source(&self) -> Option<Source> {
+        let source = self.inspection_source();
+        (self.kind == EntryKind::File && source.kind.supports_thumbnail()).then_some(source)
+    }
 }

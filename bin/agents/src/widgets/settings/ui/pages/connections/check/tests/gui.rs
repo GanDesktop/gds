@@ -43,7 +43,7 @@ fn card_checks_its_saved_target_without_selecting_or_writing(cx: &mut TestAppCon
     cx.update(|cx| {
         cx.set_global(crate::entities::agent::catalog::Service::new(
             active.clone(),
-            runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
         ));
         page.read(cx).profiles.clone().update(cx, |profiles, cx| {
             profiles.put(profile.clone(), cx).expect("saved profile");

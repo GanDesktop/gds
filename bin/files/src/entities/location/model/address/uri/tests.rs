@@ -22,8 +22,9 @@ fn volume_uri_preserves_non_utf8_relative_path() {
         identity: VolumeIdentity::Stable("disk".into()),
         relative: OsString::from_vec(b"folder/\xff".to_vec()),
     };
+    let uri = location.uri().expect("format volume URI");
     assert_eq!(
-        Location::from_uri(&location.uri().unwrap()).unwrap(),
+        Location::from_uri(&uri).expect("parse non-UTF-8 volume URI"),
         location
     );
 }

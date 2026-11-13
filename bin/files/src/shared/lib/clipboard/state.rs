@@ -2,9 +2,9 @@
 
 use std::{collections::HashSet, path::Path, path::PathBuf, sync::Arc};
 
-use gpui_kit::Global;
+use gpui_kit::{App, BorrowAppContext as _, Global, Task};
 
-use super::{Error, Mode, Snapshot};
+use super::{Bridge, Error, Mode, Snapshot, protocol::Formats};
 
 #[derive(Default)]
 pub(super) struct Cache {
@@ -19,6 +19,124 @@ pub(super) struct Cache {
 impl Global for Cache {}
 
 impl Cache {
+    pub(super) fn observe<V: 'static>(
+        cx: &mut gpui_kit::Context<V>,
+        on_change: impl Fn(&mut V, &mut gpui_kit::Context<V>) + 'static,
+    ) -> gpui_kit::Subscription {
+        cx.observe_global::<Self>(on_change)
+    }
+
+    fn mutate<R>(cx: &mut App, f: impl FnOnce(&mut Self) -> R) -> R {
+        cx.update_default_global::<Self, R>(|cache, _| f(cache))
+    }
+
+    fn notify_observers(cx: &mut App) {
+        Self::mutate(cx, |_| ());
+    }
+
+    pub(super) fn is_cut_in(path: &Path, cx: &App) -> bool {
+        cx.try_global::<Self>()
+            .is_some_and(|cache| cache.is_cut(path))
+    }
+
+    pub(super) fn current_in(cx: &App) -> Option<Arc<Snapshot>> {
+        cx.try_global::<Self>().and_then(Self::current)
+    }
+
+    pub(super) fn can_paste_in(cx: &App) -> bool {
+        cx.try_global::<Self>().is_some_and(Self::can_paste)
+    }
+
+    pub(super) fn refresh(cx: &mut App) {
+        let Some(generation) = cx.default_global::<Self>().begin_refresh() else {
+            return;
+        };
+        let bridge = Bridge::new(cx);
+        let read = bridge.read(cx);
+        cx.spawn(async move |cx| {
+            let current = read.await;
+            let (current, remote_copy) = match current {
+                Ok(None) | Err(Error::InvalidUri(_)) => {
+                    match cx.update(|cx| bridge.read_uris(cx)).await {
+                        Ok(offer) => {
+                            let copyable = offer.is_some_and(|(mode, uris)| {
+                                mode == Mode::Copy && Formats::copyable_uris(&uris)
+                            });
+                            (Ok(None), copyable)
+                        }
+                        Err(error) => (Err(error), false),
+                    }
+                }
+                result => (result, false),
+            };
+            cx.update(|cx| {
+                if cx
+                    .default_global::<Self>()
+                    .reconcile(generation, current, remote_copy)
+                {
+                    Self::notify_observers(cx);
+                    cx.refresh_windows();
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn clear_in(cx: &mut App) {
+        let changed = {
+            let cache = cx.default_global::<Self>();
+            let had_files = cache.can_paste();
+            cache.clear();
+            had_files
+        };
+        if changed {
+            Self::notify_observers(cx);
+            cx.refresh_windows();
+        }
+    }
+
+    /// # Errors
+    /// The task reports clipboard access or update failures.
+    pub(super) fn cancel_cut(cx: &mut App) -> Option<Task<Result<(), Error>>> {
+        Self::current_in(cx).filter(|snapshot| snapshot.can_cancel())?;
+        let Some(expected) = cx.default_global::<Self>().begin_cancel() else {
+            return Some(Task::ready(Ok(())));
+        };
+        let cleanup =
+            Bridge::new(cx).remove_cut_paths(expected.as_ref().clone(), expected.paths.clone(), cx);
+        Some(cx.spawn(async move |cx| {
+            let result = cleanup.await;
+            cx.update(|cx| {
+                cx.default_global::<Self>()
+                    .finish_cancel(&expected, result.is_ok());
+                if result.is_ok() {
+                    Self::notify_observers(cx);
+                }
+                Self::refresh(cx);
+                cx.refresh_windows();
+            });
+            result
+        }))
+    }
+
+    pub(super) fn note_write(written: &Snapshot, cx: &mut App) {
+        Self::mutate(cx, |cache| cache.record_write(written));
+        cx.refresh_windows();
+    }
+
+    pub(super) fn record_uri_copy_in(copyable: bool, cx: &mut App) {
+        Self::mutate(cx, |cache| cache.record_uri_copy(copyable));
+        cx.refresh_windows();
+    }
+
+    pub(super) fn note_cut_paste(pasted: &Snapshot, succeeded: &[PathBuf], cx: &mut App) {
+        if pasted.mode != Mode::Cut || succeeded.is_empty() {
+            return;
+        }
+        Self::mutate(cx, |cache| cache.note_pasted(pasted, succeeded));
+        cx.refresh_windows();
+    }
+
     pub(super) fn current(&self) -> Option<Arc<Snapshot>> {
         self.snapshot.clone()
     }

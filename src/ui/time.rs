@@ -45,7 +45,7 @@ impl Global for Shared {}
 /// it, so preference changes never accumulate timers. Applications call this
 /// once at startup with the stored preference, then again whenever the
 /// preference changes.
-pub fn apply(format: Format, cx: &mut App) {
+pub(crate) fn apply(format: Format, cx: &mut App) {
     let existing = cx.try_global::<Shared>().map(|shared| shared.clock.clone());
     match existing {
         Some(clock) => clock.update(cx, |clock, cx| clock.set_format(format, cx)),
@@ -57,14 +57,14 @@ pub fn apply(format: Format, cx: &mut App) {
 }
 
 /// The configured shared format, used by [`Timestamp`] by default.
-pub fn format(cx: &App) -> Format {
+pub(crate) fn format(cx: &App) -> Format {
     cx.try_global::<Shared>()
         .map_or_else(Format::default, |shared| shared.clock.read(cx).format())
 }
 
 /// Current wall-clock time for a render. The shared clock schedules refreshes,
 /// but a newly modified file must not look like a future value between ticks.
-pub fn now(_: &App) -> SystemTime {
+pub(crate) fn now(_: &App) -> SystemTime {
     SystemTime::now()
 }
 

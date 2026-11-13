@@ -10,7 +10,10 @@ use super::names::{self, NamedTarget};
 
 #[cfg(target_os = "linux")]
 use rustix::{
-    fs::{AtFlags, CWD, Dir, FileType, OFlags, RenameFlags, Stat},
+    fs::{
+        AtFlags, CWD, Dir, FileType, OFlags, RenameFlags, Stat, Timespec, Timestamps, UTIME_OMIT,
+        futimens, utimensat,
+    },
     io::Errno,
 };
 #[cfg(target_os = "linux")]
@@ -216,6 +219,7 @@ impl Batch {
                         source,
                         destination,
                         destination_committed: false,
+                        committed_snapshot: None,
                         result: Err(Error::UnsupportedPlatform),
                     }
                 })
@@ -243,6 +247,7 @@ impl Batch {
                     source,
                     destination,
                     destination_committed: false,
+                    committed_snapshot: None,
                     result: Ok(()),
                 };
                 item.result = if cancel.is_cancelled() {
@@ -263,6 +268,7 @@ pub struct Item {
     pub destination: PathBuf,
     /// Also true when a later source-removal or staging-cleanup error leaves a complete destination.
     pub destination_committed: bool,
+    pub committed_snapshot: Option<crate::features::file_operations::history::Snapshot>,
     pub result: Result<(), Error>,
 }
 
@@ -415,6 +421,11 @@ impl Item {
             match Prepared::rename_no_replace(&prepared.source, &prepared.destination) {
                 Ok(()) => {
                     self.destination_committed = true;
+                    self.committed_snapshot =
+                        crate::features::file_operations::history::Snapshot::capture(
+                            &prepared.destination,
+                        )
+                        .ok();
                     return Ok(());
                 }
                 Err(Errno::XDEV) => {}
@@ -443,6 +454,9 @@ impl Item {
             Prepared::rename_no_replace(&node.destination, &prepared.destination)
                 .map_err(|error| prepared.rename_error(error))?;
             self.destination_committed = true;
+            self.committed_snapshot =
+                crate::features::file_operations::history::Snapshot::capture(&prepared.destination)
+                    .ok();
             copied = Some(manifest);
             Ok(())
         });
@@ -493,6 +507,7 @@ impl Node {
                     .map_err(|error| Error::filesystem("read link", &self.source, error))?;
                 symlink(OsStr::from_bytes(target.to_bytes()), &self.destination)
                     .map_err(|error| Error::filesystem("create link", &self.destination, error))?;
+                Self::preserve_path_timestamps(&self.destination, &metadata)?;
                 Vec::new()
             }
             _ => {
@@ -522,14 +537,12 @@ impl Node {
         let opened = rustix::fs::fstat(&source)
             .map_err(|error| Error::filesystem("inspect open file", &self.source, error))?;
         Copied::check(expected, &opened, &self.source)?;
-        let metadata = source
-            .metadata()
-            .map_err(|error| Error::filesystem("inspect open file", &self.source, error))?;
-        if !metadata.is_file() {
+        if FileType::from_raw_mode(opened.st_mode) != FileType::RegularFile {
             return Err(Error::UnsupportedEntry {
                 path: self.source.clone(),
             });
         }
+        let permissions = fs::Permissions::from_mode(opened.st_mode);
         let mut destination = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -557,8 +570,9 @@ impl Node {
         let after = rustix::fs::fstat(&source)
             .map_err(|error| Error::filesystem("recheck open file", &self.source, error))?;
         Copied::check(expected, &after, &self.source)?;
+        Self::preserve_file_timestamps(&destination, &opened, &self.destination)?;
         destination
-            .set_permissions(metadata.permissions())
+            .set_permissions(permissions)
             .map_err(|error| Error::filesystem("set file permissions", &self.destination, error))
     }
 
@@ -569,7 +583,7 @@ impl Node {
         parent: &File,
         name: &OsStr,
         expected: &Stat,
-    ) -> Result<Vec<(OsString, Copied)>, Error> {
+    ) -> Result<Vec<CopiedChild>, Error> {
         let descriptor = rustix::fs::openat(
             parent,
             name,
@@ -581,10 +595,7 @@ impl Node {
         let opened = rustix::fs::fstat(&source)
             .map_err(|error| Error::filesystem("inspect open directory", &self.source, error))?;
         Copied::check(expected, &opened, &self.source)?;
-        let permissions = source
-            .metadata()
-            .map_err(|error| Error::filesystem("inspect open directory", &self.source, error))?
-            .permissions();
+        let permissions = fs::Permissions::from_mode(opened.st_mode);
         fs::create_dir(&self.destination).map_err(|error| {
             Error::filesystem("create staged directory", &self.destination, error)
         })?;
@@ -604,12 +615,16 @@ impl Node {
                 destination: self.destination.join(name),
             }
             .copy_at(&source, name)?;
-            children.push((name.to_owned(), copied));
+            children.push(CopiedChild {
+                name: name.to_owned(),
+                copied,
+            });
         }
-        // Apply readonly source modes only after every child has been written.
+        // Apply timestamps and readonly source modes only after every child has been written.
         gds::service::file_tags::copy_from(&source, &self.destination).map_err(|error| {
             Error::filesystem("preserve directory tags", &self.destination, error)
         })?;
+        Self::preserve_path_timestamps(&self.destination, &opened)?;
         fs::set_permissions(&self.destination, permissions).map_err(|error| {
             Error::filesystem("set directory permissions", &self.destination, error)
         })?;
@@ -618,13 +633,64 @@ impl Node {
         Copied::check(expected, &after, &self.source)?;
         Ok(children)
     }
+
+    fn source_timestamps(source: &Stat) -> Timestamps {
+        Timestamps {
+            last_access: Timespec {
+                tv_sec: 0,
+                tv_nsec: UTIME_OMIT,
+            },
+            last_modification: Timespec {
+                tv_sec: source.st_mtime as _,
+                tv_nsec: source.st_mtime_nsec as _,
+            },
+        }
+    }
+
+    fn is_unsupported_timestamp_error(error: Errno) -> bool {
+        matches!(
+            error,
+            Errno::PERM | Errno::ACCESS | Errno::OPNOTSUPP | Errno::NOSYS
+        )
+    }
+
+    /// # Errors
+    /// Propagates unexpected kernel timestamp failures while ignoring mount-level denials.
+    fn preserve_file_timestamps(file: &File, source: &Stat, path: &Path) -> Result<(), Error> {
+        match futimens(file, &Self::source_timestamps(source)) {
+            Ok(()) => Ok(()),
+            Err(error) if Self::is_unsupported_timestamp_error(error) => Ok(()),
+            Err(error) => Err(Error::filesystem("preserve timestamps", path, error)),
+        }
+    }
+
+    /// # Errors
+    /// Propagates unexpected kernel timestamp failures while ignoring mount-level denials.
+    fn preserve_path_timestamps(path: &Path, source: &Stat) -> Result<(), Error> {
+        match utimensat(
+            CWD,
+            path,
+            &Self::source_timestamps(source),
+            AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(()) => Ok(()),
+            Err(error) if Self::is_unsupported_timestamp_error(error) => Ok(()),
+            Err(error) => Err(Error::filesystem("preserve timestamps", path, error)),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct CopiedChild {
+    name: OsString,
+    copied: Copied,
 }
 
 /// Only entries actually copied may be removed. Never enumerate the live tree during cleanup.
 #[cfg(target_os = "linux")]
 struct Copied {
     metadata: Stat,
-    children: Vec<(OsString, Copied)>,
+    children: Vec<CopiedChild>,
 }
 
 #[cfg(target_os = "linux")]
@@ -635,6 +701,8 @@ impl Copied {
             && expected.st_mode == current.st_mode
     }
 
+    /// # Errors
+    /// Reports [`Error::SourceChanged`] when file identity, size or timestamps differ.
     fn check(expected: &Stat, current: &Stat, path: &Path) -> Result<(), Error> {
         if Self::same_identity(expected, current)
             && expected.st_size == current.st_size
@@ -670,8 +738,10 @@ impl Copied {
             let opened = rustix::fs::fstat(&source)
                 .map_err(|error| Error::filesystem("inspect cleanup directory", path, error))?;
             Self::check(&self.metadata, &opened, path)?;
-            for (child, copied) in &self.children {
-                copied.remove_at(&source, child, &path.join(child))?;
+            for child in &self.children {
+                child
+                    .copied
+                    .remove_at(&source, &child.name, &path.join(&child.name))?;
             }
             // Removing our children changes directory timestamps. Recheck identity, not timestamps.
             let current = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)
@@ -721,7 +791,11 @@ impl Staging {
     /// Propagates the operation error and explicitly reports cleanup failures, retaining both errors when needed.
     fn finish(self, operation: Result<(), Error>) -> Result<(), Error> {
         let path = self.directory.path().to_owned();
-        let cleanup = Self::make_removable(&path).and_then(|()| self.directory.close());
+        let cleanup = if operation.is_err() {
+            Self::make_removable(&path).and_then(|()| self.directory.close())
+        } else {
+            self.directory.close()
+        };
         match cleanup {
             Ok(()) => operation,
             Err(source) => Err(Error::StagingCleanup {

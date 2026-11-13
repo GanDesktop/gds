@@ -1,4 +1,5 @@
 //! Suite-wide decisions and notification navigation. Applications own their commands.
+use crate::app::AppExt as _;
 use gpui_kit::*;
 
 gpui_kit::actions!(
@@ -55,7 +56,7 @@ impl Command {
     }
 }
 
-pub fn register(cx: &mut App) {
+pub(crate) fn register(cx: &mut App) {
     let bindings = Command::ALL
         .into_iter()
         .map(|command| {
@@ -71,5 +72,5 @@ pub fn register(cx: &mut App) {
         })
         .collect::<Vec<_>>();
     cx.bind_keys(bindings);
-    crate::ui::dialog::register(cx);
+    cx.gds_mut().ui().register_dialogs();
 }

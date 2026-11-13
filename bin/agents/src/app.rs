@@ -1,4 +1,5 @@
 //! Application startup, route assembly and shutdown.
+use gds::app::AppExt as _;
 pub(crate) mod cli;
 mod startup;
 pub(crate) use startup::run;
@@ -16,29 +17,26 @@ pub(crate) fn init(cx: &mut App) {
         return;
     }
     cx.set_global(ActionsRegistered);
-    gds::ui::actions::register(cx);
-    gds::ui::terminal::init(cx);
-    gds::ui::task_manager::init(cx);
-    cx.on_app_quit(|_| async { gds::service::terminal::shutdown_all().await })
-        .detach();
+    cx.gds_mut().ui().register_actions();
+    cx.gds_mut().ui().init_terminal();
     crate::shared::config::terminal::init(cx);
     crate::pages::workspace::windows::bind_page_keys(cx);
     crate::features::navigation::install(crate::pages::workspace::routes(), cx);
-    gds::ui::time::apply(gds::ui::time::Format::Relative, cx);
-    gds::ui::keytips::install(cx);
-    gds::ui::logs::init(
-        gds::ui::logs::Options {
-            app_id: Some("io.github.GanDesktop.GdsAgents".into()),
-            app_name: "GDS Agents".into(),
-            background: |cx| {
-                cx.global::<crate::shared::lib::appearance::Appearance>()
-                    .background
-            },
-            root: |view, window, cx| crate::shared::lib::appearance::window_root(view, window, cx),
-            ignored_contexts: &[crate::shared::config::TERMINAL_TABS_CONTEXT],
+    cx.gds_mut()
+        .ui()
+        .time()
+        .apply(gds::ui::time::Format::Relative);
+    cx.gds_mut().ui().keytips().install();
+    cx.gds_mut().ui().logs().init(gds::ui::logs::Options {
+        app_id: Some("io.github.GanDesktop.GdsAgents".into()),
+        app_name: "GDS Agents".into(),
+        background: |cx| {
+            cx.global::<crate::shared::lib::appearance::Appearance>()
+                .background
         },
-        cx,
-    );
+        root: |view, window, cx| crate::shared::lib::appearance::window_root(view, window, cx),
+        ignored_contexts: &[crate::shared::config::TERMINAL_TABS_CONTEXT],
+    });
     let (settings, quit) = if cfg!(target_os = "macos") {
         ("cmd-,", "cmd-q")
     } else {
@@ -81,8 +79,8 @@ pub(crate) fn request_quit(cx: &mut App) {
     cx.set_global(QuitPending);
     settings::window::flush_pending(cx);
     let closed = crate::pages::workspace::windows::close_all(cx);
-    gds::ui::task_manager::retain_until_quit(closed, cx);
-    gds::ui::task_manager::quit_when_idle(cx);
+    cx.gds_mut().tasks().retain_until_quit(closed);
+    cx.gds_mut().tasks().request_quit();
 }
 
 #[cfg(all(test, feature = "gui-tests"))]

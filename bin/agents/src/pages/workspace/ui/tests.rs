@@ -48,6 +48,7 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
     .expect("write deterministic appearance");
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::config::init(Some(appearance_path), cx);
         theme::init(cx);
         crate::app::init(cx);

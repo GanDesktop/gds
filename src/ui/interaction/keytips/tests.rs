@@ -484,3 +484,237 @@ fn more_labels_than_rows_still_never_overlap() {
     let rects = label_rects(&slots, content);
     assert_clear_and_inside(&rects, content);
 }
+
+#[test]
+fn staged_generation_tracks_only_effective_state_changes() {
+    let mut staged = Staged::default();
+    assert_eq!(staged.generation, 0);
+
+    // No-op hold/release and empty prune do not bump generation.
+    assert!(!staged.set_held(None));
+    assert!(!staged.release());
+    assert!(!staged.prune());
+    assert_eq!(staged.generation, 0);
+
+    // Staging a new hint bumps generation even while no modifier is held.
+    let mounted = Rc::new(());
+    assert!(!staged.stage(
+        "a".into(),
+        shortcut(),
+        bounds(0.),
+        HintPlacement::Corner,
+        Rc::downgrade(&mounted),
+    ));
+    let gen_after_insert = staged.generation;
+    assert!(gen_after_insert > 0);
+
+    // Re-staging with identical bounds, placement, shortcut, and live mount is a no-op.
+    assert!(!staged.stage(
+        "a".into(),
+        shortcut(),
+        bounds(0.),
+        HintPlacement::Corner,
+        Rc::downgrade(&mounted),
+    ));
+    assert_eq!(staged.generation, gen_after_insert);
+
+    // Refreshing a live Weak with a new live Rc does not bump generation and preserves liveness.
+    let remounted = Rc::new(());
+    assert!(!staged.stage(
+        "a".into(),
+        shortcut(),
+        bounds(0.),
+        HintPlacement::Corner,
+        Rc::downgrade(&remounted),
+    ));
+    assert_eq!(staged.generation, gen_after_insert);
+    drop(mounted);
+    assert!(!staged.prune());
+    assert_eq!(staged.hints.len(), 1);
+    assert_eq!(staged.generation, gen_after_insert);
+
+    // Arming Ctrl bumps generation once; repeating Ctrl does not.
+    assert!(staged.set_held(Some(HeldModifier::Ctrl)));
+    let gen_held = staged.generation;
+    assert!(gen_held > gen_after_insert);
+    assert!(!staged.set_held(Some(HeldModifier::Ctrl)));
+    assert_eq!(staged.generation, gen_held);
+
+    // Changing bounds bumps generation and requests a frame while held.
+    assert!(staged.stage(
+        "a".into(),
+        shortcut(),
+        bounds(20.),
+        HintPlacement::Corner,
+        Rc::downgrade(&remounted),
+    ));
+    let gen_moved = staged.generation;
+    assert!(gen_moved > gen_held);
+
+    // Re-staging over a dead Weak with identical bounds replaces it and bumps generation.
+    drop(remounted);
+    let replacement = Rc::new(());
+    assert!(staged.stage(
+        "a".into(),
+        shortcut(),
+        bounds(20.),
+        HintPlacement::Corner,
+        Rc::downgrade(&replacement),
+    ));
+    let gen_replaced = staged.generation;
+    assert!(gen_replaced > gen_moved);
+
+    // Pruning a dropped hint removes it and bumps generation.
+    drop(replacement);
+    assert!(staged.prune());
+    let gen_pruned = staged.generation;
+    assert!(gen_pruned > gen_replaced);
+    assert!(staged.hints.is_empty());
+
+    // Releasing bumps generation once; repeating release is a no-op.
+    assert!(staged.release());
+    let gen_released = staged.generation;
+    assert!(gen_released > gen_pruned);
+    assert!(!staged.release());
+    assert_eq!(staged.generation, gen_released);
+}
+
+#[cfg(feature = "gui-tests")]
+mod watcher_tests {
+    use gpui_kit::{
+        AppContext, Context, FocusHandle, IntoElement, Render, TestAppContext, Window,
+        component::Root, div, prelude::*, px, size, test::TestWindowExt,
+    };
+
+    use super::super::{Anchor, HeldModifier, layer, release};
+    use super::{binding, shortcut};
+    use crate::app::AppExt as _;
+    use crate::ui::actions::FocusNotifications;
+
+    struct Host {
+        primary: FocusHandle,
+        secondary: FocusHandle,
+        show_hint: bool,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .track_focus(&self.primary)
+                .on_action(|_: &FocusNotifications, _, _| {})
+                .child(div().size(px(16.)).track_focus(&self.secondary))
+                .when(self.show_hint, |this| {
+                    this.child(
+                        div()
+                            .w(px(40.))
+                            .h(px(24.))
+                            .child(Anchor::new("hint", shortcut())),
+                    )
+                })
+        }
+    }
+
+    #[gpui_kit::test]
+    fn held_modifier_skips_idle_rerenders_until_state_changes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.gds_mut().tasks().init_test(false);
+            let scope = cx.gds().tasks().scope();
+            cx.gds_mut().initialize(scope, None);
+            cx.bind_keys([binding("ctrl-r")]);
+        });
+
+        let mut host = None;
+        let window = cx.open_window(size(px(720.), px(480.)), |window, cx| {
+            let view = cx.new(|cx| Host {
+                primary: cx.focus_handle(),
+                secondary: cx.focus_handle(),
+                show_hint: true,
+            });
+            host = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let host = host.expect("host");
+
+        cx.update_window(window.into(), |_, window, _| window.activate_window())
+            .expect("activate window");
+        cx.run_until_parked();
+
+        let layer = cx
+            .update_window(window.into(), |_, window, cx| {
+                let primary = host.read(cx).primary.clone();
+                primary.focus(window, cx);
+                window.render_frame(cx);
+                layer(window, cx).expect("keytips plugin")
+            })
+            .expect("initial render");
+
+        // Arm Ctrl outside manual `window.draw` so GPUI flushes Root's observer
+        // notification and draws the frame once before capturing `settled`.
+        cx.update(|cx| {
+            layer.update(cx, |layer, cx| {
+                assert!(layer.staged.borrow_mut().set_held(Some(HeldModifier::Ctrl)));
+                cx.notify();
+            });
+        });
+
+        let settled = cx.update(|cx| {
+            let l = layer.read(cx);
+            assert!(l.watcher_armed, "watcher stays armed while Ctrl is held");
+            l.renders
+        });
+
+        // Idle frames re-arm the lightweight watcher without triggering Keytips::render.
+        cx.update_window(window.into(), |_, window, cx| {
+            for _ in 0..5 {
+                assert_eq!(window.simulate_next_frame(cx), 1);
+                window.draw(cx).clear(cx);
+            }
+        })
+        .expect("idle frames");
+        assert_eq!(cx.update(|cx| layer.read(cx).renders), settled);
+
+        // Focus shift while Ctrl stays held triggers one re-render on the next frame.
+        cx.update_window(window.into(), |_, window, cx| {
+            let secondary = host.read(cx).secondary.clone();
+            secondary.focus(window, cx);
+            assert_eq!(window.simulate_next_frame(cx), 1);
+        })
+        .expect("focus shift");
+        let after_focus = cx.update(|cx| layer.read(cx).renders);
+        assert_eq!(after_focus, settled + 1);
+
+        // Unmounting a staged control drops its Weak<()>; the watcher prunes it and re-renders.
+        host.update(cx, |host, cx| {
+            host.show_hint = false;
+            cx.notify();
+        });
+        let before_prune = cx.update(|cx| layer.read(cx).renders);
+        assert_eq!(
+            cx.update(|cx| layer.read(cx).staged.borrow().hints.len()),
+            1
+        );
+        cx.update_window(window.into(), |_, window, cx| {
+            assert_eq!(window.simulate_next_frame(cx), 1);
+        })
+        .expect("unmount hint");
+        let after_unmount = cx.update(|cx| layer.read(cx).renders);
+        assert_eq!(after_unmount, before_prune + 1);
+        assert!(cx.update(|cx| layer.read(cx).staged.borrow().hints.is_empty()));
+
+        // Releasing stops re-arming the watcher immediately.
+        cx.update_window(window.into(), |_, window, cx| {
+            release(window, cx);
+        })
+        .expect("release");
+        cx.update_window(window.into(), |_, window, cx| {
+            let _ = window.simulate_next_frame(cx);
+            assert_eq!(window.simulate_next_frame(cx), 0);
+        })
+        .expect("release drains watcher");
+        let after_release = cx.update(|cx| layer.read(cx).renders);
+        assert_eq!(after_release, after_unmount + 1);
+        assert!(!cx.update(|cx| layer.read(cx).watcher_armed));
+    }
+}

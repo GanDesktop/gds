@@ -70,6 +70,7 @@ rustPlatform.buildRustPackage {
     wrapProgram "$out/bin/${binary}" "''${gappsWrapperArgs[@]}" \
       --prefix PATH : ${lib.makeBinPath ([ pkgs.xdg-utils pkgs.xdg-terminal-exec gtkPython ] ++ lib.optionals (application == "files") [ pkgs.ffmpeg-headless ])} \
       --suffix TERMINFO_DIRS : ${pkgs.ncurses}/share/terminfo \
+      ${lib.optionalString (application == "files") "--suffix XDG_DATA_DIRS : ${pkgs.shared-mime-info}/share"} \
       --prefix LD_LIBRARY_PATH : "/run/opengl-driver/lib:${lib.makeLibraryPath libraries}"
   '';
 

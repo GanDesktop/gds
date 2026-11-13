@@ -39,9 +39,13 @@ impl Cache {
     ///
     /// # Errors
     /// Returns path, migration, database, or connection startup failures.
-    pub async fn open(options: &ConnectionOptions) -> Result<Self, Error> {
+    pub async fn open(
+        tasks: &gds::service::task_manager::Scope,
+        options: &ConnectionOptions,
+    ) -> Result<Self, Error> {
         let root = dirs::cache_dir().ok_or(Error::Invalid("no cache directory"))?;
         Self::open_at(
+            tasks,
             root.join("gds/agents/history-v1/history.sqlite"),
             options,
             DEFAULT_BYTE_LIMIT,
@@ -55,12 +59,13 @@ impl Cache {
     /// # Errors
     /// Rejects unsafe paths and reports migration or database errors.
     pub async fn open_at(
+        tasks: &gds::service::task_manager::Scope,
         path: impl AsRef<Path>,
         options: &ConnectionOptions,
         byte_limit: u64,
     ) -> Result<Self, Error> {
         Ok(Self {
-            store: store::Store::open(path.as_ref(), options, byte_limit).await?,
+            store: store::Store::open(tasks, path.as_ref(), options, byte_limit).await?,
         })
     }
 

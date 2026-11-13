@@ -2,7 +2,7 @@ use gpui_kit::{App, SharedString, component::select::SelectItem};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::{appearance::typography, i18n};
+use crate::{app::AppExt as _, i18n};
 
 pub trait Model: Clone + Default + PartialEq + 'static {
     fn fields() -> Vec<Field<Self>>;
@@ -53,11 +53,19 @@ impl SelectItem for Choice {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Integer {
     Float,
-    Signed,
-    Unsigned,
+    I8,
+    I16,
+    I32,
+    I64,
+    Isize,
+    U8,
+    U16,
+    U32,
+    U64,
+    Usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,20 +97,46 @@ impl Number {
         }
     }
 
-    pub(super) fn value(self, display: f32) -> Result<Value, String> {
+    pub(super) fn value(self, display: f32, cx: &App) -> Result<Value, String> {
         let value = f64::from(display) / self.scale;
-        match self.integer {
-            Integer::Float => serde_json::Number::from_f64(value)
-                .map(Value::Number)
-                .ok_or_else(|| "number must be finite".into()),
-            Integer::Signed if value >= i64::MIN as f64 && value < i64::MAX as f64 => {
-                Ok(Value::from(value.round() as i64))
-            }
-            Integer::Unsigned if value >= 0. && value < u64::MAX as f64 => {
-                Ok(Value::from(value.round() as u64))
-            }
-            _ => Err("number is outside the field's representable range".into()),
+        if !value.is_finite() {
+            return Err(i18n::text("form-number-not-finite", cx).to_string());
         }
+        if matches!(self.integer, Integer::Float) {
+            return serde_json::Number::from_f64(value)
+                .map(Value::Number)
+                .ok_or_else(|| i18n::text("form-number-not-finite", cx).to_string());
+        }
+        let rounded = value.round();
+        let converted = match self.integer {
+            Integer::Float => unreachable!(),
+            Integer::I8 => fits_signed(rounded, i8::MIN.into(), i8::MAX.into())
+                .then(|| Value::from(rounded as i8)),
+            Integer::I16 => fits_signed(rounded, i16::MIN.into(), i16::MAX.into())
+                .then(|| Value::from(rounded as i16)),
+            Integer::I32 => fits_signed(rounded, i32::MIN.into(), i32::MAX.into())
+                .then(|| Value::from(rounded as i32)),
+            Integer::I64 => fits_signed(rounded, i64::MIN.into(), i64::MAX.into())
+                .then(|| Value::from(rounded as i64)),
+            Integer::Isize => fits_signed(rounded, isize::MIN as i128, isize::MAX as i128)
+                .then(|| Value::from(rounded as isize)),
+            Integer::U8 => {
+                fits_unsigned(rounded, u8::MAX.into()).then(|| Value::from(rounded as u8))
+            }
+            Integer::U16 => {
+                fits_unsigned(rounded, u16::MAX.into()).then(|| Value::from(rounded as u16))
+            }
+            Integer::U32 => {
+                fits_unsigned(rounded, u32::MAX.into()).then(|| Value::from(rounded as u32))
+            }
+            Integer::U64 => {
+                fits_unsigned(rounded, u64::MAX.into()).then(|| Value::from(rounded as u64))
+            }
+            Integer::Usize => {
+                fits_unsigned(rounded, usize::MAX as u128).then(|| Value::from(rounded as usize))
+            }
+        };
+        converted.ok_or_else(|| i18n::text("form-number-out-of-range", cx).to_string())
     }
 
     pub(super) fn label(self, display: f32) -> String {
@@ -174,7 +208,11 @@ impl<T> Field<T> {
 
     pub(super) fn choices(&self, model: &T, cx: &App) -> Vec<Choice> {
         let mut choices = match self.kind {
-            Kind::Font => typography::installed_families(cx)
+            Kind::Font => cx
+                .gds()
+                .appearance()
+                .typography()
+                .installed_families()
                 .into_iter()
                 .map(|name| Choice::new(Value::String(name.clone()), name))
                 .collect(),
@@ -207,6 +245,22 @@ impl<T> Field<T> {
             choices.push(Choice::new(current, title));
         }
         choices
+    }
+}
+
+fn fits_signed(rounded: f64, min: i128, max: i128) -> bool {
+    if max <= (1i128 << 53) {
+        rounded >= min as f64 && rounded <= max as f64
+    } else {
+        rounded >= min as f64 && rounded < max as f64
+    }
+}
+
+fn fits_unsigned(rounded: f64, max: u128) -> bool {
+    if max <= (1u128 << 53) {
+        rounded >= 0. && rounded <= max as f64
+    } else {
+        rounded >= 0. && rounded < max as f64
     }
 }
 

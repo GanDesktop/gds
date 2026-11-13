@@ -483,7 +483,7 @@ impl Fixture {
         cx.update(|cx| {
             crate::entities::agent::init(
                 self.address.clone().into(),
-                self.runtime.handle().clone(),
+                gds::service::task_manager::Scope::with_runtime(&self.runtime, false),
                 cx,
             );
         });
@@ -592,7 +592,7 @@ fn policy_page_autosaves_to_remote_and_preserves_draft_when_server_rejects(
     cx.update(|cx| {
         crate::entities::agent::init(
             fixture.address.clone().into(),
-            fixture.runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&fixture.runtime, false),
             cx,
         )
     });
@@ -785,7 +785,7 @@ fn policy_autosave_keeps_newer_edits_and_flushes_to_original_server_after_close(
     cx.update(|cx| {
         crate::entities::agent::init(
             fixture.address.clone().into(),
-            fixture.runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&fixture.runtime, false),
             cx,
         )
     });
@@ -835,7 +835,7 @@ fn policy_autosave_keeps_newer_edits_and_flushes_to_original_server_after_close(
     cx.update_window(window.into(), |_, window, cx| {
         crate::entities::agent::init(
             Target::Pipe("different-backend".into()).into(),
-            fixture.runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&fixture.runtime, false),
             cx,
         );
         page.update(cx, |page, cx| page.flush_pending(cx));
@@ -870,7 +870,7 @@ fn cached_policy_page_reopens_after_closing_a_window_during_load(cx: &mut TestAp
     cx.update(|cx| {
         crate::entities::agent::init(
             fixture.address.clone().into(),
-            fixture.runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&fixture.runtime, false),
             cx,
         )
     });
@@ -931,7 +931,7 @@ fn fetched_registrations_survive_remote_catalog_failure(cx: &mut TestAppContext)
     cx.update(|cx| {
         crate::entities::agent::init(
             fixture.address.clone().into(),
-            fixture.runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&fixture.runtime, false),
             cx,
         )
     });
@@ -1047,7 +1047,7 @@ fn remote_configuration_save_stays_with_its_backend_after_switching(cx: &mut Tes
         });
         crate::entities::agent::init(
             "tcp://192.0.2.1:4554".parse().expect("other backend"),
-            fixture.runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&fixture.runtime, false),
             cx,
         );
         page.update(cx, |page, cx| page.save(cx));
@@ -1122,7 +1122,7 @@ fn authentication_form_round_trips_over_the_owned_interactive_stream(cx: &mut Te
         // Management can switch before this backend's panel is even created.
         crate::entities::agent::init(
             "192.0.2.1:4554".parse().expect("other target"),
-            fixture.runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&fixture.runtime, false),
             cx,
         );
         let raw = serde_json::json!({"protocolVersion":1,"authMethods":[{"id":"form-login","name":"Configure provider"}]});

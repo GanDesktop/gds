@@ -22,6 +22,8 @@ form-language = 界面语言
 form-time-format = 时间格式
 form-time-relative = 相对时间
 form-time-absolute = 完整时间
+form-number-not-finite = 数值必须为有限数
+form-number-out-of-range = 数值超出此字段可表示的范围
 
 gds-thumbnail-loading = 正在加载预览…
 gds-thumbnail-too-large = 图片太大，无法预览

@@ -64,11 +64,20 @@ fn wait_for_exit(session: &Session) -> Status {
 
 #[test]
 fn real_pty_preserves_split_utf8_wide_cells_ansi_and_exit_status() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("test directory");
-    let session = Session::spawn(options(
-        directory.path().to_owned(),
-        r"printf '\033[31m\344'; sleep 0.03; printf '\275\240\345\245\275\033[0m\r\n'; exit 7",
-    ))
+    let session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            r"printf '\033[31m\344'; sleep 0.03; printf '\275\240\345\245\275\033[0m\r\n'; exit 7",
+        ),
+    )
     .expect("spawn PTY");
     assert_eq!(
         wait_for_exit(&session),
@@ -99,10 +108,16 @@ fn real_pty_preserves_split_utf8_wide_cells_ansi_and_exit_status() {
 
 #[test]
 fn real_pty_starts_in_literal_directory_and_resizes_kernel_and_grid() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let parent = tempfile::tempdir().expect("test directory");
     let directory = parent.path().join("space ' ; $ directory");
     std::fs::create_dir(&directory).expect("literal directory");
-    let session = Session::spawn(options(
+    let session = Session::spawn(&tasks, options(
         directory.clone(),
         "stty -echo; printf 'READY\\n'; read value; printf 'SIZE:'; stty size; printf 'CWD:'; pwd",
     ))
@@ -130,8 +145,14 @@ fn real_pty_starts_in_literal_directory_and_resizes_kernel_and_grid() {
 
 #[test]
 fn real_pty_query_responses_return_through_writer() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("test directory");
-    let session = Session::spawn(options(directory.path().to_owned(),
+    let session = Session::spawn(&tasks, options(directory.path().to_owned(),
         r"stty -echo -icanon min 1 time 0; printf '\033[6n'; dd bs=1 count=6 2>/dev/null | od -An -tx1"))
         .expect("spawn PTY");
     assert_eq!(
@@ -149,8 +170,14 @@ fn real_pty_query_responses_return_through_writer() {
 
 #[test]
 fn real_pty_control_c_is_a_terminal_signal_not_a_text_command() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("test directory");
-    let session = Session::spawn(options(
+    let session = Session::spawn(&tasks, options(
         directory.path().to_owned(),
         "stty -echo; trap 'printf SIGNAL; exit 42' INT; printf READY; while :; do read value; done",
     ))
@@ -169,6 +196,12 @@ fn real_pty_control_c_is_a_terminal_signal_not_a_text_command() {
 
 #[test]
 fn invalid_cwd_and_shell_fail_instead_of_falling_back() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("test directory");
     for cwd in [
         PathBuf::new(),
@@ -176,26 +209,32 @@ fn invalid_cwd_and_shell_fail_instead_of_falling_back() {
         directory.path().join("missing"),
     ] {
         assert!(matches!(
-            Session::spawn(options(cwd, "exit")),
+            Session::spawn(&tasks, options(cwd, "exit")),
             Err(Error::InvalidDirectory(_))
         ));
     }
     let file = directory.path().join("not-directory");
     std::fs::write(&file, b"data").expect("fixture");
     assert!(matches!(
-        Session::spawn(options(file, "exit")),
+        Session::spawn(&tasks, options(file, "exit")),
         Err(Error::InvalidDirectory(_))
     ));
     let mut invalid = options(directory.path().to_owned(), "exit");
     invalid.shell = Some(directory.path().join("missing-shell"));
     assert!(matches!(
-        Session::spawn(invalid),
+        Session::spawn(&tasks, invalid),
         Err(Error::InvalidShell(_))
     ));
 }
 
 #[test]
 fn explicit_invalid_executable_reports_spawn_failure() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().expect("test directory");
     let executable = directory.path().join("bad-interpreter");
@@ -204,7 +243,7 @@ fn explicit_invalid_executable_reports_spawn_failure() {
         .expect("executable fixture");
     let mut invalid = options(directory.path().to_owned(), "");
     invalid.shell = Some(executable);
-    match Session::spawn(invalid) {
+    match Session::spawn(&tasks, invalid) {
         Err(Error::Pty(_)) => {}
         Err(error) => panic!("Expected an exec/PTY failure, got {error:?}"),
         Ok(session) => {
@@ -220,6 +259,12 @@ fn explicit_invalid_executable_reports_spawn_failure() {
 #[cfg(target_os = "linux")]
 #[test]
 fn final_handle_drop_stops_jobs_and_reaps_direct_child_without_worker_arc_cycle() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     use nix::{
         errno::Errno,
         sys::wait::{WaitPidFlag, waitpid},
@@ -227,10 +272,13 @@ fn final_handle_drop_stops_jobs_and_reaps_direct_child_without_worker_arc_cycle(
     };
     let directory = tempfile::tempdir().expect("test directory");
     let child_pid_file = directory.path().join("job.pid");
-    let session = Session::spawn(options(
-        directory.path().to_owned(),
-        "trap '' HUP; echo $$ > shell.pid; sleep 60 & echo $! > job.pid; printf READY; wait",
-    ))
+    let session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            "trap '' HUP; echo $$ > shell.pid; sleep 60 & echo $! > job.pid; printf READY; wait",
+        ),
+    )
     .expect("spawn PTY");
     wait_until(|| screen(&session).contains("READY"));
     let pid: i32 = std::fs::read_to_string(directory.path().join("shell.pid"))
@@ -276,13 +324,19 @@ fn final_handle_drop_stops_jobs_and_reaps_direct_child_without_worker_arc_cycle(
 
 #[test]
 fn output_flood_preserves_tail_and_bounds_scrollback() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("test directory");
     let mut spawn = options(
         directory.path().to_owned(),
         r#"i=0; while [ "$i" -lt 12000 ]; do printf 'line-%s\n' "$i"; i=$((i+1)); done; printf FINAL-TAIL"#,
     );
     spawn.scrollback = 64;
-    let session = Session::spawn(spawn).expect("spawn PTY");
+    let session = Session::spawn(&tasks, spawn).expect("spawn PTY");
     assert_eq!(
         wait_for_exit(&session),
         Status::Exited {
@@ -297,57 +351,99 @@ fn output_flood_preserves_tail_and_bounds_scrollback() {
 #[cfg(target_os = "linux")]
 #[test]
 fn application_quit_waits_for_workers_and_rejects_later_spawns() {
-    const CHILD_ENV: &str = "GDS_TERMINAL_QUIT_BARRIER_TEST_CHILD";
-    if std::env::var_os(CHILD_ENV).is_none() {
-        // The registry's shutdown is intentionally irreversible; isolate it
-        // from the test harness's other concurrently running session tests.
-        let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args(["--exact", "service::terminal::session::tests::application_quit_waits_for_workers_and_rejects_later_spawns", "--nocapture"])
-            .env(CHILD_ENV, "1").status().expect("isolated quit test");
-        assert!(status.success());
-        return;
-    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("test directory");
-    let session = Session::spawn(options(
-        directory.path().to_owned(),
-        "trap '' HUP; echo $$ > shell.pid; printf READY; while :; do read value; done",
-    ))
-    .expect("spawn PTY");
-    wait_until(|| screen(&session).contains("READY"));
-    let pid: i32 = std::fs::read_to_string(directory.path().join("shell.pid"))
-        .expect("shell pid")
+    let live_session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            "trap '' HUP; echo $$ > live.pid; printf READY; while :; do read value; done",
+        ),
+    )
+    .expect("spawn live PTY");
+    let dropped_session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            "trap '' HUP; echo $$ > dropped.pid; printf READY; while :; do read value; done",
+        ),
+    )
+    .expect("spawn dropped PTY");
+    wait_until(|| screen(&live_session).contains("READY"));
+    wait_until(|| screen(&dropped_session).contains("READY"));
+    let live_pid: i32 = std::fs::read_to_string(directory.path().join("live.pid"))
+        .expect("live shell pid")
         .trim()
         .parse()
-        .expect("numeric shell pid");
-    let updates = session.updates();
-    // Weak registry entries must still find workers after UI handles are gone.
-    drop(session);
-    futures_lite::future::block_on(super::shutdown_all());
-    assert!(*updates.borrow());
+        .expect("numeric live shell pid");
+    let dropped_pid: i32 = std::fs::read_to_string(directory.path().join("dropped.pid"))
+        .expect("dropped shell pid")
+        .trim()
+        .parse()
+        .expect("numeric dropped shell pid");
+    let live_updates = live_session.updates();
+    let dropped_updates = dropped_session.updates();
+    drop(dropped_session);
+    runtime.block_on(tasks.shutdown());
+    assert!(*live_updates.borrow());
+    assert!(*dropped_updates.borrow());
+    assert!(!live_session.is_running());
     assert!(
-        !std::path::Path::new(&format!("/proc/{pid}")).exists(),
-        "quit must wait for reap"
+        !std::path::Path::new(&format!("/proc/{live_pid}")).exists(),
+        "scope shutdown must reap active session"
+    );
+    assert!(
+        !std::path::Path::new(&format!("/proc/{dropped_pid}")).exists(),
+        "scope shutdown must wait for dropped session reap"
     );
     assert!(matches!(
-        Session::spawn(options(directory.path().to_owned(), "exit")),
+        Session::spawn(&tasks, options(directory.path().to_owned(), "exit")),
         Err(Error::Closed)
     ));
-    futures_lite::future::block_on(super::shutdown_all());
+    let fresh = crate::service::task_manager::Scope::with_runtime(&runtime, false);
+    let reopened = Session::spawn(
+        &fresh,
+        options(directory.path().to_owned(), "printf REOPENED; exit 0"),
+    )
+    .expect("new Scope in the same process must accept spawns after shutdown");
+    assert_eq!(
+        wait_for_exit(&reopened),
+        Status::Exited {
+            code: 0,
+            signal: None
+        }
+    );
+    assert!(screen(&reopened).contains("REOPENED"));
+    runtime.block_on(fresh.shutdown());
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn in_place_directory_change_is_rejected_but_manual_cd_and_jobs_work() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let parent = tempfile::tempdir().expect("test directory");
     let target = parent.path().join("新 folder ' $HOME");
     std::fs::create_dir(&target).expect("target directory");
-    let session = Session::spawn(SpawnOptions {
-        cwd: parent.path().to_owned(),
-        shell: Some(shell()),
-        args: vec!["-i".into()],
-        columns: 180,
-        ..SpawnOptions::default()
-    })
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: parent.path().to_owned(),
+            shell: Some(shell()),
+            args: vec!["-i".into()],
+            columns: 180,
+            ..SpawnOptions::default()
+        },
+    )
     .expect("interactive shell");
     session
         .write(b"stty -echo; PS1=''; original_pid=$$; printf 'READY_%s\\n' switch\r")
@@ -387,17 +483,26 @@ fn in_place_directory_change_is_rejected_but_manual_cd_and_jobs_work() {
 #[cfg(target_os = "linux")]
 #[test]
 fn directory_change_does_not_submit_unconfirmed_shell_input() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let parent = tempfile::tempdir().expect("test directory");
     let target = parent.path().join("target");
     std::fs::create_dir(&target).expect("target directory");
     let marker = parent.path().join("UNCONFIRMED_EXECUTED");
-    let session = Session::spawn(SpawnOptions {
-        cwd: parent.path().to_owned(),
-        shell: Some(shell()),
-        args: vec!["-i".into()],
-        columns: 180,
-        ..SpawnOptions::default()
-    })
+    let session = Session::spawn(
+        &tasks,
+        SpawnOptions {
+            cwd: parent.path().to_owned(),
+            shell: Some(shell()),
+            args: vec!["-i".into()],
+            columns: 180,
+            ..SpawnOptions::default()
+        },
+    )
     .expect("interactive shell");
     session
         .write(b"PS1=''; printf 'READY_%s\\n' pending\r")
@@ -431,6 +536,12 @@ fn directory_change_does_not_submit_unconfirmed_shell_input() {
 
 #[test]
 fn theme_changes_during_startup_preserve_osc_overrides_until_reset() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     use alacritty_terminal::{term::color::COUNT, vte::ansi::Rgb};
     let directory = tempfile::tempdir().expect("query working directory");
     let mut options = options(
@@ -458,7 +569,8 @@ dd bs=1 count=51 of=reset.reply 2>/dev/null
             b: 0xbc,
         }; COUNT],
     );
-    let session = Session::spawn_with_palette(options, launch_palette).expect("spawn query PTY");
+    let session =
+        Session::spawn_with_palette(&tasks, options, launch_palette).expect("spawn query PTY");
     wait_until(|| session.title().as_deref() == Some("OVERRIDDEN"));
     assert_eq!(
         std::fs::read(directory.path().join("start.reply")).expect("startup palette reply"),
@@ -490,6 +602,12 @@ dd bs=1 count=51 of=reset.reply 2>/dev/null
 #[cfg(target_os = "linux")]
 #[test]
 fn shutdown_cleans_foreground_background_and_stopped_job_groups_before_completion() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     use nix::{
         errno::Errno,
         sys::wait::{WaitPidFlag, waitpid},
@@ -497,9 +615,11 @@ fn shutdown_cleans_foreground_background_and_stopped_job_groups_before_completio
     };
 
     let directory = tempfile::tempdir().expect("job-control directory");
-    let session = Session::spawn(options(
-        directory.path().to_owned(),
-        r#"
+    let session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            r#"
 set -m
 trap '' HUP TERM
 echo $$ > shell.pid
@@ -507,7 +627,8 @@ echo $$ > shell.pid
 "$0" -c 'trap "" HUP TERM; echo $$ > background.pid; while :; do sleep 60; done' &
 "$0" -c 'trap "" HUP TERM; echo $$ > foreground.pid; printf READY; while :; do read value; done'
 "#,
-    ))
+        ),
+    )
     .expect("spawn job-control PTY");
     wait_until(|| screen(&session).contains("READY"));
     let pid = |name: &str| -> i32 {
@@ -579,8 +700,14 @@ fn process_state(pid: i32) -> Option<char> {
 
 #[test]
 fn osc52_requests_are_disabled_while_regular_queries_still_work() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("OSC52 directory");
-    let session = Session::spawn(options(directory.path().to_owned(),
+    let session = Session::spawn(&tasks, options(directory.path().to_owned(),
         r"stty -echo -icanon min 1 time 0; printf '\033]52;c;c2VjcmV0\033\\\033]52;c;?\033\\\033[6n'; dd bs=1 count=6 of=reply 2>/dev/null"))
         .expect("spawn OSC52 PTY");
     assert!(matches!(
@@ -596,8 +723,14 @@ fn osc52_requests_are_disabled_while_regular_queries_still_work() {
 
 #[test]
 fn query_response_flood_is_bounded_and_completes_cleanup() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("query flood directory");
-    let session = Session::spawn(options(directory.path().to_owned(),
+    let session = Session::spawn(&tasks, options(directory.path().to_owned(),
         r"stty -echo -icanon min 1 time 0; while :; do printf '\033[6n\033[6n\033[6n\033[6n\033[6n\033[6n\033[6n\033[6n'; done"))
         .expect("spawn query flood PTY");
     assert!(
@@ -614,11 +747,20 @@ fn query_response_flood_is_bounded_and_completes_cleanup() {
 #[cfg(target_os = "linux")]
 #[test]
 fn direct_exit_wakes_cleanup_while_a_background_job_holds_the_slave_open() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("child exit directory");
-    let session = Session::spawn(options(
-        directory.path().to_owned(),
-        "trap '' HUP; sleep 60 & echo $! > job.pid; printf FINAL; exit 9",
-    ))
+    let session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            "trap '' HUP; sleep 60 & echo $! > job.pid; printf FINAL; exit 9",
+        ),
+    )
     .expect("spawn inherited-slave PTY");
     assert_eq!(
         wait_for_exit(&session),
@@ -640,11 +782,20 @@ fn direct_exit_wakes_cleanup_while_a_background_job_holds_the_slave_open() {
 
 #[test]
 fn synchronized_output_deadline_flushes_without_further_pty_activity() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("synchronized output directory");
-    let session = Session::spawn(options(
-        directory.path().to_owned(),
-        r"stty -echo; printf '\033[?2026hDEADLINE'; read value",
-    ))
+    let session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            r"stty -echo; printf '\033[?2026hDEADLINE'; read value",
+        ),
+    )
     .expect("spawn synchronized output PTY");
     // The child neither ends sync mode nor writes more bytes. Only the parser's
     // deadline can make its buffered text visible before we close the session.
@@ -657,11 +808,20 @@ fn synchronized_output_deadline_flushes_without_further_pty_activity() {
 
 #[test]
 fn queued_responses_precede_queued_input_on_the_real_pty() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("priority directory");
-    let session = Session::spawn(options(
-        directory.path().to_owned(),
-        "stty -echo -icanon min 1 time 0; printf READY; dd bs=1 count=10 of=wire 2>/dev/null",
-    ))
+    let session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            "stty -echo -icanon min 1 time 0; printf READY; dd bs=1 count=10 of=wire 2>/dev/null",
+        ),
+    )
     .expect("spawn priority PTY");
     wait_until(|| screen(&session).contains("READY"));
     {
@@ -686,11 +846,20 @@ fn queued_responses_precede_queued_input_on_the_real_pty() {
 
 #[test]
 fn input_backpressure_is_atomic() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
     let directory = tempfile::tempdir().expect("test directory");
-    let session = Session::spawn(options(
-        directory.path().to_owned(),
-        "stty -echo; printf READY; sleep 60",
-    ))
+    let session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            "stty -echo; printf READY; sleep 60",
+        ),
+    )
     .expect("spawn PTY");
     wait_until(|| screen(&session).contains("READY"));
     assert!(matches!(
@@ -701,4 +870,102 @@ fn input_backpressure_is_atomic() {
     session.terminate();
     session.terminate();
     assert!(matches!(wait_for_exit(&session), Status::Exited { .. }));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn clean_shell_exit_still_reaps_session_background_jobs() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let tasks = crate::service::task_manager::Scope::with_runtime(&runtime, false);
+    let directory = tempfile::tempdir().expect("test directory");
+    let job_pid_file = directory.path().join("job.pid");
+    let session = Session::spawn(
+        &tasks,
+        options(
+            directory.path().to_owned(),
+            // Redirect stdio so slave PTY hits EOF as soon as the shell exits
+            // while an HUP-ignoring background job remains in the same session.
+            "(trap '' HUP; echo $$ > job.pid; exec sleep 60) </dev/null >/dev/null 2>&1 & while [ ! -s job.pid ]; do sleep 0.01; done; exit 0",
+        ),
+    )
+    .expect("spawn PTY");
+    let updates = session.updates();
+    assert_eq!(
+        wait_for_exit(&session),
+        Status::Exited {
+            code: 0,
+            signal: None
+        }
+    );
+    wait_until(|| *updates.borrow());
+    let job: i32 = std::fs::read_to_string(&job_pid_file)
+        .expect("background job pid")
+        .trim()
+        .parse()
+        .expect("numeric background job pid");
+    wait_until(|| {
+        let stat = std::fs::read_to_string(format!("/proc/{job}/stat"));
+        match stat {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Ok(stat) => stat
+                .rsplit_once(") ")
+                .is_some_and(|(_, fields)| fields.starts_with("Z ")),
+            _ => false,
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn parent_scope_shutdown_cascades_to_child_sessions_and_rejects_cancelled_spawns() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test executor");
+    let parent = crate::service::task_manager::Scope::with_runtime(&runtime, false);
+    let child = parent.child();
+    let directory = tempfile::tempdir().expect("test directory");
+    let session = Session::spawn(
+        &child,
+        options(
+            directory.path().to_owned(),
+            "trap '' HUP; echo $$ > shell.pid; printf READY; while :; do read value; done",
+        ),
+    )
+    .expect("spawn PTY in child scope");
+    wait_until(|| screen(&session).contains("READY"));
+    let pid: i32 = std::fs::read_to_string(directory.path().join("shell.pid"))
+        .expect("shell pid")
+        .trim()
+        .parse()
+        .expect("numeric shell pid");
+    let updates = session.updates();
+    runtime.block_on(parent.shutdown());
+    assert!(*updates.borrow());
+    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+    assert!(matches!(
+        Session::spawn(&child, options(directory.path().to_owned(), "exit")),
+        Err(Error::Closed)
+    ));
+    assert!(matches!(
+        Session::spawn(&parent, options(directory.path().to_owned(), "exit")),
+        Err(Error::Closed)
+    ));
+    drop(child);
+    let fresh = crate::service::task_manager::Scope::with_runtime(&runtime, false);
+    let next = Session::spawn(&fresh, options(directory.path().to_owned(), "exit 0"))
+        .expect("spawn in fresh scope");
+    assert_eq!(
+        wait_for_exit(&next),
+        Status::Exited {
+            code: 0,
+            signal: None
+        }
+    );
+    runtime.block_on(fresh.shutdown());
 }

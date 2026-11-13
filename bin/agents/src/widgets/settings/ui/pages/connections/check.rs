@@ -1,8 +1,8 @@
 use super::*;
 use crate::shared::i18n::tr;
 use bas::service::{Client, Target, pb, tls::ConnectionOptions};
+use gds::service::task_manager::Task as IoTask;
 use std::{error::Error as StdError, io::ErrorKind, time::Duration};
-use tokio_util::task::AbortOnDropHandle;
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -13,7 +13,7 @@ pub(super) mod tests;
 pub(super) enum Error {
     #[error("connection check timed out")]
     Timeout,
-    #[error("network runtime is unavailable")]
+    #[error("network task service is unavailable")]
     Runtime,
     #[error(transparent)]
     Connect(#[from] bas::service::tls::Error),
@@ -134,11 +134,10 @@ impl Page {
         let request = cx
             .try_global::<crate::entities::agent::catalog::Service>()
             .map(|service| {
-                AbortOnDropHandle::new(
-                    service
-                        .runtime()
-                        .spawn(probe(options.clone(), CHECK_TIMEOUT)),
-                )
+                IoTask::cancel_on_drop(service.tasks().spawn_cancellable_named(
+                    "Check server connection",
+                    probe(options.clone(), CHECK_TIMEOUT),
+                ))
             });
         self.begin_check(
             profile.id.clone(),

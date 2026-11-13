@@ -20,7 +20,7 @@ fn notices_do_not_enable_logging_as_a_side_effect(cx: &mut TestAppContext) {
     assert_eq!(count(origin, cx), 1);
     cx.update(|cx| {
         assert!(store(cx).is_none());
-        assert!(!gds::ui::logs::is_enabled(cx));
+        assert!(!cx.gds().ui().logs().is_enabled());
     });
 }
 
@@ -41,8 +41,8 @@ fn setup(cx: &mut TestAppContext) {
         theme::init_default(cx);
         // Layout assertions target the settled card. One-shot entrance animations
         // use wall time rather than the test executor's clock.
-        gds::appearance::motion::set_animations_enabled(false, cx);
-        init(Store::new(), cx);
+        cx.gds_mut().appearance().motion().set_enabled(false);
+        cx.gds_mut().ui().logs().install(Store::new());
     });
 }
 

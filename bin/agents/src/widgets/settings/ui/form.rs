@@ -2,7 +2,6 @@
 
 use gds::ui::settings::*;
 use gds_uim::el;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{AnyElement, App, IntoElement, RenderOnce, TestSupportExt, Window, div, prelude::*};
 
 pub(super) const CONTROLS_WIDTH: f32 = gds::ui::settings::CONTROL_WIDTH;
@@ -21,7 +20,7 @@ impl RenderOnce for Row {
         let title = div()
             .id(format!("{}-label", self.id))
             .test_support()
-            .tooltip(move |window, cx| Tooltip::new(self.help).build(window, cx))
+            .tooltip(move |window, cx| gds::ui::tooltip::view(self.help, window, cx))
             .child(self.label);
         let row = el! {
             .SettingRow::default [

@@ -1,5 +1,5 @@
 use super::{Preferences, Terminal};
-use crate::appearance::theme;
+use crate::{app::AppExt as _, appearance::theme};
 use gpui_kit::{AppContext, TestAppContext, px, size};
 use std::path::{Path, PathBuf};
 
@@ -10,7 +10,12 @@ fn installed_themes_reach_starting_and_hidden_terminals_without_paint(cx: &mut T
     let directory = tempfile::tempdir().expect("terminal query directory");
     cx.update(|cx| {
         gpui_kit::init(cx);
-        theme::apply(&theme::Appearance::default(), cx).expect("initial theme");
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut()
+            .appearance()
+            .theme()
+            .apply(&theme::Appearance::default())
+            .expect("initial theme");
     });
     let shell = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|path| path.join("sh"))
@@ -45,13 +50,8 @@ dd bs=1 count=25 of=second.reply 2>/dev/null
     let terminal = terminal.expect("hidden terminal");
     let first = install(theme::ModePreference::Light, cx);
     cx.run_until_parked();
-    let session = cx.update(|cx| {
-        terminal
-            .read(cx)
-            .service
-            .session()
-            .expect("background launch completed")
-    });
+    let ready = cx.update(|cx| terminal.read(cx).service.ready());
+    let session = futures_lite::future::block_on(ready).expect("background launch completed");
     session.write(b"go\n").expect("first query");
     assert_reply(directory.path(), "first", &first);
     let second = install(theme::ModePreference::Dark, cx);
@@ -65,14 +65,14 @@ dd bs=1 count=25 of=second.reply 2>/dev/null
 
 fn install(mode: theme::ModePreference, cx: &mut TestAppContext) -> String {
     cx.update(|cx| {
-        theme::apply(
-            &theme::Appearance {
+        cx.gds_mut()
+            .appearance()
+            .theme()
+            .apply(&theme::Appearance {
                 mode,
                 ..Default::default()
-            },
-            cx,
-        )
-        .expect("install theme");
+            })
+            .expect("install theme");
         let colors = crate::ui::terminal::view::palette::Palette::new(cx).query_colors();
         let color = colors[alacritty_terminal::vte::ansi::NamedColor::Foreground as usize];
         format!(

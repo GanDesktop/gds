@@ -1,4 +1,5 @@
 use super::{NewTerminal, Panel, Preferences};
+use gds::app::AppExt as _;
 use gpui_kit::{
     AppContext, Entity, TestAppContext, component::Root, px, size, test::TestWindowExt,
 };
@@ -9,6 +10,7 @@ async fn shell_title_changes_notify_the_host_caption(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::lib::appearance::init_default(cx);
     });
     let directory = tempfile::tempdir().expect("terminal title directory");
@@ -58,6 +60,7 @@ async fn empty_dock_keeps_management_focus_without_workspace_sidebar(cx: &mut Te
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::lib::appearance::init_default(cx);
         super::super::bind_keys(cx);
     });
@@ -110,6 +113,7 @@ async fn agents_selection_and_new_target_do_not_retarget_existing_terminals(
     std::fs::create_dir(&second_cwd).expect("second directory");
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::lib::appearance::init_default(cx);
         super::super::bind_keys(cx);
     });

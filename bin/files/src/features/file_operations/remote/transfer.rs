@@ -1,10 +1,21 @@
 use super::{Error, Resource, resource::Stream};
-use gds::service::remote::EntryKind;
-use std::{future::Future, pin::Pin};
+use gds::service::remote::{Address, EntryKind, Session};
+use std::{
+    collections::hash_map::RandomState,
+    future::Future,
+    hash::{BuildHasher, Hasher},
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 const BUFFER_SIZE: usize = 128 * 1024;
+const STAGING_ATTEMPTS: usize = 64;
+
+static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Default)]
 pub(crate) struct Progress {
@@ -16,15 +27,19 @@ pub(crate) struct Progress {
 #[derive(Default)]
 pub(crate) struct Report {
     pub completed: Vec<Resource>,
+    pub undo: Vec<super::super::history::Step>,
     pub failures: Vec<(String, String)>,
     pub cancelled: bool,
 }
 
 struct Work {
+    tasks: gds::service::task_manager::Scope,
     cancel: CancellationToken,
     updates: watch::Sender<Progress>,
     progress: Progress,
+    buffer: Vec<u8>,
 }
+
 enum Reservation {
     New,
     Directory,
@@ -33,15 +48,18 @@ enum Reservation {
 
 /// Copy each root to an exclusive staging entry and publish without replacing targets.
 pub(crate) async fn copy(
+    tasks: gds::service::task_manager::Scope,
     sources: Vec<Resource>,
     destination: Resource,
     cancel: CancellationToken,
     updates: watch::Sender<Progress>,
 ) -> Report {
     let mut work = Work {
+        tasks,
         cancel,
         updates,
         progress: Progress::default(),
+        buffer: vec![0; BUFFER_SIZE],
     };
     let mut report = Report::default();
     for source in sources {
@@ -50,7 +68,10 @@ pub(crate) async fn copy(
             break;
         }
         match work.copy_root(&source, &destination).await {
-            Ok(()) => report.completed.push(source),
+            Ok(undo) => {
+                report.completed.push(source);
+                report.undo.extend(undo);
+            }
             Err(Error::Cancelled) => {
                 report.cancelled = true;
                 break;
@@ -69,7 +90,7 @@ pub(crate) async fn delete(
 ) -> Report {
     let mut report = Report::default();
     for source in sources {
-        match remove_tree(&source, &cancel).await {
+        match source.remove_tree(&cancel).await {
             Ok(()) => {
                 report.completed.push(source);
                 updates.send_replace(Progress {
@@ -88,7 +109,45 @@ pub(crate) async fn delete(
 }
 
 impl Work {
-    async fn copy_root(&mut self, source: &Resource, destination: &Resource) -> Result<(), Error> {
+    /// Generate a unique staging leaf name purely in memory without touching local disk.
+    fn staging_name(prefix: &str) -> String {
+        let seq = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let mut hasher = RandomState::new().build_hasher();
+        hasher.write_u64(seq);
+        hasher.write_u128(nanos);
+        let nonce = hasher.finish();
+        format!("{prefix}{nanos:016x}-{seq:04x}-{nonce:016x}")
+    }
+
+    /// Create an exclusive local staging directory asynchronously without blocking Tokio workers.
+    ///
+    /// # Errors
+    /// Reports directory creation failures.
+    async fn create_local_staging(directory: &Path) -> Result<PathBuf, Error> {
+        for _ in 0..STAGING_ATTEMPTS {
+            let candidate = directory.join(Self::staging_name(".gds-download-"));
+            match tokio::fs::create_dir(&candidate).await {
+                Ok(()) => return Ok(candidate),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(Error::Io(error)),
+            }
+        }
+        Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not allocate unique download staging directory",
+        )))
+    }
+
+    /// # Errors
+    /// Rejects self-nested copies and reports local or remote transfer failures.
+    async fn copy_root(
+        &mut self,
+        source: &Resource,
+        destination: &Resource,
+    ) -> Result<Vec<super::super::history::Step>, Error> {
         let name = source.name()?;
         let target = destination.child(&name)?;
         if let (
@@ -99,108 +158,153 @@ impl Work {
                 address: target, ..
             },
         ) = (source, &target)
+            && source.connection_key() == target.connection_key()
+            && (source.path() == target.path()
+                || target
+                    .path()
+                    .starts_with(&format!("{}/", source.path().trim_end_matches('/'))))
         {
-            if source.connection_key() == target.connection_key()
-                && (source.path() == target.path()
-                    || target
-                        .path()
-                        .starts_with(&format!("{}/", source.path().trim_end_matches('/'))))
-            {
-                return Err(Error::Unsupported("copying a directory into itself"));
-            }
+            return Err(Error::Unsupported("copying a directory into itself"));
         }
         match destination {
-            Resource::Local(directory) => {
-                if let Resource::Local(source) = source {
-                    if tokio::fs::canonicalize(directory)
-                        .await?
-                        .starts_with(tokio::fs::canonicalize(source).await?)
-                    {
-                        return Err(Error::Unsupported("copying a directory into itself"));
-                    }
-                }
-                let staging = tempfile::Builder::new()
-                    .prefix(".gds-download-")
-                    .tempdir_in(directory)?;
-                let staged = Resource::Local(staging.path().join(&name));
-                self.copy_tree(source, &staged, Reservation::New).await?;
-                if self.cancel.is_cancelled() {
-                    return Err(Error::Cancelled);
-                }
-                let Resource::Local(path) = staged else {
-                    unreachable!()
-                };
-                let batch = super::super::transfer::Batch::new(super::super::transfer::Request {
-                    paths: vec![path],
-                    destination: directory.clone(),
-                    mode: super::super::transfer::Mode::Move,
-                })
-                .map_err(|e| Error::Failed(e.to_string()))?;
-                let result = tokio::task::spawn_blocking(move || batch.execute())
-                    .await
-                    .map_err(|e| Error::Failed(e.to_string()))?;
-                if let Some(item) = result.items.into_iter().find(|item| item.result.is_err()) {
-                    return Err(Error::Failed(
-                        item.result.expect_err("failed transfer item").to_string(),
-                    ));
-                }
-                Ok(())
-            }
-            Resource::Remote { address, session } => {
-                let nonce = tempfile::Builder::new()
-                    .prefix(".gds-upload-")
-                    .rand_bytes(16)
-                    .tempfile()?;
-                let stage = address.child(
-                    nonce
-                        .path()
-                        .file_name()
-                        .expect("temporary file name")
-                        .to_str()
-                        .expect("ASCII staging name"),
-                )?;
-                let staged = Resource::Remote {
-                    address: stage.clone(),
-                    session: session.clone(),
-                };
-                let kind = source.kind().await?;
-                if !matches!(kind, EntryKind::File | EntryKind::Directory) {
-                    return Err(Error::Unsupported("symbolic links and special files"));
-                }
-                let reserved = if kind == EntryKind::Directory {
-                    staged.mkdir().await?;
-                    Reservation::Directory
-                } else {
-                    Reservation::File(staged.stream(true).await?)
-                };
-                let result = self.copy_tree(source, &staged, reserved).await;
-                let result = match result {
-                    Ok(()) if self.cancel.is_cancelled() => Err(Error::Cancelled),
-                    Ok(()) => {
-                        let Resource::Remote {
-                            address: target, ..
-                        } = target
-                        else {
-                            unreachable!()
-                        };
-                        session.rename(&stage, &target).await.map_err(Error::from)
-                    }
-                    Err(error) => Err(error),
-                };
-                if let Err(error) = result {
-                    let cleanup = remove_tree(&staged, &CancellationToken::new()).await;
-                    return match cleanup {
-                        Ok(()) => Err(error),
-                        Err(cleanup) => Err(Error::Failed(format!(
-                            "{error}; cannot remove staging {stage}: {cleanup}"
-                        ))),
-                    };
-                }
-                Ok(())
-            }
+            Resource::Local(directory) => self.download_to_local(source, directory, &name).await,
+            Resource::Remote { address, session } => self
+                .upload_to_remote(source, &target, address, session)
+                .await
+                .map(|()| Vec::new()),
         }
     }
 
+    /// # Errors
+    /// Reports staging creation, download, atomic commit or cleanup failures.
+    async fn download_to_local(
+        &mut self,
+        source: &Resource,
+        directory: &Path,
+        name: &str,
+    ) -> Result<Vec<super::super::history::Step>, Error> {
+        if let Resource::Local(source) = source
+            && tokio::fs::canonicalize(directory)
+                .await?
+                .starts_with(tokio::fs::canonicalize(source).await?)
+        {
+            return Err(Error::Unsupported("copying a directory into itself"));
+        }
+        let staging_dir = Self::create_local_staging(directory).await?;
+        let staged_path = staging_dir.join(name);
+        let staged = Resource::Local(staged_path.clone());
+        let copy_result = match self.copy_tree(source, &staged, Reservation::New).await {
+            Ok(()) if self.cancel.is_cancelled() => Err(Error::Cancelled),
+            other => other,
+        };
+        if let Err(operation) = copy_result {
+            if let Err(cleanup) = tokio::fs::remove_dir_all(&staging_dir).await {
+                return Err(Error::LocalStagingCleanup {
+                    path: staging_dir,
+                    operation: Box::new(operation),
+                    cleanup,
+                });
+            }
+            return Err(operation);
+        }
+        let batch = super::super::transfer::Batch::new(super::super::transfer::Request {
+            paths: vec![staged_path],
+            destination: directory.to_path_buf(),
+            mode: super::super::transfer::Mode::Move,
+        })?;
+        self.tasks
+            .spawn_blocking_named(
+                "Commit downloaded files",
+                move || -> Result<Vec<super::super::history::Step>, Error> {
+                    let result = batch.execute();
+                    let mut undo = Vec::new();
+                    let mut transfer_error = None;
+                    for item in result.items {
+                        match item.result {
+                            Ok(()) => {
+                                if let Some(expected) = item.committed_snapshot {
+                                    undo.push(super::super::history::Step::trash(
+                                        item.destination,
+                                        expected,
+                                    ));
+                                }
+                            }
+                            Err(error) => {
+                                transfer_error = Some(Error::Transfer(error));
+                                break;
+                            }
+                        }
+                    }
+                    let cleanup = std::fs::remove_dir_all(&staging_dir);
+                    match (transfer_error, cleanup) {
+                        (None, Ok(())) => Ok(undo),
+                        (None, Err(cleanup)) => Err(Error::Io(cleanup)),
+                        (Some(operation), Ok(())) => Err(operation),
+                        (Some(operation), Err(cleanup)) => Err(Error::LocalStagingCleanup {
+                            path: staging_dir,
+                            operation: Box::new(operation),
+                            cleanup,
+                        }),
+                    }
+                },
+            )
+            .await?
+    }
+
+    /// # Errors
+    /// Reports remote staging, upload, atomic rename or cleanup failures.
+    async fn upload_to_remote(
+        &mut self,
+        source: &Resource,
+        target: &Resource,
+        address: &Address,
+        session: &Session,
+    ) -> Result<(), Error> {
+        let stage = address.child(&Self::staging_name(".gds-upload-"))?;
+        let staged = Resource::Remote {
+            address: stage.clone(),
+            session: session.clone(),
+        };
+        let kind = source.kind().await?;
+        if !matches!(kind, EntryKind::File | EntryKind::Directory) {
+            return Err(Error::Unsupported("symbolic links and special files"));
+        }
+        let reserved = if kind == EntryKind::Directory {
+            staged.mkdir().await?;
+            Reservation::Directory
+        } else {
+            Reservation::File(staged.stream(true).await?)
+        };
+        let result = self.copy_tree(source, &staged, reserved).await;
+        let result = match result {
+            Ok(()) if self.cancel.is_cancelled() => Err(Error::Cancelled),
+            Ok(()) => {
+                let Resource::Remote {
+                    address: target, ..
+                } = target
+                else {
+                    unreachable!()
+                };
+                session.rename(&stage, target).await.map_err(Error::from)
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(operation) = result {
+            let cleanup = staged.remove_tree(&CancellationToken::new()).await;
+            return match cleanup {
+                Ok(()) => Err(operation),
+                Err(cleanup) => Err(Error::StagingCleanup {
+                    stage,
+                    operation: Box::new(operation),
+                    cleanup: Box::new(cleanup),
+                }),
+            };
+        }
+        Ok(())
+    }
+
+    /// # Errors
+    /// Propagates stream I/O, directory traversal and cancellation errors.
     fn copy_tree<'a>(
         &'a mut self,
         source: &'a Resource,
@@ -237,19 +341,29 @@ impl Work {
                         Ok(file) => file,
                         Err(error) => {
                             let close = output.close().await;
-                            return Err(combine(error, close));
+                            return Err(error.combine_close(close));
                         }
                     };
-                    let copied = async {
-                        let mut buffer = vec![0; BUFFER_SIZE];
+                    let copied: Result<(), Error> = async {
                         loop {
-                            let count = tokio::select! { _ = self.cancel.cancelled() => return Err(Error::Cancelled), result = input.read(&mut buffer) => result? };
-                            if count == 0 { break; }
-                            tokio::select! { _ = self.cancel.cancelled() => return Err(Error::Cancelled), result = output.write_all(&buffer[..count]) => result? }
-                            self.progress.bytes += count as u64; self.updates.send_replace(self.progress.clone());
+                            let count = self
+                                .cancel
+                                .run_until_cancelled(input.read(&mut self.buffer))
+                                .await
+                                .ok_or(Error::Cancelled)??;
+                            if count == 0 {
+                                break;
+                            }
+                            self.cancel
+                                .run_until_cancelled(output.write_all(&self.buffer[..count]))
+                                .await
+                                .ok_or(Error::Cancelled)??;
+                            self.progress.bytes += count as u64;
+                            self.updates.send_replace(self.progress.clone());
                         }
                         Ok(())
-                    }.await;
+                    }
+                    .await;
                     let read_closed = input.close().await;
                     let write_closed = output.close().await;
                     match copied {
@@ -258,7 +372,9 @@ impl Work {
                             write_closed?;
                         }
                         Err(error) => {
-                            return Err(combine(combine(error, read_closed), write_closed));
+                            return Err(error
+                                .combine_close(read_closed)
+                                .combine_close(write_closed));
                         }
                     }
                     self.progress.files += 1;
@@ -269,32 +385,4 @@ impl Work {
             Ok(())
         })
     }
-}
-
-fn combine(error: Error, cleanup: Result<(), Error>) -> Error {
-    match cleanup {
-        Ok(()) => error,
-        Err(other) => Error::Failed(format!("{error}; {other}")),
-    }
-}
-
-fn remove_tree<'a>(
-    source: &'a Resource,
-    cancel: &'a CancellationToken,
-) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
-    Box::pin(async move {
-        if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
-        let kind = source.kind().await?;
-        if kind == EntryKind::Directory {
-            for child in source.children().await? {
-                remove_tree(&child, cancel).await?;
-            }
-        }
-        if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
-        source.remove(kind).await
-    })
 }

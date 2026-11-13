@@ -1,5 +1,6 @@
 use super::*;
 use crate::shared::i18n::tr;
+use tokio_util::task::AbortOnDropHandle;
 use tonic::{Request, Response, Status, codegen::*};
 
 #[cfg(feature = "gui-tests")]

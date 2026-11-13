@@ -16,7 +16,7 @@ fn local_file_authority_requires_ipc_even_for_loopback_tcp() {
     ] {
         let service = Service::new(
             value.parse().expect("valid target"),
-            runtime.handle().clone(),
+            gds::service::task_manager::Scope::with_runtime(&runtime, false),
         );
         assert_eq!(service.local(), eligible, "{value}");
     }

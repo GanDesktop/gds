@@ -1,5 +1,6 @@
 //! Owns the daemon authentication stream; dropping it cancels its ACP process.
 use crate::shared::i18n::tr;
+use gds::service::task_manager::Scope;
 use std::path::PathBuf;
 
 use bas::{
@@ -8,8 +9,8 @@ use bas::{
     service::pb,
 };
 use futures::channel::mpsc as futures_mpsc;
-use tokio::{runtime::Handle, sync::mpsc};
-use tokio_util::task::AbortOnDropHandle;
+use gds::service::task_manager::Task as IoTask;
+use tokio::sync::mpsc;
 
 use crate::entities::agent::{Status, check};
 
@@ -58,7 +59,7 @@ fn preparation(spec: &AgentSpec, method: &Method) -> Result<pb::PrepareAcpReques
 pub(super) struct Stream {
     pub input: mpsc::UnboundedSender<Control>,
     pub events: futures_mpsc::UnboundedReceiver<Result<Event, Failure>>,
-    pub task: AbortOnDropHandle<()>,
+    pub task: IoTask<()>,
 }
 
 pub(super) fn start(
@@ -69,13 +70,16 @@ pub(super) fn start(
 ) -> Stream {
     let (input, receive) = mpsc::unbounded_channel();
     let (events, receiver) = futures_mpsc::unbounded();
-    let runtime = service.runtime();
-    let task = AbortOnDropHandle::new(runtime.spawn(async move {
-        let result = run(service, spec, method, path, receive, events.clone()).await;
-        if let Err(error) = result {
-            let _ = events.unbounded_send(Err(error));
-        }
-    }));
+    let tasks = service.tasks();
+    let task = IoTask::cancel_on_drop(tasks.spawn_cancellable_named(
+        "Authenticate agent",
+        async move {
+            let result = run(service, spec, method, path, receive, events.clone()).await;
+            if let Err(error) = result {
+                let _ = events.unbounded_send(Err(error));
+            }
+        },
+    ));
     Stream {
         input,
         events: receiver,
@@ -187,18 +191,22 @@ async fn run(
 }
 
 pub(super) fn terminal(
-    runtime: &Handle,
+    tasks: &Scope,
     plan: bas::authentication::Invocation,
 ) -> impl Future<Output = Result<i32, String>> + use<> {
-    let task = AbortOnDropHandle::new(runtime.spawn(async move {
-        async {
-            let invocation =
-                super::terminal::Invocation::from_plan(plan).map_err(|error| error.to_string())?;
-            let login = super::terminal::launch(invocation).map_err(|error| error.to_string())?;
-            login.complete_code().await
-        }
-        .await
-    }));
+    let task = IoTask::cancel_on_drop(tasks.spawn_cancellable_named(
+        "Wait for terminal authentication",
+        async move {
+            async {
+                let invocation = super::terminal::Invocation::from_plan(plan)
+                    .map_err(|error| error.to_string())?;
+                let login =
+                    super::terminal::launch(invocation).map_err(|error| error.to_string())?;
+                login.complete_code().await
+            }
+            .await
+        },
+    ));
     async move {
         task.await.unwrap_or_else(|error| {
             tracing::error!(%error, "Agent request task failed");

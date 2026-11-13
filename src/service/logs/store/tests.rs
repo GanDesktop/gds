@@ -220,3 +220,51 @@ fn independent_stores_never_share_records_or_update_notifications() {
     assert!(second.snapshot().entries.is_empty());
     assert!(changes.try_recv().is_err());
 }
+
+#[test]
+fn target_and_message_bytes_count_toward_retention_budget() {
+    let store = Store::new();
+    let target = "t".repeat(MAX_TARGET_BYTES);
+    let message = "m".repeat(MAX_RECORD_BYTES);
+    let count = MAX_MESSAGE_BYTES / MAX_RECORD_BYTES;
+    for _ in 0..count {
+        store.record(Level::Info, target.as_str(), message.as_str());
+    }
+    let snapshot = store.snapshot();
+    assert!(snapshot.evicted > 0);
+    let retained_bytes: usize = snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.target.len() + entry.message.len())
+        .sum();
+    assert!(retained_bytes <= MAX_MESSAGE_BYTES);
+}
+
+#[test]
+fn strips_dcs_apc_sos_and_pm_control_strings() {
+    assert_eq!(
+        plain_text("before\x1bP1$qpayload\x1b\\after"),
+        "beforeafter"
+    );
+    assert_eq!(plain_text("before\x1bPdcs-bel\x07after"), "beforeafter");
+    assert_eq!(
+        plain_text("before\x1b_Gi=1,a=q;AAAA\x1b\\after"),
+        "beforeafter"
+    );
+    assert_eq!(plain_text("before\x1b_apc-bel\x07after"), "beforeafter");
+    assert_eq!(plain_text("before\x1bXsos-body\x1b\\after"), "beforeafter");
+    assert_eq!(plain_text("before\x1b^pm-body\x1b\\after"), "beforeafter");
+    assert_eq!(plain_text("a\x1bPone\x1b[31mtwo\x1b\\b"), "ab");
+    assert_eq!(plain_text("a\x1b_unterminated"), "a");
+
+    let store = Store::new();
+    store.record(
+        Level::Warn,
+        "\x1bPtarget-dcs\x1b\\mod",
+        "msg\x1b_apc-secret\x1b\\!",
+    );
+    let entry = store.snapshot().entries.pop().expect("record exists");
+    assert_eq!(entry.target, "mod");
+    assert_eq!(entry.message, "msg!");
+    assert!(!entry.text().contains('\x1b'));
+}

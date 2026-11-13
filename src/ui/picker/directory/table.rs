@@ -1,9 +1,7 @@
 use super::*;
 use crate::{
-    appearance::{
-        theme::Colors,
-        tokens::{self, DataListStyle},
-    },
+    app::AppExt as _,
+    appearance::tokens::{self, DataListStyle},
     i18n::t,
 };
 use gds_uim::el;
@@ -72,7 +70,7 @@ impl TableDelegate for Directories {
         cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
         let color = if self.selected == Some(index) {
-            Colors::current(cx).selection_foreground
+            cx.gds().appearance().theme().colors().selection_foreground
         } else {
             cx.theme().foreground
         };
@@ -127,6 +125,9 @@ impl TableDelegate for Directories {
                     .as_ref()
                     .is_some_and(|page| page.next_cursor.is_some())
         })
+    }
+    fn load_more_threshold(&self) -> usize {
+        super::view::TABLE_LOAD_MORE_THRESHOLD
     }
     fn load_more(&mut self, window: &mut Window, _cx: &mut Context<TableState<Self>>) {
         let picker = self.picker.clone();

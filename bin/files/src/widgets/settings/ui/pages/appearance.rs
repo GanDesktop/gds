@@ -1,38 +1,24 @@
 use gds_uim::el;
-use gpui_kit::component::{ActiveTheme, switch::Switch};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 
 use crate::widgets::settings::ui::{
     View,
-    controls::{Field, PERCENTAGE_RANGE, SettingNote},
+    controls::{Field, PERCENTAGE_RANGE},
 };
-use gds::i18n::text;
-use gds::ui::settings::SettingRow;
+use gds::i18n::t;
+use gds::ui::settings::{SettingDescription, SettingRow};
 
 impl View {
     pub(super) fn render_appearance(&mut self, cx: &mut Context<Self>) -> Div {
-        let corners = el! {
-            "settings-rounded-corners".Switch::new {
-                accessibility_label: $(text("appearance-rounded-corners", cx));
-                checked: $(self.preferences.appearance.rounded_corners);
-                on_change: $(cx.listener(Self::on_rounded_corners_changed));
-            }
-        };
-        let corners_row = self.setting_row(Field::RoundedCorners, corners, cx);
-        let animations = el! {
-            "settings-animations".Switch::new {
-                accessibility_label: $(text("appearance-animations", cx));
-                checked: $(self.preferences.animations_enabled.unwrap_or(true));
-                on_change: $(cx.listener(Self::on_animations_changed));
-            }
-        };
-        let animations_row = self.setting_row(Field::Animations, animations, cx);
+        let corners_row = self.toggle_row(Field::RoundedCorners, false, cx);
+        let animations_row = self.toggle_row(Field::Animations, false, cx);
         let animations_note =
-            el! { .SettingNote::default { message: $(text("appearance-animations-help", cx)); } };
+            el! { .SettingDescription::default [$(t!(@cx, "appearance-animations-help"))] };
         let source = self.source.render(
             Field::Source,
-            text("theme-custom", cx),
-            text("theme-search", cx),
+            t!(@cx, "theme-custom"),
+            t!(@cx, "theme-search"),
             cx,
         );
         let builtin_row = if self.source.state.read(cx).selected_value()
@@ -40,8 +26,8 @@ impl View {
         {
             let builtin = self.builtin.render(
                 Field::Builtin,
-                text("theme-builtin-selection", cx),
-                text("theme-search", cx),
+                t!(@cx, "theme-builtin-selection"),
+                t!(@cx, "theme-search"),
                 cx,
             );
             Some(self.setting_row(Field::Builtin, builtin, cx))
@@ -53,8 +39,8 @@ impl View {
         {
             let custom = self.custom.render(
                 Field::Custom,
-                text("theme-custom-selection", cx),
-                text("theme-search", cx),
+                t!(@cx, "theme-custom-selection"),
+                t!(@cx, "theme-search"),
                 cx,
             );
             Some(self.setting_row(Field::Custom, custom, cx))
@@ -63,15 +49,15 @@ impl View {
         };
         let mode = self.mode.render(
             Field::Mode,
-            text("theme-mode", cx),
-            text("theme-search", cx),
+            t!(@cx, "theme-mode"),
+            t!(@cx, "theme-search"),
             cx,
         );
         let source_row = self.setting_row(Field::Source, source, cx);
         let mode_row = self.setting_row(Field::Mode, mode, cx);
         let content_opacity = self.percentage_row(Field::ContentOpacity, cx);
         let sidebar_opacity = self.percentage_row(Field::SidebarOpacity, cx);
-        let sample_text = text("font-sample", cx);
+        let sample_text = t!(@cx, "font-sample");
         let sample = el! {
             .div {
                 py_4; text_lg; truncate;

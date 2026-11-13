@@ -1,4 +1,5 @@
 //! User-initiated playback of complete ACP audio blocks, never automatic replay.
+use gds::app::AppExt as _;
 
 use crate::shared::i18n::tr;
 use crate::shared::ui::{
@@ -66,7 +67,7 @@ enum State {
 }
 
 pub(crate) struct Player {
-    worker_scope: Option<gds::task_manager::Owner>,
+    worker_scope: Option<gds::service::task_manager::Owner>,
     id: Option<String>,
     generation: Arc<AtomicU64>,
     scope: u64,
@@ -97,9 +98,10 @@ impl Player {
         let (commands, receiver) = mpsc::channel();
         let (events, mut updates) = tokio::sync::mpsc::unbounded_channel();
         let generation = Arc::clone(&self.generation);
-        let scope = gds::ui::task_manager::scope(cx).named_child("Audio playback");
+        let scope = cx.gds().tasks().scope().named_child("Audio playback");
         let cancel = scope.token();
-        scope.spawn_thread(
+        scope.spawn_thread_named(
+            "Play audio",
             std::thread::Builder::new().name("gds-agents-audio".into()),
             move || worker::run(receiver, events, generation, cancel),
         )?;

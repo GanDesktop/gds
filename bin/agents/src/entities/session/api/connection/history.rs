@@ -66,7 +66,7 @@ enum Write {
 }
 
 impl Store {
-    pub(super) fn new(cache: Option<cache::Cache>) -> (Self, Option<JoinHandle<()>>) {
+    pub(super) fn new(cache: Option<cache::Cache>, scope: &Scope) -> (Self, Option<IoTask<()>>) {
         let Some(cache) = cache else {
             return (
                 Self {
@@ -77,7 +77,10 @@ impl Store {
             );
         };
         let (writes, receiver) = mpsc::channel(WRITE_CAPACITY);
-        let task = tokio::spawn(write_loop(cache.clone(), receiver));
+        let task = scope.spawn_named(
+            "Persist session history",
+            write_loop(cache.clone(), receiver),
+        );
         (
             Self {
                 cache: Some(cache),

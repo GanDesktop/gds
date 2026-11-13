@@ -8,9 +8,9 @@ use bas::{
     config::AgentSpec,
     service::{Client, pb},
 };
+use gds::service::task_manager::Scope;
+use gds::service::task_manager::Task as IoTask;
 use gpui_kit::{App, Global};
-use tokio::runtime::Handle;
-use tokio_util::task::AbortOnDropHandle;
 
 use super::super::Status;
 
@@ -24,26 +24,26 @@ mod tests;
 #[derive(Clone)]
 pub(crate) struct Service {
     server: Target,
-    runtime: Handle,
+    tasks: Scope,
 }
 
 impl Global for Service {}
 
-pub(crate) fn init(server: Target, runtime: Handle, cx: &mut App) {
-    cx.set_global(Service { server, runtime });
+pub(crate) fn init(server: Target, tasks: Scope, cx: &mut App) {
+    cx.set_global(Service { server, tasks });
 }
 
 impl Service {
-    pub(crate) fn new(server: Target, runtime: Handle) -> Self {
-        Self { server, runtime }
+    pub(crate) fn new(server: Target, tasks: Scope) -> Self {
+        Self { server, tasks }
     }
 
     pub(crate) fn address(&self) -> Target {
         self.server.clone()
     }
 
-    pub(crate) fn runtime(&self) -> Handle {
-        self.runtime.clone()
+    pub(crate) fn tasks(&self) -> Scope {
+        self.tasks.clone()
     }
 
     pub(crate) fn request(
@@ -53,15 +53,18 @@ impl Service {
         settings_path: PathBuf,
     ) -> impl Future<Output = Status> + use<> {
         let server = self.server.clone();
-        let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
-            let result = tokio::time::timeout(
-                REQUEST_TIMEOUT,
-                request(server, spec, connect, settings_path),
-            )
-            .await
-            .unwrap_or_else(|_| Err(tr!("agent-check-timeout").into()));
-            result.unwrap_or_else(Status::Failed)
-        }));
+        let task = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Check agent availability",
+            async move {
+                let result = tokio::time::timeout(
+                    REQUEST_TIMEOUT,
+                    request(server, spec, connect, settings_path),
+                )
+                .await
+                .unwrap_or_else(|_| Err(tr!("agent-check-timeout").into()));
+                result.unwrap_or_else(Status::Failed)
+            },
+        ));
         async move {
             task.await.unwrap_or_else(|error| {
                 tracing::error!(%error, "Agent check task failed");

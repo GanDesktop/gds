@@ -5,38 +5,16 @@ use toasty::models;
 
 use super::super::model::places::{Change, Places};
 use accessor::Accessor;
-use record::{Location, SavedLocation, ViewSettings};
+use record::{SavedLocation, ViewSettings};
 
 mod accessor;
 mod record;
 
-const MIGRATIONS: MigrationSet = MigrationSet::new(&[
-    MigrationFile::new(
-        1,
-        "001-places.sql",
-        include_str!("places/assets/001-places.sql"),
-    ),
-    MigrationFile::new(
-        2,
-        "002-location-views.sql",
-        include_str!("places/assets/002-location-views.sql"),
-    ),
-    MigrationFile::new(
-        3,
-        "003-remote-locations.sql",
-        include_str!("places/assets/003-remote-locations.sql"),
-    ),
-    MigrationFile::new(
-        4,
-        "004-unified-places.sql",
-        include_str!("places/assets/004-unified-places.sql"),
-    ),
-    MigrationFile::new(
-        5,
-        "005-location-pins.sql",
-        include_str!("places/assets/005-location-pins.sql"),
-    ),
-]);
+const MIGRATIONS: MigrationSet = MigrationSet::new(&[MigrationFile::new(
+    1,
+    "001-places.sql",
+    include_str!("places/assets/001-places.sql"),
+)]);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -47,7 +25,7 @@ pub(crate) enum Error {
     #[error(transparent)]
     Database(#[from] toasty::Error),
     #[error(transparent)]
-    Task(#[from] tokio::task::JoinError),
+    Task(#[from] gds::service::task_manager::Error),
     #[error("invalid places data: {0}")]
     Data(#[from] serde_json::Error),
 }
@@ -60,10 +38,13 @@ pub(crate) struct Store {
 impl Store {
     /// # Errors
     /// Reports database or migration failures.
-    pub(crate) async fn open_at(path: &Path) -> Result<Self, Error> {
+    pub(crate) async fn open_at(
+        tasks: &gds::service::task_manager::Scope,
+        path: &Path,
+    ) -> Result<Self, Error> {
         let mut db = Options::new(MIGRATIONS)
-            .models(models!(Location, SavedLocation, ViewSettings))
-            .open(path)
+            .models(models!(SavedLocation, ViewSettings))
+            .open(tasks, path)
             .await?;
         let mut tx = db
             .transaction_builder()

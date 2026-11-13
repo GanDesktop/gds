@@ -313,7 +313,7 @@ impl Workspace {
                 overflow_hidden;
                 border_1;
                 border_color: $(cx.theme().border);
-                bg: $(theme::content_background(cx));
+                bg: $(cx.gds().appearance().theme().content_background());
             } [
                 ..preview,
                 ..menu,

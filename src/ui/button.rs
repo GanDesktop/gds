@@ -8,6 +8,7 @@ pub use icon::IconButton;
 
 use std::rc::Rc;
 
+use crate::app::AppExt as _;
 use gpui_kit::{
     AnyElement, App, ClickEvent, CursorStyle, ElementId, InteractiveElement, Interactivity,
     IntoElement, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement,
@@ -205,7 +206,7 @@ impl Button {
                 .child(super::keytips::anchor(window, cx, self.id, shortcut));
         }
         if self.variant == ButtonVariant::Ghost {
-            let colors = crate::appearance::theme::Colors::current(cx);
+            let colors = cx.gds().appearance().theme().colors();
             let selected = self.inner.is_selected();
             let variant = ButtonCustomVariant::new(cx)
                 .foreground(if selected {

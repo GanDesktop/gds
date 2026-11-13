@@ -1,4 +1,5 @@
 use super::*;
+use gds::app::AppExt as _;
 use gpui_kit::{TestAppContext, WindowHandle, component::Root, px, size, test::TestWindowExt};
 
 fn setup(cx: &mut TestAppContext) -> (tempfile::TempDir, WindowHandle<Root>, Entity<Page>) {
@@ -7,6 +8,7 @@ fn setup(cx: &mut TestAppContext) -> (tempfile::TempDir, WindowHandle<Root>, Ent
     std::fs::write(&path, "{}").expect("settings");
     cx.update(|cx| {
         gpui_kit::init(cx);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::config::init(Some(path), cx);
         crate::shared::lib::appearance::init(cx);
         crate::app::init(cx);

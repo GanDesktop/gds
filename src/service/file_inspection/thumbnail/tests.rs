@@ -21,8 +21,7 @@ fn images_use_their_bytes_and_preserve_aspect_ratio_in_a_bounded_frame() {
     let thumbnail = source(path, Kind::Image)
         .thumbnail()
         .expect("image preview");
-    let decoded = ::image::load_from_memory(&thumbnail.bytes).expect("encoded preview");
-    assert_eq!((decoded.width(), decoded.height()), (EDGE, EDGE / 2));
+    assert_eq!((thumbnail.width(), thumbnail.height()), (EDGE, EDGE / 2));
 }
 
 #[test]
@@ -35,9 +34,8 @@ fn svg_content_is_supported_without_an_svg_extension_and_large_images_are_reject
     let thumbnail = source(path.clone(), Kind::Image)
         .thumbnail()
         .expect("SVG preview");
-    let decoded = ::image::load_from_memory(&thumbnail.bytes).expect("SVG raster PNG");
-    assert_eq!((decoded.width(), decoded.height()), (32, 32));
-    let pixel = decoded.to_rgba8().get_pixel(0, 0).0;
+    assert_eq!((thumbnail.width(), thumbnail.height()), (32, 32));
+    let pixel = thumbnail.as_rgba().get_pixel(0, 0).0;
     for (actual, expected) in pixel.into_iter().zip([64_u8, 128, 192, 128]) {
         assert!(
             actual.abs_diff(expected) <= 1,
@@ -84,9 +82,8 @@ fn videos_extract_one_frame_and_corrupt_media_reports_failure() {
     let thumbnail = source(path.clone(), Kind::Video)
         .thumbnail()
         .expect("short video preview");
-    let decoded = ::image::load_from_memory(&thumbnail.bytes).expect("video frame PNG");
-    assert!(decoded.width() <= EDGE && decoded.height() <= EDGE);
-    assert_eq!(decoded.width() * 3, decoded.height() * 4);
+    assert!(thumbnail.width() <= EDGE && thumbnail.height() <= EDGE);
+    assert_eq!(thumbnail.width() * 3, thumbnail.height() * 4);
     fs::write(&path, b"not a video").expect("corrupt video");
     assert!(matches!(
         source(path, Kind::Video).thumbnail(),

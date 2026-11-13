@@ -18,7 +18,7 @@ use gpui_kit::base::{Root, RootPlugin};
 use gpui_kit::component::{ActiveTheme, window_paddings};
 use gpui_kit::{IntoElement, prelude::*, *};
 
-use crate::appearance::typography;
+use crate::app::AppExt as _;
 use crate::ui::{HeldModifier, Shortcut, ShortcutBadge};
 
 /// Horizontal padding of a compact label.
@@ -66,13 +66,41 @@ const LAYER_PRIORITY: usize = 90;
 pub struct Keytips {
     this: WeakEntity<Self>,
     staged: Rc<RefCell<Staged>>,
+    last_rendered: Option<RenderSnapshot>,
+    watcher_armed: bool,
+    #[cfg(all(test, feature = "gui-tests"))]
+    renders: usize,
     _activation: Subscription,
+}
+
+#[derive(Clone, PartialEq)]
+struct RenderSnapshot {
+    focus: Option<gpui_kit::FocusHandle>,
+    content: Bounds<Pixels>,
+    held: Option<HeldModifier>,
+    generation: u64,
+}
+
+impl RenderSnapshot {
+    fn capture(
+        focus: Option<&gpui_kit::FocusHandle>,
+        content: Bounds<Pixels>,
+        staged: &Staged,
+    ) -> Self {
+        Self {
+            focus: focus.cloned(),
+            content,
+            held: staged.held,
+            generation: staged.generation,
+        }
+    }
 }
 
 #[derive(Default)]
 struct Staged {
     held: Option<HeldModifier>,
     hints: HashMap<ElementId, Hint>,
+    generation: u64,
 }
 
 struct Hint {
@@ -133,7 +161,38 @@ impl Keytips {
         Self {
             this: cx.entity().downgrade(),
             staged: Rc::new(RefCell::new(Staged::default())),
+            last_rendered: None,
+            watcher_armed: false,
+            #[cfg(all(test, feature = "gui-tests"))]
+            renders: 0,
             _activation: activation,
+        }
+    }
+
+    /// Arm a lightweight next-frame check while a modifier group is held so
+    /// focus, viewport bounds, or hint changes are detected without running a
+    /// full `render()` and label collision pass on idle frames.
+    fn arm_watcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.watcher_armed || self.staged.borrow().held.is_none() {
+            return;
+        }
+        self.watcher_armed = true;
+        cx.on_next_frame(window, |this, window, cx| {
+            this.watcher_armed = false;
+            this.check_next_frame(window, cx);
+        });
+    }
+
+    fn check_next_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let snapshot = {
+            let mut staged = self.staged.borrow_mut();
+            staged.prune();
+            RenderSnapshot::capture(window.focused(cx).as_ref(), content_bounds(window), &staged)
+        };
+        if self.last_rendered.as_ref() != Some(&snapshot) {
+            cx.notify();
+        } else if snapshot.held.is_some() {
+            self.arm_watcher(window, cx);
         }
     }
 }
@@ -142,7 +201,7 @@ impl Keytips {
 ///
 /// The plugin also clears on window deactivation, which may lose the matching
 /// modifier release. Callers can explicitly clear during other focus transitions.
-pub fn release(window: &mut Window, cx: &mut App) {
+pub(crate) fn release(window: &mut Window, cx: &mut App) {
     let Some(layer) = layer(window, cx) else {
         return;
     };
@@ -157,13 +216,19 @@ pub fn release(window: &mut Window, cx: &mut App) {
     }
 }
 
-/// Register the hint layer for the windows created afterwards.
+struct Initialized;
+impl Global for Initialized {}
+
+/// Register the hint layer once for all application windows.
 ///
-/// Call it while a window's view is being built (that runs before its root
-/// exists) and after `gpui_kit::init`. The layer paints itself in its own
-/// deferred layer, so its registration order no longer decides whether it
-/// covers a dialog.
-pub fn install(cx: &mut App) {
+/// `Gds::initialize` calls this at startup after `gpui_kit::init`. The layer
+/// paints itself in its own deferred layer, so its registration order no
+/// longer decides whether it covers a dialog.
+pub(crate) fn install(cx: &mut App) {
+    if cx.has_global::<Initialized>() {
+        return;
+    }
+    cx.set_global(Initialized);
     Root::register_plugin::<Keytips>(cx, Keytips::new);
 }
 
@@ -197,25 +262,20 @@ impl RootPlugin for Keytips {
 
 impl Render for Keytips {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(all(test, feature = "gui-tests"))]
+        {
+            self.renders += 1;
+        }
         let focus = window.focused(cx);
         let content = content_bounds(window);
         let mut staged = self.staged.borrow_mut();
-        staged
-            .hints
-            .retain(|_, hint| hint.mounted.strong_count() > 0);
+        staged.prune();
+        self.last_rendered = Some(RenderSnapshot::capture(focus.as_ref(), content, &staged));
         let mut slots = Vec::new();
         let mut labels = Vec::new();
         if let Some(held) = staged.held
             && let Some(focus) = focus.as_ref()
         {
-            // Focus, scope and control positions can change without any control
-            // restaging (a dialog opening or closing moves focus only), so the
-            // layer keeps a frame scheduled while a group is held instead of
-            // watching every focus handle. It stops as soon as that is released.
-            if let Some(this) = self.this.upgrade() {
-                let id = this.entity_id();
-                window.on_next_frame(move |_, cx| cx.notify(id));
-            }
             let mut placed: Vec<_> = staged
                 .hints
                 .iter()
@@ -250,7 +310,11 @@ impl Render for Keytips {
                 labels.push(compact_label(key, &bindings, held, cx).into_any_element());
             }
         }
+        let armed = staged.held.is_some();
         drop(staged);
+        if armed {
+            self.arm_watcher(window, cx);
+        }
         deferred(
             div()
                 .absolute()
@@ -306,6 +370,18 @@ impl Staged {
         self.set_held(None)
     }
 
+    /// Drop hints whose staging element left the tree. Returns whether any
+    /// dead entry was removed.
+    fn prune(&mut self) -> bool {
+        let before = self.hints.len();
+        self.hints.retain(|_, hint| hint.mounted.strong_count() > 0);
+        let removed = self.hints.len() != before;
+        if removed {
+            self.generation += 1;
+        }
+        removed
+    }
+
     /// Arm one modifier group, or disarm both. Returns whether the layer needs
     /// a frame to show the change.
     fn set_held(&mut self, held: Option<HeldModifier>) -> bool {
@@ -316,6 +392,7 @@ impl Staged {
         if held.is_none() {
             self.hints.clear();
         }
+        self.generation += 1;
         true
     }
 
@@ -329,12 +406,15 @@ impl Staged {
         placement: HintPlacement,
         mounted: Weak<()>,
     ) -> bool {
-        let unchanged = self.hints.get(&key).is_some_and(|hint| {
-            hint.bounds == bounds
-                && hint.placement == placement
-                && hint.shortcut.same_scope(&shortcut)
-        });
-        if unchanged {
+        if let Some(hint) = self.hints.get_mut(&key)
+            && hint.mounted.strong_count() > 0
+            && hint.bounds == bounds
+            && hint.placement == placement
+            && hint.shortcut.same_scope(&shortcut)
+        {
+            if !Weak::ptr_eq(&hint.mounted, &mounted) {
+                hint.mounted = mounted;
+            }
             return false;
         }
         self.hints.insert(
@@ -346,6 +426,7 @@ impl Staged {
                 mounted,
             },
         );
+        self.generation += 1;
         self.held.is_some()
     }
 }
@@ -501,7 +582,8 @@ pub fn suffix_anchor(
         return div().size_0().into_any_element();
     };
     let label = ShortcutBadge::path_label(&[binding.clone()], held).unwrap_or_default();
-    let text_size = typography::scaled(LABEL_TEXT_SIZE, cx);
+    let typography = cx.gds().appearance().typography();
+    let text_size = typography.scaled(LABEL_TEXT_SIZE);
     let run = window.text_style().to_run(label.len());
     let width = window
         .text_system()
@@ -510,7 +592,7 @@ pub fn suffix_anchor(
         + px(LABEL_PADDING_X * 2. + 2.);
     // Text layout rounds glyph advances up; the clip must include the entire border.
     let width = width.ceil();
-    let gap = typography::scaled(SUFFIX_GAP, cx);
+    let gap = typography.scaled(SUFFIX_GAP);
     let height = (text_size * LABEL_LINE_HEIGHT + px(LABEL_PADDING_Y * 2. + 2.)).ceil();
     let label = compact_label(key, &[binding], held, cx).w_full().h_full();
     el! {
@@ -941,7 +1023,7 @@ fn compact_label(
     held: HeldModifier,
     cx: &App,
 ) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
-    let text_size = typography::scaled(LABEL_TEXT_SIZE, cx);
+    let text_size = cx.gds().appearance().typography().scaled(LABEL_TEXT_SIZE);
     let label = ShortcutBadge::path_label(bindings, held).unwrap_or_default();
     div()
         .id(SharedString::from(format!("keytip-{key}")))

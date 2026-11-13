@@ -293,7 +293,7 @@ impl Workspace {
                 };
                 cursor_pointer;
                 hover: {
-                    bg: $(gds::appearance::theme::Colors::current(cx).sidebar_hover());
+                    bg: $(cx.gds().appearance().theme().colors().sidebar_hover());
                 };
                 on_click: $(cx.listener(move |this, _, _, cx| {
                             this.toggle_workspace_collapsed(directory.clone(), cx)

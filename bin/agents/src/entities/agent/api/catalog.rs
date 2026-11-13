@@ -10,9 +10,9 @@ use bas::{
     service::{Client, pb},
 };
 use futures::{StreamExt, channel::mpsc};
+use gds::service::task_manager::Scope;
+use gds::service::task_manager::Task as IoTask;
 use gpui_kit::{App, Global};
-use tokio::runtime::Handle;
-use tokio_util::task::AbortOnDropHandle;
 
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -21,12 +21,12 @@ mod policy;
 #[derive(Clone)]
 pub(crate) struct Service {
     server: Target,
-    runtime: Handle,
+    tasks: Scope,
 }
 impl Global for Service {}
 
-pub(in crate::entities::agent) fn init(server: Target, runtime: Handle, cx: &mut App) {
-    cx.set_global(Service { server, runtime });
+pub(in crate::entities::agent) fn init(server: Target, tasks: Scope, cx: &mut App) {
+    cx.set_global(Service { server, tasks });
 }
 
 pub(crate) struct Progress {
@@ -50,7 +50,7 @@ fn decode(operation: pb::AgentOperation) -> Progress {
 
 pub(crate) struct Updates {
     receiver: mpsc::UnboundedReceiver<Result<Progress, String>>,
-    _task: AbortOnDropHandle<()>,
+    _task: IoTask<()>,
 }
 
 impl Updates {
@@ -65,32 +65,35 @@ impl Service {
         save: Option<pb::SaveAgentConfigurationRequest>,
     ) -> impl Future<Output = Result<pb::AgentConfiguration, String>> + use<> {
         let server = self.server.clone();
-        let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
-            tokio::time::timeout(CATALOG_TIMEOUT, async {
-                let mut client = Client::connect_options(&server)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let response = match save {
-                    Some(request) => client.save_agent_configuration(request).await,
-                    None => {
-                        client
-                            .get_agent_configuration(pb::GetAgentConfigurationRequest {})
-                            .await
-                    }
-                };
-                response
-                    .map(|response| response.into_inner())
-                    .map_err(|error| {
-                        if error.code() == tonic::Code::Unimplemented {
-                            tr!("agent-config-upgrade").to_owned()
-                        } else {
-                            error.message().to_owned()
+        let task = IoTask::cancel_on_drop(self.tasks.spawn_named(
+            "Read or save agent configuration",
+            async move {
+                tokio::time::timeout(CATALOG_TIMEOUT, async {
+                    let mut client = Client::connect_options(&server)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let response = match save {
+                        Some(request) => client.save_agent_configuration(request).await,
+                        None => {
+                            client
+                                .get_agent_configuration(pb::GetAgentConfigurationRequest {})
+                                .await
                         }
-                    })
-            })
-            .await
-            .unwrap_or_else(|_| Err(tr!("agent-config-timeout").into()))
-        }));
+                    };
+                    response
+                        .map(|response| response.into_inner())
+                        .map_err(|error| {
+                            if error.code() == tonic::Code::Unimplemented {
+                                tr!("agent-config-upgrade").to_owned()
+                            } else {
+                                error.message().to_owned()
+                            }
+                        })
+                })
+                .await
+                .unwrap_or_else(|_| Err(tr!("agent-config-timeout").into()))
+            },
+        ));
         async move {
             task.await.unwrap_or_else(|error| {
                 tracing::error!(%error, "Agent request task failed");
@@ -99,16 +102,16 @@ impl Service {
         }
     }
 
-    pub(crate) fn new(server: Target, runtime: Handle) -> Self {
-        Self { server, runtime }
+    pub(crate) fn new(server: Target, tasks: Scope) -> Self {
+        Self { server, tasks }
     }
 
     pub(crate) fn address(&self) -> Target {
         self.server.clone()
     }
 
-    pub(crate) fn runtime(&self) -> &Handle {
-        &self.runtime
+    pub(crate) fn tasks(&self) -> &Scope {
+        &self.tasks
     }
 
     pub(crate) fn local(&self) -> bool {
@@ -121,21 +124,25 @@ impl Service {
         refresh: bool,
     ) -> impl Future<Output = Result<Catalog, String>> + use<> {
         let server = self.server.clone();
-        let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
-            tokio::time::timeout(CATALOG_TIMEOUT, async {
-                let mut client = Client::connect_options(&server)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let response = client
-                    .list_agent_catalog(pb::ListAgentCatalogRequest { refresh })
-                    .await
-                    .map_err(|error| error.message().to_owned())?
-                    .into_inner();
-                serde_json::from_slice(&response.catalog_json).map_err(|error| error.to_string())
-            })
-            .await
-            .unwrap_or_else(|_| Err(tr!("catalog-timeout").into()))
-        }));
+        let task = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Load agent catalog",
+            async move {
+                tokio::time::timeout(CATALOG_TIMEOUT, async {
+                    let mut client = Client::connect_options(&server)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let response = client
+                        .list_agent_catalog(pb::ListAgentCatalogRequest { refresh })
+                        .await
+                        .map_err(|error| error.message().to_owned())?
+                        .into_inner();
+                    serde_json::from_slice(&response.catalog_json)
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                .unwrap_or_else(|_| Err(tr!("catalog-timeout").into()))
+            },
+        ));
         async move {
             task.await.unwrap_or_else(|error| {
                 tracing::error!(%error, "Agent request task failed");
@@ -147,36 +154,39 @@ impl Service {
     pub(crate) fn install(&self, id: String) -> Updates {
         let server = self.server.clone();
         let (send, receiver) = mpsc::unbounded();
-        let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
-            let result = async {
-                let mut client = Client::connect_options(&server)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let mut stream = client
-                    .install_agent(pb::InstallAgentRequest { id })
-                    .await
-                    .map_err(|error| error.message().to_owned())?
-                    .into_inner();
-                while let Some(operation) = stream
-                    .message()
-                    .await
-                    .map_err(|error| error.message().to_owned())?
-                {
-                    let complete = operation.complete;
-                    if send.unbounded_send(Ok(decode(operation))).is_err() {
-                        return Ok(());
+        let task = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Install agent",
+            async move {
+                let result = async {
+                    let mut client = Client::connect_options(&server)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let mut stream = client
+                        .install_agent(pb::InstallAgentRequest { id })
+                        .await
+                        .map_err(|error| error.message().to_owned())?
+                        .into_inner();
+                    while let Some(operation) = stream
+                        .message()
+                        .await
+                        .map_err(|error| error.message().to_owned())?
+                    {
+                        let complete = operation.complete;
+                        if send.unbounded_send(Ok(decode(operation))).is_err() {
+                            return Ok(());
+                        }
+                        if complete {
+                            return Ok(());
+                        }
                     }
-                    if complete {
-                        return Ok(());
-                    }
+                    Err(tr!("agent-install-incomplete").to_owned())
                 }
-                Err(tr!("agent-install-incomplete").to_owned())
-            }
-            .await;
-            if let Err(error) = result {
-                let _ = send.unbounded_send(Err(error));
-            }
-        }));
+                .await;
+                if let Err(error) = result {
+                    let _ = send.unbounded_send(Err(error));
+                }
+            },
+        ));
         Updates {
             receiver,
             _task: task,
@@ -185,19 +195,22 @@ impl Service {
 
     pub(crate) fn remove(&self, id: String) -> impl Future<Output = Result<(), String>> + use<> {
         let server = self.server.clone();
-        let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
-            async {
-                let mut client = Client::connect_options(&server)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                client
-                    .remove_agent(pb::RemoveAgentRequest { id })
-                    .await
-                    .map_err(|error| error.message().to_owned())?;
-                Ok(())
-            }
-            .await
-        }));
+        let task = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Remove agent",
+            async move {
+                async {
+                    let mut client = Client::connect_options(&server)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    client
+                        .remove_agent(pb::RemoveAgentRequest { id })
+                        .await
+                        .map_err(|error| error.message().to_owned())?;
+                    Ok(())
+                }
+                .await
+            },
+        ));
         async move {
             task.await.unwrap_or_else(|error| {
                 tracing::error!(%error, "Agent request task failed");
@@ -212,29 +225,32 @@ impl Service {
         settings_path: std::path::PathBuf,
     ) -> impl Future<Output = Result<(), String>> + use<> {
         let server = self.server.clone();
-        let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
-            tokio::time::timeout(CATALOG_TIMEOUT, async {
-                let mut client = super::check::verified_client(server, &settings_path).await?;
-                let expected_spec_json =
-                    serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
-                client
-                    .logout_agent(pb::LogoutAgentRequest {
-                        agent: spec.id.to_string(),
-                        expected_spec_json,
-                    })
-                    .await
-                    .map_err(|error| {
-                        if error.code() == tonic::Code::Unimplemented {
-                            tr!("agent-check-upgrade").into()
-                        } else {
-                            crate::shared::api::failure::Failure::from(error).presentation()
-                        }
-                    })?;
-                Ok(())
-            })
-            .await
-            .unwrap_or_else(|_| Err(tr!("agent-logout-unknown").into()))
-        }));
+        let task = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Log out agent",
+            async move {
+                tokio::time::timeout(CATALOG_TIMEOUT, async {
+                    let mut client = super::check::verified_client(server, &settings_path).await?;
+                    let expected_spec_json =
+                        serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
+                    client
+                        .logout_agent(pb::LogoutAgentRequest {
+                            agent: spec.id.to_string(),
+                            expected_spec_json,
+                        })
+                        .await
+                        .map_err(|error| {
+                            if error.code() == tonic::Code::Unimplemented {
+                                tr!("agent-check-upgrade").into()
+                            } else {
+                                crate::shared::api::failure::Failure::from(error).presentation()
+                            }
+                        })?;
+                    Ok(())
+                })
+                .await
+                .unwrap_or_else(|_| Err(tr!("agent-logout-unknown").into()))
+            },
+        ));
         async move {
             task.await.unwrap_or_else(|error| {
                 tracing::error!(%error, "Agent request task failed");

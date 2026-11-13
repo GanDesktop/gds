@@ -49,12 +49,19 @@ pub struct About {
     focus: FocusHandle,
 }
 
+struct BindingsInstalled;
+
+impl gpui_kit::Global for BindingsInstalled {}
+
 impl About {
     pub fn new(application: &'static Application, cx: &mut Context<Self>) -> Self {
-        cx.bind_keys([
-            KeyBinding::new("escape", Back, Some(DETAILS_CONTEXT)),
-            KeyBinding::new("alt-left", Back, Some(DETAILS_CONTEXT)),
-        ]);
+        if !cx.has_global::<BindingsInstalled>() {
+            cx.set_global(BindingsInstalled);
+            cx.bind_keys([
+                KeyBinding::new("escape", Back, Some(DETAILS_CONTEXT)),
+                KeyBinding::new("alt-left", Back, Some(DETAILS_CONTEXT)),
+            ]);
+        }
         Self {
             application,
             section: Section::Overview,

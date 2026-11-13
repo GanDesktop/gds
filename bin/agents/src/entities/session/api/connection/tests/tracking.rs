@@ -162,7 +162,13 @@ async fn dropping_connection_aborts_pending_turn_tracking() {
     let connection = Connection {
         scope: None,
         commands,
-        task: Some(tokio::spawn(run(fixture.client.clone(), receiver, updates))),
+        task: Some(
+            gds::service::task_manager::Scope::with_handle(
+                tokio::runtime::Handle::current(),
+                false,
+            )
+            .spawn(run(fixture.client.clone(), receiver, updates)),
+        ),
     };
     assert!(
         connection
@@ -187,22 +193,18 @@ async fn dropping_connection_aborts_pending_turn_tracking() {
 #[tokio::test]
 async fn application_cancellation_drains_connection_with_its_sender_still_alive() {
     let fixture = fixture(super::Scenario::Tracking(Scenario::Pending)).await;
-    let root = gds::task_manager::Scope::default();
+    let root =
+        gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false);
     let owner = root.child();
     let (commands, receiver) = mpsc::unbounded_channel();
     let (updates, mut events) = mpsc::channel(EVENT_CAPACITY);
-    let task = owner
-        .spawn(
-            &tokio::runtime::Handle::current(),
-            super::super::run_cached_scoped(
-                fixture.client.clone(),
-                receiver,
-                updates,
-                None,
-                owner.token(),
-            ),
-        )
-        .unwrap();
+    let task = owner.spawn(super::super::run_cached_scoped(
+        fixture.client.clone(),
+        receiver,
+        updates,
+        None,
+        (*owner).clone(),
+    ));
     commands
         .send(prompt(fixture.session, fixture.turn))
         .unwrap();

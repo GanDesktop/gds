@@ -1,8 +1,14 @@
-use std::{collections::HashMap, time::Instant};
+use gds::service::task_manager::Scope;
+use std::{
+    collections::HashMap,
+    ops::Deref,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
+use gds::service::task_manager::Task as IoTask;
 use gpui_kit::*;
-use tokio::{runtime::Handle, sync::mpsc};
-use tokio_util::task::AbortOnDropHandle;
+use tokio::sync::mpsc;
 
 use super::*;
 
@@ -14,35 +20,95 @@ pub(super) struct Observation {
     pub result: Result<Snapshot, Error>,
 }
 
+struct ActionReport {
+    mount_point: Result<Option<std::path::PathBuf>, Error>,
+    observation: Observation,
+}
+
+struct BusyGuard {
+    busy: Arc<Mutex<HashMap<VolumeId, Vec<std::path::PathBuf>>>>,
+    scope: Vec<VolumeId>,
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        let mut busy = self.busy.lock().expect("volumes busy lock");
+        for id in &self.scope {
+            busy.remove(id);
+        }
+    }
+}
+
 /// One service per application, shared by every window and tab.
 pub struct Service {
     pub snapshot: Snapshot,
     pub error: Option<String>,
     pub discovering: bool,
-    busy: HashMap<VolumeId, Vec<std::path::PathBuf>>,
+    busy: Arc<Mutex<HashMap<VolumeId, Vec<std::path::PathBuf>>>>,
     last_observation: Instant,
     usage: super::usage::UsageCache,
-    runtime: Handle,
+    tasks: Scope,
     _updates: Task<()>,
 }
 
-impl Service {
-    pub fn shared(runtime: Handle, cx: &mut App) -> Entity<Self> {
-        if let Some(service) = cx.try_global::<SharedService>() {
-            return service.0.clone();
+#[derive(Clone, Copy)]
+pub(crate) struct Accessor<C> {
+    cx: C,
+}
+
+pub(crate) trait VolumesExt {
+    type Context<'a>: gds::app::Context
+    where
+        Self: 'a;
+
+    fn volumes(&mut self) -> Accessor<Self::Context<'_>>;
+}
+
+impl<C: gds::app::Context> VolumesExt for gds::app::Gds<C> {
+    type Context<'a>
+        = C::Reborrowed<'a>
+    where
+        C: 'a;
+
+    fn volumes(&mut self) -> Accessor<C::Reborrowed<'_>> {
+        Accessor {
+            cx: self.reborrow().into_inner(),
         }
-        let service = cx.new(|cx| Self::new(runtime, cx));
-        cx.set_global(SharedService(service.clone()));
+    }
+}
+
+impl<C: Deref<Target = App>> Accessor<C> {
+    pub(crate) fn service(&self) -> Entity<Service> {
+        self.cx.global::<SharedService>().0.clone()
+    }
+}
+
+impl Accessor<&mut App> {
+    pub(crate) fn initialize(&mut self, tasks: &Scope) -> Entity<Service> {
+        assert!(
+            !self.cx.has_global::<SharedService>(),
+            "volumes already initialized"
+        );
+        let tasks = tasks.clone();
+        let service = self.cx.new(|cx| Service::new(tasks, cx));
+        self.cx.set_global(SharedService(service.clone()));
         service
     }
+}
 
-    fn new(runtime: Handle, cx: &mut Context<Self>) -> Self {
+impl Service {
+    fn new(tasks: Scope, cx: &mut Context<Self>) -> Self {
         let last_observation = Instant::now();
         let (sender, mut receiver) = mpsc::channel(16);
         #[cfg(target_os = "linux")]
-        let watcher = runtime.spawn(super::linux::watch(sender));
+        let watcher = {
+            let cancel = tasks.token();
+            tasks.spawn_named("Watch storage volumes", async move {
+                tokio::select! { _ = cancel.cancelled() => {}, _ = super::linux::watch(sender) => {} }
+            })
+        };
         #[cfg(not(target_os = "linux"))]
-        let watcher = runtime.spawn(async move {
+        let watcher = tasks.spawn_named("Discover storage volumes", async move {
             let _ = sender
                 .send(Observation {
                     started: Instant::now(),
@@ -50,7 +116,7 @@ impl Service {
                 })
                 .await;
         });
-        let watcher = AbortOnDropHandle::new(watcher);
+        let watcher = IoTask::cancel_on_drop(watcher);
         let updates = cx.spawn(async move |this, cx| {
             while let Some(observation) = receiver.recv().await {
                 if this
@@ -80,16 +146,19 @@ impl Service {
             snapshot: Snapshot::default(),
             error: None,
             discovering: true,
-            busy: HashMap::new(),
+            busy: Arc::new(Mutex::new(HashMap::new())),
             last_observation,
             usage: super::usage::UsageCache::default(),
-            runtime,
+            tasks,
             _updates: updates,
         }
     }
 
     pub fn is_busy(&self, id: &VolumeId) -> bool {
-        self.busy.contains_key(id)
+        self.busy
+            .lock()
+            .expect("volumes busy lock")
+            .contains_key(id)
     }
 
     pub fn capacity(&self, id: &VolumeId) -> Option<&CapacityState> {
@@ -105,16 +174,19 @@ impl Service {
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.discovering = true;
         let started = Instant::now();
-        let work = AbortOnDropHandle::new(self.runtime.spawn(async {
-            #[cfg(target_os = "linux")]
-            {
-                super::linux::refresh().await
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                Err(Error::Unsupported)
-            }
-        }));
+        let work = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
+            "Refresh storage volumes",
+            async {
+                #[cfg(target_os = "linux")]
+                {
+                    super::linux::refresh().await
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Err(Error::Unsupported)
+                }
+            },
+        ));
         cx.spawn(async move |this, cx| {
             let result = work
                 .await
@@ -131,11 +203,14 @@ impl Service {
     fn sample_capacity(&mut self, cx: &mut Context<Self>) {
         for request in self.usage.requests(&self.snapshot, Instant::now()) {
             let worker_request = request.clone();
-            let work = cx
-                .background_executor()
-                .spawn(async move { worker_request.read() });
+            let work = self
+                .tasks
+                .spawn_blocking_named("Read filesystem capacity", move || worker_request.read());
             cx.spawn(async move |this, cx| {
-                let result = work.await;
+                let result = work
+                    .await
+                    .map_err(|error| super::usage::ReadError::Io(std::io::Error::other(error)))
+                    .and_then(std::convert::identity);
                 let _ = this.update(cx, |service, cx| {
                     if service.usage.finish(request, result, Instant::now()) {
                         cx.notify();
@@ -148,6 +223,8 @@ impl Service {
 
     pub fn removal_in_progress(&self, path: &std::path::Path) -> bool {
         self.busy
+            .lock()
+            .expect("volumes busy lock")
             .values()
             .flatten()
             .any(|root| path.starts_with(root))
@@ -169,7 +246,6 @@ impl Service {
             }
             Err(error) => {
                 self.error = Some(error.to_string());
-                self.snapshot = Snapshot::default();
             }
         }
         if was_discovering || previous_snapshot != self.snapshot || previous_error != self.error {
@@ -189,67 +265,84 @@ impl Service {
         if self.snapshot.volume(action.volume()).is_none() {
             return Err(Error::Disconnected);
         }
-        // Lock all volumes of a drive even for a single-volume operation, so a
-        // concurrent whole-drive removal cannot race mounting another partition.
-        let scope_action = DeviceAction::PowerOff(action.volume().clone());
+        if action.removes() && !self.snapshot.supports_removal(&action) {
+            return Err(Error::Unsupported);
+        }
         let mut scope: Vec<_> = self
             .snapshot
-            .removal_volumes(&scope_action)
+            .removal_volumes(&action)
             .iter()
             .map(|volume| volume.id.clone())
             .collect();
         if scope.is_empty() {
             scope.push(action.volume().clone());
         }
-        if scope.iter().any(|id| self.is_busy(id)) {
-            return Err(Error::Busy);
+        {
+            let mut busy = self.busy.lock().expect("volumes busy lock");
+            if scope.iter().any(|id| busy.contains_key(id)) {
+                return Err(Error::Busy);
+            }
+            for id in &scope {
+                let roots = self
+                    .snapshot
+                    .volume(id)
+                    .map(|volume| volume.mount_points.clone())
+                    .unwrap_or_default();
+                busy.insert(id.clone(), roots);
+            }
         }
-        for id in &scope {
-            let roots = self
-                .snapshot
-                .volume(id)
-                .map(|volume| volume.mount_points.clone())
-                .unwrap_or_default();
-            self.busy.insert(id.clone(), roots);
-        }
+        let guard = BusyGuard {
+            busy: self.busy.clone(),
+            scope,
+        };
         cx.notify();
         let expected = self.snapshot.clone();
-        let work = AbortOnDropHandle::new(self.runtime.spawn(async move {
-            #[cfg(target_os = "linux")]
-            {
-                let result = super::linux::operate(expected, action).await;
-                let started = Instant::now();
-                let snapshot = super::linux::refresh().await;
-                (result, started, snapshot)
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let _ = (expected, action);
-                (
-                    Err(Error::Unsupported),
-                    Instant::now(),
-                    Err(Error::Unsupported),
-                )
-            }
-        }));
-        Ok(cx.spawn(async move |this, cx| {
-            let (result, started, snapshot) = work.await.unwrap_or_else(|error| {
-                let error = Error::Operation(error.to_string());
-                (Err(error.clone()), Instant::now(), Err(error))
-            });
-            let observation = Observation {
-                started,
-                result: snapshot.clone(),
-            };
-            let _ = this.update(cx, |service, cx| {
-                for id in scope {
-                    service.busy.remove(&id);
+        let work = IoTask::cancel_on_drop(self.tasks.spawn_named(
+            "Change volume mount state",
+            async move {
+                #[cfg(target_os = "linux")]
+                {
+                    let mount_point = super::linux::operate(expected, action).await;
+                    let started = Instant::now();
+                    let result = super::linux::refresh().await;
+                    ActionReport {
+                        mount_point,
+                        observation: Observation { started, result },
+                    }
                 }
-                service.apply(observation, cx);
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = (expected, action);
+                    ActionReport {
+                        mount_point: Err(Error::Unsupported),
+                        observation: Observation {
+                            started: Instant::now(),
+                            result: Err(Error::Unsupported),
+                        },
+                    }
+                }
+            },
+        ));
+        Ok(cx.spawn(async move |this, cx| {
+            let guard = guard;
+            let report = work.await.unwrap_or_else(|error| {
+                let error = Error::Operation(error.to_string());
+                ActionReport {
+                    mount_point: Err(error.clone()),
+                    observation: Observation {
+                        started: Instant::now(),
+                        result: Err(error),
+                    },
+                }
+            });
+            drop(guard);
+            let refresh_result = report.observation.result.clone();
+            let _ = this.update(cx, |service, cx| {
+                service.apply(report.observation, cx);
                 cx.notify();
             });
-            let mount_point = result?;
-            snapshot?;
+            let mount_point = report.mount_point?;
+            refresh_result?;
             Ok(OperationOutcome { mount_point })
         }))
     }

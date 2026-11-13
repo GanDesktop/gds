@@ -20,6 +20,7 @@ Requires:       vulkan-loader
 Requires:       xdg-utils
 Requires:       xdg-terminal-exec
 Requires:       xdg-desktop-portal
+Requires:       shared-mime-info
 Requires:       udisks2
 Requires:       python3-gobject
 Requires:       gtk3

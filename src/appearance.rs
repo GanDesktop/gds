@@ -5,7 +5,7 @@ pub mod tokens;
 pub mod typography;
 
 /// Initialize Kit with the system fonts before it probes default typography.
-pub fn init(cx: &mut gpui_kit::App) {
+pub(crate) fn init(cx: &mut gpui_kit::App) {
     #[cfg(target_os = "linux")]
     let seeded = {
         use gpui_kit::component::Theme;

@@ -1,4 +1,8 @@
-use std::{fs::File, path::Path};
+use std::{
+    fs::File,
+    io::{Seek, SeekFrom},
+    path::Path,
+};
 
 use ashpd::desktop::{ResponseError, open_uri::OpenFileRequest};
 
@@ -48,23 +52,37 @@ impl Portal {
     }
 
     /// # Errors
-    /// Reports unavailable files, portal failures and application launch failures.
+    /// Reports unreadable files, portal failures and application launch failures.
     pub(super) async fn open_file(
         &self,
         path: &Path,
+        file: &File,
         mode: OpenMode,
     ) -> Result<OpenOutcome, Error> {
         match mode {
-            OpenMode::ChooseApplication => self.request(path, true).await,
+            OpenMode::ChooseApplication => self.request(path, file, true).await,
             OpenMode::DefaultApplication => {
-                Self::default_or_choose(|ask| self.request(path, ask)).await
+                Self::default_or_choose(path, file, |ask| self.request(path, file, ask)).await
             }
         }
     }
 
+    fn rewind(path: &Path, mut file: &File) -> Result<(), Error> {
+        Seek::seek(&mut file, SeekFrom::Start(0))
+            .map(|_| ())
+            .map_err(|source| Error::Read {
+                path: path.to_owned(),
+                source,
+            })
+    }
+
     /// # Errors
     /// Reports the default-handler error together with a failed application chooser.
-    async fn default_or_choose<F, Fut>(mut send: F) -> Result<OpenOutcome, Error>
+    async fn default_or_choose<F, Fut>(
+        path: &Path,
+        file: &File,
+        mut send: F,
+    ) -> Result<OpenOutcome, Error>
     where
         F: FnMut(bool) -> Fut,
         Fut: std::future::Future<Output = Result<OpenOutcome, Error>>,
@@ -73,6 +91,12 @@ impl Portal {
             Ok(outcome) => Ok(outcome),
             Err(default_error) => {
                 tracing::warn!(%default_error, "default document open failed; asking for another application");
+                if let Err(chooser_error) = Self::rewind(path, file) {
+                    return Err(Error::DefaultAndChooser {
+                        default: Box::new(default_error),
+                        chooser: Box::new(chooser_error),
+                    });
+                }
                 send(true)
                     .await
                     .map_err(|chooser| Error::DefaultAndChooser {
@@ -85,18 +109,15 @@ impl Portal {
 
     /// # Errors
     /// Reports unreadable files, portal availability and application launch failures.
-    async fn request(&self, path: &Path, ask: bool) -> Result<OpenOutcome, Error> {
-        let file = File::open(path).map_err(|source| Error::Read {
-            path: path.to_owned(),
-            source,
-        })?;
+    async fn request(&self, path: &Path, file: &File, ask: bool) -> Result<OpenOutcome, Error> {
+        Self::rewind(path, file)?;
         // OpenFile passes an fd, preserving non-UTF-8 names and asking the desktop
         // to open a document instead of executing the selected file.
         // https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.OpenURI.html
         let response = OpenFileRequest::default()
             .connection(Some(self.connection.clone()))
             .ask(ask)
-            .send_file(&file)
+            .send_file(file)
             .await
             .and_then(|request| request.response());
         match response {

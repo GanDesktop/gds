@@ -90,7 +90,7 @@ struct State {
     revision: u64,
     next_id: u64,
     entries: VecDeque<Entry>,
-    message_bytes: usize,
+    retained_bytes: usize,
     evicted: u64,
     updates: Vec<Sender<()>>,
 }
@@ -137,7 +137,7 @@ impl Store {
         let mut state = self.state();
         state.next_id += 1;
         let id = state.next_id;
-        state.message_bytes += message.len();
+        state.retained_bytes += target.len() + message.len();
         state.entries.push_back(Entry {
             id,
             time: SystemTime::now(),
@@ -145,9 +145,9 @@ impl Store {
             target,
             message,
         });
-        while state.entries.len() > MAX_ENTRIES || state.message_bytes > MAX_MESSAGE_BYTES {
+        while state.entries.len() > MAX_ENTRIES || state.retained_bytes > MAX_MESSAGE_BYTES {
             if let Some(entry) = state.entries.pop_front() {
-                state.message_bytes -= entry.message.len();
+                state.retained_bytes -= entry.target.len() + entry.message.len();
                 state.evicted += 1;
             }
         }
@@ -176,7 +176,7 @@ impl Store {
     pub fn clear(&self) {
         let mut state = self.state();
         state.entries.clear();
-        state.message_bytes = 0;
+        state.retained_bytes = 0;
         state.evicted = 0;
         self.publish(&mut state);
     }
@@ -336,8 +336,8 @@ impl fmt::Write for LimitedText {
     }
 }
 
-/// Strip terminal escape sequences (CSI, OSC and short ESC forms) and controls,
-/// preserving newlines and tabs in diagnostics.
+/// Strip terminal escape sequences (CSI, OSC/DCS/SOS/PM/APC control strings
+/// and short ESC forms) and controls, preserving newlines and tabs in diagnostics.
 fn plain_text(text: &str) -> String {
     plain_text_bounded(text, usize::MAX)
 }
@@ -355,7 +355,7 @@ fn plain_text_bounded(text: &str, max_bytes: usize) -> String {
                         }
                     }
                 }
-                Some(']') => {
+                Some(']' | 'P' | '_' | 'X' | '^') => {
                     while let Some(ch) = chars.next() {
                         if ch == '\u{7}' {
                             break;

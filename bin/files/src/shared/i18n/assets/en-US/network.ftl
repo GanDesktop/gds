@@ -1,9 +1,7 @@
 remote-connect = Connect to server
 remote-connect-action = Connect
 remote-state-unavailable = Cannot access the user state directory
-remote-user = Username (SMB: DOMAIN\user)
 remote-password = Password
-remote-key = SSH private key path (optional)
 remote-passphrase = SSH key passphrase (optional)
 remote-host-new = Trust this SSH host key?
 remote-host-changed = The SSH host key has changed. Trust the new key?
@@ -53,7 +51,6 @@ remote-connecting = Connecting…
 remote-connected = Connected
 remote-disconnected = Not connected
 remote-adding = Adding network location…
-remote-loading-folder = Loading folder…
 remote-saved-locations = Saved network locations
 remote-connected-servers = Connected servers
 remote-mounted-folders = Mounted network folders

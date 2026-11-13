@@ -2,13 +2,13 @@
 
 use gds::ui::field::select as select_field;
 use gds::ui::settings::NumberControl as NumericControl;
-use gds_uim::{component, el};
+use gds_uim::el;
 use gpui_kit::{
     assets::IconName,
     component::{
-        IndexPath, Sizable,
-        button::ButtonVariants,
+        Disableable, IndexPath, Sizable,
         select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+        switch::Switch,
     },
     *,
 };
@@ -16,12 +16,11 @@ use gpui_kit::{
 use crate::entities::preferences::Preferences;
 use crate::widgets::settings::ui::View;
 use gds::ui::button::Button;
-use gds::ui::settings::{
-    SettingActions, SettingControl, SettingDescription, SettingLabel, SettingReset, SettingRow,
-};
+use gds::ui::settings::{SettingActions, SettingControl, SettingLabel, SettingReset, SettingRow};
 use gds::{
+    app::AppExt as _,
     appearance::theme::{BuiltinTheme, ModePreference, SourceKind},
-    i18n::text,
+    i18n::{t, text},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,12 +33,21 @@ pub(super) enum Field {
     SidebarOpacity,
     ShowHidden,
     AutoFocusSearch,
+    ProbeBudget,
     SidebarVolumes,
     Animations,
     RoundedCorners,
+    TerminalEnabled,
+    TagsEnabled,
 }
 
 impl Field {
+    pub const NUMBERS: [Self; 3] = [
+        Self::ContentOpacity,
+        Self::SidebarOpacity,
+        Self::ProbeBudget,
+    ];
+
     pub fn label_id(self) -> &'static str {
         match self {
             Self::RoundedCorners => "appearance-rounded-corners",
@@ -52,15 +60,74 @@ impl Field {
             Self::SidebarOpacity => "sidebar-opacity",
             Self::ShowHidden => "show-hidden",
             Self::AutoFocusSearch => "auto-focus-search",
+            Self::ProbeBudget => "probe-budget",
             Self::SidebarVolumes => "sidebar-show-volumes",
+            Self::TerminalEnabled => "files-terminal-enabled",
+            Self::TagsEnabled => "tags-enabled",
+        }
+    }
+
+    pub fn help_id(self) -> Option<&'static str> {
+        match self {
+            Self::Animations => Some("appearance-animations-help"),
+            Self::ProbeBudget => Some("probe-budget-help"),
+            _ => None,
+        }
+    }
+
+    pub fn switch_id(self) -> &'static str {
+        match self {
+            Self::RoundedCorners => "settings-rounded-corners",
+            Self::Animations => "settings-animations",
+            Self::ShowHidden => "settings-show-hidden",
+            Self::AutoFocusSearch => "settings-auto-focus-search",
+            Self::SidebarVolumes => "settings-sidebar-volumes",
+            Self::TerminalEnabled => "settings-terminal-enabled",
+            Self::TagsEnabled => "tags-enabled",
+            _ => unreachable!("only toggle fields have switch IDs"),
+        }
+    }
+
+    pub fn bool(self, preferences: &Preferences) -> Option<bool> {
+        match self {
+            Self::RoundedCorners => Some(preferences.appearance.rounded_corners),
+            Self::Animations => Some(preferences.animations_enabled.unwrap_or(true)),
+            Self::ShowHidden => Some(preferences.files.show_hidden),
+            Self::AutoFocusSearch => Some(preferences.files.auto_focus_search),
+            Self::SidebarVolumes => Some(preferences.files.sidebar.show_volumes),
+            Self::TerminalEnabled => Some(preferences.terminal_enabled()),
+            Self::TagsEnabled => Some(preferences.tags.enabled),
+            _ => None,
+        }
+    }
+
+    pub fn set_bool(self, preferences: &mut Preferences, value: bool) -> bool {
+        match self {
+            Self::RoundedCorners => {
+                Self::replace(&mut preferences.appearance.rounded_corners, value)
+            }
+            Self::Animations => Self::replace(&mut preferences.animations_enabled, Some(value)),
+            Self::ShowHidden => Self::replace(&mut preferences.files.show_hidden, value),
+            Self::AutoFocusSearch => Self::replace(&mut preferences.files.auto_focus_search, value),
+            Self::SidebarVolumes => {
+                Self::replace(&mut preferences.files.sidebar.show_volumes, value)
+            }
+            Self::TerminalEnabled => Self::replace(&mut preferences.terminal_enabled, Some(value)),
+            Self::TagsEnabled => Self::replace(&mut preferences.tags.enabled, value),
+            _ => unreachable!("only toggle fields set boolean values"),
         }
     }
 
     pub fn is_modified(self, preferences: &Preferences) -> bool {
         let defaults = Preferences::default();
         match self {
-            Self::RoundedCorners => preferences.appearance.rounded_corners,
-            Self::Animations => !preferences.animations_enabled.unwrap_or(true),
+            Self::RoundedCorners => {
+                preferences.appearance.rounded_corners != defaults.appearance.rounded_corners
+            }
+            Self::Animations => {
+                preferences.animations_enabled.unwrap_or(true)
+                    != defaults.animations_enabled.unwrap_or(true)
+            }
             Self::Source => preferences.appearance.source != defaults.appearance.source,
             Self::Custom => false,
             Self::Builtin => preferences.appearance.builtin != defaults.appearance.builtin,
@@ -77,9 +144,12 @@ impl Field {
             Self::AutoFocusSearch => {
                 preferences.files.auto_focus_search != defaults.files.auto_focus_search
             }
+            Self::ProbeBudget => preferences.files.probe_budget != defaults.files.probe_budget,
             Self::SidebarVolumes => {
                 preferences.files.sidebar.show_volumes != defaults.files.sidebar.show_volumes
             }
+            Self::TerminalEnabled => preferences.terminal_enabled() != defaults.terminal_enabled(),
+            Self::TagsEnabled => preferences.tags.enabled != defaults.tags.enabled,
         }
     }
 
@@ -89,7 +159,9 @@ impl Field {
         }
         let defaults = Preferences::default();
         match self {
-            Self::RoundedCorners => preferences.appearance.rounded_corners = false,
+            Self::RoundedCorners => {
+                preferences.appearance.rounded_corners = defaults.appearance.rounded_corners
+            }
             Self::Animations => preferences.animations_enabled = defaults.animations_enabled,
             Self::Source => preferences.appearance.source = defaults.appearance.source,
             Self::Custom => return false,
@@ -105,9 +177,12 @@ impl Field {
             Self::AutoFocusSearch => {
                 preferences.files.auto_focus_search = defaults.files.auto_focus_search
             }
+            Self::ProbeBudget => preferences.files.probe_budget = defaults.files.probe_budget,
             Self::SidebarVolumes => {
                 preferences.files.sidebar.show_volumes = defaults.files.sidebar.show_volumes
             }
+            Self::TerminalEnabled => preferences.terminal_enabled = defaults.terminal_enabled,
+            Self::TagsEnabled => preferences.tags.enabled = defaults.tags.enabled,
         }
         true
     }
@@ -123,6 +198,7 @@ impl Field {
     pub fn number_range(self) -> Option<NumberRange> {
         match self {
             Self::ContentOpacity | Self::SidebarOpacity => Some(PERCENTAGE_RANGE),
+            Self::ProbeBudget => Some(PROBE_BUDGET_RANGE),
             _ => None,
         }
     }
@@ -131,6 +207,7 @@ impl Field {
         match self {
             Self::ContentOpacity => Some(preferences.appearance.content_opacity * 100.0),
             Self::SidebarOpacity => Some(preferences.appearance.sidebar_opacity * 100.0),
+            Self::ProbeBudget => Some(preferences.files.probe_budget as f32),
             _ => None,
         }
     }
@@ -143,6 +220,10 @@ impl Field {
             Self::SidebarOpacity => {
                 Self::replace(&mut preferences.appearance.sidebar_opacity, value / 100.0)
             }
+            Self::ProbeBudget => Self::replace(
+                &mut preferences.files.probe_budget,
+                value.round().max(0.0) as usize,
+            ),
             _ => unreachable!("only numeric fields own numeric controls"),
         }
     }
@@ -195,18 +276,14 @@ impl<T: Clone + PartialEq> SelectItem for Choice<T> {
 impl Choice<SourceKind> {
     pub fn catalog(system_available: bool, cx: &App) -> Vec<Self> {
         vec![
-            Self::new(SourceKind::System, text("theme-system", cx), "system 系统")
+            Self::new(SourceKind::System, t!(@cx, "theme-system"), "system 系统")
                 .disabled(!system_available),
             Self::new(
                 SourceKind::Builtin,
-                text("theme-builtin", cx),
+                t!(@cx, "theme-builtin"),
                 "builtin 内置",
             ),
-            Self::new(
-                SourceKind::Custom,
-                text("theme-custom", cx),
-                "custom 自定义",
-            ),
+            Self::new(SourceKind::Custom, t!(@cx, "theme-custom"), "custom 自定义"),
         ]
     }
 }
@@ -216,7 +293,7 @@ impl Choice<std::path::PathBuf> {
         entries: &[gds::appearance::theme::provider::custom::Entry],
         cx: &App,
     ) -> Vec<Self> {
-        let locale = gds::i18n::language(cx).locale();
+        let locale = cx.gds().i18n().language().locale();
         entries
             .iter()
             .map(|entry| {
@@ -244,11 +321,11 @@ impl Choice<ModePreference> {
         vec![
             Self::new(
                 ModePreference::System,
-                text("theme-mode-system", cx),
+                t!(@cx, "theme-mode-system"),
                 "system automatic 系统",
             ),
-            Self::new(ModePreference::Light, text("theme-light", cx), "light 浅色"),
-            Self::new(ModePreference::Dark, text("theme-dark", cx), "dark 深色"),
+            Self::new(ModePreference::Light, t!(@cx, "theme-light"), "light 浅色"),
+            Self::new(ModePreference::Dark, t!(@cx, "theme-dark"), "dark 深色"),
         ]
     }
 }
@@ -329,6 +406,12 @@ impl<T: Clone + PartialEq + 'static> ChoiceControl<T> {
 
 pub(super) use gds::ui::settings::{CONTROL_WIDTH, NumberRange, PERCENTAGE_RANGE};
 
+pub(super) const PROBE_BUDGET_RANGE: NumberRange = NumberRange {
+    min: 0.0,
+    max: 2048.0,
+    step: 32.0,
+};
+
 pub(super) struct NumberControl(NumericControl);
 impl std::ops::Deref for NumberControl {
     type Target = NumericControl;
@@ -356,47 +439,62 @@ impl NumberControl {
 }
 
 impl View {
+    pub(super) fn toggle_row(
+        &self,
+        field: Field,
+        disabled: bool,
+        cx: &mut Context<View>,
+    ) -> SettingRow {
+        let checked = field
+            .bool(&self.preferences)
+            .expect("toggle rows use boolean fields");
+        let label = text(field.label_id(), cx);
+        let id = field.switch_id();
+        let on_change = cx.listener(Self::on_toggle_change(field));
+        let control = el! {
+            id.Switch::new {
+                small;
+                checked: checked;
+                disabled: disabled;
+                accessibility_label: label;
+                on_change: on_change;
+            }
+        };
+        self.setting_row(field, control, cx)
+    }
+
     pub(super) fn setting_row(
         &self,
         field: Field,
         control: impl IntoElement,
         cx: &mut Context<View>,
     ) -> SettingRow {
-        let reset = if field.is_modified(&self.preferences) {
-            let label = text("settings-reset-default", cx);
+        let mut title = div()
+            .id(("settings-title", field as usize))
+            .child(text(field.label_id(), cx));
+        if let Some(help_id) = field.help_id() {
+            let help = text(help_id, cx);
+            title = title.hoverable_tooltip(move |window, cx| {
+                gds::ui::tooltip::view(help.clone(), window, cx)
+            });
+        }
+        let reset = field.is_modified(&self.preferences).then(|| {
+            let label = t!(@cx, "settings-reset-default");
             let on_reset = cx.listener(View::on_reset(field));
-            Some(el! {
-                $("settings-reset", field as usize).Button::new {
-                    ghost; small; icon: IconName::RotateCcw;
-                    accessibility_label: ~label;
-                    tooltip: label;
-                    on_click: on_reset;
-                }
-            })
-        } else {
-            None
-        };
+            Button::icon_button(("settings-reset", field as usize))
+                .control_icon(IconName::RotateCcw)
+                .accessibility_label(label.clone())
+                .tooltip(label)
+                .on_click(on_reset)
+        });
         el! {
             .SettingRow::default [
-                .SettingLabel::default [$text(field.label_id(), cx)],
+                .SettingLabel::default [title],
                 .SettingActions::default [
                     .SettingReset::default [..reset],
                     .SettingControl::default [control],
                 ],
             ]
         }
-    }
-}
-
-#[component]
-#[derive(Default, IntoElement)]
-pub(super) struct SettingNote {
-    #[attr(into)]
-    message: SharedString,
-}
-
-impl RenderOnce for SettingNote {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        el! { .SettingDescription::default [$self.message] }
     }
 }

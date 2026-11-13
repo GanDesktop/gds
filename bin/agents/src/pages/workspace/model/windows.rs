@@ -1,11 +1,11 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use bas::service::tls::ConnectionOptions as Target;
+use gds::service::task_manager::Scope;
 use gpui_kit::{
     App, AppContext, Bounds, Global, WindowBounds, WindowHandle, WindowKind, WindowOptions,
     component::Root, prelude::*, transparent_black,
 };
-use tokio::runtime::Handle;
 
 mod host;
 pub(crate) use host::bind_page_keys;
@@ -13,7 +13,7 @@ pub(crate) use host::{Host as WorkspaceHost, workspace_view};
 
 #[derive(Clone)]
 struct Launch {
-    runtime: Handle,
+    tasks: Scope,
     cwd: PathBuf,
     compact: bool,
 }
@@ -69,9 +69,9 @@ pub(crate) fn close_all(cx: &mut App) -> Vec<gpui_kit::AnyView> {
     closed
 }
 
-pub(crate) fn init_windows(runtime: Handle, cwd: PathBuf, compact: bool, cx: &mut App) {
+pub(crate) fn init_windows(tasks: Scope, cwd: PathBuf, compact: bool, cx: &mut App) {
     cx.set_global(Launch {
-        runtime,
+        tasks,
         cwd,
         compact,
     });
@@ -112,12 +112,12 @@ pub(crate) fn window_options(compact: bool, cx: &App) -> WindowOptions {
 /// Opens or activates this backend's window without repurposing another backend's drafts.
 ///
 /// # Errors
-/// Returns a missing-runtime or platform window error without changing management context.
+/// Reports an unavailable task service or platform window error without changing management context.
 pub(crate) fn open_for(target: Target, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     let launch = cx
         .try_global::<Launch>()
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("The workspace runtime is unavailable"))?;
+        .ok_or_else(|| anyhow::anyhow!("The workspace task service is unavailable"))?;
     if let Some(handle) = cx
         .try_global::<Windows>()
         .and_then(|windows| windows.0.get(&target))
@@ -142,7 +142,7 @@ pub(crate) fn open_for(target: Target, cx: &mut App) -> anyhow::Result<WindowHan
                 target.clone(),
                 launch.cwd,
                 launch.compact,
-                &launch.runtime,
+                &launch.tasks,
                 window,
                 cx,
             )

@@ -29,7 +29,7 @@ pub struct Observer {
 impl EventEmitter<Change> for Observer {}
 
 impl Observer {
-    pub fn shared(cx: &mut App) -> Entity<Self> {
+    pub(crate) fn shared(cx: &mut App) -> Entity<Self> {
         if let Some(shared) = cx.try_global::<Shared>() {
             return shared.0.clone();
         }
@@ -69,7 +69,7 @@ impl Observer {
     }
 
     /// Register one window without transferring ownership of the process watcher to it.
-    pub fn attach(window: &mut Window, cx: &mut App) {
+    pub(crate) fn attach(window: &mut Window, cx: &mut App) {
         let observer = Self::shared(cx);
         let id = window.window_handle().window_id();
         let attached = observer.update(cx, |observer, cx| {
