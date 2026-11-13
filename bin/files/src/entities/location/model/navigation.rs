@@ -42,6 +42,7 @@ pub struct LoadRequest {
     path: Option<PathBuf>,
     options: ReadOptions,
     destination: Destination,
+    record_recent: bool,
 }
 
 impl LoadRequest {
@@ -55,6 +56,9 @@ impl LoadRequest {
     }
     pub fn location(&self) -> &Location {
         &self.location
+    }
+    pub fn records_recent(&self) -> bool {
+        self.record_recent
     }
     /// Read the requested local directory with full synchronous metadata.
     ///
@@ -270,7 +274,7 @@ impl<V: Default> Navigation<V> {
         path: Option<PathBuf>,
         options: ReadOptions,
     ) -> LoadRequest {
-        self.begin(location, path, options, Destination::Open)
+        self.begin(location, path, options, Destination::Open, true)
     }
     pub fn prepare_history(
         &mut self,
@@ -282,10 +286,42 @@ impl<V: Default> Navigation<V> {
             return None;
         }
         let location = self.history.get(index)?.location.clone();
-        Some(self.begin(location, path, options, Destination::History { index }))
+        Some(self.begin(
+            location,
+            path,
+            options,
+            Destination::History { index },
+            true,
+        ))
+    }
+    pub fn prepare_initial(
+        &mut self,
+        path: Option<PathBuf>,
+        options: ReadOptions,
+        record_recent: bool,
+    ) -> LoadRequest {
+        self.begin(
+            self.location().clone(),
+            path,
+            options,
+            Destination::Refresh,
+            record_recent,
+        )
     }
     pub fn prepare_refresh(&mut self, path: Option<PathBuf>, options: ReadOptions) -> LoadRequest {
-        self.begin(self.location().clone(), path, options, Destination::Refresh)
+        // Preserve a still-pending visit marker if a refresh supersedes an in-flight
+        // load of the same location before it commits (e.g. desktop reveal requests).
+        let record_recent = self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.record_recent && pending.location == *self.location());
+        self.begin(
+            self.location().clone(),
+            path,
+            options,
+            Destination::Refresh,
+            record_recent,
+        )
     }
     pub fn cancel_pending(&mut self) {
         self.pending = None;
@@ -354,6 +390,7 @@ impl<V: Default> Navigation<V> {
         path: Option<PathBuf>,
         options: ReadOptions,
         destination: Destination,
+        record_recent: bool,
     ) -> LoadRequest {
         let request = LoadRequest {
             id: NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
@@ -361,6 +398,7 @@ impl<V: Default> Navigation<V> {
             path,
             options,
             destination,
+            record_recent,
         };
         self.revision = request.id;
         self.pending = Some(request.clone());

@@ -145,6 +145,18 @@ impl Save {
 }
 
 impl Places {
+    #[cfg(all(test, feature = "gui-tests"))]
+    pub(crate) fn for_tests(pinned: Vec<Location>, recent: Vec<Location>) -> Self {
+        Self {
+            snapshot: Snapshot {
+                pinned,
+                recent,
+                ..Snapshot::default()
+            },
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn shutdown(&self) -> Option<Shutdown> {
         Some(Shutdown {
             store: Arc::downgrade(self.store.as_ref()?),

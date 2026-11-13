@@ -53,6 +53,11 @@ impl View {
         let task = cx.spawn(async move |view, cx| {
             loop {
                 if *updates.borrow() {
+                    // Completion may drop between subscribing/observing and polling this loop.
+                    let _ = view.update(cx, |view, cx| {
+                        view.cursor_on = true;
+                        cx.notify();
+                    });
                     break;
                 }
                 if updates.changed().await.is_err() {

@@ -1,7 +1,8 @@
 use super::{
-    Browser, Command, FilesExt as _, InputEvent, KeyDownEvent, Keystroke, LaunchOptions, Modifiers,
-    configuration, directory, pages, px, size, sorting, tokens,
+    Browser, Command, FilesExt as _, InputEvent, KeyDownEvent, Keystroke, LaunchOptions, Location,
+    Modifiers, configuration, directory, pages, px, size, sorting, tokens,
 };
+use crate::entities::location::places::Places;
 use gds::app::AppExt as _;
 use gpui_kit::{
     AppContext, Entity, TestAppContext, Window, WindowHandle, component::Root, test::TestWindowExt,
@@ -48,10 +49,16 @@ fn init_test_workspace(cx: &mut TestAppContext) {
 fn open_test_browser(
     cx: &mut TestAppContext,
     home: PathBuf,
-    places: Result<
-        crate::entities::location::places::Places,
-        crate::entities::location::places::Error,
-    >,
+    places: Result<Places, crate::entities::location::places::Error>,
+) -> (WindowHandle<Root>, Entity<Browser>) {
+    open_test_browser_at(cx, home.clone(), home, places)
+}
+
+fn open_test_browser_at(
+    cx: &mut TestAppContext,
+    start: PathBuf,
+    home: PathBuf,
+    places: Result<Places, crate::entities::location::places::Error>,
 ) -> (WindowHandle<Root>, Entity<Browser>) {
     let mut browser = None;
     let window = cx.open_window(size(px(1280.), px(800.)), |window, cx| {
@@ -59,7 +66,7 @@ fn open_test_browser(
             Browser::new(
                 LaunchOptions {
                     places,
-                    start: home.clone(),
+                    start,
                     home,
                     picker: None,
                 },
@@ -71,6 +78,27 @@ fn open_test_browser(
         Root::new(view, window, cx)
     });
     (window, browser.expect("browser entity created"))
+}
+
+fn wait_for_tabs_loaded(
+    cx: &mut TestAppContext,
+    window: WindowHandle<Root>,
+    browser: &Entity<Browser>,
+) {
+    wait_for_browser(cx, window, browser, |view, _| {
+        !view.tabs.items.is_empty()
+            && view.tabs.items.iter().all(|slot| {
+                !slot.is_loading()
+                    && (slot.path().is_none() || slot.navigation.directory().is_some())
+            })
+    });
+}
+
+async fn close_test_browser(cx: &mut TestAppContext, window: WindowHandle<Root>) {
+    let scope = cx.update(|cx| cx.gds_ro().tasks().scope());
+    cx.update_window(window.into(), |_, window, _| window.remove_window())
+        .expect("remove test window");
+    scope.shutdown().await;
 }
 
 fn wait_for_browser(
@@ -889,8 +917,278 @@ async fn size_sort_enrichment_and_viewport_priority_settle_order_selection_and_r
     })
     .expect("verify revision safety after navigation");
 
-    let scope = cx.update(|cx| cx.gds_ro().tasks().scope());
-    cx.update_window(window.into(), |_, window, _| window.remove_window())
-        .expect("remove test window");
-    scope.shutdown().await;
+    close_test_browser(cx, window).await;
+}
+
+#[gpui_kit::test]
+async fn opening_window_with_pinned_tabs_does_not_record_pins_or_reorder_recent(
+    cx: &mut TestAppContext,
+) {
+    init_test_workspace(cx);
+    let temp = tempfile::tempdir().expect("create temporary workspace directory");
+    let home = temp.path().join("home");
+    let pinned_a = temp.path().join("pinned-a");
+    let pinned_b = temp.path().join("pinned-b");
+    let prior_recent = temp.path().join("prior-recent");
+    for dir in [&home, &pinned_a, &pinned_b, &prior_recent] {
+        std::fs::create_dir_all(dir).expect("create test directory");
+    }
+    std::fs::write(pinned_a.join("alpha.txt"), b"a").expect("write pinned-a file");
+    std::fs::write(pinned_b.join("beta.txt"), b"b").expect("write pinned-b file");
+
+    let places = Places::for_tests(
+        vec![
+            Location::from(&pinned_a),
+            Location::from(&pinned_b),
+            Location::Trash,
+        ],
+        vec![Location::from(&prior_recent), Location::from(&pinned_a)],
+    );
+
+    let (window, browser) = open_test_browser_at(cx, home.clone(), home.clone(), Ok(places));
+    wait_for_tabs_loaded(cx, window, &browser);
+
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let view = browser.read(cx);
+        assert_eq!(view.tabs.items.len(), 4);
+        assert!(view.tabs.items[0].pinned);
+        assert!(view.tabs.items[1].pinned);
+        assert!(view.tabs.items[2].pinned);
+        assert!(!view.tabs.items[3].pinned);
+        assert_eq!(view.tabs.active_id, view.tabs.items[3].id);
+        assert_eq!(view.current_path().as_deref(), Some(home.as_path()));
+        // Restoring pinned tabs must neither append unvisited pins nor re-promote
+        // previously visited pins ahead of newer recent entries; unpinned `start`
+        // is still recorded.
+        assert_eq!(
+            view.locations.places.recent,
+            vec![
+                Location::from(&home),
+                Location::from(&prior_recent),
+                Location::from(&pinned_a),
+            ]
+        );
+    })
+    .expect("verify initial recent list with unpinned start tab");
+
+    // Background file-operation refreshes and manual Refresh must not record
+    // unvisited pinned tabs either.
+    std::fs::write(pinned_b.join("created.txt"), b"new").expect("write new file in pinned-b");
+    cx.update_window(window.into(), |_, window, cx| {
+        browser.update(cx, |browser, cx| {
+            browser.refresh_after_file_operation(&[pinned_b.join("created.txt")], cx);
+            browser.dispatch(Command::Refresh, window, cx);
+        });
+    })
+    .expect("trigger background and active refreshes");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.tabs.items.iter().all(|slot| !slot.is_loading())
+            && view.tabs.items[1]
+                .table_rows
+                .iter()
+                .any(|entry| entry.display_name == "created.txt")
+    });
+
+    cx.update_window(window.into(), |_, _, cx| {
+        assert_eq!(
+            browser.read(cx).locations.places.recent,
+            vec![
+                Location::from(&home),
+                Location::from(&prior_recent),
+                Location::from(&pinned_a),
+            ]
+        );
+    })
+    .expect("verify recent list unchanged after background and manual refreshes");
+
+    close_test_browser(cx, window).await;
+}
+
+#[gpui_kit::test]
+async fn opening_window_when_start_matches_pinned_tab_activates_it_without_recording_recent(
+    cx: &mut TestAppContext,
+) {
+    init_test_workspace(cx);
+    let temp = tempfile::tempdir().expect("create temporary workspace directory");
+    let home = temp.path().join("home");
+    let pinned_b = temp.path().join("pinned-b");
+    std::fs::create_dir_all(&home).expect("create home directory");
+    std::fs::create_dir_all(&pinned_b).expect("create second pinned directory");
+    std::fs::write(home.join("visible.txt"), b"v").expect("write visible file");
+    std::fs::write(home.join(".hidden.txt"), b"h").expect("write hidden file");
+    std::fs::write(pinned_b.join("other.txt"), b"o").expect("write other file");
+
+    let places = Places::for_tests(
+        vec![Location::from(&home), Location::from(&pinned_b)],
+        Vec::new(),
+    );
+
+    let (window, browser) = open_test_browser_at(cx, home.clone(), home.clone(), Ok(places));
+    wait_for_tabs_loaded(cx, window, &browser);
+
+    cx.update_window(window.into(), |_, _, cx| {
+        let view = browser.read(cx);
+        assert_eq!(view.tabs.items.len(), 2);
+        assert!(view.tabs.items.iter().all(|tab| tab.pinned));
+        assert_eq!(view.tabs.active_id, view.tabs.items[0].id);
+        assert_eq!(view.current_path().as_deref(), Some(home.as_path()));
+        assert!(view.locations.places.recent.is_empty());
+        assert!(!view.locations.places.has_pending());
+    })
+    .expect("verify matching pinned start tab activates without recording recent");
+
+    // Refreshing the active pinned tab (F5 / hidden-files reload) also must not
+    // record it into recent or queue a places write.
+    cx.update_window(window.into(), |_, window, cx| {
+        browser.update(cx, |browser, cx| {
+            browser.dispatch(Command::Refresh, window, cx);
+            browser.settings.preferences.files.show_hidden = true;
+            browser.refresh_if_hidden_changed(cx);
+        });
+    })
+    .expect("refresh active pinned tab and reload with hidden files");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.tabs.items.iter().all(|slot| !slot.is_loading())
+            && view.active().is_some_and(|slot| {
+                slot.table_rows
+                    .iter()
+                    .any(|entry| entry.display_name == ".hidden.txt")
+            })
+    });
+
+    cx.update_window(window.into(), |_, window, cx| {
+        let view = browser.read(cx);
+        assert!(view.locations.places.recent.is_empty());
+        assert!(!view.locations.places.has_pending());
+        window.render_frame(cx);
+    })
+    .expect("verify recent still empty after active pinned tab refreshes");
+
+    close_test_browser(cx, window).await;
+}
+
+#[gpui_kit::test]
+async fn navigating_inside_pinned_tab_and_explicit_opens_record_to_recent(cx: &mut TestAppContext) {
+    init_test_workspace(cx);
+    let temp = tempfile::tempdir().expect("create temporary workspace directory");
+    let home = temp.path().join("home");
+    let pinned_a = temp.path().join("pinned-a");
+    let pinned_child = pinned_a.join("child");
+    let other_dir = temp.path().join("other");
+    let new_tab_dir = temp.path().join("new-tab");
+    for dir in [&home, &pinned_a, &pinned_child, &other_dir, &new_tab_dir] {
+        std::fs::create_dir_all(dir).expect("create test directory");
+    }
+
+    let places = Places::for_tests(vec![Location::from(&pinned_a)], Vec::new());
+
+    let (window, browser) = open_test_browser_at(cx, pinned_a.clone(), home, Ok(places));
+    wait_for_tabs_loaded(cx, window, &browser);
+
+    cx.update_window(window.into(), |_, _, cx| {
+        assert!(browser.read(cx).locations.places.recent.is_empty());
+    })
+    .expect("verify empty recent after restoring active pinned tab");
+
+    // 1. Navigating into a child folder inside the pinned tab records the child.
+    cx.update_window(window.into(), |_, _, cx| {
+        browser.update(cx, |browser, cx| {
+            browser.navigate(pinned_child.clone(), cx);
+        });
+    })
+    .expect("navigate into child folder of pinned tab");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        !view.tabs.items.iter().any(|slot| slot.is_loading())
+            && view.current_path().as_deref() == Some(pinned_child.as_path())
+    });
+    cx.update_window(window.into(), |_, _, cx| {
+        assert_eq!(
+            browser.read(cx).locations.places.recent,
+            vec![Location::from(&pinned_child)]
+        );
+    })
+    .expect("verify child folder inside pinned tab recorded in recent");
+
+    // 2. History Back navigation records the destination visited by the user.
+    cx.update_window(window.into(), |_, window, cx| {
+        browser.update(cx, |browser, cx| {
+            browser.dispatch(Command::Back, window, cx);
+        });
+    })
+    .expect("navigate back to pinned-a");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        !view.tabs.items.iter().any(|slot| slot.is_loading())
+            && view.current_path().as_deref() == Some(pinned_a.as_path())
+    });
+    cx.update_window(window.into(), |_, _, cx| {
+        assert_eq!(
+            browser.read(cx).locations.places.recent,
+            vec![Location::from(&pinned_a), Location::from(&pinned_child)]
+        );
+    })
+    .expect("verify Back navigation recorded in recent");
+
+    // 3. Explicit sidebar/location navigation records the visited folder.
+    cx.update_window(window.into(), |_, window, cx| {
+        browser.update(cx, |browser, cx| {
+            browser.show_location(Location::from(&other_dir), window, cx);
+        });
+    })
+    .expect("navigate explicitly to other_dir");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        !view.tabs.items.iter().any(|slot| slot.is_loading())
+            && view.current_path().as_deref() == Some(other_dir.as_path())
+    });
+    cx.update_window(window.into(), |_, _, cx| {
+        assert_eq!(
+            browser.read(cx).locations.places.recent,
+            vec![
+                Location::from(&other_dir),
+                Location::from(&pinned_a),
+                Location::from(&pinned_child),
+            ]
+        );
+    })
+    .expect("verify explicit show_location recorded in recent");
+
+    // 4. Opening a folder in a new tab via UI records the opened folder, and
+    // switching tabs leaves recent untouched.
+    let first_tab_id = cx
+        .update_window(window.into(), |_, window, cx| {
+            let first_id = browser.read(cx).tabs.items[0].id;
+            browser.update(cx, |browser, cx| {
+                browser.open_location_tab(Location::from(&new_tab_dir), false, Some(window), cx);
+            });
+            first_id
+        })
+        .expect("open new_tab_dir in new unpinned tab");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        !view.tabs.items.iter().any(|slot| slot.is_loading())
+            && view.current_path().as_deref() == Some(new_tab_dir.as_path())
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        assert_eq!(
+            browser.read(cx).locations.places.recent,
+            vec![
+                Location::from(&new_tab_dir),
+                Location::from(&other_dir),
+                Location::from(&pinned_a),
+                Location::from(&pinned_child),
+            ]
+        );
+        browser.update(cx, |browser, cx| {
+            browser.switch_tab(first_tab_id, window, cx);
+        });
+        assert_eq!(browser.read(cx).locations.places.recent.len(), 4);
+    })
+    .expect("verify open_location_tab recorded and switch_tab did not duplicate");
+
+    close_test_browser(cx, window).await;
 }

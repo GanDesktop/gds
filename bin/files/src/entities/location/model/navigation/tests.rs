@@ -84,3 +84,63 @@ fn base_directory_loads_share_arc_snapshots_and_accept_in_place_updates() {
         })
     );
 }
+
+#[test]
+fn load_requests_track_recent_visit_intent_across_initial_refresh_and_navigation() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    let pinned_dir = root.path().join("pinned");
+    let child_dir = pinned_dir.join("child");
+    std::fs::create_dir_all(&child_dir).expect("create pinned and child directories");
+
+    let initial_location = Location::from(pinned_dir.as_path());
+    let child_location = Location::from(child_dir.as_path());
+    let mut navigation = Navigation::<()>::new(initial_location.clone(), Some(pinned_dir.clone()));
+
+    let restored =
+        navigation.prepare_initial(Some(pinned_dir.clone()), ReadOptions::default(), false);
+    assert!(!restored.records_recent());
+
+    let refresh_pending_restore =
+        navigation.prepare_refresh(Some(pinned_dir.clone()), ReadOptions::default());
+    assert!(!refresh_pending_restore.records_recent());
+
+    let restored_snapshot = refresh_pending_restore
+        .load()
+        .expect("load restored pinned directory");
+    assert_eq!(
+        navigation
+            .finish_load(&refresh_pending_restore, Ok(restored_snapshot))
+            .expect("commit restored tab"),
+        LoadOutcome::Applied
+    );
+
+    let later_refresh =
+        navigation.prepare_refresh(Some(pinned_dir.clone()), ReadOptions::default());
+    assert!(!later_refresh.records_recent());
+
+    let user_open = navigation.prepare_open(
+        child_location,
+        Some(child_dir.clone()),
+        ReadOptions::default(),
+    );
+    assert!(user_open.records_recent());
+    let child_snapshot = user_open.load().expect("load child directory");
+    assert_eq!(
+        navigation
+            .finish_load(&user_open, Ok(child_snapshot))
+            .expect("commit child navigation"),
+        LoadOutcome::Applied
+    );
+
+    let back = navigation
+        .prepare_history(0, Some(pinned_dir.clone()), ReadOptions::default())
+        .expect("prepare back navigation");
+    assert!(back.records_recent());
+
+    let mut opened_tab = Navigation::<()>::new(initial_location, Some(pinned_dir.clone()));
+    let user_tab =
+        opened_tab.prepare_initial(Some(pinned_dir.clone()), ReadOptions::default(), true);
+    assert!(user_tab.records_recent());
+    let refresh_pending_open = opened_tab.prepare_refresh(Some(pinned_dir), ReadOptions::default());
+    assert!(refresh_pending_open.records_recent());
+}

@@ -790,15 +790,21 @@ impl Browser {
             notifications::error(error, cx);
         }
         for location in this.locations.places.pinned.clone() {
-            this.open_location_tab(location, true, Some(window), cx);
+            this.restore_pinned_tab(location, cx);
         }
-        if let Some(tab) = this
+        let start_location = this.resolve_location(&Location::from(&start), cx).location;
+        if let Some((index, id)) = this
             .tabs
             .items
             .iter()
-            .find(|tab| tab.path() == Some(start.as_path()))
+            .enumerate()
+            .find(|(_, tab)| {
+                tab.path() == Some(start.as_path()) || tab.location() == start_location
+            })
+            .map(|(index, tab)| (index, tab.id))
         {
-            this.tabs.active_id = tab.id;
+            this.activate_tab_chrome(index, id, Some(window), cx);
+            this.enter_location(cx);
         } else {
             this.open_tab(start, false, window, cx);
         }
@@ -1008,6 +1014,61 @@ impl Browser {
         self.open_location_tab(Location::from(&path), pinned, window, cx);
     }
 
+    fn append_location_tab(
+        &mut self,
+        location: Location,
+        pinned: bool,
+        cx: &App,
+    ) -> (usize, u64, Option<PathBuf>) {
+        let resolved = self.resolve_location(&location, cx);
+        let id = self.tabs.next_id;
+        self.tabs.next_id += 1;
+        let mut slot = OpenTab::new(id, resolved.location, resolved.path.clone(), pinned);
+        slot.set_device(resolved.device);
+        slot.picker = self.picker_projection();
+        self.tabs.items.push(slot);
+        (self.tabs.items.len() - 1, id, resolved.path)
+    }
+
+    fn activate_tab_chrome(
+        &mut self,
+        index: usize,
+        id: u64,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        self.tabs.active_id = id;
+        self.pages.clear();
+        self.toolbar.finish_path_edit();
+        self.sidebar.regions.tabs_scroll.scroll_to_item(index);
+        if let Some(window) = window {
+            self.sync_filter_input(window, cx);
+            self.window.focus.focus(window, cx);
+        }
+    }
+
+    fn start_initial_tab_load(
+        &mut self,
+        id: u64,
+        path: Option<PathBuf>,
+        record_recent: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let options = self.read_options(id);
+        let Some(slot) = self.tab_slot_mut(id) else {
+            return;
+        };
+        let request = slot
+            .navigation
+            .prepare_initial(path, options, record_recent);
+        self.start_request(id, request, cx);
+    }
+
+    fn restore_pinned_tab(&mut self, location: Location, cx: &mut Context<Self>) {
+        let (_, id, path) = self.append_location_tab(location, true, cx);
+        self.start_initial_tab_load(id, path, false, cx);
+    }
+
     fn open_location_tab(
         &mut self,
         location: Location,
@@ -1015,26 +1076,9 @@ impl Browser {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        let resolved = self.resolve_location(&location, cx);
-        let id = self.tabs.next_id;
-        self.tabs.next_id += 1;
-        let mut slot = OpenTab::new(id, resolved.location, resolved.path, pinned);
-        slot.set_device(resolved.device);
-        slot.picker = self.picker_projection();
-        self.tabs.items.push(slot);
-        self.tabs.active_id = id;
-        self.pages.clear();
-        self.toolbar.finish_path_edit();
-        self.sidebar
-            .regions
-            .tabs_scroll
-            .scroll_to_item(self.tabs.items.len() - 1);
-        if let Some(window) = window {
-            self.sync_filter_input(window, cx);
-            self.window.focus.focus(window, cx);
-        }
-
-        self.refresh_tab(id, cx);
+        let (index, id, path) = self.append_location_tab(location, pinned, cx);
+        self.activate_tab_chrome(index, id, window, cx);
+        self.start_initial_tab_load(id, path, true, cx);
     }
 
     fn start_request(&mut self, id: u64, request: LoadRequest, cx: &mut Context<Self>) {
@@ -1122,15 +1166,22 @@ impl Browser {
                 slot.sort = columns::sort_for(&slot.location(), &self.locations.places);
                 slot.refresh_visible();
                 slot.restore_scroll();
-                let location = slot
-                    .path()
-                    .map(Location::from)
-                    .unwrap_or_else(|| slot.location());
-                self.locations.places.record(location);
+                let mut places_changed = false;
+                if request.records_recent() {
+                    let location = slot
+                        .path()
+                        .map(Location::from)
+                        .unwrap_or_else(|| slot.location());
+                    self.locations.places.record(location);
+                    places_changed = true;
+                }
                 if pin_changed {
                     self.sync_pinned();
+                    places_changed = true;
                 }
-                self.save_places(cx);
+                if places_changed {
+                    self.save_places(cx);
+                }
             }
             Err(error) if error.is_cancelled() => return,
             Err(error) => report_load_failure(error.to_string(), cx),

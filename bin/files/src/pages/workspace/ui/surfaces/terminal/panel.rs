@@ -109,7 +109,13 @@ impl Panel {
         self.next_id += 1;
         let preferences = self.preferences.clone();
         let terminal = cx.new(|cx| Terminal::new(cwd, preferences, window, cx));
-        let subscription = cx.subscribe(&terminal, |_, _, _: &terminal::Event, cx| cx.notify());
+        let subscription = cx.subscribe_in(
+            &terminal,
+            window,
+            move |panel, terminal, _: &terminal::Event, window, cx| {
+                panel.on_terminal_event(id, &terminal, window, cx);
+            },
+        );
         self.entries.push(Entry {
             id,
             terminal: terminal.clone(),
@@ -407,6 +413,36 @@ impl Panel {
         cx.notify();
     }
 
+    fn should_auto_close(status: &terminal::Status) -> bool {
+        // Interactive shells exit Ctrl+D with `$?` and `signal: None`, so non-zero
+        // exit codes from a prior command still close; launch/I/O failures and
+        // signal terminations remain visible.
+        matches!(
+            status,
+            terminal::Status::Exited { signal: None, .. } | terminal::Status::Closed
+        )
+    }
+
+    fn on_terminal_event(
+        &mut self,
+        id: u64,
+        terminal: &Entity<Terminal>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.sealed
+            && self
+                .entries
+                .iter()
+                .any(|entry| entry.id == id && !entry.closing)
+            && Self::should_auto_close(&terminal.read(cx).status(cx))
+        {
+            self.close_approved(id, window, cx);
+            return;
+        }
+        cx.notify();
+    }
+
     fn request_close(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.close_approved(id, window, cx);
     }
@@ -517,6 +553,8 @@ impl Panel {
         let Some(index) = self.entries.iter().position(|entry| entry.id == id) else {
             return;
         };
+        let tabs_focused =
+            self.tabs_focus.is_focused(window) || self.tabs_focus.contains_focused(window, cx);
         let focused = self.contains_focus(window, cx);
         let was_active = self.active == Some(id);
         self.entries.remove(index);
@@ -526,7 +564,11 @@ impl Panel {
                 .get(index.min(self.entries.len().saturating_sub(1)))
                 .map(|entry| entry.id);
             if focused {
-                self.tabs_focus.focus(window, cx);
+                if tabs_focused {
+                    self.tabs_focus.focus(window, cx);
+                } else {
+                    self.focus(window, cx);
+                }
             }
         }
         cx.notify();
