@@ -411,7 +411,9 @@ impl Step {
             }
             Self::Trash { path, .. } => {
                 self.verify_trash()?;
-                Ok(Self::Restore(recycle::trash_cancellable(path, cancel)?.entry?))
+                Ok(Self::Restore(
+                    recycle::trash_cancellable(path, cancel)?.entry?,
+                ))
             }
             Self::Restore(entry) => {
                 let outcome = recycle::perform_cancellable(

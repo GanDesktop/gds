@@ -74,9 +74,9 @@ impl Browser {
         let language_changed = preferences.language != self.settings.preferences.language;
         let hidden_changed =
             preferences.files.show_hidden != self.settings.preferences.files.show_hidden;
-        let enrichment_changed =
-            preferences.files.probe_budget != self.settings.preferences.files.probe_budget
-                || preferences.files.enrichment != self.settings.preferences.files.enrichment;
+        let enrichment_changed = preferences.files.probe_budget
+            != self.settings.preferences.files.probe_budget
+            || preferences.files.enrichment != self.settings.preferences.files.enrichment;
         let tags_changed = preferences.tags != self.settings.preferences.tags;
         let roots_changed = preferences.files.volume_mount_points
             != self.settings.preferences.files.volume_mount_points;

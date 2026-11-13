@@ -210,7 +210,11 @@ fn progressive_partial_loads_commit_route_once_and_keep_loading_until_finish() {
     assert_eq!(navigation.location(), &slow_loc);
     assert_eq!(navigation.history().len(), 2);
     assert_eq!(
-        navigation.directory().expect("partial snapshot").entries.len(),
+        navigation
+            .directory()
+            .expect("partial snapshot")
+            .entries
+            .len(),
         partials[0].entries.len()
     );
 
@@ -222,7 +226,11 @@ fn progressive_partial_loads_commit_route_once_and_keep_loading_until_finish() {
     assert!(navigation.is_loading());
     assert_eq!(navigation.history().len(), 2);
     assert_eq!(
-        navigation.directory().expect("second partial").entries.len(),
+        navigation
+            .directory()
+            .expect("second partial")
+            .entries
+            .len(),
         partials[1].entries.len()
     );
 
@@ -236,5 +244,12 @@ fn progressive_partial_loads_commit_route_once_and_keep_loading_until_finish() {
     assert!(!navigation.is_loading());
     assert!(!navigation.had_partial_commit(&request));
     assert_eq!(navigation.history().len(), 2);
-    assert_eq!(navigation.directory().expect("final snapshot").entries.len(), 6);
+    assert_eq!(
+        navigation
+            .directory()
+            .expect("final snapshot")
+            .entries
+            .len(),
+        6
+    );
 }

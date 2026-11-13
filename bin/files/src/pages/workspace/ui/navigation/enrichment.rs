@@ -362,7 +362,8 @@ impl Browser {
                     // Initial off-screen budget was already spent on this snapshot revision:
                     // scroll re-entries probe only the viewport (`0` extra backlog), while a
                     // live increase of `probe_budget` probes only the delta.
-                    queue_need.budget = directory::ProbeBudget::Bounded(target.saturating_sub(done));
+                    queue_need.budget =
+                        directory::ProbeBudget::Bounded(target.saturating_sub(done));
                 }
                 need = need.union(prev);
             }
@@ -1017,8 +1018,7 @@ mod tests {
             budget: directory::ProbeBudget::Full,
             ..Default::default()
         };
-        let mut queue =
-            EnrichQueue::new(&snapshot, &[], need, directory::DEFAULT_PRIORITY_LIMIT);
+        let mut queue = EnrichQueue::new(&snapshot, &[], need, directory::DEFAULT_PRIORITY_LIMIT);
 
         for step in 0..10 {
             let start = step * 20;

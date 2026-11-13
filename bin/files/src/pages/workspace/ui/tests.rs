@@ -1497,7 +1497,11 @@ async fn scroll_reentry_caps_offscreen_budget_and_sorted_precheck_skips_redundan
     // while `Size` ordering is already fixed by `lstat` byte lengths (1..=80 bytes).
     for index in 0..80 {
         let payload = "x".repeat(index + 1);
-        std::fs::write(size_dir.join(format!("blob-{index:03}")), payload.as_bytes()).unwrap();
+        std::fs::write(
+            size_dir.join(format!("blob-{index:03}")),
+            payload.as_bytes(),
+        )
+        .unwrap();
     }
 
     // `alpha.png` (Image category) and extensionless `zeta` containing UTF-8 text (Text category):
@@ -1771,7 +1775,9 @@ async fn progressive_streaming_loads_preserve_selection_and_respect_preferences(
                 .prepare_refresh(Some(stream_dir.clone()), options);
 
             assert!(browser.apply_partial_request(id, &refresh_req, partial_10, None, cx));
-            let slot = browser.tab_slot(id).expect("active tab after first partial");
+            let slot = browser
+                .tab_slot(id)
+                .expect("active tab after first partial");
             assert!(slot.is_loading());
             assert_eq!(slot.table_rows.len(), 10);
             assert!(slot.navigation.view().selected.contains(&selected_tail));
@@ -1779,14 +1785,18 @@ async fn progressive_streaming_loads_preserve_selection_and_respect_preferences(
             assert_eq!(slot.pending_selection.as_ref(), Some(&pending_tail));
 
             assert!(browser.apply_partial_request(id, &refresh_req, partial_25, None, cx));
-            let slot = browser.tab_slot(id).expect("active tab after second partial");
+            let slot = browser
+                .tab_slot(id)
+                .expect("active tab after second partial");
             assert!(slot.is_loading());
             assert_eq!(slot.table_rows.len(), 25);
             assert!(slot.navigation.view().selected.contains(&selected_tail));
             assert_eq!(slot.pending_selection.as_ref(), Some(&pending_tail));
 
             browser.finish_request(id, &refresh_req, Ok(Some(full_snapshot)), None, cx);
-            let slot = browser.tab_slot(id).expect("active tab after final snapshot");
+            let slot = browser
+                .tab_slot(id)
+                .expect("active tab after final snapshot");
             assert!(!slot.is_loading());
             assert_eq!(slot.table_rows.len(), 40);
             // Once loading completes, `pending_selection` is applied cleanly.

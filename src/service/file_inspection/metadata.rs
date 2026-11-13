@@ -819,7 +819,11 @@ fn seek_to<R: Read + Seek>(reader: &mut R, target: u64) -> Option<()> {
     Some(())
 }
 
-fn next_box<R: Read + Seek>(reader: &mut R, cursor: &mut u64, container_end: u64) -> Option<BoxSpan> {
+fn next_box<R: Read + Seek>(
+    reader: &mut R,
+    cursor: &mut u64,
+    container_end: u64,
+) -> Option<BoxSpan> {
     if *cursor >= container_end || container_end - *cursor < 8 {
         return None;
     }
@@ -1018,8 +1022,8 @@ fn read_stsd(payload: &[u8], track: &mut IsoTrack) {
     let kind: [u8; 4] = header.kind.into();
     track.codec = Some(kind);
     match &kind {
-        b"avc1" | b"avc3" | b"hvc1" | b"hev1" | b"av01" | b"vp09" | b"mp4v" | b"apch"
-        | b"apcn" | b"apcs" | b"apco" | b"ap4h" => {
+        b"avc1" | b"avc3" | b"hvc1" | b"hev1" | b"av01" | b"vp09" | b"mp4v" | b"apch" | b"apcn"
+        | b"apcs" | b"apco" | b"ap4h" => {
             if let Ok(visual) = IsoVisualEntry::decode(&mut entry) {
                 track.dimensions =
                     PixelSize::new(u32::from(visual.width), u32::from(visual.height))
