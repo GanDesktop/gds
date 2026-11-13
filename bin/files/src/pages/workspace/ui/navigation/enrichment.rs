@@ -23,10 +23,6 @@ use super::{Browser, OpenTab, picker};
 
 const DEFAULT_VIEWPORT_ITEMS: usize = 64;
 const VIEWPORT_MARGIN_ITEMS: usize = 16;
-const MAX_CONCURRENT_BATCHES: usize = 4;
-const COALESCE_WINDOW: std::time::Duration = std::time::Duration::from_millis(32);
-const REORDER_COALESCE_WINDOW: std::time::Duration = std::time::Duration::from_millis(180);
-const COALESCE_MAX_UPDATES: usize = 512;
 
 struct EnrichBatch {
     entries: Vec<Entry>,
@@ -72,11 +68,23 @@ impl Drop for BatchSender {
     }
 }
 
-#[derive(Default)]
 struct EnrichQueue {
     priority: VecDeque<Entry>,
     backlog: VecDeque<Entry>,
-    queued_or_done: HashSet<PathBuf>,
+    /// Paths already popped by [`Self::pop_batch`] and handed to worker tasks.
+    dispatched: HashSet<PathBuf>,
+    priority_limit: usize,
+}
+
+impl Default for EnrichQueue {
+    fn default() -> Self {
+        Self {
+            priority: VecDeque::new(),
+            backlog: VecDeque::new(),
+            dispatched: HashSet::new(),
+            priority_limit: directory::DEFAULT_PRIORITY_LIMIT,
+        }
+    }
 }
 
 impl EnrichQueue {
@@ -84,16 +92,20 @@ impl EnrichQueue {
         snapshot: &directory::DirectorySnapshot,
         priority_paths: &[PathBuf],
         need: EnrichmentNeed,
+        priority_limit: usize,
     ) -> Self {
         if need.is_empty() {
-            return Self::default();
+            return Self {
+                priority_limit,
+                ..Self::default()
+            };
         }
         let mut priority = VecDeque::with_capacity(priority_paths.len());
-        let mut queued_or_done = HashSet::with_capacity(priority_paths.len());
+        let mut in_priority = HashSet::with_capacity(priority_paths.len());
         for path in priority_paths {
             if let Some(entry) = snapshot.entry_for_path(path)
                 && entry.needs_enrichment(need)
-                && queued_or_done.insert(entry.path.clone())
+                && in_priority.insert(entry.path.clone())
             {
                 priority.push_back(entry.clone());
             }
@@ -107,7 +119,7 @@ impl EnrichQueue {
             {
                 break;
             }
-            if !entry.needs_enrichment(need) || queued_or_done.contains(&entry.path) {
+            if !entry.needs_enrichment(need) || in_priority.contains(&entry.path) {
                 continue;
             }
             backlog.push_back(entry.clone());
@@ -117,7 +129,8 @@ impl EnrichQueue {
         Self {
             priority,
             backlog,
-            queued_or_done,
+            dispatched: HashSet::new(),
+            priority_limit,
         }
     }
 
@@ -126,28 +139,51 @@ impl EnrichQueue {
     }
 
     fn prioritize_viewport(&mut self, rows: &[Entry], need: EnrichmentNeed) {
+        let cap = self.priority_limit.max(rows.len());
         for entry in rows.iter().rev() {
-            if entry.needs_enrichment(need) && self.queued_or_done.insert(entry.path.clone()) {
-                self.priority.push_front(entry.clone());
+            if !entry.needs_enrichment(need) || self.dispatched.contains(&entry.path) {
+                continue;
+            }
+            if let Some(pos) = self
+                .priority
+                .iter()
+                .position(|existing| existing.path == entry.path)
+            {
+                self.priority.remove(pos);
+            }
+            self.priority.push_front(entry.clone());
+        }
+        while self.priority.len() > cap {
+            let Some(evicted) = self.priority.pop_back() else {
+                break;
+            };
+            if need.is_full_budget() {
+                self.backlog.push_back(evicted);
             }
         }
     }
 
     fn pop_batch(&mut self) -> Option<EnrichBatch> {
-        if !self.priority.is_empty() {
-            let count = self.priority.len().min(directory::BATCH_SIZE);
-            let entries = self.priority.drain(..count).collect();
+        let mut entries = Vec::with_capacity(directory::BATCH_SIZE);
+        while entries.len() < directory::BATCH_SIZE {
+            let Some(entry) = self.priority.pop_front() else {
+                break;
+            };
+            if self.dispatched.insert(entry.path.clone()) {
+                entries.push(entry);
+            }
+        }
+        if !entries.is_empty() {
             return Some(EnrichBatch {
                 entries,
                 is_viewport: true,
             });
         }
-        let mut entries = Vec::with_capacity(directory::BATCH_SIZE);
         while entries.len() < directory::BATCH_SIZE {
             let Some(entry) = self.backlog.pop_front() else {
                 break;
             };
-            if self.queued_or_done.insert(entry.path.clone()) {
+            if self.dispatched.insert(entry.path.clone()) {
                 entries.push(entry);
             }
         }
@@ -234,6 +270,10 @@ impl EnrichJob {
     pub(in crate::pages::workspace) fn prioritize_viewport(&self, rows: &[Entry]) {
         self.queue.borrow_mut().prioritize_viewport(rows, self.need);
     }
+
+    fn set_priority_limit(&self, priority_limit: usize) {
+        self.queue.borrow_mut().priority_limit = priority_limit;
+    }
 }
 
 impl Drop for EnrichJob {
@@ -277,21 +317,23 @@ impl Browser {
         let Some(mut need) = self.enrichment_need(id) else {
             return;
         };
+        let enrich_prefs = self.settings.preferences.files.enrichment;
         let Some(slot) = self.tab_slot(id) else {
             return;
         };
         let mut priority_paths = Vec::with_capacity(extra_priority.len() + DEFAULT_VIEWPORT_ITEMS);
         priority_paths.extend(extra_priority.iter().map(|entry| entry.path.clone()));
         priority_paths.extend(viewport_priority_paths(slot));
+        let mut queue_need = need;
         if let Some(existing) = slot.local_enrich() {
             if existing.revision() == revision && need.is_satisfied_by(existing.need()) {
-                let viewport_needs_probe = !existing.need().is_full_budget()
-                    && priority_paths.iter().any(|path| {
-                        directory
-                            .entry_for_path(path)
-                            .is_some_and(|entry| entry.needs_enrichment(need))
-                    });
+                let viewport_needs_probe = priority_paths.iter().any(|path| {
+                    directory
+                        .entry_for_path(path)
+                        .is_some_and(|entry| entry.needs_enrichment(need))
+                });
                 if existing.is_in_flight() {
+                    existing.set_priority_limit(enrich_prefs.priority_limit);
                     if viewport_needs_probe {
                         let viewport_entries: Vec<Entry> = priority_paths
                             .iter()
@@ -306,10 +348,31 @@ impl Browser {
                 }
             }
             if existing.revision() == revision {
-                need = need.union(existing.need());
+                let prev = existing.need();
+                let same_dimensions = (!need.children || prev.children)
+                    && (!need.content || prev.content)
+                    && (!need.symlinks || prev.symlinks);
+                if !existing.is_in_flight()
+                    && same_dimensions
+                    && let (
+                        directory::ProbeBudget::Bounded(target),
+                        directory::ProbeBudget::Bounded(done),
+                    ) = (need.budget, prev.budget)
+                {
+                    // Initial off-screen budget was already spent on this snapshot revision:
+                    // scroll re-entries probe only the viewport (`0` extra backlog), while a
+                    // live increase of `probe_budget` probes only the delta.
+                    queue_need.budget = directory::ProbeBudget::Bounded(target.saturating_sub(done));
+                }
+                need = need.union(prev);
             }
         }
-        let queue = EnrichQueue::new(&directory, &priority_paths, need);
+        let queue = EnrichQueue::new(
+            &directory,
+            &priority_paths,
+            queue_need,
+            enrich_prefs.priority_limit,
+        );
         if queue.is_empty() {
             if let Some(slot) = self.tab_slot_mut(id) {
                 slot.set_local_enrich(Some(EnrichJob::completed(revision, need)));
@@ -317,6 +380,13 @@ impl Browser {
             return;
         }
 
+        let max_concurrent = enrich_prefs.max_concurrent_batches.max(1);
+        let coalesce_window = std::time::Duration::from_millis(if need.is_full_budget() {
+            enrich_prefs.reorder_coalesce_ms
+        } else {
+            enrich_prefs.coalesce_ms
+        });
+        let max_updates = enrich_prefs.coalesce_max_updates.max(1);
         let queue = Rc::new(RefCell::new(queue));
         let worker_queue = Rc::clone(&queue);
         let cancel = self.window.tasks.token().child_token();
@@ -326,13 +396,15 @@ impl Browser {
         let tasks = self.window.tasks.clone();
         let task = cx.spawn(async move |this, cx| {
             let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<CompletedBatch>();
-            let mut in_flight =
-                fill_probe_slots(&tasks, &worker_queue, need, &worker_cancel, &done_tx, 0);
-            let coalesce_window = if need.is_full_budget() {
-                REORDER_COALESCE_WINDOW
-            } else {
-                COALESCE_WINDOW
-            };
+            let mut in_flight = fill_probe_slots(
+                &tasks,
+                &worker_queue,
+                need,
+                &worker_cancel,
+                &done_tx,
+                0,
+                max_concurrent,
+            );
             let mut pending_updates: Vec<Entry> = Vec::new();
             let mut pending_has_viewport = false;
             let mut coalesce_deadline: Option<std::time::Instant> = None;
@@ -375,6 +447,7 @@ impl Browser {
                             &worker_cancel,
                             &done_tx,
                             in_flight,
+                            max_concurrent,
                         );
                         flush_now = true;
                     }
@@ -398,6 +471,7 @@ impl Browser {
                                 &worker_cancel,
                                 &done_tx,
                                 in_flight,
+                                max_concurrent,
                             );
                             if !batch_updates.is_empty() {
                                 pending_updates.extend(batch_updates);
@@ -408,7 +482,7 @@ impl Browser {
                                     }
                                 }
                             }
-                            if pending_updates.len() >= COALESCE_MAX_UPDATES {
+                            if pending_updates.len() >= max_updates {
                                 flush_now = true;
                                 break;
                             }
@@ -428,8 +502,9 @@ impl Browser {
                     continue;
                 }
 
-                if in_flight == 0
-                    || pending_updates.len() >= COALESCE_MAX_UPDATES
+                if coalesce_window.is_zero()
+                    || in_flight == 0
+                    || pending_updates.len() >= max_updates
                     || coalesce_deadline
                         .is_some_and(|deadline| std::time::Instant::now() >= deadline)
                 {
@@ -591,6 +666,26 @@ impl Browser {
         let Some(slot) = self.tab_slot_mut(id) else {
             return false;
         };
+        let picker_narrows = slot
+            .picker
+            .as_ref()
+            .is_some_and(picker::Projection::narrows);
+        let picker_membership_changed = if picker_narrows
+            && !slot.projection_dirty
+            && let (Some(picker), Some(current_dir)) =
+                (slot.picker.as_ref(), slot.navigation.directory())
+        {
+            let raw_filter = slot.filter();
+            let filter = (!raw_filter.is_empty()).then(|| raw_filter.to_lowercase());
+            let filter_str = filter.as_deref().unwrap_or("");
+            batch_updates.iter().any(|update| {
+                current_dir.entry_for_path(&update.path).is_some_and(|old| {
+                    old.matches_filter(filter_str) && picker.keeps(old) != picker.keeps(update)
+                })
+            })
+        } else {
+            false
+        };
         let mut restore_canonical_rows = false;
         let mut restore_proj_source = false;
         if let Some(current_entries) = slot.navigation.directory().map(|dir| &dir.entries) {
@@ -656,15 +751,10 @@ impl Browser {
             return true;
         };
 
-        let picker_narrows = slot
-            .picker
-            .as_ref()
-            .is_some_and(picker::Projection::narrows);
-        let can_alter_order_or_membership = picker_narrows
-            || matches!(
-                slot.sort.key,
-                sorting::Key::Size | sorting::Key::Type | sorting::Key::DetailedType
-            );
+        let sort_can_alter_order = matches!(
+            slot.sort.key,
+            sorting::Key::Size | sorting::Key::Type | sorting::Key::DetailedType
+        );
 
         if !changed_visible {
             if slot.projection_dirty && !marquee_active {
@@ -692,7 +782,10 @@ impl Browser {
             return true;
         }
 
-        if slot.projection_dirty || can_alter_order_or_membership {
+        if slot.projection_dirty
+            || picker_membership_changed
+            || (marquee_active && sort_can_alter_order)
+        {
             slot.sorted_projection = None;
             if marquee_active {
                 slot.projection_dirty = true;
@@ -732,6 +825,29 @@ impl Browser {
         let viewport_range = viewport_item_range(slot, slot.table_rows.len());
         let in_viewport =
             slot.apply_in_place_enrichment(&next_snapshot, batch_updates, viewport_range);
+
+        // Pre-check whether secondary metadata actually broke the active sort order (Dolphin style):
+        // when probed MIME/size values preserve neighbor ordering, keep `table_rows` and `row_backing`
+        // in place instead of running an `O(N log N)` full resort.
+        if sort_can_alter_order {
+            if !slot.sort.is_sorted(&slot.table_rows) {
+                slot.sorted_projection = None;
+                self.release_active_selection_mirrors(cx);
+                if let Some(slot) = self.tab_slot_mut(id) {
+                    slot.refresh_visible();
+                }
+                cx.notify();
+                return true;
+            }
+            if slot
+                .sorted_projection
+                .as_ref()
+                .is_some_and(|proj| !proj.sort.is_sorted(&proj.entries))
+            {
+                slot.sorted_projection = None;
+            }
+        }
+
         let touched_viewport = is_viewport || in_viewport;
         let updated_rows = Arc::clone(&slot.table_rows);
         super::table::FileTable::restore_rows_after_enrichment(
@@ -758,8 +874,9 @@ fn fill_probe_slots(
     cancel: &CancellationToken,
     done_tx: &tokio::sync::mpsc::UnboundedSender<CompletedBatch>,
     mut in_flight: usize,
+    max_concurrent: usize,
 ) -> usize {
-    while in_flight < MAX_CONCURRENT_BATCHES {
+    while in_flight < max_concurrent {
         let Some(batch) = queue.borrow_mut().pop_batch() else {
             break;
         };
@@ -798,8 +915,11 @@ fn viewport_priority_paths(slot: &OpenTab) -> Vec<PathBuf> {
 
 fn viewport_item_range(slot: &OpenTab, total: usize) -> Option<std::ops::Range<usize>> {
     let state = slot.scroll.0.borrow();
-    let item_size = state.last_item_size?;
-    let row_height = f32::from(item_size.item.height);
+    let row_height = if slot.view_mode == ViewMode::Grid {
+        slot.grid.row_height
+    } else {
+        f32::from(state.last_item_size?.item.height)
+    };
     let viewport = f32::from(state.base_handle.bounds().size.height);
     if row_height <= 0. || viewport <= 0. {
         return None;
@@ -820,4 +940,97 @@ fn viewport_item_range(slot: &OpenTab, total: usize) -> Option<std::ops::Range<u
         )
     };
     (start < end).then_some(start..end)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{ffi::OsString, path::PathBuf};
+
+    use super::{EnrichQueue, EnrichmentNeed, Entry, directory};
+
+    fn unprobed_dir_snapshot(count: usize) -> directory::DirectorySnapshot {
+        let entries: Vec<Entry> = (0..count)
+            .map(|index| {
+                let name = format!("dir-{index:04}");
+                Entry::new(
+                    PathBuf::from(format!("/tmp/{name}")),
+                    OsString::from(&name),
+                    directory::EntryKind::Directory,
+                    None,
+                    None,
+                    directory::EntryDetails::default(),
+                )
+            })
+            .collect();
+        directory::DirectorySnapshot {
+            path: PathBuf::from("/tmp"),
+            entries: entries.into(),
+            warnings: Vec::new(),
+            options: directory::ReadOptions::default(),
+        }
+    }
+
+    #[test]
+    fn prioritize_viewport_sheds_transient_scroll_items_under_bounded_budget() {
+        let snapshot = unprobed_dir_snapshot(300);
+        let need = EnrichmentNeed {
+            children: true,
+            budget: directory::ProbeBudget::Bounded(0),
+            ..Default::default()
+        };
+        let custom_limit = 64usize;
+        let mut queue = EnrichQueue::new(&snapshot, &[], need, custom_limit);
+        assert!(queue.is_empty());
+
+        // Simulate rapid scrolling across 10 viewports (200 entries total).
+        for step in 0..10 {
+            let start = step * 20;
+            queue.prioritize_viewport(&snapshot.entries[start..start + 20], need);
+        }
+
+        let mut popped = Vec::new();
+        while let Some(batch) = queue.pop_batch() {
+            assert!(batch.is_viewport);
+            popped.extend(batch.entries);
+        }
+        assert_eq!(popped.len(), custom_limit);
+        // Most recent viewport (180..200) is popped first; earliest scrolled-past items (0..20) were shed.
+        assert_eq!(popped[0].path, snapshot.entries[180].path);
+        assert!(
+            !popped
+                .iter()
+                .any(|entry| entry.path == snapshot.entries[0].path)
+        );
+
+        // Revisiting an earlier shed viewport later can still enqueue and probe it cleanly.
+        queue.prioritize_viewport(&snapshot.entries[0..10], need);
+        let revisited = queue.pop_batch().expect("revisited viewport batch");
+        assert_eq!(revisited.entries.len(), 10);
+        assert_eq!(revisited.entries[0].path, snapshot.entries[0].path);
+    }
+
+    #[test]
+    fn prioritize_viewport_retains_overflow_in_backlog_under_full_budget() {
+        let snapshot = unprobed_dir_snapshot(200);
+        let need = EnrichmentNeed {
+            children: true,
+            budget: directory::ProbeBudget::Full,
+            ..Default::default()
+        };
+        let mut queue =
+            EnrichQueue::new(&snapshot, &[], need, directory::DEFAULT_PRIORITY_LIMIT);
+
+        for step in 0..10 {
+            let start = step * 20;
+            queue.prioritize_viewport(&snapshot.entries[start..start + 20], need);
+        }
+
+        let mut popped = Vec::new();
+        while let Some(batch) = queue.pop_batch() {
+            popped.extend(batch.entries);
+        }
+        // Every unique entry is dispatched exactly once under Full budget.
+        assert_eq!(popped.len(), 200);
+        assert_eq!(popped[0].path, snapshot.entries[180].path);
+    }
 }

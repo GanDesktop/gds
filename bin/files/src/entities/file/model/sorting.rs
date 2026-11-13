@@ -60,6 +60,11 @@ impl Sort {
         visible.sort_by(|&left, &right| self.compare(&entries[left], &entries[right]));
     }
 
+    /// Whether `entries` already satisfy this ordering without requiring a resort.
+    pub fn is_sorted(&self, entries: &[Entry]) -> bool {
+        entries.is_sorted_by(|left, right| self.compare(left, right) != Ordering::Greater)
+    }
+
     fn compare(&self, left: &Entry, right: &Entry) -> Ordering {
         let directories_first =
             (right.kind == EntryKind::Directory).cmp(&(left.kind == EntryKind::Directory));

@@ -33,7 +33,9 @@ pub(super) use gpui_kit::*;
 
 use crate::entities::file::directory::{self, ReadOptions};
 pub(super) use crate::entities::file::{ViewMode, sorting};
-use crate::entities::location::navigation::{LoadOutcome, LoadRequest, Navigation, resolve_input};
+use crate::entities::location::navigation::{
+    LoadOutcome, LoadRequest, Navigation, PartialLoadOutcome, resolve_input,
+};
 use crate::entities::location::places::Places;
 
 pub struct NewWindowRequested(pub PathBuf);
@@ -704,7 +706,9 @@ impl OpenTab {
             self.sorted_projection = None;
             return;
         }
-        let pending = self.pending_selection.take();
+        let pending = (!self.is_loading())
+            .then(|| self.pending_selection.take())
+            .flatten();
         let raw_filter = self.filter();
         let filter = (!raw_filter.is_empty()).then(|| raw_filter.to_lowercase());
         let filter_str = filter.as_deref().unwrap_or("");
@@ -767,7 +771,11 @@ impl OpenTab {
             }
         }
 
-        let has_pending_reveal = !self.is_loading() && self.pending_reveal.is_some();
+        if self.is_loading() {
+            return;
+        }
+
+        let has_pending_reveal = self.pending_reveal.is_some();
         let needs_visibility_check = !self.navigation.view().selected.is_empty()
             || self.cursor.is_some()
             || self.anchor.is_some()
@@ -1269,15 +1277,34 @@ impl Browser {
             self.finish_request(id, &request, Ok(None), expected, cx);
             return;
         }
+        let stream_options = self.settings.preferences.files.streaming.options();
         let cancel = self.window.tasks.token().child_token();
         let worker_cancel = cancel.clone();
         let worker = request.clone();
-        let work = IoTask::cancel_on_drop(
-            self.window
-                .tasks
-                .spawn_blocking_named("Read directory", move || worker.load_base(&worker_cancel)),
-        );
+        let (progress_tx, mut progress_rx) =
+            tokio::sync::mpsc::unbounded_channel::<Arc<directory::DirectorySnapshot>>();
+        let work = IoTask::cancel_on_drop(self.window.tasks.spawn_blocking_named(
+            "Read directory",
+            move || {
+                worker.load_base_streaming(stream_options, &worker_cancel, |partial| {
+                    let _ = progress_tx.send(partial);
+                })
+            },
+        ));
         let task = cx.spawn(async move |this, cx| {
+            while let Some(mut latest) = progress_rx.recv().await {
+                while let Ok(newer) = progress_rx.try_recv() {
+                    latest = newer;
+                }
+                let Ok(keep_going) = this.update(cx, |this, cx| {
+                    this.apply_partial_request(id, &request, latest, expected.as_ref(), cx)
+                }) else {
+                    return;
+                };
+                if !keep_going {
+                    return;
+                }
+            }
             let result = work
                 .await
                 .map_err(directory::Error::from)
@@ -1294,6 +1321,66 @@ impl Browser {
         cx.notify();
     }
 
+    fn apply_partial_request(
+        &mut self,
+        id: u64,
+        request: &LoadRequest,
+        snapshot: Arc<directory::DirectorySnapshot>,
+        expected: Option<&devices::DeviceLocation>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let valid = expected.is_none_or(|device| {
+            device.availability != devices::Availability::Available
+                || device.is_current(&self.devices.service.read(cx).snapshot)
+        });
+        let content_width = self.content_width();
+        let font_scale = f32::from(cx.gds().appearance().typography().scaled(1.));
+        let Some(slot) = self.tabs.items.iter_mut().find(|slot| slot.id == id) else {
+            return false;
+        };
+        if !valid {
+            if slot.navigation.is_current_request(request) {
+                slot.set_local_load(None);
+            }
+            if slot.navigation.cancel_request(request) {
+                notifications::error(i18n::text("device-path-unavailable", cx), cx);
+            }
+            cx.notify();
+            return false;
+        }
+        let pin_changed = slot.pinned && slot.location() != *request.location();
+        let first_commit = match slot.navigation.apply_partial_load(request, snapshot) {
+            PartialLoadOutcome::Stale => return false,
+            PartialLoadOutcome::FirstCommit => {
+                slot.set_device(expected.cloned());
+                slot.anchor = None;
+                let location = slot.location();
+                slot.sort = columns::sort_for(&location, &self.locations.places);
+                slot.view_mode = self.locations.places.effective_view_mode(location);
+                slot.grid = grid::Geometry::new(content_width, font_scale);
+                slot.refresh_visible();
+                slot.restore_scroll();
+                true
+            }
+            PartialLoadOutcome::Updated => {
+                slot.refresh_visible();
+                false
+            }
+        };
+        if first_commit {
+            if pin_changed {
+                self.sync_pinned();
+                self.save_places(cx);
+            }
+            if id == self.tabs.active_id {
+                self.request_filter_sync(cx);
+                self.enter_location(cx);
+            }
+        }
+        cx.notify();
+        true
+    }
+
     fn finish_request(
         &mut self,
         id: u64,
@@ -1306,16 +1393,30 @@ impl Browser {
             device.availability != devices::Availability::Available
                 || device.is_current(&self.devices.service.read(cx).snapshot)
         });
+        let content_width = self.content_width();
+        let font_scale = f32::from(cx.gds().appearance().typography().scaled(1.));
+        let is_current = self
+            .tab_slot(id)
+            .is_some_and(|slot| slot.navigation.is_current_request(request));
+        if is_current && valid && id == self.tabs.active_id {
+            self.release_active_selection_mirrors(cx);
+        }
         let Some(slot) = self.tabs.items.iter_mut().find(|slot| slot.id == id) else {
             return;
         };
+        let had_partial = slot.navigation.had_partial_commit(request);
         if slot.navigation.is_current_request(request) {
             slot.set_local_load(None);
         }
         if !valid {
             if slot.navigation.cancel_request(request) {
+                if had_partial {
+                    slot.set_device(expected);
+                    slot.refresh_visible();
+                }
                 notifications::error(i18n::text("device-path-unavailable", cx), cx);
             }
+            cx.notify();
             return;
         }
         let pin_changed = slot.pinned && slot.location() != *request.location();
@@ -1328,10 +1429,17 @@ impl Browser {
                     report_directory_warnings(directory, cx);
                 }
                 slot.set_device(expected);
-                slot.anchor = None;
-                slot.sort = columns::sort_for(&slot.location(), &self.locations.places);
+                let location = slot.location();
+                if !had_partial {
+                    slot.anchor = None;
+                    slot.sort = columns::sort_for(&location, &self.locations.places);
+                }
+                slot.view_mode = self.locations.places.effective_view_mode(location);
+                slot.grid = grid::Geometry::new(content_width, font_scale);
                 slot.refresh_visible();
-                slot.restore_scroll();
+                if !had_partial || slot.navigation.view().scroll_offset != 0. {
+                    slot.restore_scroll();
+                }
                 let mut places_changed = false;
                 if request.records_recent() {
                     let location = slot
@@ -1360,7 +1468,7 @@ impl Browser {
         if applied {
             self.schedule_enrichment(id, cx);
         }
-        if id == self.tabs.active_id {
+        if id == self.tabs.active_id && !had_partial {
             self.request_filter_sync(cx);
             self.enter_location(cx);
         }

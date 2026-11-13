@@ -786,7 +786,9 @@ impl Browser {
                 .into_any_element();
         };
         if slot.table_rows.is_empty() {
-            let message = if !slot.filter().is_empty() {
+            let message = if slot.is_loading() {
+                "loading"
+            } else if !slot.filter().is_empty() {
                 "empty-filter"
             } else if slot
                 .picker

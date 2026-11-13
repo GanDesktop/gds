@@ -385,3 +385,69 @@ fn merge_enriched_in_place_reuses_unique_snapshot_and_falls_back_to_cow_when_sha
         })
     );
 }
+
+#[test]
+fn streaming_base_read_gates_on_delay_and_min_entries_without_trailing_duplicate() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    for index in 0..50 {
+        fs::write(root.path().join(format!("file-{index:03}.txt")), "x").expect("write test file");
+    }
+    let cancel = CancellationToken::new();
+
+    // Fast-drive case: scan completes well before `initial_delay`, emitting zero partials.
+    let mut fast_partials = Vec::new();
+    let fast_final = read_directory_base_streaming(
+        root.path(),
+        ReadOptions::default(),
+        StreamOptions {
+            initial_delay: Duration::from_secs(10),
+            interval: Duration::from_millis(250),
+            min_entries: 10,
+        },
+        &cancel,
+        |partial| fast_partials.push(partial),
+    )
+    .expect("read fast streaming snapshot");
+    assert!(fast_partials.is_empty());
+    assert_eq!(fast_final.entries.len(), 50);
+
+    // Exact-count boundary: when `min_entries == total_entries`, no redundant partial fires after the last item.
+    let mut boundary_partials = Vec::new();
+    let boundary_final = read_directory_base_streaming(
+        root.path(),
+        ReadOptions::default(),
+        StreamOptions {
+            initial_delay: Duration::ZERO,
+            interval: Duration::ZERO,
+            min_entries: 50,
+        },
+        &cancel,
+        |partial| boundary_partials.push(partial),
+    )
+    .expect("read boundary streaming snapshot");
+    assert!(boundary_partials.is_empty());
+    assert_eq!(boundary_final.entries.len(), 50);
+
+    // Slow-drive case (`initial_delay = 0`): emits canonically sorted progressive snapshots strictly smaller than final.
+    let mut slow_partials = Vec::new();
+    let slow_final = read_directory_base_streaming(
+        root.path(),
+        ReadOptions::default(),
+        StreamOptions {
+            initial_delay: Duration::ZERO,
+            interval: Duration::from_secs(10),
+            min_entries: 20,
+        },
+        &cancel,
+        |partial| slow_partials.push(partial),
+    )
+    .expect("read progressive streaming snapshot");
+    assert_eq!(slow_partials.len(), 1);
+    assert_eq!(slow_partials[0].entries.len(), 20);
+    assert!(
+        slow_partials[0]
+            .entries
+            .is_sorted_by(|left, right| Entry::canonical_order(left, right).is_le())
+    );
+    assert_eq!(slow_final.entries.len(), 50);
+}

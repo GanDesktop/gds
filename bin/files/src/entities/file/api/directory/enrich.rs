@@ -15,6 +15,21 @@ use super::{
 /// Off-screen entries probed per enrichment pass when unbounded probing is not required.
 pub const DEFAULT_PROBE_BUDGET: usize = 256;
 
+/// Maximum viewport-priority entries retained during rapid scrolling before shedding older rows.
+pub const DEFAULT_PRIORITY_LIMIT: usize = 128;
+
+/// Default batch flush coalescing window (ms) when secondary metadata cannot alter row order.
+pub const DEFAULT_COALESCE_MS: u64 = 32;
+
+/// Default batch flush coalescing window (ms) when secondary metadata can alter order or filter membership.
+pub const DEFAULT_REORDER_COALESCE_MS: u64 = 180;
+
+/// Maximum pending enrichment updates buffered before forcing an immediate UI flush.
+pub const DEFAULT_COALESCE_MAX_UPDATES: usize = 512;
+
+/// Default worker concurrency per directory enrichment pass.
+pub const DEFAULT_MAX_CONCURRENT_BATCHES: usize = 4;
+
 /// Entries processed per blocking batch so UI updates stream progressively and
 /// cancellation checks stay responsive.
 pub const BATCH_SIZE: usize = 32;

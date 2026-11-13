@@ -78,6 +78,12 @@ enum Repr<T> {
     Empty,
     Single(Arc<T>),
     /// Non-empty inclusive range `start..=end` into `backing.items` (`start <= end < backing.len()`).
+    ///
+    /// Models a single contiguous span, which covers `Ctrl+A` and single `Shift` range selections
+    /// in `O(1)`. Non-adjacent insertions or interior removals currently materialize [`Repr::Set`];
+    /// if disjoint range edits (e.g. `Ctrl+A` followed by `Ctrl+Click` deselections or additive
+    /// `Ctrl` marquees) in multi-myriad directories become hot, upgrade this variant to sorted
+    /// disjoint `(start, count)` runs (`SmallVec<[(usize, usize); 4]>`, Dolphin `KItemSet` style).
     Range {
         backing: Arc<SelectionBacking<T>>,
         start: usize,
@@ -434,6 +440,8 @@ impl<T> Selection<T> {
                     }
                     return true;
                 }
+                // Splitting an interior item out of a single-span range falls back to `Set`;
+                // see `Repr::Range` doc comment on evolving to multi-segment runs if needed.
                 let capacity = *end - *start;
                 let mut order = Vec::with_capacity(capacity);
                 let mut set = HashSet::with_capacity(capacity);

@@ -1,7 +1,7 @@
 use super::{
     Browser, Command, InputEvent, KeyDownEvent, Keystroke, LaunchOptions, Location, Modifiers,
-    PreferencesExt as _, VolumesExt as _, configuration, directory, pages, px, size, sorting,
-    tokens,
+    PreferencesExt as _, ViewMode, VolumesExt as _, configuration, directory, pages, px, size,
+    sorting, tokens,
 };
 use crate::entities::location::places::Places;
 use gds::app::AppExt as _;
@@ -1471,6 +1471,331 @@ async fn live_enrichment_and_selection_cow_preserve_pointers_respect_budget_and_
         assert!(slot.local_enrich().is_some_and(|job| !job.is_in_flight()));
     })
     .expect("verify Type sort enrichment stays settled without render reschedule loop");
+
+    close_test_browser(cx, window).await;
+}
+
+#[gpui_kit::test]
+async fn scroll_reentry_caps_offscreen_budget_and_sorted_precheck_skips_redundant_resorts(
+    cx: &mut TestAppContext,
+) {
+    let temp = init_test_workspace(cx);
+    let big_dir = temp.path().join("big");
+    let size_dir = temp.path().join("size_sorted");
+    let type_resort_dir = temp.path().join("type_resort");
+    let grid_dir = temp.path().join("grid_folder");
+    std::fs::create_dir_all(&big_dir).unwrap();
+    std::fs::create_dir_all(&size_dir).unwrap();
+    std::fs::create_dir_all(&type_resort_dir).unwrap();
+    std::fs::create_dir_all(&grid_dir).unwrap();
+
+    for index in 0..120 {
+        std::fs::create_dir_all(big_dir.join(format!("item-{index:03}"))).unwrap();
+    }
+
+    // Extensionless regular files: content probing visibly updates `details.content` (`None` -> `text/plain`),
+    // while `Size` ordering is already fixed by `lstat` byte lengths (1..=80 bytes).
+    for index in 0..80 {
+        let payload = "x".repeat(index + 1);
+        std::fs::write(size_dir.join(format!("blob-{index:03}")), payload.as_bytes()).unwrap();
+    }
+
+    // `alpha.png` (Image category) and extensionless `zeta` containing UTF-8 text (Text category):
+    // before probing, `zeta` has `None` content (sorts after `Some(Image)`); after probing, `Text` sorts before `Image`.
+    std::fs::write(
+        type_resort_dir.join("alpha.png"),
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde",
+    )
+    .unwrap();
+    std::fs::write(type_resort_dir.join("zeta"), b"hello plain text").unwrap();
+
+    std::fs::write(grid_dir.join("pic.txt"), b"hi").unwrap();
+
+    cx.update(|cx| {
+        cx.gds_mut()
+            .preferences()
+            .edit(|prefs| prefs.files.probe_budget = 8)
+            .expect("set probe_budget = 8");
+    });
+
+    let mut places = crate::entities::location::places::Places::default();
+    places.set_sort(
+        Location::from(type_resort_dir.as_path()),
+        sorting::Sort {
+            key: sorting::Key::Type,
+            direction: sorting::Direction::Ascending,
+        },
+    );
+    places.set_view_mode(Location::from(grid_dir.as_path()), ViewMode::Grid);
+
+    let (window, browser) = open_test_browser(cx, big_dir.clone(), Ok(places));
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            !slot.is_loading()
+                && slot.table_rows.len() == 120
+                && slot.local_enrich().is_some_and(|job| !job.is_in_flight())
+        })
+    });
+
+    let child_need = directory::EnrichmentNeed {
+        children: true,
+        ..Default::default()
+    };
+
+    // Initial pass probed default viewport (0..64) plus `probe_budget = 8` off-screen entries (64..72).
+    cx.update_window(window.into(), |_, _, cx| {
+        let slot = browser.read(cx).active().expect("active tab");
+        assert!(!slot.table_rows[71].needs_enrichment(child_need));
+        assert!(slot.table_rows[72].needs_enrichment(child_need));
+        assert!(slot.table_rows[110].needs_enrichment(child_need));
+
+        browser.update(cx, |browser, cx| {
+            let scrolled_slice = browser.active().unwrap().table_rows[110..115].to_vec();
+            browser.request_viewport_enrichment(&scrolled_slice, cx);
+        });
+    })
+    .expect("trigger scroll re-entry enrichment on tail slice");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            slot.local_enrich().is_some_and(|job| !job.is_in_flight())
+                && !slot.table_rows[114].needs_enrichment(child_need)
+        })
+    });
+
+    cx.update_window(window.into(), |_, _, cx| {
+        let slot = browser.read(cx).active().expect("active tab");
+        assert!(
+            slot.table_rows[72].needs_enrichment(child_need),
+            "scroll re-entry must not spend an extra off-screen probe_budget pass on rows 72..80"
+        );
+
+        browser.update(cx, |browser, cx| {
+            browser.navigate(size_dir.clone(), cx);
+        });
+    })
+    .expect("verify scroll re-entry budget cap and navigate to size_dir");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            !slot.is_loading()
+                && slot.navigation.path() == Some(size_dir.as_path())
+                && slot.table_rows.len() == 80
+                && slot.local_enrich().is_some_and(|job| !job.is_in_flight())
+        })
+    });
+
+    let content_need = directory::EnrichmentNeed {
+        content: true,
+        ..Default::default()
+    };
+
+    // Tail entries 72..80 are still unprobed (`probe_budget = 8` after 0..64 viewport).
+    // Switch synchronously to `Sort::Size` and materialize `row_backing` before async probing flushes.
+    let size_rows_ptr = cx
+        .update_window(window.into(), |_, _, cx| {
+            assert!(
+                browser.read(cx).active().unwrap().table_rows[75].needs_enrichment(content_need)
+            );
+            browser.update(cx, |browser, cx| {
+                browser.set_sort(
+                    sorting::Sort {
+                        key: sorting::Key::Size,
+                        direction: sorting::Direction::Ascending,
+                    },
+                    cx,
+                );
+                browser.select(0, Modifiers::default(), cx);
+                browser.select(
+                    70,
+                    Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            });
+            let slot = browser.read(cx).active().unwrap();
+            assert!(slot.row_backing.is_some());
+            slot.table_rows.as_ptr()
+        })
+        .expect("switch to Size sort and materialize row_backing before tail probes complete");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            slot.local_enrich().is_some_and(|job| !job.is_in_flight())
+                && slot
+                    .table_rows
+                    .iter()
+                    .all(|entry| !entry.needs_enrichment(content_need))
+        })
+    });
+
+    cx.update_window(window.into(), |_, _, cx| {
+        let slot = browser.read(cx).active().expect("active tab");
+        assert!(
+            slot.row_backing.is_some(),
+            "order pre-check must preserve row_backing when Size sort order is unbroken"
+        );
+        assert_eq!(
+            slot.table_rows.as_ptr(),
+            size_rows_ptr,
+            "order pre-check must mutate Size-sorted table_rows in place without O(N log N) reallocation"
+        );
+
+        browser.update(cx, |browser, cx| {
+            browser.navigate(type_resort_dir.clone(), cx);
+        });
+    })
+    .expect("verify Size-sorted in-place update and navigate to type_resort_dir");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            !slot.is_loading()
+                && slot.navigation.path() == Some(type_resort_dir.as_path())
+                && slot.local_enrich().is_some_and(|job| !job.is_in_flight())
+                && slot
+                    .table_rows
+                    .iter()
+                    .all(|entry| !entry.needs_enrichment(content_need))
+        })
+    });
+
+    cx.update_window(window.into(), |_, _, cx| {
+        let slot = browser.read(cx).active().expect("active tab");
+        assert_eq!(slot.table_rows[0].display_name, "zeta");
+        assert_eq!(slot.table_rows[1].display_name, "alpha.png");
+        assert!(slot.sort.is_sorted(&slot.table_rows));
+
+        browser.update(cx, |browser, cx| {
+            browser.navigate(grid_dir.clone(), cx);
+        });
+    })
+    .expect("verify Type resort when probed MIME crosses boundary and navigate to grid_dir");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            !slot.is_loading() && slot.navigation.path() == Some(grid_dir.as_path())
+        })
+    });
+
+    // Without rendering a frame, `finish_request` has already synchronized `slot.view_mode`.
+    cx.update_window(window.into(), |_, _, cx| {
+        let slot = browser.read(cx).active().expect("active tab");
+        assert_eq!(slot.view_mode, ViewMode::Grid);
+    })
+    .expect("verify finish_request syncs Grid view_mode immediately");
+
+    close_test_browser(cx, window).await;
+}
+
+#[gpui_kit::test]
+async fn progressive_streaming_loads_preserve_selection_and_respect_preferences(
+    cx: &mut TestAppContext,
+) {
+    let temp = init_test_workspace(cx);
+    let home = temp.path().join("home");
+    let stream_dir = home.join("usb_slow_dir");
+    std::fs::create_dir_all(&stream_dir).expect("create stream fixture directory");
+    for index in 0..40 {
+        std::fs::write(stream_dir.join(format!("item-{index:03}.txt")), "payload")
+            .expect("write stream fixture file");
+    }
+
+    let (window, browser) =
+        open_test_browser_at(cx, home.clone(), home.clone(), Ok(Places::default()));
+    wait_for_tabs_loaded(cx, window, &browser);
+
+    // Configure streaming and enrichment parameters via Preferences rather than magic constants.
+    cx.update_window(window.into(), |_, window, cx| {
+        browser.update(cx, |browser, cx| {
+            let mut prefs = browser.settings.preferences.clone();
+            prefs.files.streaming.initial_delay_ms = 0;
+            prefs.files.streaming.interval_ms = 0;
+            prefs.files.streaming.min_entries = 10;
+            prefs.files.enrichment.priority_limit = 64;
+            prefs.files.enrichment.coalesce_ms = 0;
+            prefs.files.enrichment.reorder_coalesce_ms = 0;
+            prefs.files.enrichment.coalesce_max_updates = 64;
+            prefs.files.enrichment.max_concurrent_batches = 2;
+            browser.apply_preferences(prefs, window, cx);
+            browser.navigate(stream_dir.clone(), cx);
+        });
+    })
+    .expect("configure streaming/enrichment preferences and navigate to stream_dir");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            !slot.is_loading()
+                && slot.navigation.path() == Some(stream_dir.as_path())
+                && slot.table_rows.len() == 40
+        })
+    });
+
+    // Deterministically verify intermediate partial snapshots during refresh:
+    // a selected tail item (`item-035.txt`) and `pending_selection` (`item-038.txt`) that have not
+    // yet appeared in early partial batches must survive until `finish_request` completes.
+    let selected_tail = stream_dir.join("item-035.txt");
+    let pending_tail = stream_dir.join("item-038.txt");
+    cx.update_window(window.into(), |_, _, cx| {
+        browser.update(cx, |browser, cx| {
+            let id = browser.tabs.active_id;
+            let options = browser.read_options(id);
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let full_snapshot = Arc::new(
+                directory::read_directory_base(&stream_dir, options, &cancel)
+                    .expect("read full snapshot"),
+            );
+            let partial_10 = Arc::new(directory::DirectorySnapshot {
+                path: stream_dir.clone(),
+                entries: full_snapshot.entries[..10].into(),
+                warnings: Vec::new(),
+                options,
+            });
+            let partial_25 = Arc::new(directory::DirectorySnapshot {
+                path: stream_dir.clone(),
+                entries: full_snapshot.entries[..25].into(),
+                warnings: Vec::new(),
+                options,
+            });
+
+            let slot = browser.tab_slot_mut(id).expect("active tab");
+            slot.navigation
+                .view_mut()
+                .selected
+                .set_single(selected_tail.clone());
+            slot.cursor = Some(selected_tail.clone());
+            slot.pending_selection = Some(pending_tail.clone());
+            let refresh_req = slot
+                .navigation
+                .prepare_refresh(Some(stream_dir.clone()), options);
+
+            assert!(browser.apply_partial_request(id, &refresh_req, partial_10, None, cx));
+            let slot = browser.tab_slot(id).expect("active tab after first partial");
+            assert!(slot.is_loading());
+            assert_eq!(slot.table_rows.len(), 10);
+            assert!(slot.navigation.view().selected.contains(&selected_tail));
+            assert_eq!(slot.cursor.as_ref(), Some(&selected_tail));
+            assert_eq!(slot.pending_selection.as_ref(), Some(&pending_tail));
+
+            assert!(browser.apply_partial_request(id, &refresh_req, partial_25, None, cx));
+            let slot = browser.tab_slot(id).expect("active tab after second partial");
+            assert!(slot.is_loading());
+            assert_eq!(slot.table_rows.len(), 25);
+            assert!(slot.navigation.view().selected.contains(&selected_tail));
+            assert_eq!(slot.pending_selection.as_ref(), Some(&pending_tail));
+
+            browser.finish_request(id, &refresh_req, Ok(Some(full_snapshot)), None, cx);
+            let slot = browser.tab_slot(id).expect("active tab after final snapshot");
+            assert!(!slot.is_loading());
+            assert_eq!(slot.table_rows.len(), 40);
+            // Once loading completes, `pending_selection` is applied cleanly.
+            assert!(slot.pending_selection.is_none());
+            assert!(slot.navigation.view().selected.contains(&pending_tail));
+            assert_eq!(slot.cursor.as_ref(), Some(&pending_tail));
+        });
+    })
+    .expect("verify selection and pending_selection survive progressive partial snapshots");
 
     close_test_browser(cx, window).await;
 }

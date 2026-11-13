@@ -25,6 +25,7 @@ pub struct Navigation<V> {
     history: Vec<Visit<V>>,
     history_index: usize,
     pending: Option<LoadRequest>,
+    pending_committed: bool,
     revision: u64,
 }
 
@@ -76,6 +77,7 @@ impl LoadRequest {
     ///
     /// # Errors
     /// Reports [`directory::Error::Cancelled`] when `cancel` fires, or a failed filesystem read.
+    #[cfg(test)]
     pub fn load_base(
         &self,
         cancel: &CancellationToken,
@@ -85,11 +87,43 @@ impl LoadRequest {
             .map(|path| directory::read_directory_base(path, self.options, cancel).map(Arc::new))
             .transpose()
     }
+    /// Read the requested local directory's base metadata, emitting progressive snapshots
+    /// through `on_progress` when enumeration exceeds `stream` thresholds.
+    ///
+    /// # Errors
+    /// Reports [`directory::Error::Cancelled`] when `cancel` fires, or a failed filesystem read.
+    pub fn load_base_streaming(
+        &self,
+        stream: directory::StreamOptions,
+        cancel: &CancellationToken,
+        on_progress: impl FnMut(Arc<DirectorySnapshot>),
+    ) -> Result<Option<Arc<DirectorySnapshot>>, directory::Error> {
+        self.path
+            .as_ref()
+            .map(|path| {
+                directory::read_directory_base_streaming(
+                    path,
+                    self.options,
+                    stream,
+                    cancel,
+                    on_progress,
+                )
+                .map(Arc::new)
+            })
+            .transpose()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadOutcome {
     Applied,
+    Stale,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartialLoadOutcome {
+    FirstCommit,
+    Updated,
     Stale,
 }
 
@@ -197,6 +231,7 @@ impl<V: Default> Navigation<V> {
             }],
             history_index: 0,
             pending: None,
+            pending_committed: false,
             revision: 0,
         }
     }
@@ -342,22 +377,45 @@ impl<V: Default> Navigation<V> {
     }
     pub fn cancel_pending(&mut self) {
         self.pending = None;
+        self.pending_committed = false;
     }
     pub fn is_current_request(&self, request: &LoadRequest) -> bool {
         self.pending
             .as_ref()
             .is_some_and(|pending| pending.id == request.id)
     }
+    pub fn had_partial_commit(&self, request: &LoadRequest) -> bool {
+        self.is_current_request(request) && self.pending_committed
+    }
     pub fn cancel_request(&mut self, request: &LoadRequest) -> bool {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.id == request.id)
-        {
+        if self.is_current_request(request) {
             self.pending = None;
+            self.pending_committed = false;
             true
         } else {
             false
+        }
+    }
+    /// Apply an intermediate progressive snapshot for an in-flight local directory scan
+    /// while keeping [`Self::is_loading`] active until [`Self::finish_load`] completes.
+    pub fn apply_partial_load(
+        &mut self,
+        request: &LoadRequest,
+        snapshot: Arc<DirectorySnapshot>,
+    ) -> PartialLoadOutcome {
+        if !self.is_current_request(request) || Some(snapshot.path.as_path()) != request.path() {
+            return PartialLoadOutcome::Stale;
+        }
+        let first = !self.pending_committed;
+        if first {
+            self.commit_destination(request);
+            self.pending_committed = true;
+        }
+        self.directory = Some(snapshot);
+        if first {
+            PartialLoadOutcome::FirstCommit
+        } else {
+            PartialLoadOutcome::Updated
         }
     }
     /// # Errors
@@ -367,18 +425,24 @@ impl<V: Default> Navigation<V> {
         request: &LoadRequest,
         result: Result<Option<Arc<DirectorySnapshot>>, directory::Error>,
     ) -> Result<LoadOutcome, Error> {
-        if !self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.id == request.id)
-        {
+        if !self.is_current_request(request) {
             return Ok(LoadOutcome::Stale);
         }
+        let already_committed = self.pending_committed;
         self.pending = None;
+        self.pending_committed = false;
         let directory = result?;
         if directory.as_ref().map(|directory| directory.path.as_path()) != request.path() {
             return Err(Error::UnexpectedSnapshot);
         }
+        if !already_committed {
+            self.commit_destination(request);
+        }
+        self.directory = directory;
+        self.path = request.path.clone();
+        Ok(LoadOutcome::Applied)
+    }
+    fn commit_destination(&mut self, request: &LoadRequest) {
         match request.destination {
             Destination::Open if self.location() != &request.location => {
                 self.history.truncate(self.history_index + 1);
@@ -397,9 +461,7 @@ impl<V: Default> Navigation<V> {
             }
             _ => (),
         }
-        self.directory = directory;
         self.path = request.path.clone();
-        Ok(LoadOutcome::Applied)
     }
     fn begin(
         &mut self,
@@ -419,6 +481,7 @@ impl<V: Default> Navigation<V> {
         };
         self.revision = request.id;
         self.pending = Some(request.clone());
+        self.pending_committed = false;
         request
     }
 }

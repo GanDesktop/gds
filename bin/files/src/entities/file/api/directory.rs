@@ -18,7 +18,7 @@ use std::{
     ops::Deref,
     path::{Path, PathBuf},
     sync::Arc,
-    time::SystemTime,
+    time::{Duration, Instant, SystemTime},
 };
 
 use tokio_util::sync::CancellationToken;
@@ -28,6 +28,36 @@ use self::identity::IdentityCache;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReadOptions {
     pub show_hidden: bool,
+}
+
+/// Elapsed milliseconds before emitting the first progressive directory snapshot.
+pub const DEFAULT_STREAM_INITIAL_DELAY_MS: u64 = 150;
+
+/// Minimum milliseconds between subsequent progressive directory snapshots.
+pub const DEFAULT_STREAM_INTERVAL_MS: u64 = 250;
+
+/// Minimum collected entries before emitting a progressive snapshot (`0` disables streaming).
+pub const DEFAULT_STREAM_MIN_ENTRIES: usize = 200;
+
+/// Time and item-count gates for progressive directory snapshots on slow storage (e.g. USB HDDs or FUSE mounts).
+///
+/// Scans that finish within `initial_delay` emit zero intermediate snapshots, preserving atomic
+/// single-shot transitions on fast local SSDs. Setting `min_entries = 0` disables progressive emission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamOptions {
+    pub initial_delay: Duration,
+    pub interval: Duration,
+    pub min_entries: usize,
+}
+
+impl Default for StreamOptions {
+    fn default() -> Self {
+        Self {
+            initial_delay: Duration::from_millis(DEFAULT_STREAM_INITIAL_DELAY_MS),
+            interval: Duration::from_millis(DEFAULT_STREAM_INTERVAL_MS),
+            min_entries: DEFAULT_STREAM_MIN_ENTRIES,
+        }
+    }
 }
 
 /// Entry type captured with `lstat`; a symlink is never reported as its target.
@@ -174,7 +204,7 @@ pub fn read_directory_cancellable(
     options: ReadOptions,
     cancel: &CancellationToken,
 ) -> Result<DirectorySnapshot, Error> {
-    DirectorySnapshot::read(path, options, cancel, true)
+    DirectorySnapshot::read(path, options, cancel, true, None)
 }
 
 /// Read the base entries of one local directory without child-count, file-header, or
@@ -188,7 +218,28 @@ pub fn read_directory_base(
     options: ReadOptions,
     cancel: &CancellationToken,
 ) -> Result<DirectorySnapshot, Error> {
-    DirectorySnapshot::read(path, options, cancel, false)
+    DirectorySnapshot::read(path, options, cancel, false, None)
+}
+
+/// Read the base entries of one local directory, emitting time-gated progressive snapshots
+/// through `on_progress` when enumeration exceeds [`StreamOptions::initial_delay`] and
+/// [`StreamOptions::min_entries`].
+///
+/// # Errors
+/// Returns [`Error::Cancelled`] when `cancel` is triggered, or an open/working-directory
+/// error when the target directory cannot be opened.
+pub fn read_directory_base_streaming(
+    path: &Path,
+    options: ReadOptions,
+    stream: StreamOptions,
+    cancel: &CancellationToken,
+    mut on_progress: impl FnMut(Arc<DirectorySnapshot>),
+) -> Result<DirectorySnapshot, Error> {
+    let stream_hook = (stream.min_entries > 0).then_some((
+        stream,
+        &mut on_progress as &mut dyn FnMut(Arc<DirectorySnapshot>),
+    ));
+    DirectorySnapshot::read(path, options, cancel, false, stream_hook)
 }
 
 impl DirectorySnapshot {
@@ -213,6 +264,7 @@ impl DirectorySnapshot {
         options: ReadOptions,
         cancel: &CancellationToken,
         full: bool,
+        stream: Option<(StreamOptions, &mut dyn FnMut(Arc<Self>))>,
     ) -> Result<Self, Error> {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
@@ -228,7 +280,7 @@ impl DirectorySnapshot {
             path: path.clone(),
             source,
         })?;
-        Self::collect(path, entries, options, cancel, full)
+        Self::collect(path, entries, options, cancel, full, stream)
     }
 
     fn collect(
@@ -237,10 +289,15 @@ impl DirectorySnapshot {
         options: ReadOptions,
         cancel: &CancellationToken,
         full: bool,
+        mut stream: Option<(StreamOptions, &mut dyn FnMut(Arc<Self>))>,
     ) -> Result<Self, Error> {
         let mut collected = Vec::new();
         let mut warnings = Vec::new();
         let mut identities = IdentityCache::new();
+        let mut next_emit_at = stream
+            .as_ref()
+            .map(|(opts, _)| Instant::now() + opts.initial_delay);
+        let mut last_emitted_len = 0usize;
         for result in entries {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
@@ -250,6 +307,24 @@ impl DirectorySnapshot {
                     let hidden = entry.file_name().as_encoded_bytes().first() == Some(&b'.');
                     if !options.show_hidden && hidden {
                         continue;
+                    }
+                    // Emit before `lstat` on the next unhidden entry so a partial snapshot is
+                    // never emitted redundantly after the final directory item.
+                    if let (Some((opts, on_progress)), Some(deadline)) =
+                        (stream.as_mut(), next_emit_at)
+                        && collected.len() >= opts.min_entries
+                        && collected.len() > last_emitted_len
+                        && Instant::now() >= deadline
+                    {
+                        collected.sort_by(Entry::canonical_order);
+                        on_progress(Arc::new(Self {
+                            path: path.clone(),
+                            entries: collected.as_slice().into(),
+                            warnings: Vec::new(),
+                            options,
+                        }));
+                        last_emitted_len = collected.len();
+                        next_emit_at = Some(Instant::now() + opts.interval);
                     }
                     let item = if full {
                         Entry::from_dir_entry(entry, &mut identities, &mut warnings)
