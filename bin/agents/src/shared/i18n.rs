@@ -26,7 +26,7 @@ pub(crate) fn install(language: Language, cx: &mut gpui_kit::App) {
         Language::Chinese => CHINESE,
         Language::English => ENGLISH,
     };
-    cx.gds()
+    cx.gds_mut()
         .i18n()
         .install_resources(language, &[source])
         .expect("embedded Agents Fluent catalog");

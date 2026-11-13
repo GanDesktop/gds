@@ -139,7 +139,7 @@ pub(crate) fn watch(cx: &mut App) {
         return;
     }
     let config = cx.global::<WatchConfig>().clone();
-    let observer = cx.gds().appearance().theme().observer();
+    let observer = cx.gds_mut().appearance().theme().observer();
     let mut paths = vec![config.loader.store.path().to_owned()];
     if let Ok(document) = config.loader.document() {
         paths.extend(preferences::appearance(&document.preferences).source_paths());
@@ -202,20 +202,20 @@ pub(crate) fn watch(cx: &mut App) {
 fn apply(resolved: loader::Resolved, window: Option<&mut Window>, cx: &mut App) {
     let effective = resolved.effective;
     let preferences = &effective.preferences;
-    cx.gds()
+    cx.gds_mut()
         .appearance()
         .motion()
         .set_enabled(preferences.animations_enabled.unwrap_or(true));
     let opacity = gds::appearance::tokens::SurfaceOpacity::default();
     crate::shared::i18n::install(preferences.language, cx);
     let applied = cx
-        .gds()
+        .gds_mut()
         .appearance()
         .theme()
         .install(resolved.palette)
         .expect("prepared palettes have validated opacity");
     let font = cx
-        .gds()
+        .gds_mut()
         .appearance()
         .typography()
         .apply(&effective.font)
@@ -270,7 +270,7 @@ pub(crate) fn window_root(
     window: &mut Window,
     cx: &mut Context<Root>,
 ) -> Root {
-    cx.gds().appearance().theme().attach_observer(window);
+    cx.gds_mut().appearance().theme().attach_observer(window);
     cx.observe_global::<Appearance>(|root, cx| {
         root.style().text = font_style(cx).text;
         cx.notify();

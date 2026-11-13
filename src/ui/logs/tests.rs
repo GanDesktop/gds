@@ -9,20 +9,20 @@ mod tasks;
 #[gpui_kit::test]
 fn disabled_logging_has_no_store_window_or_shortcut(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        cx.gds().tasks().init_test(false);
+        cx.gds_mut().tasks().init_test(false);
         let scope = cx.gds().tasks().scope();
-        cx.gds().initialize(scope, None);
+        cx.gds_mut().initialize(scope, None);
         assert!(cx.gds().tasks().inspector().is_none());
-        cx.gds()
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::Chinese)
             .expect("translations");
-        cx.gds().ui().logs().init(Options::default());
-        assert!(!cx.gds_ro().ui().logs().is_enabled());
-        assert!(cx.gds_ro().ui().logs().store().is_none());
-        assert!(cx.gds().ui().logs().open().is_err());
+        cx.gds_mut().ui().logs().init(Options::default());
+        assert!(!cx.gds().ui().logs().is_enabled());
+        assert!(cx.gds().ui().logs().store().is_none());
+        assert!(cx.gds_mut().ui().logs().open().is_err());
         assert!(
-            cx.gds_ro().ui().logs().store().is_none(),
+            cx.gds().ui().logs().store().is_none(),
             "opening must not implicitly start collection"
         );
     });
@@ -40,10 +40,10 @@ fn disabled_logging_has_no_store_window_or_shortcut(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|cx| {
         assert!(!cx.has_global::<OpenWindow>());
-        assert!(cx.gds_ro().ui().logs().store().is_none());
-        cx.gds().tasks().init_test(true);
-        cx.gds().ui().logs().install(Store::new());
-        cx.gds().ui().logs().init(Options::default());
+        assert!(cx.gds().ui().logs().store().is_none());
+        cx.gds_mut().tasks().init_test(true);
+        cx.gds_mut().ui().logs().install(Store::new());
+        cx.gds_mut().ui().logs().init(Options::default());
     });
     cx.update_window(host.into(), |_, window, cx| window.press(key, cx))
         .expect("shortcut with explicit collection");
@@ -53,14 +53,14 @@ fn disabled_logging_has_no_store_window_or_shortcut(cx: &mut TestAppContext) {
 
 pub(super) fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Root>, WeakEntity<Viewer>, Store) {
     cx.update(|cx| {
-        cx.gds().tasks().init_test(true);
+        cx.gds_mut().tasks().init_test(true);
         let scope = cx.gds().tasks().scope();
-        cx.gds().initialize(scope, Some(Store::new()));
-        cx.gds()
+        cx.gds_mut().initialize(scope, Some(Store::new()));
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::Chinese)
             .expect("translations");
-        cx.gds()
+        cx.gds_mut()
             .appearance()
             .theme()
             .apply(&crate::appearance::theme::Appearance {
@@ -68,9 +68,9 @@ pub(super) fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Root>, WeakEntit
                 ..Default::default()
             })
             .expect("theme");
-        cx.gds().ui().logs().init(Options::default());
-        let store = cx.gds_ro().ui().logs().store().expect("fixture collector");
-        let handle = cx.gds().ui().logs().open().expect("log window");
+        cx.gds_mut().ui().logs().init(Options::default());
+        let store = cx.gds().ui().logs().store().expect("fixture collector");
+        let handle = cx.gds_mut().ui().logs().open().expect("log window");
         (handle, cx.global::<OpenWindow>().viewer.clone(), store)
     })
 }
@@ -340,11 +340,11 @@ fn target_dropdown_and_details_fit_minimum_width(cx: &mut TestAppContext) {
 fn shift_l_opens_logs_but_shift_d_does_not(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds()
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::Chinese)
             .expect("translations");
-        cx.gds()
+        cx.gds_mut()
             .appearance()
             .theme()
             .apply(&crate::appearance::theme::Appearance {
@@ -352,9 +352,9 @@ fn shift_l_opens_logs_but_shift_d_does_not(cx: &mut TestAppContext) {
                 ..Default::default()
             })
             .expect("theme");
-        cx.gds().tasks().init_test(true);
-        cx.gds().ui().logs().install(Store::new());
-        cx.gds().ui().logs().init(Options::default());
+        cx.gds_mut().tasks().init_test(true);
+        cx.gds_mut().ui().logs().install(Store::new());
+        cx.gds_mut().ui().logs().init(Options::default());
     });
     let host = cx.open_window(size(px(800.), px(600.)), |_, _| gpui_kit::Empty);
     cx.update_window(host.into(), |_, window, cx| {
@@ -389,7 +389,7 @@ fn shift_l_opens_logs_but_shift_d_does_not(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn singleton_close_reopen_retains_store_and_releases_viewer(cx: &mut TestAppContext) {
     let (first, viewer, store) = fixture(cx);
-    let again = cx.update(|cx| cx.gds().ui().logs().open().expect("existing window"));
+    let again = cx.update(|cx| cx.gds_mut().ui().logs().open().expect("existing window"));
     assert_eq!(first.window_id(), again.window_id());
     store.record(Level::Error, "frontend", "retained across close");
     cx.update_window(first.into(), |_, window, cx| {
@@ -429,7 +429,7 @@ fn singleton_close_reopen_retains_store_and_releases_viewer(cx: &mut TestAppCont
         )
     });
     store.record(Level::Debug, "frontend", "recorded without a window");
-    let second = cx.update(|cx| cx.gds().ui().logs().open().expect("reopened window"));
+    let second = cx.update(|cx| cx.gds_mut().ui().logs().open().expect("reopened window"));
     assert_ne!(first.window_id(), second.window_id());
     cx.update(|cx| {
         let viewer = cx.global::<OpenWindow>().viewer.clone();
@@ -441,7 +441,7 @@ fn singleton_close_reopen_retains_store_and_releases_viewer(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn log_viewer_does_not_enable_task_inspection(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.gds().tasks().init_test(false));
+    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
     let (handle, viewer, _) = fixture(cx);
     let root = cx.update(|cx| cx.gds().tasks().scope());
     let completion = root.register().unwrap();

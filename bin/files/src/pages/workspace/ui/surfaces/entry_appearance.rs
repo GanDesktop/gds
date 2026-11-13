@@ -2,7 +2,7 @@
 
 use gpui_kit::App;
 
-use super::{AppExt as _, FilesExt as _, drag_drop};
+use super::{AppExt as _, ClipboardExt as _, drag_drop};
 use crate::entities::file::directory::Entry;
 
 const HIDDEN_OPACITY: f32 = 0.65;
@@ -16,7 +16,7 @@ pub(in crate::pages::workspace) struct EntryAppearance {
 
 impl EntryAppearance {
     pub(in crate::pages::workspace) fn of(entry: &Entry, cx: &App) -> Self {
-        let cut = cx.gds_ro().files().clipboard().is_cut(&entry.path);
+        let cut = cx.gds().clipboard().is_cut(&entry.path);
         // Resolve all causes together so hidden, cut, and dragged never multiply.
         let opacity = if cut || drag_drop::is_source(&entry.path, cx) {
             GHOSTED_OPACITY

@@ -49,24 +49,24 @@ impl Prepared {
 
     pub(super) fn install(self, preferences: &Preferences, cx: &mut App) {
         if let Some(theme) = self.theme {
-            cx.gds()
+            cx.gds_mut()
                 .appearance()
                 .theme()
                 .install(theme)
                 .expect("prepared theme has valid opacity");
         }
         if let Some(font) = self.font {
-            cx.gds()
+            cx.gds_mut()
                 .appearance()
                 .typography()
                 .apply(&font)
                 .expect("prepared font has a valid size");
         }
         if let Some(language) = self.language {
-            cx.gds().i18n().install_catalog(language);
+            cx.gds_mut().i18n().install_catalog(language);
         }
-        cx.gds().ui().time().apply(preferences.time_format);
-        cx.gds()
+        cx.gds_mut().ui().time().apply(preferences.time_format);
+        cx.gds_mut()
             .appearance()
             .motion()
             .set_enabled(preferences.animations_enabled.unwrap_or(true));

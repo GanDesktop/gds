@@ -141,7 +141,7 @@ fn keyboard_cursor_pointer_activation_and_close_restore_the_previous_target(
     }
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds()
+        cx.gds_mut()
             .appearance()
             .theme()
             .apply(&Default::default())

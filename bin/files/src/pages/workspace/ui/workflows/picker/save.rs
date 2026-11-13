@@ -100,7 +100,7 @@ impl Browser {
         window.open_alert_dialog(cx, move |dialog: AlertDialog, _, cx| {
             let browser = browser.clone();
             let paths = paths.clone();
-            let colors = cx.gds_ro().appearance().theme().colors();
+            let colors = cx.gds().appearance().theme().colors();
             let footer = el! { .DialogActions::default {
                 primary_label: $(i18n::text("picker-save", cx));
                 cancel_label: $(i18n::text("picker-cancel", cx));

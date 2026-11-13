@@ -1,4 +1,3 @@
-use gds::app::AppExt as _;
 use gds::service::task_manager::Scope;
 use std::{
     collections::HashMap,
@@ -57,10 +56,23 @@ pub(crate) struct Accessor<C> {
     cx: C,
 }
 
-impl<C> crate::shared::app::Files<C> {
-    pub(crate) fn volumes(self) -> Accessor<C> {
+pub(crate) trait VolumesExt {
+    type Context<'a>: gds::app::Context
+    where
+        Self: 'a;
+
+    fn volumes(&mut self) -> Accessor<Self::Context<'_>>;
+}
+
+impl<C: gds::app::Context> VolumesExt for gds::app::Gds<C> {
+    type Context<'a>
+        = C::Reborrowed<'a>
+    where
+        C: 'a;
+
+    fn volumes(&mut self) -> Accessor<C::Reborrowed<'_>> {
         Accessor {
-            cx: self.into_inner(),
+            cx: self.reborrow().into_inner(),
         }
     }
 }
@@ -72,12 +84,12 @@ impl<C: Deref<Target = App>> Accessor<C> {
 }
 
 impl Accessor<&mut App> {
-    pub(crate) fn initialize(&mut self) -> Entity<Service> {
+    pub(crate) fn initialize(&mut self, tasks: &Scope) -> Entity<Service> {
         assert!(
             !self.cx.has_global::<SharedService>(),
             "volumes already initialized"
         );
-        let tasks = self.cx.gds_ro().tasks().scope();
+        let tasks = tasks.clone();
         let service = self.cx.new(|cx| Service::new(tasks, cx));
         self.cx.set_global(SharedService(service.clone()));
         service

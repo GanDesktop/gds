@@ -209,7 +209,7 @@ impl<T> Field<T> {
     pub(super) fn choices(&self, model: &T, cx: &App) -> Vec<Choice> {
         let mut choices = match self.kind {
             Kind::Font => cx
-                .gds_ro()
+                .gds()
                 .appearance()
                 .typography()
                 .installed_families()

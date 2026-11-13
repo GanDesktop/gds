@@ -272,16 +272,30 @@ fn enrichment_prioritizes_viewport_bounds_budget_and_marks_unreadable_entries_pr
         children: true,
         content: false,
         symlinks: false,
-        full_budget: false,
+        budget: ProbeBudget::default(),
     };
     let planned = plan_enrichment(&base, std::slice::from_ref(&priority_dir), bounded_need);
     assert_eq!(planned.len(), 1 + DEFAULT_PROBE_BUDGET);
     assert_eq!(planned[0].path, priority_dir);
 
-    let full_need = EnrichmentNeed {
-        full_budget: true,
+    let custom_need = EnrichmentNeed {
+        budget: ProbeBudget::Bounded(0),
         ..bounded_need
     };
+    let viewport_only = plan_enrichment(&base, std::slice::from_ref(&priority_dir), custom_need);
+    assert_eq!(viewport_only.len(), 1);
+    assert_eq!(viewport_only[0].path, priority_dir);
+    assert!(custom_need.is_satisfied_by(bounded_need));
+    assert!(!bounded_need.is_satisfied_by(custom_need));
+
+    let full_need = EnrichmentNeed {
+        budget: ProbeBudget::Full,
+        ..bounded_need
+    };
+    assert!(bounded_need.is_satisfied_by(full_need));
+    assert!(!full_need.is_satisfied_by(bounded_need));
+    assert_eq!(custom_need.union(bounded_need), bounded_need);
+    assert_eq!(bounded_need.union(full_need), full_need);
     let all_planned = plan_enrichment(&base, std::slice::from_ref(&priority_dir), full_need);
     assert_eq!(all_planned.len(), DEFAULT_PROBE_BUDGET + 11);
 
@@ -329,5 +343,45 @@ fn enrichment_prioritizes_viewport_bounds_budget_and_marks_unreadable_entries_pr
         )
         .iter()
         .all(|entry| entry.path != vanished_dir)
+    );
+}
+
+#[test]
+fn merge_enriched_in_place_reuses_unique_snapshot_and_falls_back_to_cow_when_shared() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    let dir_a = root.path().join("dir-a");
+    let dir_b = root.path().join("dir-b");
+    fs::create_dir(&dir_a).expect("create dir-a");
+    fs::create_dir(&dir_b).expect("create dir-b");
+    fs::write(dir_a.join("inside.txt"), "1").expect("write child");
+
+    let cancel = CancellationToken::new();
+    let mut unique = Arc::new(
+        read_directory_base(root.path(), ReadOptions::default(), &cancel)
+            .expect("read base snapshot"),
+    );
+    let need = EnrichmentNeed {
+        children: true,
+        ..EnrichmentNeed::default()
+    };
+    let updates = probe_batch(&unique.entries[..1], need, &cancel).expect("probe first entry");
+
+    let snapshot_ptr = Arc::as_ptr(&unique);
+    let entries_ptr = unique.entries.as_ptr();
+    assert_eq!(merge_enriched_in_place(&mut unique, &updates), Some(true));
+    assert_eq!(Arc::as_ptr(&unique), snapshot_ptr);
+    assert_eq!(unique.entries.as_ptr(), entries_ptr);
+
+    let shared = Arc::clone(&unique);
+    let updates_b = probe_batch(&unique.entries[1..2], need, &cancel).expect("probe second entry");
+    assert_eq!(merge_enriched_in_place(&mut unique, &updates_b), Some(true));
+    assert_ne!(Arc::as_ptr(&unique), Arc::as_ptr(&shared));
+    assert_eq!(shared.entries[1].details.children, None);
+    assert_eq!(
+        unique.entries[1].details.children,
+        Some(ChildCount {
+            count: 0,
+            truncated: false
+        })
     );
 }

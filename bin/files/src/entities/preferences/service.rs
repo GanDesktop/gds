@@ -2,6 +2,7 @@
 
 use super::{Preferences, api, presentation};
 use gds::app::AppExt as _;
+use gds::service::task_manager::Scope;
 use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
 use std::{
     ops::Deref,
@@ -10,10 +11,12 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-pub(crate) struct SaveFailed(pub String);
+pub struct SaveFailed(pub String);
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum Error {
+pub enum Error {
+    #[error(transparent)]
+    Storage(#[from] api::Error),
     #[error(transparent)]
     Presentation(#[from] presentation::Error),
     #[error("Files is closing; preferences can no longer be changed")]
@@ -25,7 +28,7 @@ type Queue = Arc<Mutex<Option<mpsc::UnboundedSender<Preferences>>>>;
 struct Installed(Entity<Service>);
 impl Global for Installed {}
 
-pub(crate) struct Service {
+pub struct Service {
     current: Preferences,
     queue: Queue,
     _updates: Task<()>,
@@ -33,8 +36,11 @@ pub(crate) struct Service {
 impl EventEmitter<SaveFailed> for Service {}
 
 impl Service {
-    fn new(preferences: Preferences, path: PathBuf, cx: &mut Context<Self>) -> Self {
-        let tasks = cx.gds_ro().tasks().scope();
+    pub fn current(&self) -> &Preferences {
+        &self.current
+    }
+
+    fn new(preferences: Preferences, path: PathBuf, tasks: &Scope, cx: &mut Context<Self>) -> Self {
         let (sender, mut receiver) = mpsc::unbounded_channel::<Preferences>();
         let queue = Arc::new(Mutex::new(Some(sender)));
         let closing = queue.clone();
@@ -81,7 +87,7 @@ impl Service {
         let prepared = presentation::Prepared::new(&preferences, &self.current, cx)?;
         let queue = self.queue.lock().expect("preferences queue lock");
         let sender = queue.as_ref().ok_or(Error::Closed)?;
-        if cx.gds_ro().tasks().is_shutting_down() || sender.is_closed() {
+        if cx.gds().tasks().is_shutting_down() || sender.is_closed() {
             return Err(Error::Closed);
         }
         // Persist failures leave this accepted snapshot active in every window.
@@ -90,7 +96,7 @@ impl Service {
             .send(preferences.clone())
             .map_err(|_| Error::Closed)?;
         prepared.install(&preferences, cx);
-        cx.gds()
+        cx.gds_mut()
             .appearance()
             .theme()
             .configure_hot_reload(preferences.appearance.clone());
@@ -107,10 +113,23 @@ pub(crate) struct Accessor<C> {
     cx: C,
 }
 
-impl<C> crate::shared::app::Files<C> {
-    pub(crate) fn preferences(self) -> Accessor<C> {
+pub(crate) trait PreferencesExt {
+    type Context<'a>: gds::app::Context
+    where
+        Self: 'a;
+
+    fn preferences(&mut self) -> Accessor<Self::Context<'_>>;
+}
+
+impl<C: gds::app::Context> PreferencesExt for gds::app::Gds<C> {
+    type Context<'a>
+        = C::Reborrowed<'a>
+    where
+        C: 'a;
+
+    fn preferences(&mut self) -> Accessor<C::Reborrowed<'_>> {
         Accessor {
-            cx: self.into_inner(),
+            cx: self.reborrow().into_inner(),
         }
     }
 }
@@ -131,16 +150,32 @@ impl Accessor<&mut App> {
     pub(crate) fn initialize(
         &mut self,
         preferences: Preferences,
-    ) -> Result<Entity<Service>, api::Error> {
-        Ok(self.install(preferences, api::path()?))
+        tasks: &Scope,
+    ) -> Result<Entity<Service>, Error> {
+        Ok(self.install(preferences, api::path()?, tasks))
     }
 
-    fn install(&mut self, preferences: Preferences, path: PathBuf) -> Entity<Service> {
+    #[cfg(all(test, feature = "gui-tests"))]
+    pub(crate) fn init_test(
+        &mut self,
+        preferences: Preferences,
+        path: PathBuf,
+        tasks: &Scope,
+    ) -> Entity<Service> {
+        self.install(preferences, path, tasks)
+    }
+
+    fn install(
+        &mut self,
+        preferences: Preferences,
+        path: PathBuf,
+        tasks: &Scope,
+    ) -> Entity<Service> {
         assert!(
             !self.cx.has_global::<Installed>(),
             "preferences already initialized"
         );
-        let service = self.cx.new(|cx| Service::new(preferences, path, cx));
+        let service = self.cx.new(|cx| Service::new(preferences, path, tasks, cx));
         self.cx.set_global(Installed(service.clone()));
         service
     }

@@ -13,12 +13,12 @@ fn cargo_identity_can_be_copied_and_information_pages_return_to_the_overview(
 ) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds()
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::English)
             .expect("translations");
-        cx.gds().ui().register_dialogs();
-        cx.gds()
+        cx.gds_mut().ui().register_dialogs();
+        cx.gds_mut()
             .appearance()
             .theme()
             .apply(&crate::appearance::theme::Appearance {
@@ -69,12 +69,12 @@ fn escape_returns_from_license_and_the_close_shortcut_dismisses_the_dialog(
 ) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds()
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::English)
             .expect("translations");
-        cx.gds().ui().register_dialogs();
-        cx.gds()
+        cx.gds_mut().ui().register_dialogs();
+        cx.gds_mut()
             .appearance()
             .theme()
             .apply(&crate::appearance::theme::Appearance {
@@ -117,7 +117,7 @@ fn escape_returns_from_license_and_the_close_shortcut_dismisses_the_dialog(
             crate::appearance::theme::ModePreference::Light,
             crate::appearance::theme::ModePreference::Dark,
         ] {
-            cx.gds()
+            cx.gds_mut()
                 .appearance()
                 .theme()
                 .apply(&crate::appearance::theme::Appearance {

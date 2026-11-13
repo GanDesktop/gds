@@ -76,6 +76,7 @@ struct Inner<T> {
 
 enum Repr<T> {
     Empty,
+    Single(Arc<T>),
     /// Non-empty inclusive range `start..=end` into `backing.items` (`start <= end < backing.len()`).
     Range {
         backing: Arc<SelectionBacking<T>>,
@@ -89,6 +90,7 @@ impl<T> Clone for Repr<T> {
     fn clone(&self) -> Self {
         match self {
             Self::Empty => Self::Empty,
+            Self::Single(item) => Self::Single(Arc::clone(item)),
             Self::Range {
                 backing,
                 start,
@@ -106,8 +108,9 @@ impl<T> Clone for Repr<T> {
 /// Ordered selection set backed by a shared copy-on-write allocation or a zero-copy range slice.
 ///
 /// Empty selections remain [`Repr::Empty`] so [`Default`] performs zero heap allocation,
-/// contiguous range selections share [`SelectionBacking`] in `O(1)`, and arbitrary selections
-/// keep `order` (unique items in first-seen order) synchronized with `set` (`O(1)` membership).
+/// single-item selections use [`Repr::Single`] without allocating a hash set, contiguous range
+/// selections share [`SelectionBacking`] in `O(1)`, and arbitrary multi-item selections keep
+/// `order` (unique items in first-seen order) synchronized with `set` (`O(1)` membership).
 pub(crate) struct Selection<T> {
     repr: Repr<T>,
 }
@@ -120,6 +123,7 @@ impl<T> Selection<T> {
     pub(crate) fn len(&self) -> usize {
         match &self.repr {
             Repr::Empty => 0,
+            Repr::Single(_) => 1,
             Repr::Range { start, end, .. } => end - start + 1,
             Repr::Set(inner) => inner.order.len(),
         }
@@ -129,9 +133,14 @@ impl<T> Selection<T> {
         matches!(self.repr, Repr::Empty)
     }
 
+    pub(crate) fn is_range(&self) -> bool {
+        matches!(self.repr, Repr::Range { .. })
+    }
+
     pub(crate) fn as_slice(&self) -> &[T] {
         match &self.repr {
             Repr::Empty => &[],
+            Repr::Single(item) => std::slice::from_ref(item.as_ref()),
             Repr::Range {
                 backing,
                 start,
@@ -160,6 +169,7 @@ impl<T> Selection<T> {
     {
         match &self.repr {
             Repr::Empty => false,
+            Repr::Single(item) => (**item).borrow() == value,
             Repr::Range {
                 backing,
                 start,
@@ -181,6 +191,7 @@ impl<T> Selection<T> {
     pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
         match (&self.repr, &other.repr) {
             (Repr::Empty, Repr::Empty) => true,
+            (Repr::Single(left), Repr::Single(right)) => Arc::ptr_eq(left, right),
             (
                 Repr::Range {
                     backing: left_backing,
@@ -204,6 +215,42 @@ impl<T> Selection<T> {
 
     pub(crate) fn clear(&mut self) {
         self.repr = Repr::Empty;
+    }
+
+    /// Detach any shared [`SelectionBacking`] by materializing a range selection into its own
+    /// compact representation (`Empty`, `Single`, or `Set`).
+    pub(crate) fn compact(&mut self)
+    where
+        T: Clone + Eq + Hash,
+    {
+        let Repr::Range {
+            backing,
+            start,
+            end,
+        } = &self.repr
+        else {
+            return;
+        };
+        self.repr = Self::repr_from_unique_slice(&backing.items[*start..=*end]);
+    }
+
+    fn repr_from_unique_slice(slice: &[T]) -> Repr<T>
+    where
+        T: Clone + Eq + Hash,
+    {
+        match slice {
+            [] => Repr::Empty,
+            [only] => Repr::Single(Arc::new(only.clone())),
+            many => {
+                let mut order = Vec::with_capacity(many.len());
+                let mut set = HashSet::with_capacity(many.len());
+                for item in many {
+                    order.push(item.clone());
+                    set.insert(item.clone());
+                }
+                Repr::Set(Arc::new(Inner { order, set }))
+            }
+        }
     }
 
     /// Select the inclusive span `start..=end` from `backing` in `O(1)` without cloning or hashing.
@@ -237,17 +284,18 @@ impl<T> Selection<T> {
 
     pub(crate) fn set_single(&mut self, item: T)
     where
-        T: Clone + Eq + Hash,
+        T: PartialEq,
     {
         if self.len() == 1 && self.as_slice()[0] == item {
             return;
         }
-        let mut set = HashSet::with_capacity(1);
-        set.insert(item.clone());
-        self.repr = Repr::Set(Arc::new(Inner {
-            order: vec![item],
-            set,
-        }));
+        if let Repr::Single(arc) = &mut self.repr
+            && let Some(slot) = Arc::get_mut(arc)
+        {
+            *slot = item;
+            return;
+        }
+        self.repr = Repr::Single(Arc::new(item));
     }
 
     pub(crate) fn replace<I>(&mut self, iter: I)
@@ -255,18 +303,35 @@ impl<T> Selection<T> {
         I: IntoIterator<Item = T>,
         T: Clone + Eq + Hash,
     {
-        let iter = iter.into_iter();
-        let (lower, _) = iter.size_hint();
-        let mut order = Vec::with_capacity(lower);
-        let mut set = HashSet::with_capacity(lower);
+        let mut iter = iter.into_iter();
+        let Some(first) = iter.next() else {
+            self.repr = Repr::Empty;
+            return;
+        };
+        let mut second_distinct = None;
+        for candidate in &mut iter {
+            if candidate != first {
+                second_distinct = Some(candidate);
+                break;
+            }
+        }
+        let Some(second) = second_distinct else {
+            self.set_single(first);
+            return;
+        };
+
+        let (lower_rest, _) = iter.size_hint();
+        let capacity = lower_rest.saturating_add(2);
+        let mut order = Vec::with_capacity(capacity);
+        let mut set = HashSet::with_capacity(capacity);
+        set.insert(first.clone());
+        order.push(first);
+        set.insert(second.clone());
+        order.push(second);
         for item in iter {
             if set.insert(item.clone()) {
                 order.push(item);
             }
-        }
-        if order.is_empty() {
-            self.repr = Repr::Empty;
-            return;
         }
         if self.as_slice() == order.as_slice() {
             return;
@@ -283,18 +348,27 @@ impl<T> Selection<T> {
         }
         match &mut self.repr {
             Repr::Empty => {
-                let mut set = HashSet::with_capacity(1);
+                self.repr = Repr::Single(Arc::new(item));
+            }
+            Repr::Single(existing) => {
+                let first = (**existing).clone();
+                let mut order = Vec::with_capacity(2);
+                let mut set = HashSet::with_capacity(2);
+                set.insert(first.clone());
+                order.push(first);
                 set.insert(item.clone());
-                self.repr = Repr::Set(Arc::new(Inner {
-                    order: vec![item],
-                    set,
-                }));
+                order.push(item);
+                self.repr = Repr::Set(Arc::new(Inner { order, set }));
             }
             Repr::Range {
                 backing,
                 start,
                 end,
             } => {
+                if backing.position(&item) == Some(*end + 1) {
+                    *end += 1;
+                    return true;
+                }
                 let slice = &backing.items[*start..=*end];
                 let capacity = slice.len() + 1;
                 let mut order = Vec::with_capacity(capacity);
@@ -323,6 +397,14 @@ impl<T> Selection<T> {
     {
         match &mut self.repr {
             Repr::Empty => false,
+            Repr::Single(existing) => {
+                if (**existing).borrow() == value {
+                    self.repr = Repr::Empty;
+                    true
+                } else {
+                    false
+                }
+            }
             Repr::Range {
                 backing,
                 start,
@@ -336,6 +418,20 @@ impl<T> Selection<T> {
                 }
                 if *start == *end {
                     self.repr = Repr::Empty;
+                    return true;
+                }
+                if pos == *start {
+                    *start += 1;
+                    if *start == *end {
+                        self.repr = Repr::Single(Arc::new(backing.items[*start].clone()));
+                    }
+                    return true;
+                }
+                if pos == *end {
+                    *end -= 1;
+                    if *start == *end {
+                        self.repr = Repr::Single(Arc::new(backing.items[*start].clone()));
+                    }
                     return true;
                 }
                 let capacity = *end - *start;
@@ -357,6 +453,18 @@ impl<T> Selection<T> {
                 }
                 if arc.order.len() == 1 {
                     self.repr = Repr::Empty;
+                    return true;
+                }
+                if arc.order.len() == 2 {
+                    let remaining = arc
+                        .order
+                        .iter()
+                        .find(|item| (*item).borrow() != value)
+                        .cloned();
+                    self.repr = match remaining {
+                        Some(item) => Repr::Single(Arc::new(item)),
+                        None => Repr::Empty,
+                    };
                     return true;
                 }
                 let inner = Arc::make_mut(arc);
@@ -389,6 +497,11 @@ impl<T> Selection<T> {
     {
         match &self.repr {
             Repr::Empty => {}
+            Repr::Single(item) => {
+                if !keep(item.as_ref()) {
+                    self.repr = Repr::Empty;
+                }
+            }
             Repr::Range {
                 backing,
                 start,
@@ -398,23 +511,93 @@ impl<T> Selection<T> {
                 let Some(first_removed) = slice.iter().position(|item| !keep(item)) else {
                     return;
                 };
-                let mut order = Vec::with_capacity(slice.len() - 1);
-                let mut set = HashSet::with_capacity(slice.len() - 1);
-                for item in &slice[..first_removed] {
-                    order.push(item.clone());
-                    set.insert(item.clone());
-                }
-                for item in &slice[(first_removed + 1)..] {
-                    if keep(item) {
+                if first_removed > 0 {
+                    let rel_end = first_removed - 1;
+                    let mut tail = slice[(first_removed + 1)..].iter();
+                    let Some(after_hole) = tail.find(|item| keep(item)) else {
+                        self.repr = if rel_end == 0 {
+                            Repr::Single(Arc::new(slice[0].clone()))
+                        } else {
+                            Repr::Range {
+                                backing: Arc::clone(backing),
+                                start: *start,
+                                end: *start + rel_end,
+                            }
+                        };
+                        return;
+                    };
+                    let mut order = Vec::with_capacity(slice.len() - 1);
+                    let mut set = HashSet::with_capacity(slice.len() - 1);
+                    for item in &slice[..first_removed] {
                         order.push(item.clone());
                         set.insert(item.clone());
                     }
-                }
-                self.repr = if order.is_empty() {
-                    Repr::Empty
+                    order.push(after_hole.clone());
+                    set.insert(after_hole.clone());
+                    for item in tail {
+                        if keep(item) {
+                            order.push(item.clone());
+                            set.insert(item.clone());
+                        }
+                    }
+                    self.repr = Repr::Set(Arc::new(Inner { order, set }));
                 } else {
-                    Repr::Set(Arc::new(Inner { order, set }))
-                };
+                    let mut idx = 1usize;
+                    while idx < slice.len() && !keep(&slice[idx]) {
+                        idx += 1;
+                    }
+                    if idx >= slice.len() {
+                        self.repr = Repr::Empty;
+                        return;
+                    }
+                    let rel_start = idx;
+                    let mut rel_end = idx;
+                    idx += 1;
+                    while idx < slice.len() && keep(&slice[idx]) {
+                        rel_end = idx;
+                        idx += 1;
+                    }
+                    if idx >= slice.len() {
+                        self.repr = if rel_start == rel_end {
+                            Repr::Single(Arc::new(slice[rel_start].clone()))
+                        } else {
+                            Repr::Range {
+                                backing: Arc::clone(backing),
+                                start: *start + rel_start,
+                                end: *start + rel_end,
+                            }
+                        };
+                        return;
+                    }
+                    let mut tail = slice[(idx + 1)..].iter();
+                    let Some(after_hole) = tail.find(|item| keep(item)) else {
+                        self.repr = if rel_start == rel_end {
+                            Repr::Single(Arc::new(slice[rel_start].clone()))
+                        } else {
+                            Repr::Range {
+                                backing: Arc::clone(backing),
+                                start: *start + rel_start,
+                                end: *start + rel_end,
+                            }
+                        };
+                        return;
+                    };
+                    let mut order = Vec::with_capacity(slice.len() - rel_start);
+                    let mut set = HashSet::with_capacity(slice.len() - rel_start);
+                    for item in &slice[rel_start..=rel_end] {
+                        order.push(item.clone());
+                        set.insert(item.clone());
+                    }
+                    order.push(after_hole.clone());
+                    set.insert(after_hole.clone());
+                    for item in tail {
+                        if keep(item) {
+                            order.push(item.clone());
+                            set.insert(item.clone());
+                        }
+                    }
+                    self.repr = Repr::Set(Arc::new(Inner { order, set }));
+                }
             }
             Repr::Set(arc) => {
                 // Avoid cloning or mutating the shared allocation when every element stays selected.
@@ -439,6 +622,10 @@ impl<T> Selection<T> {
                     }
                     if inner.order.is_empty() {
                         self.repr = Repr::Empty;
+                    } else if inner.order.len() == 1
+                        && let Some(only) = inner.order.pop()
+                    {
+                        self.repr = Repr::Single(Arc::new(only));
                     }
                 } else {
                     let mut order = Vec::with_capacity(arc.order.len() - 1);
@@ -453,10 +640,10 @@ impl<T> Selection<T> {
                             set.insert(item.clone());
                         }
                     }
-                    self.repr = if order.is_empty() {
-                        Repr::Empty
-                    } else {
-                        Repr::Set(Arc::new(Inner { order, set }))
+                    self.repr = match order.len() {
+                        0 => Repr::Empty,
+                        1 => Repr::Single(Arc::new(order.pop().expect("single retained item"))),
+                        _ => Repr::Set(Arc::new(Inner { order, set })),
                     };
                 }
             }
@@ -579,6 +766,9 @@ impl<T: Clone> IntoIterator for Selection<T> {
     fn into_iter(self) -> Self::IntoIter {
         match self.repr {
             Repr::Empty => Vec::new().into_iter(),
+            Repr::Single(arc) => {
+                vec![Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone())].into_iter()
+            }
             Repr::Range {
                 backing,
                 start,
@@ -783,5 +973,84 @@ mod tests {
         assert!(selection.is_empty());
         selection.set_range(&backing, 0, 10);
         assert!(selection.is_empty());
+    }
+
+    #[test]
+    fn single_representation_reuses_unique_arc_and_avoids_hash_sets() {
+        let mut selection = Selection::new();
+        selection.set_single(String::from("alpha"));
+        let Repr::Single(first_arc) = &selection.repr else {
+            panic!("single selection must use Repr::Single");
+        };
+        let first_ptr = std::sync::Arc::as_ptr(first_arc);
+
+        // Unique Single mutates in place without allocating a new Arc.
+        selection.set_single(String::from("beta"));
+        let Repr::Single(second_arc) = &selection.repr else {
+            panic!("single selection must remain Repr::Single");
+        };
+        assert_eq!(std::sync::Arc::as_ptr(second_arc), first_ptr);
+        assert_eq!(selection.as_slice(), &[String::from("beta")]);
+
+        // Shared Single copies on write without mutating the snapshot.
+        let snapshot = selection.clone();
+        assert!(selection.ptr_eq(&snapshot));
+        selection.set_single(String::from("gamma"));
+        assert!(!selection.ptr_eq(&snapshot));
+        assert_eq!(snapshot.as_slice(), &[String::from("beta")]);
+        assert_eq!(selection.as_slice(), &[String::from("gamma")]);
+
+        // Single-item replace and Set shrink normalize back to Single.
+        let mut from_replace = Selection::new();
+        from_replace.replace(["only", "only"]);
+        assert!(matches!(from_replace.repr, Repr::Single(_)));
+
+        let mut two_items = Selection::from(vec!["left", "right"]);
+        assert!(matches!(two_items.repr, Repr::Set(_)));
+        assert!(two_items.remove(&"left"));
+        assert!(matches!(two_items.repr, Repr::Single(_)));
+        assert_eq!(two_items.as_slice(), &["right"]);
+    }
+
+    #[test]
+    fn range_boundary_mutations_and_compact_preserve_order_without_set_clones() {
+        let backing = SelectionBacking::from_items(["a", "b", "c", "d", "e", "f"]);
+        let mut selection = Selection::new();
+        selection.set_range(&backing, 1, 3);
+        assert!(selection.is_range());
+        assert_eq!(selection.as_slice(), &["b", "c", "d"]);
+
+        // Appending the immediately following backing item extends the Range in O(1).
+        assert!(selection.insert("e"));
+        assert!(selection.is_range());
+        assert_eq!(selection.as_slice(), &["b", "c", "d", "e"]);
+
+        // Removing head or tail items shrinks Range bounds in O(1).
+        assert!(selection.remove(&"b"));
+        assert!(selection.is_range());
+        assert_eq!(selection.as_slice(), &["c", "d", "e"]);
+        assert!(selection.remove(&"e"));
+        assert!(selection.is_range());
+        assert_eq!(selection.as_slice(), &["c", "d"]);
+
+        // Trimming range boundaries via retain preserves Repr::Range and calls keep once per item.
+        selection.set_range(&backing, 0, 5);
+        let mut calls = 0usize;
+        selection.retain(|item| {
+            calls += 1;
+            matches!(*item, "b" | "c" | "d")
+        });
+        assert_eq!(calls, 6);
+        assert!(selection.is_range());
+        assert_eq!(selection.as_slice(), &["b", "c", "d"]);
+
+        // Compacting detaches SelectionBacking while preserving exact order.
+        let weak_backing = std::sync::Arc::downgrade(&backing);
+        drop(backing);
+        assert!(weak_backing.upgrade().is_some());
+        selection.compact();
+        assert!(!selection.is_range());
+        assert!(weak_backing.upgrade().is_none());
+        assert_eq!(selection.as_slice(), &["b", "c", "d"]);
     }
 }

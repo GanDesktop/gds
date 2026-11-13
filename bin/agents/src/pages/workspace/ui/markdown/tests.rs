@@ -38,7 +38,7 @@ impl Render for StructuredMarkdown {
         div()
             .size_full()
             .p_3()
-            .bg(cx.gds_ro().appearance().theme().content_background())
+            .bg(cx.gds().appearance().theme().content_background())
             .child(
                 div()
                     .id("structured-markdown")

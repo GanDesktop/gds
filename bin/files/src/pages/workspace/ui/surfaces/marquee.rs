@@ -153,6 +153,15 @@ impl State {
     fn clear(&self) {
         self.drag.borrow_mut().take();
     }
+
+    pub(in crate::pages::workspace) fn is_active(&self) -> bool {
+        self.drag.borrow().as_ref().is_some_and(|drag| drag.started)
+    }
+}
+
+enum MarqueeHits {
+    Indices(std::ops::Range<usize>),
+    Paths(Vec<PathBuf>),
 }
 
 impl Default for State {
@@ -216,7 +225,11 @@ impl Browser {
             return false;
         }
         if self.marquee_origin_current(&drag.origin) {
+            self.release_active_selection_mirrors(cx);
             self.marquee_restore(&drag.baseline);
+            if let Some(slot) = self.active_mut() {
+                slot.refresh_visible_if_dirty();
+            }
         }
         cx.notify();
         true
@@ -320,23 +333,31 @@ impl Browser {
         let hits = self.marquee_hits(drag.rect(), bounds);
         let baseline = drag.baseline.clone();
         *self.files.marquee.drag.borrow_mut() = Some(drag);
-        self.marquee_write_selection(&hits, &baseline);
+        self.release_active_selection_mirrors(cx);
+        self.marquee_write_selection(hits, &baseline);
         cx.notify();
     }
 
     fn marquee_release(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.files.marquee.drag.borrow_mut().take().is_some() {
+            if self.active().is_some_and(|slot| slot.projection_dirty) {
+                self.release_active_selection_mirrors(cx);
+                if let Some(slot) = self.active_mut() {
+                    slot.refresh_visible_if_dirty();
+                }
+            }
             cx.notify();
         }
     }
 
-    /// The paths of the visible rows the rectangle crosses.
-    fn marquee_hits(&self, rect: Bounds<Pixels>, bounds: Bounds<Pixels>) -> Vec<PathBuf> {
+    /// The visible rows the rectangle crosses: contiguous index span in list mode,
+    /// or tile-intersected paths in grid mode.
+    fn marquee_hits(&self, rect: Bounds<Pixels>, bounds: Bounds<Pixels>) -> MarqueeHits {
         let Some(slot) = self.active() else {
-            return Vec::new();
+            return MarqueeHits::Indices(0..0);
         };
         if slot.navigation.directory().is_none() {
-            return Vec::new();
+            return MarqueeHits::Indices(0..0);
         }
         let Some(viewport) = State::viewport(
             bounds,
@@ -346,18 +367,18 @@ impl Browser {
                 DataListStyle::HEADER_HEIGHT
             },
         ) else {
-            return Vec::new();
+            return MarqueeHits::Indices(0..0);
         };
         let viewport_right = viewport.origin.x + viewport.size.width;
         let rect_right = rect.origin.x + rect.size.width;
         if rect.origin.x >= viewport_right || rect_right <= viewport.origin.x {
-            return Vec::new();
+            return MarqueeHits::Indices(0..0);
         }
         let top = rect.origin.y.max(viewport.origin.y);
         let bottom =
             (rect.origin.y + rect.size.height).min(viewport.origin.y + viewport.size.height);
         if bottom <= top {
-            return Vec::new();
+            return MarqueeHits::Indices(0..0);
         }
         // Rows scroll under the fixed header, so screen position must account
         // for the list's scroll offset instead of assuming row 0 is at the top.
@@ -379,14 +400,16 @@ impl Browser {
                 .ceil()
                 .max(0.) as usize)
                 * slot.grid.columns;
-            return (first..last.min(slot.table_rows.len()))
-                .filter_map(|index| {
-                    slot.grid
-                        .tile(index, bounds.origin, scroll_offset)
-                        .intersects(&clipped)
-                        .then(|| slot.table_rows[index].path.clone())
-                })
-                .collect();
+            return MarqueeHits::Paths(
+                (first..last.min(slot.table_rows.len()))
+                    .filter_map(|index| {
+                        slot.grid
+                            .tile(index, bounds.origin, scroll_offset)
+                            .intersects(&clipped)
+                            .then(|| slot.table_rows[index].path.clone())
+                    })
+                    .collect(),
+            );
         }
         let rows_top = viewport.origin.y + scroll_offset;
         let first = ((f32::from(top - rows_top) / DataListStyle::ROW_HEIGHT)
@@ -397,45 +420,92 @@ impl Browser {
             .ceil()
             .max(0.) as usize)
             .min(slot.table_rows.len());
-        slot.table_rows[first..last]
-            .iter()
-            .map(|entry| entry.path.clone())
-            .collect()
+        MarqueeHits::Indices(first..last)
     }
 
     /// Write `hits` into the tab's own selection, the same paths copy, cut and
     /// delete read.
-    fn marquee_write_selection(&mut self, hits: &[PathBuf], baseline: &Baseline) {
+    fn marquee_write_selection(&mut self, hits: MarqueeHits, baseline: &Baseline) {
         let Some(slot) = self.active_mut() else {
             return;
         };
-        if baseline.merge {
-            let mut next = baseline.selection.clone();
-            for path in hits {
-                next.insert(path.clone());
+        match hits {
+            MarqueeHits::Indices(range) if !baseline.merge => {
+                if range.is_empty() {
+                    slot.navigation.view_mut().selected.clear();
+                    slot.cursor = None;
+                    slot.cursor_index = None;
+                    slot.anchor = None;
+                    slot.anchor_index = None;
+                } else {
+                    let end = range.end - 1;
+                    slot.select_index_range(range.start, end);
+                    slot.anchor = Some(slot.table_rows[range.start].path.clone());
+                    slot.anchor_index = Some(range.start);
+                    slot.cursor = Some(slot.table_rows[end].path.clone());
+                    slot.cursor_index = Some(end);
+                }
             }
-            if slot.navigation.view().selected != next {
-                slot.navigation.view_mut().selected = next;
+            MarqueeHits::Indices(range) => {
+                let mut next = baseline.selection.clone();
+                for entry in &slot.table_rows[range.clone()] {
+                    next.insert(entry.path.clone());
+                }
+                if slot.navigation.view().selected != next {
+                    slot.navigation.view_mut().selected = next;
+                }
+                if !range.is_empty() {
+                    let end = range.end - 1;
+                    slot.cursor = Some(slot.table_rows[end].path.clone());
+                    slot.cursor_index = Some(end);
+                    slot.anchor = baseline
+                        .anchor
+                        .clone()
+                        .or_else(|| Some(slot.table_rows[range.start].path.clone()));
+                    slot.anchor_index = None;
+                } else {
+                    slot.cursor = baseline.cursor.clone();
+                    slot.cursor_index = None;
+                    slot.anchor = baseline.anchor.clone();
+                    slot.anchor_index = None;
+                }
             }
-        } else if slot.navigation.view().selected != hits {
-            let mut next = Selection::new();
-            next.replace(hits.iter().cloned());
-            slot.navigation.view_mut().selected = next;
-        }
-        if let Some(last) = hits.last() {
-            slot.cursor = Some(last.clone());
-            slot.anchor = if baseline.merge {
-                baseline.anchor.clone().or_else(|| hits.first().cloned())
-            } else {
-                hits.first().cloned()
-            };
-        } else if baseline.merge {
-            // The blank press cleared these; a merge must keep its starting point.
-            slot.cursor = baseline.cursor.clone();
-            slot.anchor = baseline.anchor.clone();
-        } else {
-            slot.cursor = None;
-            slot.anchor = None;
+            MarqueeHits::Paths(paths) => {
+                if baseline.merge {
+                    let mut next = baseline.selection.clone();
+                    for path in &paths {
+                        next.insert(path.clone());
+                    }
+                    if slot.navigation.view().selected != next {
+                        slot.navigation.view_mut().selected = next;
+                    }
+                } else if slot.navigation.view().selected != paths {
+                    let mut next = Selection::new();
+                    next.replace(paths.iter().cloned());
+                    slot.navigation.view_mut().selected = next;
+                }
+                if let Some(last) = paths.last() {
+                    slot.cursor = Some(last.clone());
+                    slot.cursor_index = None;
+                    slot.anchor = if baseline.merge {
+                        baseline.anchor.clone().or_else(|| paths.first().cloned())
+                    } else {
+                        paths.first().cloned()
+                    };
+                    slot.anchor_index = None;
+                } else if baseline.merge {
+                    // The blank press cleared these; a merge must keep its starting point.
+                    slot.cursor = baseline.cursor.clone();
+                    slot.cursor_index = None;
+                    slot.anchor = baseline.anchor.clone();
+                    slot.anchor_index = None;
+                } else {
+                    slot.cursor = None;
+                    slot.cursor_index = None;
+                    slot.anchor = None;
+                    slot.anchor_index = None;
+                }
+            }
         }
     }
 

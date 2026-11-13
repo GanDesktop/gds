@@ -347,7 +347,7 @@ impl RenderOnce for TitleBar {
                 cfg!(target_os = "macos") && !window.is_fullscreen(),
                 |bar| bar.pl(px(MACOS_CONTROLS_WIDTH)),
             )
-            .bg(cx.gds_ro().appearance().theme().sidebar_background())
+            .bg(cx.gds().appearance().theme().sidebar_background())
             .border_b_1()
             .border_color(cx.theme().title_bar_border)
             .child(title.children(self.children))

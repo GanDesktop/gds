@@ -157,6 +157,7 @@ impl Browser {
             .then(|| self.collections.trash.view(cx));
         if let Some(slot) = self.tab_slot_mut(id) {
             slot.save_scroll();
+            slot.navigation.view_mut().selected.compact();
             if let Some(scroll) = scroll {
                 slot.navigation.view_mut().scroll_offset = scroll;
             }

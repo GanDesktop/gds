@@ -47,13 +47,13 @@ impl Details {
             icons: HashMap::new(),
             scroll: UniformListScrollHandle::new(),
             _changes: cx.observe(&browser, |this, browser, cx| {
-                if browser.read(cx).clipboard_details.read(cx).is_open() {
-                    let clipboard_details = browser.read(cx).clipboard_details.clone();
-                    clipboard_details.update(cx, |details, cx| details.sync_from_clipboard(cx));
-                }
                 this.sync(&browser, cx);
             }),
         }
+    }
+
+    pub(in crate::pages::workspace) fn is_open(&self) -> bool {
+        self.open
     }
 
     pub(in crate::pages::workspace) fn set_open(
@@ -180,12 +180,8 @@ impl Details {
 
 impl Render for Details {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(browser) = self.browser.upgrade() else {
+        if self.browser.upgrade().is_none() {
             return el! { .div }.into_any_element();
-        };
-        if !self.open {
-            self.open = true;
-            self.sync_state(&browser, cx);
         }
         if self.items.is_empty() {
             return el! { .StatusList::default { empty: $(i18n::text("selection-empty", cx)); } }
@@ -325,13 +321,16 @@ impl Browser {
     fn remove_status_selection(&mut self, target: Target, cx: &mut Context<Self>) {
         match target {
             Target::File(path) => {
+                self.release_active_selection_mirrors(cx);
                 if let Some(slot) = self.active_mut() {
                     slot.navigation.view_mut().selected.remove(&path);
                     if slot.anchor.as_ref() == Some(&path) {
                         slot.anchor = None;
+                        slot.anchor_index = None;
                     }
                     if slot.cursor.as_ref() == Some(&path) {
                         slot.cursor = None;
+                        slot.cursor_index = None;
                     }
                 }
             }

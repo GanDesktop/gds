@@ -26,18 +26,18 @@ fn preference_off_on_restores_system_and_late_system_updates_cannot_enable(
     cx: &mut TestAppContext,
 ) {
     cx.update(|cx| {
-        cx.gds().appearance().init();
+        cx.gds_mut().appearance().init();
         for system in [false, true] {
             system_changed(system, cx);
-            cx.gds().appearance().motion().set_enabled(false);
+            cx.gds_mut().appearance().motion().set_enabled(false);
             assert!(cx.reduce_motion());
             system_changed(!system, cx);
             assert!(cx.reduce_motion());
-            cx.gds().appearance().motion().set_enabled(true);
+            cx.gds_mut().appearance().motion().set_enabled(true);
             assert_eq!(cx.reduce_motion(), !system);
-            cx.gds().appearance().motion().set_enabled(false);
+            cx.gds_mut().appearance().motion().set_enabled(false);
             system_changed(system, cx);
-            cx.gds().appearance().motion().set_enabled(true);
+            cx.gds_mut().appearance().motion().set_enabled(true);
             assert_eq!(cx.reduce_motion(), system);
         }
     });
@@ -47,7 +47,7 @@ fn preference_off_on_restores_system_and_late_system_updates_cannot_enable(
 fn all_roots_reassert_policy_before_render_and_static_spinners_stop_frames(
     cx: &mut TestAppContext,
 ) {
-    cx.update(|cx| cx.gds().appearance().init());
+    cx.update(|cx| cx.gds_mut().appearance().init());
     let first_samples = Rc::new(RefCell::new(Vec::new()));
     let second_samples = Rc::new(RefCell::new(Vec::new()));
     let first = open(cx, first_samples.clone());
@@ -62,7 +62,7 @@ fn all_roots_reassert_policy_before_render_and_static_spinners_stop_frames(
                 > 0
         );
     }
-    cx.update(|cx| cx.gds().appearance().motion().set_enabled(false));
+    cx.update(|cx| cx.gds_mut().appearance().motion().set_enabled(false));
     cx.run_until_parked();
     first_samples.borrow_mut().clear();
     second_samples.borrow_mut().clear();
@@ -96,7 +96,7 @@ fn all_roots_reassert_policy_before_render_and_static_spinners_stop_frames(
     }
     cx.update(|cx| {
         system_changed(false, cx);
-        cx.gds().appearance().motion().set_enabled(true);
+        cx.gds_mut().appearance().motion().set_enabled(true);
     });
     cx.run_until_parked();
     for window in [first, second, third] {

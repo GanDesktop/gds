@@ -35,9 +35,9 @@ bin/
 
 ## 任务与退出生命周期
 
-UI 与服务负责资源所有权，`gds::service::task_manager` 负责跨 GPUI、Tokio、线程和子进程的取消与完成追踪。新应用导入 `gds::app::AppExt`，通过 `cx.gds().tasks()` 接入窗口关闭、显式退出和 Unix 信号；先关闭原生窗口，再等待服务清理，最后退出应用。
+UI 与服务负责资源所有权，`gds::service::task_manager` 负责跨 GPUI、Tokio、线程和子进程的取消与完成追踪。新应用导入 `gds::app::AppExt`，通过 `cx.gds_mut().tasks()` 接入窗口关闭、显式退出和 Unix 信号；先关闭原生窗口，再等待服务清理，最后退出应用。
 
-应用在 GPUI 启动入口调用 `cx.gds().initialize(supervisor.scope(), logs)`，统一幂等安装任务管理、外观基础、KeyTips、终端输入上下文和可选日志收集器，在服务和视图启动前固定追踪开关。公共库仅保留唯一扩展 trait `AppExt`（提供可变 `cx.gds()` 与只读 `cx.gds_ro()`），通过固有方法下挂 `tasks()`、`appearance()`、`i18n()` 与 `ui()` 访问器。Files 通过唯一本地扩展 trait `FilesExt`（位于 `shared/app.rs`）提供 `cx.gds().files()` / `cx.gds_ro().files()` 访问器，下挂固有子访问器 `preferences()`、`volumes()`、`clipboard()` 与应用内的 `windows()`，并承载 `bind_lifecycle`、`init_ui`、`register_actions` 等启动与操作方法，配置仅作为输入。trait 只声明访问入口；访问器借用上下文，不持有服务，也不在获取时初始化。独立任务服务可通过 `cx.gds().tasks().init(scope)` 安装，`cx.gds_ro().tasks().scope()` 只读取已安装的服务；日志窗口不再参与任务服务初始化。`ui::task_manager` 只通过只读 `Inspector` 展示快照，关闭日志时不创建 Inspector、任务视图或刷新计时器。
+应用在 GPUI 启动入口调用 `cx.gds_mut().initialize(supervisor.scope(), logs)`，统一幂等安装任务管理、外观基础、KeyTips、终端输入上下文和可选日志收集器，在服务和视图启动前固定追踪开关；若启动包含异步前置阶段（如 Files 先调用 `cx.gds_mut().tasks().init(scope)` 绑定信号与取消，再于主线程挂载界面），则在第二阶段调用 `cx.gds_mut().init_ui(logs)` 安装界面基础服务。公共库仅保留唯一扩展 trait `AppExt`（提供只读 `cx.gds()` 与可变 `cx.gds_mut()`），通过固有方法下挂 `tasks()`、`appearance()`、`i18n()` 与 `ui()` 访问器。Files 内各 FSD 切片通过各自公开入口导出的局部扩展 trait（`PreferencesExt`、`VolumesExt`、`ClipboardExt`）在 `Gds` 上挂载 `preferences()`、`volumes()` 与 `clipboard()` 访问器，顶层启动与窗口宿主编排直接归属 `app` 层自身结构体（`Bootstrap`、`PreparedIo`、`ui::Initializer`、`windows::Host`、`DesktopIntegration`），配置仅作为输入。trait 只声明访问入口；访问器借用上下文，不持有服务，也不在获取时初始化。独立任务服务可通过 `cx.gds_mut().tasks().init(scope)` 安装，`cx.gds().tasks().scope()` 只读取已安装的服务；日志窗口不再参与任务服务初始化。`ui::task_manager` 只通过只读 `Inspector` 展示快照，关闭日志时不创建 Inspector、任务视图或刷新计时器。
 
 新增后台工作时，先确定所属作用域、取消策略和完成条件，再选择执行器。涉及进程、设备或持久化的任务必须登记完成；仅用于 UI 更新的任务可以随其拥有者释放。具体 API、服务示例和测试约定见[任务所有权与应用退出](development/task-manager.md)。
 
@@ -105,7 +105,7 @@ cargo build --bins --features files,agents,portal
 | `storage` | Toasty / SQLite 存储 |
 | `logs` | 本进程日志服务 |
 | `task-manager` | `service::task_manager` 的任务作用域、取消与完成追踪，以及可选的诊断快照；不依赖 GPUI |
-| `app` | `AppExt`（`cx.gds()` / `cx.gds_ro()`）根访问器、任务服务绑定与退出协调；不依赖 `ui` |
+| `app` | `AppExt`（`cx.gds()` / `cx.gds_mut()`）根访问器、任务服务绑定与退出协调；不依赖 `ui` |
 | `terminal` | PTY 与终端模型 |
 | `file-inspection` | 按需读取文件内容元信息、生成缩略图与标准磁盘缓存 |
 | `remote` | SFTP / SMB 文件服务 |
@@ -201,7 +201,7 @@ app → pages → widgets → features → entities → shared
 | `widgets` | 可独立使用、也可嵌入页面的界面块 | `settings`、`remote_browser`、`help` | `settings`（含 Agent 管理与安装内容）、`history`、`help` |
 | `features` | 可由不同界面触发的用户操作与工作流 | `file_operations`、`pick_files`、`connect_server` | `navigation`（切换后台、打开管理视图）、`agent_auth`、`delete_session` |
 | `entities` | 领域数据、状态、相关 API 与呈现 | `file`、`location`、`preferences` | `agent`、`backend`、`session` |
-| `shared` | 不承载业务决策的应用内基础能力 | `app`、`i18n`、`lib`（剪贴板）、`ui` | `i18n`、`config`、`api`、`lib`、`ui`、`routes` |
+| `shared` | 不承载业务决策的应用内基础能力 | `i18n`、`lib`（剪贴板与选区）、`ui` | `i18n`、`config`、`api`、`lib`、`ui`、`routes` |
 
 每层使用 `<layer>.rs` 配合 `<layer>/`；每个切片使用 `<slice>.rs` 作为公开入口，内部按实际职责组织 `ui`、`model`、`api` 等分段。外部调用只通过切片入口公开的类型、函数或命名空间访问，内部实现分段保持私有。测试与资源留在所属模块附近。
 
@@ -220,7 +220,7 @@ Agents 的设置和历史浏览器既可嵌入工作区，也可独立打开，�
 ```text
 src/
 ├── lib.rs
-├── app.rs + app/                  # AppExt (gds / gds_ro) 与 tasks / appearance / i18n / ui 访问器
+├── app.rs + app/                  # AppExt (gds / gds_mut) 与 tasks / appearance / i18n / ui 访问器
 ├── appearance.rs + appearance/
 │   ├── theme.rs + theme/          # 主题来源、配色、明暗与热更新
 │   ├── typography.rs             # 字体与字号规则
@@ -255,7 +255,7 @@ src/
 
 GPUI 与 Tokio 的执行器独立。Files、Agents 和 Nixes 的启动层持有 `service::task_manager::Supervisor`，TM 内部独占 Tokio Runtime；服务接收 `Scope`，通过 `spawn`、`spawn_cancellable`、`spawn_blocking` 和 `spawn_thread` 派生任务，不保存或查找 Runtime Handle。`Task<T>` 上报任务准入和执行错误；普通任务在句柄释放后继续受 TM 追踪，可丢弃的 I/O 显式选择取消策略。GPUI 前台负责等待结果和更新界面，纯界面任务继续使用 GPUI 所有权。原生工作线程通过作用域驱动异步 I/O，不另建运行时。
 
-Files 的启动顺序集中在 `app.rs` 及 `app/{cli, config, desktop, ui, windows}.rs`：`Bootstrap::init` 读取配置并建立日志和 TM；`Bootstrap::run_event_loop` 在 GPUI 回调中先由 `cx.gds().files().bind_lifecycle` 绑定 TM 与退出处理，再在可取消作用域中调用 `prepare_io` 执行桌面单实例协商（`DesktopIntegration::acquire`）与按需存储加载（`Storage::start`），随后在主线程通过 `cx.gds().files().mount` 调用 `init_ui` 安装界面与偏好/卷/快捷键、由 `windows().install` 注册窗口宿主并按模式打开初始窗口（`windows().open_initial`），调用 `cx.gds().tasks().ready(keep_alive)` 标记就绪，最后由 `listen_desktop` 消费桌面请求。`app/ui.rs` 只负责生命周期绑定、UI 与服务初始化，`app/windows.rs` 通过 `windows()` 访问器管理全局窗口宿主并在进程首次开窗时派发启动告警，`app/desktop.rs` 只负责单实例协商与请求分发；GPUI 事件循环在异步启动期间保持响应。配置通过携带载荷的 `Mode` 区分 Browser、Picker 与 Service 模式。桌面集成从属于应用；启动中不因无窗口退出，Service 模式持续保活。显式退出先关闭窗口，再由 TM 关闭任务准入、通知取消并等待清理，最后退出 GPUI。
+Files 的启动顺序集中在 `app.rs` 及 `app/{cli, config, desktop, ui, windows}.rs`：`Bootstrap::init` 读取配置并建立日志和 TM；`Bootstrap::run_event_loop` 在 GPUI 回调中先由 `Bootstrap::bind_lifecycle` 绑定 TM 与退出处理，再在可取消作用域中调用 `Bootstrap::prepare_io` 执行桌面单实例协商（`DesktopIntegration::acquire`）与按需存储加载（`Storage::start`），随后在主线程通过 `PreparedIo::mount` 调用 `ui::Initializer::run` 安装界面与偏好/卷/快捷键、由 `windows::Host::install` 注册窗口宿主并返回 `Host` 句柄，按模式打开初始窗口（`Host::open_initial`），调用 `cx.gds_mut().tasks().ready(keep_alive)` 标记就绪，最后由 `DesktopIntegration::listen` 持有该句柄消费桌面请求。`app/ui.rs` 只负责 UI 与全局服务初始化，`app/windows.rs` 通过 `Host::install` 管理全局窗口宿主并在进程首次开窗时派发启动告警，`app/desktop.rs` 只负责单实例协商与请求分发；GPUI 事件循环在异步启动期间保持响应。配置通过携带载荷的 `Mode` 区分 Browser、Picker 与 Service 模式。桌面集成从属于应用；启动中不因无窗口退出，Service 模式持续保活。显式退出先关闭窗口，再由 TM 关闭任务准入、通知取消并等待清理，最后退出 GPUI。
 
 卷监听通过容量为 16 的 `tokio::sync::mpsc` 向 GPUI 发送 `Observation`。这个通道的普通异步收发不依赖 Tokio 上下文，GPUI 前台可以直接等待 `receiver.recv()`。GPUI 接收任务持有监听句柄，销毁时取消监听；监听拥有唯一发送端，发送端关闭并排空缓冲后，接收任务检查监听的执行结果并报告异常。监听期间的 D-Bus 错误仍通过 `Observation` 报告。
 
@@ -281,9 +281,9 @@ Files 的 `location/model/address` 定义与页签无关的位置身份：普通
 
 Backend reuse decisions and retained host policy are documented in [Terminal backend boundary](development/terminal-backend.md); terminal color ownership and live updates are documented in [Terminal appearance contract](development/terminal-theme.md).
 
-GUI 适配器负责把主题调色板和网格尺寸传给服务；GPUI `Keystroke` / `Modifiers` 在 UI 边界转换为服务自己的输入类型。字体、选区绘制、焦点、IME 和窗口状态留在 `ui/terminal`。TM 根作用域取消会通知终端停止，并等待 PTY 回收；`cx.gds().ui().init_terminal()`（由 `cx.gds().initialize` 调用）只注册终端输入上下文的 Tab 行为，其他快捷键和标签页归应用。
+GUI 适配器负责把主题调色板和网格尺寸传给服务；GPUI `Keystroke` / `Modifiers` 在 UI 边界转换为服务自己的输入类型。字体、选区绘制、焦点、IME 和窗口状态留在 `ui/terminal`。TM 根作用域取消会通知终端停止，并等待 PTY 回收；`cx.gds_mut().ui().init_terminal()`（由 `cx.gds_mut().initialize` 调用）只注册终端输入上下文的 Tab 行为，其他快捷键和标签页归应用。
 
-公共界面组件仍通过 `gds::ui::sidebar`、`gds::ui::page`、`gds::ui::settings` 等显式入口使用；实现按视觉职责分组，入口不暴露组件内部文件。外观模型与视觉默认值位于 `gds::appearance::{theme, typography, tokens}`，GPUI 上下文读写统一通过 `cx.gds().appearance()` / `cx.gds_ro().appearance()`、`i18n()` 与 `ui()` 访问器完成，存储机制为 `gds::persistence`。
+公共界面组件仍通过 `gds::ui::sidebar`、`gds::ui::page`、`gds::ui::settings` 等显式入口使用；实现按视觉职责分组，入口不暴露组件内部文件。外观模型与视觉默认值位于 `gds::appearance::{theme, typography, tokens}`，GPUI 上下文读写统一通过 `cx.gds().appearance()` / `cx.gds_mut().appearance()`、`i18n()` 与 `ui()` 访问器完成，存储机制为 `gds::persistence`。
 
 ### 本应用日志
 
@@ -301,7 +301,7 @@ gds-agents --enable-logs --compact
 
 日志支持级别、来源和文本筛选、键盘选中、全文详情与复制。关闭窗口不会停止采集，重新打开保留记录；向上滚动时停止自动跟随，回到底部继续跟随。每个进程最多保留 2,000 条、约 2 MiB 消息，单条消息最多 64 KiB；清空只影响本进程，不写磁盘或读取其他应用日志。
 
-应用在启动任务前将 `enable_logs` 传给 `service::logs::init_tracing`；返回 `Some(Store)` 时，由 `cx.gds().initialize`（或 `cx.gds().ui().logs().install`）安装，再用 `cx.gds().ui().logs().init` 提供应用身份、窗口样式和根视图组装。禁用时保留 stderr 的基本诊断，`cx.gds_ro().ui().logs().store()` 返回 `None`，不会隐式创建队列。服务不依赖 GPUI 或 Tokio runtime；更新通知通过独立的有界异步通道发送给每个查看器。`RUST_LOG` 可覆盖过滤规则，但不会自行启用 GUI 日志功能。控制台输出固定走 stderr，Files 选择器的 stdout 仍只返回结果 JSON。开启采集时，公共操作通知及 Files 后台失败也进入日志队列。
+应用在启动任务前将 `enable_logs` 传给 `service::logs::init_tracing`；返回 `Some(Store)` 时，由 `cx.gds_mut().initialize`（或 `cx.gds_mut().ui().logs().install`）安装，再用 `cx.gds_mut().ui().logs().init` 提供应用身份、窗口样式和根视图组装。禁用时保留 stderr 的基本诊断，`cx.gds().ui().logs().store()` 返回 `None`，不会隐式创建队列。服务不依赖 GPUI 或 Tokio runtime；更新通知通过独立的有界异步通道发送给每个查看器。`RUST_LOG` 可覆盖过滤规则，但不会自行启用 GUI 日志功能。控制台输出固定走 stderr，Files 选择器的 stdout 仍只返回结果 JSON。开启采集时，公共操作通知及 Files 后台失败也进入日志队列。
 
 ## UI 代码组织
 
@@ -311,9 +311,9 @@ gds-agents --enable-logs --compact
 
 Files 的应用层先安装 TM、位置存储、配置服务、卷监听和主题热更新，再创建窗口并开始处理桌面请求。页面读取已经安装的服务，不通过 `shared()` 隐式启动全局服务。位置存储统一登记各窗口的待保存队列，在应用退出时完成清理；窗口只持有自己的位置快照。
 
-`pages/workspace/ui::Browser` 负责窗口状态组合、事件路由和呈现。文件修改及其校验归 `features/file_operations`；重命名、新建目录、复制、拖放和回收站操作通过 TM 执行。选择器的筛选与选择规则归 `features/pick_files::Session`，页面保存输入控件、菜单和焦点。目录观察和快照合并归 `entities/file`，页面负责将结果应用到对应导航版本并更新视图。地址协议归 `entities/location/scheme`，标签后端通过 `location/x/tags` 使用地址类型。跨功能的 action 声明和快捷键元数据放在 `shared/ui/actions`，通过 `cx.gds().files().register_actions()` 在应用启动时注册、由页面处理。
+`pages/workspace/ui::Browser` 负责窗口状态组合、事件路由和呈现。文件修改及其校验归 `features/file_operations`；重命名、新建目录、复制、拖放和回收站操作通过 TM 执行。选择器的筛选与选择规则归 `features/pick_files::Session`，页面保存输入控件、菜单和焦点。目录观察和快照合并归 `entities/file`，页面负责将结果应用到对应导航版本并更新视图。地址协议归 `entities/location/scheme`，标签后端通过 `location/x/tags` 使用地址类型。跨功能的 action 声明和快捷键元数据放在 `shared/ui/actions`，通过 `Command::register(cx)` 在应用启动时注册、由页面处理。
 
-Files 的配置、卷服务与文件剪贴板分别通过 `cx.gds().files()` / `cx.gds_ro().files()` 下的 `.preferences()`、`.volumes()` 和 `.clipboard()` 访问。配置服务先校验全部呈现变更，再一次性应用并更新当前快照；窗口观察配置服务实体（`Entity<Service>`）同步本地呈现。局部交互通过 `edit` 修改最新快照，避免以窗口旧副本覆盖其他变更。持久化由 TM 管理的后台队列串行执行；保存失败保留已经发布的内存状态并报告错误，退出等待已接受的写入完成。
+Files 的配置、卷服务与文件剪贴板分别通过各自切片导出的扩展 trait（`PreferencesExt`、`VolumesExt`、`ClipboardExt`）挂载在 `cx.gds()` / `cx.gds_mut()` 下的 `.preferences()`、`.volumes()` 和 `.clipboard()` 访问。配置服务先校验全部呈现变更，再一次性应用并更新当前快照；窗口观察配置服务实体（`Entity<Service>`）同步本地呈现。局部交互通过 `edit` 修改最新快照，避免以窗口旧副本覆盖其他变更。持久化由 TM 管理的后台队列串行执行；保存失败保留已经发布的内存状态并报告错误，退出等待已接受的写入完成。
 
 ### UIM 写法
 

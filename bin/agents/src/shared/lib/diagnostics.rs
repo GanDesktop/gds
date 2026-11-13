@@ -22,7 +22,7 @@ use log::Level;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 pub(crate) fn store(cx: &App) -> Option<log::Store> {
-    cx.gds_ro().ui().logs().store()
+    cx.gds().ui().logs().store()
 }
 
 pub(crate) fn record(level: Level, title: &str, message: &str, cx: &mut App) {

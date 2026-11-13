@@ -16,7 +16,7 @@ pub(crate) fn start(window: AnyWindowHandle, browser: Entity<Browser>, cx: &mut 
             cx: cx.clone(),
         };
         session.workflow().await;
-        session.cx.update(|cx| cx.gds().tasks().request_quit());
+        session.cx.update(|cx| cx.gds_mut().tasks().request_quit());
     })
     .detach();
 }

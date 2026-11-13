@@ -2,7 +2,7 @@
 
 use std::{collections::HashSet, path::Path, path::PathBuf, sync::Arc};
 
-use gpui_kit::{App, Global, Task};
+use gpui_kit::{App, BorrowAppContext as _, Global, Task};
 
 use super::{Bridge, Error, Mode, Snapshot, protocol::Formats};
 
@@ -19,6 +19,21 @@ pub(super) struct Cache {
 impl Global for Cache {}
 
 impl Cache {
+    pub(super) fn observe<V: 'static>(
+        cx: &mut gpui_kit::Context<V>,
+        on_change: impl Fn(&mut V, &mut gpui_kit::Context<V>) + 'static,
+    ) -> gpui_kit::Subscription {
+        cx.observe_global::<Self>(on_change)
+    }
+
+    fn mutate<R>(cx: &mut App, f: impl FnOnce(&mut Self) -> R) -> R {
+        cx.update_default_global::<Self, R>(|cache, _| f(cache))
+    }
+
+    fn notify_observers(cx: &mut App) {
+        Self::mutate(cx, |_| ());
+    }
+
     pub(super) fn is_cut_in(path: &Path, cx: &App) -> bool {
         cx.try_global::<Self>()
             .is_some_and(|cache| cache.is_cut(path))
@@ -54,13 +69,15 @@ impl Cache {
                 }
                 result => (result, false),
             };
-            let changed = cx.update(|cx| {
-                cx.default_global::<Self>()
+            cx.update(|cx| {
+                if cx
+                    .default_global::<Self>()
                     .reconcile(generation, current, remote_copy)
+                {
+                    Self::notify_observers(cx);
+                    cx.refresh_windows();
+                }
             });
-            if changed {
-                cx.update(|cx| cx.refresh_windows());
-            }
         })
         .detach();
     }
@@ -73,6 +90,7 @@ impl Cache {
             had_files
         };
         if changed {
+            Self::notify_observers(cx);
             cx.refresh_windows();
         }
     }
@@ -91,6 +109,9 @@ impl Cache {
             cx.update(|cx| {
                 cx.default_global::<Self>()
                     .finish_cancel(&expected, result.is_ok());
+                if result.is_ok() {
+                    Self::notify_observers(cx);
+                }
                 Self::refresh(cx);
                 cx.refresh_windows();
             });
@@ -99,7 +120,12 @@ impl Cache {
     }
 
     pub(super) fn note_write(written: &Snapshot, cx: &mut App) {
-        cx.default_global::<Self>().record_write(written);
+        Self::mutate(cx, |cache| cache.record_write(written));
+        cx.refresh_windows();
+    }
+
+    pub(super) fn record_uri_copy_in(copyable: bool, cx: &mut App) {
+        Self::mutate(cx, |cache| cache.record_uri_copy(copyable));
         cx.refresh_windows();
     }
 
@@ -107,7 +133,7 @@ impl Cache {
         if pasted.mode != Mode::Cut || succeeded.is_empty() {
             return;
         }
-        cx.default_global::<Self>().note_pasted(pasted, succeeded);
+        Self::mutate(cx, |cache| cache.note_pasted(pasted, succeeded));
         cx.refresh_windows();
     }
 

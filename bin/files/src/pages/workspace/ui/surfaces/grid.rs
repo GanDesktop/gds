@@ -131,7 +131,7 @@ impl Geometry {
 }
 
 #[derive(Default)]
-struct SelectionCache {
+pub(in crate::pages::workspace) struct SelectionCache {
     tab: Option<u64>,
     rows: Arc<[directory::Entry]>,
     selected: Selection<PathBuf>,
@@ -153,10 +153,44 @@ impl SelectionCache {
         }
         self.drag.clone()
     }
+
+    pub(in crate::pages::workspace) fn clear(&mut self) {
+        self.tab = None;
+        if !self.rows.is_empty() {
+            self.rows = Arc::from([]);
+        }
+        self.selected.clear();
+        self.drag.clear_source();
+    }
+
+    pub(in crate::pages::workspace) fn suspend_for_enrichment(
+        &mut self,
+    ) -> Option<(u64, Option<drag_drop::SuspendedDrag>)> {
+        let tab = self.tab.take()?;
+        if !self.rows.is_empty() {
+            self.rows = Arc::from([]);
+        }
+        Some((tab, self.drag.suspend_rows()))
+    }
+
+    pub(in crate::pages::workspace) fn restore_after_enrichment(
+        &mut self,
+        suspended: Option<(u64, Option<drag_drop::SuspendedDrag>)>,
+        rows: &Arc<[directory::Entry]>,
+    ) {
+        let Some((tab, suspended_drag)) = suspended else {
+            return;
+        };
+        self.tab = Some(tab);
+        self.rows = Arc::clone(rows);
+        let selected = self.selected.clone();
+        self.drag.restore_rows(suspended_drag, rows, &selected);
+    }
 }
 
 struct Data {
     rows: Arc<[directory::Entry]>,
+    selected: Selection<PathBuf>,
     drag: DragSnapshot,
     geometry: Geometry,
 }
@@ -265,12 +299,17 @@ impl Browser {
             .places
             .set_view_mode(self.current_location(), mode);
         self.save_places(cx);
+        let is_collection = self.collection().is_some();
         if let Some(slot) = self.current_tab_mut() {
+            slot.view_mode = mode;
             slot.scroll
                 .0
                 .borrow()
                 .base_handle
                 .set_offset(point(px(0.), px(0.)));
+            if !is_collection && let Some(index) = slot.resolve_cursor_index() {
+                slot.scroll_to_entry(index);
+            }
         }
         self.schedule_enrichment(self.tabs.active_id, cx);
         self.window.focus.focus(window, cx);
@@ -285,22 +324,21 @@ impl Browser {
             return el! { .div }.into_any_element();
         };
         let geometry = slot.grid;
-        let rows = slot.table_rows.clone();
+        let row_count = slot.table_rows.len();
         let tab = slot.id;
         let list = uniform_list(
             "file-grid",
-            geometry.rows(rows.len()),
+            geometry.rows(row_count),
             cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
-                let cache = window.use_keyed_state("file-grid-selection", cx, |_, _| {
-                    SelectionCache::default()
-                });
-                let Some(slot) = this.tab_slot(tab) else {
+                let Some((rows, selected)) = this.tab_slot(tab).map(|slot| {
+                    (
+                        slot.table_rows.clone(),
+                        slot.navigation.view().selected.clone(),
+                    )
+                }) else {
                     return Vec::new();
                 };
-                let rows = slot.table_rows.clone();
-                let drag = cache.update(cx, |cache, _| {
-                    cache.snapshot(tab, &rows, &slot.navigation.view().selected)
-                });
+                let drag = this.files.grid_selection.snapshot(tab, &rows, &selected);
                 let start_item = (range.start * geometry.columns).min(rows.len());
                 let end_item = (range.end * geometry.columns).min(rows.len());
                 if start_item < end_item {
@@ -308,6 +346,7 @@ impl Browser {
                 }
                 let data = Data {
                     rows: rows.clone(),
+                    selected,
                     drag,
                     geometry,
                 };
@@ -342,7 +381,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let entry = &data.rows[index];
-        let selected = data.drag.is_selected(&entry.path);
+        let selected = data.selected.contains(&entry.path);
         let target_bounds = data.geometry.tile(index, Point::default(), px(0.));
         let presented = gpui_kit::base::motion::transition(
             format!("file-grid-layout:{}", entry.path.display()),
@@ -374,7 +413,7 @@ impl Browser {
         let target = path.clone();
         let browser = cx.entity().downgrade();
         let on_click = cx.listener(move |this, event: &ClickEvent, window, cx| {
-            cx.gds().files().clipboard().refresh();
+            cx.gds_mut().clipboard().refresh();
             let Some(index) = this.active().and_then(|slot| {
                 slot.table_rows
                     .iter()

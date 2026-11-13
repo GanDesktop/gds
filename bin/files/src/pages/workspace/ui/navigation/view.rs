@@ -311,7 +311,7 @@ impl Browser {
         let id = slot.id;
         let presentation = self.sidebar.presentation;
         let compact = presentation.progress() == 0.;
-        let row_height = cx.gds_ro().appearance().typography().scaled(TAB_HEIGHT);
+        let row_height = cx.gds().appearance().typography().scaled(TAB_HEIGHT);
         let selected = id == self.tabs.active_id;
         let selection =
             motion::state_progress(format!("files-tab-selection-{id}"), selected, window, cx);
@@ -413,7 +413,7 @@ impl Browser {
                 pr: ITEM_GAP.px; rounded: ITEM_RADIUS.px; cursor_pointer;
                 bg: $(cx.theme().sidebar_accent.opacity(selection));
                 text_color: $(cx.theme().sidebar_foreground.interpolate(&cx.theme().sidebar_accent_foreground, selection));
-                @if (!selected && selection == 0.) hover: { bg: $(cx.gds_ro().appearance().theme().colors().sidebar_hover()) }; @end;
+                @if (!selected && selection == 0.) hover: { bg: $(cx.gds().appearance().theme().colors().sidebar_hover()) }; @end;
                 on_click: on_click;
                 on_hover: on_hover;
                 @if (!revealing_close) tooltip_show_delay: tokens::TOOLTIP_DELAY; tooltip: tooltip; @end;

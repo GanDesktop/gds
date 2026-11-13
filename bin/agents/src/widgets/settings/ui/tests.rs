@@ -17,7 +17,7 @@ fn settings_group_by_owner_and_keep_conversation_behavior_out_of_appearance_rese
     .expect("frontend preferences");
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::config::init(Some(path.clone()), cx);
         crate::shared::lib::appearance::init(cx);
         crate::app::init(cx);
@@ -76,7 +76,7 @@ fn check_footer_without_copy(cx: &mut TestAppContext, message: String) {
         .expect("runtime");
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::config::init(Some(path), cx);
         crate::shared::lib::appearance::init(cx);
         crate::app::init(cx);
@@ -136,7 +136,7 @@ fn frontend_connections_and_backend_switching_are_distinct_settings_scopes(
         .unwrap();
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::config::init(Some(path.clone()), cx);
         crate::shared::lib::appearance::init(cx);
         crate::app::init(cx);

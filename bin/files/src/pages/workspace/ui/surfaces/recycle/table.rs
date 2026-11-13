@@ -250,7 +250,7 @@ impl TrashTable {
         el! {
             .div {
                 # $("trash-name", row_ix); flex; items_center; size_full; min_w_0; overflow_hidden;
-                text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::NAME_SIZE));
+                text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::NAME_SIZE));
                 text_color: foreground;
                 @if (hint_enabled) tooltip_show_delay: TOOLTIP_DELAY; tooltip: tooltip; @end;
             } [
@@ -279,7 +279,7 @@ impl TrashTable {
             .div { size_full; flex; items_center; min_w_0; overflow_hidden } [
                 .div {
                     w_full; min_w_0; truncate;
-                    text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::META_SIZE));
+                    text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::META_SIZE));
                     text_color: foreground;
                     @if (right_aligned) text_right; @end;
                 } [text],
@@ -317,7 +317,7 @@ impl TrashTable {
             } [
                 .div {
                     w_full; min_w_0; truncate;
-                    text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::META_SIZE));
+                    text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::META_SIZE));
                     text_color: foreground;
                 } [text],
             ]
@@ -350,7 +350,7 @@ impl TableDelegate for TrashTable {
             .div {
                 # $("trash-column", col_ix);
                 size_full; flex; items_center;
-                text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::HEADER_SIZE));
+                text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::HEADER_SIZE));
                 font_weight: FontWeight::NORMAL; text_color: $(cx.theme().muted_foreground);
                 when: $(col_ix == 0), m! { pl: $(NAME_ICON_WIDTH + NAME_ICON_GAP).px };
             } [name]

@@ -136,7 +136,7 @@ fn hiding_and_closing_inspector_never_cancels_work(cx: &mut TestAppContext) {
         window.render_frame(cx);
     })
     .unwrap();
-    let again = cx.update(|cx| cx.gds().ui().logs().open().unwrap());
+    let again = cx.update(|cx| cx.gds_mut().ui().logs().open().unwrap());
     assert_eq!(handle.window_id(), again.window_id());
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);

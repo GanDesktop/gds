@@ -61,6 +61,11 @@ fn selection_modes_preserve_row_slice_and_filter_prunes_hidden_entries() {
     let mut selected = Selection::new();
     let mut anchor = None;
 
+    // Shift selection when anchor is initially None establishes anchor at clicked index.
+    View::apply_selection(&rows, &mut selected, &mut anchor, 2, true, false);
+    assert_eq!(anchor, Some(2));
+    assert_eq!(selected.to_vec(), vec![rows[2].address.clone()]);
+
     // Single selection sets anchor and 1 item without touching the shared row slice.
     View::apply_selection(&rows, &mut selected, &mut anchor, 1, false, false);
     assert!(Arc::ptr_eq(&rows, &rows_snapshot));
@@ -121,8 +126,8 @@ async fn table_sync_shares_rows_across_selection_modes_and_prunes_filtered_items
         gpui_kit::init(cx);
         let catalog = crate::shared::i18n::prepare(gds::i18n::Language::English)
             .expect("prepare English translations");
-        cx.gds().i18n().install_catalog(catalog);
-        cx.gds()
+        cx.gds_mut().i18n().install_catalog(catalog);
+        cx.gds_mut()
             .appearance()
             .theme()
             .apply(&Default::default())

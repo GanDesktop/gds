@@ -171,7 +171,7 @@ impl Browser {
         match location.uri() {
             Ok(uri) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(uri));
-                cx.gds().files().clipboard().clear();
+                cx.gds_mut().clipboard().clear();
                 cx.notify();
             }
             Err(error) => notifications::error(error.to_string(), cx),

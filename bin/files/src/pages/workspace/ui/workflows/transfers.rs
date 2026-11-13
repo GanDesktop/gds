@@ -41,7 +41,7 @@ impl Browser {
         if self.operations.in_progress {
             return false;
         }
-        let Some(cancel) = cx.gds().files().clipboard().cancel_cut() else {
+        let Some(cancel) = cx.gds_mut().clipboard().cancel_cut() else {
             return false;
         };
         cx.spawn(async move |_, cx| {
@@ -77,13 +77,13 @@ impl Browser {
         }
         let count = paths.len();
         let mode = if cut { Mode::Cut } else { Mode::Copy };
-        let write = cx.gds().files().clipboard().write(mode, paths);
+        let write = cx.gds_mut().clipboard().write(mode, paths);
         cx.spawn(async move |this, cx| {
             let result = write.await;
             if let Err(closed) = this.update(cx, |_, cx| {
                 match result {
                     Ok(snapshot) => {
-                        cx.gds().files().clipboard().note_write(&snapshot);
+                        cx.gds_mut().clipboard().note_write(&snapshot);
                         notifications::Report::new(
                             notifications::Level::Success,
                             i18n::count(
@@ -125,7 +125,7 @@ impl Browser {
         {
             return;
         }
-        let read = cx.gds().files().clipboard().read();
+        let read = cx.gds_mut().clipboard().read();
         let origin_tab = self.tabs.active_id;
         self.operations.in_progress = true;
         // Until the clipboard arrives, the source volumes are unknown.
@@ -134,8 +134,7 @@ impl Browser {
         cx.spawn_in(window, async move |this, cx| {
             let result = read.await;
             if matches!(&result, Ok(None) | Err(clipboard::Error::InvalidUri(_))) {
-                let Ok(read) =
-                    this.update_in(cx, |_, _, cx| cx.gds().files().clipboard().read_uris())
+                let Ok(read) = this.update_in(cx, |_, _, cx| cx.gds_mut().clipboard().read_uris())
                 else {
                     return;
                 };
@@ -331,20 +330,16 @@ impl Browser {
             let snapshot = paste.snapshot.clone();
             let moved = paste.job.succeeded.clone();
             let cleanup = cx
-                .gds()
-                .files()
+                .gds_mut()
                 .clipboard()
                 .finish_cut(snapshot.clone(), moved.clone());
             cx.spawn_in(window, async move |this, cx| {
                 let clipboard_error = cleanup.await.err().map(|error| error.to_string());
                 let _ = this.update_in(cx, |browser, window, cx| {
-                    cx.gds()
-                        .files()
-                        .clipboard()
-                        .note_cut_paste(&snapshot, &moved);
+                    cx.gds_mut().clipboard().note_cut_paste(&snapshot, &moved);
                     // Verify the published remainder asynchronously; a replaced
                     // clipboard clears the markers instead of keeping them.
-                    cx.gds().files().clipboard().refresh();
+                    cx.gds_mut().clipboard().refresh();
                     browser.finish_paste(paste, clipboard_error, ending, window, cx);
                 });
             })

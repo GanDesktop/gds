@@ -212,7 +212,7 @@ impl TableDelegate for VolumeTable {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        el! { .div { size_full; flex; items_center; text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::HEADER_SIZE)); text_color: $cx.theme().muted_foreground } [$(self.columns[index].name.clone())] }
+        el! { .div { size_full; flex; items_center; text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::HEADER_SIZE)); text_color: $cx.theme().muted_foreground } [$(self.columns[index].name.clone())] }
     }
 
     fn render_tr(
@@ -277,11 +277,11 @@ impl TableDelegate for VolumeTable {
                     @end;
                 } [
                     $(row.icon).Icon::new { size: tokens::SIDEBAR_ICON_SIZE.px; flex_shrink_0 },
-                    .div { min_w_0; truncate; text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::NAME_SIZE)) } [$(volume.name.clone())],
+                    .div { min_w_0; truncate; text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::NAME_SIZE)) } [$(volume.name.clone())],
                     @if (volume.system_mount)
                         .div { flex_shrink_0; px: DataListStyle::CELL_PADDING_Y.px; py: 1.0.px;
                             rounded: DataListStyle::ROW_RADIUS.px; bg: $cx.theme().secondary;
-                            text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::HEADER_SIZE)); text_color: $cx.theme().muted_foreground;
+                            text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::HEADER_SIZE)); text_color: $cx.theme().muted_foreground;
                         } [$i18n::text("device-system-volume", cx)],
                     @end,
                 ] }.into_any_element()

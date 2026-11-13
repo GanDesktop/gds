@@ -3,7 +3,7 @@ use std::{ffi::OsString, fs, path::PathBuf};
 use gds::service::desktop::protocol::chooser::{Choice, Mode, Request};
 
 use super::{
-    ActivatedPath, Filter, Options, SaveDecision, Session, inspect_activated_path,
+    ActivatedPath, Filter, Options, Outcome, SaveDecision, Session, inspect_activated_path,
     prepare_save_targets, targets,
 };
 
@@ -104,4 +104,41 @@ fn inspect_activated_path_distinguishes_files_and_directories() {
     );
     assert_eq!(inspect_activated_path(&file), Ok(ActivatedPath::File));
     assert!(targets::occupied(&file).expect("check occupied"));
+}
+
+#[test]
+fn session_outcome_isolates_confirmation_cancellation_and_output_failure() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let file = temp.path().join("picked.txt");
+    fs::write(&file, b"data").expect("write file");
+
+    let mut default_options = Options::default();
+    let default_slot = default_options.bind_outcome();
+    let default_session = Session::new(default_options);
+    assert_eq!(default_session.outcome(), Outcome::Cancelled);
+    assert_eq!(default_slot.get(), Outcome::Cancelled);
+
+    let mut confirmed_options = Options::default();
+    let confirmed_slot = confirmed_options.bind_outcome();
+    let mut confirmed_session = Session::new(confirmed_options);
+    let mut output = Vec::new();
+    confirmed_session
+        .complete_to(&mut output, std::slice::from_ref(&file))
+        .expect("emit confirmed selection");
+    assert_eq!(confirmed_session.outcome(), Outcome::Confirmed);
+    assert_eq!(confirmed_slot.get(), Outcome::Confirmed);
+    assert!(!confirmed_session.cancel());
+    assert_eq!(confirmed_slot.get(), Outcome::Confirmed);
+
+    let mut failed_options = Options::default();
+    let failed_slot = failed_options.bind_outcome();
+    let mut failed_session = Session::new(failed_options);
+    let mut tiny_buffer = [0u8; 4];
+    failed_session
+        .complete_to(&mut tiny_buffer[..], std::slice::from_ref(&file))
+        .expect_err("short output buffer must fail");
+    assert_eq!(failed_session.outcome(), Outcome::Failed);
+    assert_eq!(failed_slot.get(), Outcome::Failed);
+    assert!(!failed_session.cancel());
+    assert_eq!(failed_slot.get(), Outcome::Failed);
 }

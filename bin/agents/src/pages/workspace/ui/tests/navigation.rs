@@ -713,7 +713,7 @@ fn sidebar_collapsed_menu_keeps_commands_and_focus_available(cx: &mut TestAppCon
     attach(&fixture, session(), cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.activate_window();
-        cx.gds().appearance().motion().set_enabled(false);
+        cx.gds_mut().appearance().motion().set_enabled(false);
         window.press("ctrl-b", cx);
         window.click("sidebar-view-menu", cx);
         for _ in 0..6 {
@@ -819,7 +819,7 @@ fn workspace_selector_scopes_sessions_and_keeps_pins_above_it(cx: &mut TestAppCo
             fixture.view.read(cx).composer.input.read(cx).value(),
             "second draft"
         );
-        cx.gds().appearance().motion().set_enabled(false);
+        cx.gds_mut().appearance().motion().set_enabled(false);
         fixture
             .view
             .update(cx, |view, cx| view.toggle_sidebar(window, cx));

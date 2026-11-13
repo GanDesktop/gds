@@ -167,7 +167,7 @@ impl<T: Model> Editor<T> {
             value,
             fields,
             controls,
-            language: cx.gds_ro().i18n().language(),
+            language: cx.gds().i18n().language(),
             _subscriptions: subscriptions,
         }
     }
@@ -178,7 +178,7 @@ impl<T: Model> Editor<T> {
 
     /// Application acceptance or rollback synchronizes native widgets without emitting changes.
     pub fn set_value(&mut self, value: T, window: &mut Window, cx: &mut Context<Self>) {
-        if self.value == value && self.language == cx.gds_ro().i18n().language() {
+        if self.value == value && self.language == cx.gds().i18n().language() {
             return;
         }
         self.value = value;
@@ -188,7 +188,7 @@ impl<T: Model> Editor<T> {
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.language = cx.gds_ro().i18n().language();
+        self.language = cx.gds().i18n().language();
         for (field, control) in self.fields.iter().zip(&mut self.controls) {
             let current = (field.get)(&self.value);
             match control {
@@ -221,7 +221,7 @@ impl<T: Model> Editor<T> {
     }
 
     fn sync_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.language = cx.gds_ro().i18n().language();
+        self.language = cx.gds().i18n().language();
         for (field, control) in self.fields.iter().zip(&mut self.controls) {
             if let Control::Choice { state, choices } = control {
                 let current = (field.get)(&self.value);
@@ -344,7 +344,7 @@ impl<T: Model> Editor<T> {
                         .small()
                         .w_full()
                         .aria_label(label)
-                        .bg(cx.gds_ro().appearance().theme().colors().content)),
+                        .bg(cx.gds().appearance().theme().colors().content)),
                 ]
             }
             .into_any_element(),
@@ -377,7 +377,7 @@ impl<T: Model> Editor<T> {
 
 impl<T: Model> Render for Editor<T> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.language != cx.gds_ro().i18n().language() {
+        if self.language != cx.gds().i18n().language() {
             self.sync_language(window, cx);
         }
         let mut rows = Vec::new();

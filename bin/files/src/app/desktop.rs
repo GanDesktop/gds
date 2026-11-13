@@ -1,9 +1,8 @@
 //! Single-instance D-Bus negotiation and `org.freedesktop.FileManager1` command dispatch.
 
-use super::{APP_ID, config::Mode};
-use crate::shared::app::{Files, FilesExt as _};
-use gds::app::AppExt as _;
+use super::{APP_ID, config::Mode, windows};
 use gds::service::desktop::file_manager::{Command, Error, Server};
+use gds::service::task_manager::Scope;
 use tokio::sync::mpsc;
 
 pub(super) enum Acquire {
@@ -63,23 +62,21 @@ impl DesktopIntegration {
             }
         }
     }
-}
 
-impl Files<&mut gpui_kit::App> {
     /// Spawns the command forwarding loop once UI services and the window host are installed.
     ///
     /// # Errors
     /// Returns an error if the task supervisor is already shutting down.
-    pub(in crate::app) fn listen_desktop(
-        &mut self,
-        desktop: DesktopIntegration,
+    pub fn listen(
+        self,
+        tasks: &Scope,
+        windows: windows::Host,
+        cx: &mut gpui_kit::App,
     ) -> anyhow::Result<()> {
-        let DesktopIntegration {
+        let Self {
             server,
             mut receiver,
-        } = desktop;
-        let cx = self.app();
-        let tasks = cx.gds_ro().tasks().scope();
+        } = self;
         let cancel = tasks.token();
         let completion = tasks.register_named(
             "Desktop requests",
@@ -95,7 +92,7 @@ impl Files<&mut gpui_kit::App> {
                 let Some(command) = command else {
                     break;
                 };
-                cx.update(|cx| cx.gds().files().windows().dispatch_desktop(command));
+                cx.update(|cx| windows.dispatch_desktop(command, cx));
             }
             drop(server);
             drop(completion);

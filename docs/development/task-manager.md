@@ -6,7 +6,7 @@ scope. Services receive scopes, never runtime handles. TM controls admission,
 execution, cancellation and completion; each service implements its resource cleanup.
 Desktop integration (D-Bus and FileManager1) is one application service.
 
-The GPUI App context binds this service through `cx.gds().tasks()` and `cx.gds_ro().tasks()` using
+The GPUI App context binds this service through `cx.gds().tasks()` and `cx.gds_mut().tasks()` using
 `gds::app::AppExt`. GPUI continues to own windows and UI tasks. The independent
 `gds::ui::task_manager` view receives only a read-only `Inspector`; the core service
 has no GPUI, logging or rendering dependency.
@@ -126,35 +126,36 @@ start of the GPUI application callback:
 use gds::app::AppExt as _;
 
 // Before the GPUI callback: let supervisor = Supervisor::new(enable_logs)?;
-cx.gds().initialize(supervisor.scope(), logs);
+cx.gds_mut().initialize(supervisor.scope(), logs);
 let scope = cx.gds().tasks().scope();
 // Construct services, install request handlers, then mark startup complete.
-cx.gds().tasks().ready(keep_alive);
+cx.gds_mut().tasks().ready(keep_alive);
 ```
 
 `initialize` installs task ownership, appearance foundations, keytips, terminal
-input bindings and the optional log store, in that order. Startup passes
+input bindings and the optional log store, in that order (applications that bind
+`tasks().init(scope)` ahead of asynchronous startup I/O call `init_ui(logs)` once
+ready to mount the UI). Startup passes
 `enable_logs` to both the supervisor and the log collector; diagnostic collection
 is fixed when the root is constructed. `AppExt` is the single extension trait in
-`gds`, providing `cx.gds()` for mutable access and `cx.gds_ro()` for read-only
-queries across `tasks()`, `appearance()`, `i18n()` and `ui()`. Applications
-extend `Gds` with a single local accessor trait: Files defines `FilesExt` in
-`shared/app.rs` for `cx.gds().files()` / `cx.gds_ro().files()`, mounting inherent
-sub-accessors `preferences()`, `volumes()`, `clipboard()` and `windows()` alongside
-startup and action registration methods (`bind_lifecycle`, `init_ui`,
-`register_actions`). `FilesExt`
-only returns the concrete borrowed `Files` accessor; sub-accessors and service
-operations are inherent methods. Obtaining it starts no services and transfers
-no ownership. Configuration remains input data.
-Services and lifecycle operations use `cx.gds().tasks()`, including
+`gds`, providing `cx.gds()` for read-only queries and `cx.gds_mut()` for mutable
+operations across `tasks()`, `appearance()`, `i18n()` and `ui()`. Inside an FSD
+application, each slice exports its own local extension trait on `Gds` (in Files:
+`PreferencesExt` for `preferences()`, `VolumesExt` for `volumes()`, and
+`ClipboardExt` for `clipboard()`), so callers keep chained ergonomics while `use`
+imports make slice dependencies explicit. Each extension trait only returns a
+concrete borrowed accessor; service operations are inherent methods. Obtaining an
+accessor starts no services and transfers no ownership. Configuration remains
+input data.
+Services and lifecycle operations use `cx.gds_mut().tasks()`, including
 `quit_when_idle`, `request_quit` and `signals`. The task-only entry point is
-`cx.gds().tasks().init(scope)` and needs only the `app` feature.
+`cx.gds_mut().tasks().init(scope)` and needs only the `app` feature.
 Obtaining either accessor does not install any globals. `scope()` requires an
 installed service and never creates one implicitly. The diagnostics choice is fixed for that application's lifetime.
 Installing a log store or opening a diagnostic window cannot change it. Build native
 applications with `with_quit_mode(gpui_kit::QuitMode::Explicit)` so closing the last
 window does not stop the event loop before TM finishes draining. Route the
-last-window callback to `cx.gds().tasks().quit_when_idle()`.
+last-window callback to `cx.gds_mut().tasks().quit_when_idle()`.
 
 The binding has three phases: Starting, Running and Closing. `ready(keep_alive)`
 transitions Starting to Running only after required services are ready.
@@ -167,15 +168,15 @@ without windows. Startup failures route through the same shutdown path and retur
 
 Files keeps the orchestration in `bin/files/src/app.rs` and `bin/files/src/app/{cli, config, desktop, ui, windows}.rs`: `Bootstrap::init` resolves
 configuration, logging and the supervisor; `Bootstrap::run_event_loop` enters the GPUI callback,
-calls `cx.gds().files().bind_lifecycle` for TM and shutdown handling, awaits `prepare_io`
-for desktop integration (`DesktopIntegration::acquire`) and storage I/O (`Storage::start`, preloading initial window places only when the mode opens an initial window), then runs `cx.gds().files().mount` on the main thread.
-`app/ui.rs` (`init_ui`) installs presentation, the preferences
-service, volume discovery, theme hot reload and global keybindings (`register_actions`) before any window is created, and `app/windows.rs` (`windows().install` and `windows().open_initial`) registers the global window manager, opens the initial window when required and flushes startup notices onto the first opened window.
-`cx.gds().files().preferences()` and `cx.gds_ro().files().preferences()` read or edit the application's current preferences;
+calls `Bootstrap::bind_lifecycle` for TM and shutdown handling, awaits `Bootstrap::prepare_io`
+for desktop integration (`DesktopIntegration::acquire`) and storage I/O (`Storage::start`, preloading initial window places only when the mode opens an initial window), then runs `PreparedIo::mount` on the main thread.
+`app/ui.rs` (`ui::Initializer::run`) installs presentation, the preferences
+service, volume discovery, theme hot reload and global keybindings (`Command::register`) before any window is created, and `app/windows.rs` (`windows::Host::install` and `Host::open_initial`) registers the global window manager, opens the initial window when required and flushes startup notices onto the first opened window.
+`cx.gds().preferences()` and `cx.gds_mut().preferences()` read or edit the application's current preferences;
 its ordered background writer drains accepted snapshots on shutdown. Failed saves
 leave the published in-memory state active and report the persistence error.
 Location storage owns a single flush hook for its live window queues.
-`cx.gds().files().listen_desktop` only receives commands and routes them through `windows().dispatch_desktop` to ready windows.
+`DesktopIntegration::listen` only receives commands and routes them through `windows::Host::dispatch_desktop` to ready windows.
 GPUI supplies its App context inside `run`, so its event loop remains available
 during asynchronous startup; business request handling begins after readiness.
 A one-shot channel at the GPUI entry boundary returns the startup result to the

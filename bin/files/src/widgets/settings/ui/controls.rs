@@ -33,6 +33,7 @@ pub(super) enum Field {
     SidebarOpacity,
     ShowHidden,
     AutoFocusSearch,
+    ProbeBudget,
     SidebarVolumes,
     Animations,
     RoundedCorners,
@@ -41,7 +42,11 @@ pub(super) enum Field {
 }
 
 impl Field {
-    pub const NUMBERS: [Self; 2] = [Self::ContentOpacity, Self::SidebarOpacity];
+    pub const NUMBERS: [Self; 3] = [
+        Self::ContentOpacity,
+        Self::SidebarOpacity,
+        Self::ProbeBudget,
+    ];
 
     pub fn label_id(self) -> &'static str {
         match self {
@@ -55,6 +60,7 @@ impl Field {
             Self::SidebarOpacity => "sidebar-opacity",
             Self::ShowHidden => "show-hidden",
             Self::AutoFocusSearch => "auto-focus-search",
+            Self::ProbeBudget => "probe-budget",
             Self::SidebarVolumes => "sidebar-show-volumes",
             Self::TerminalEnabled => "files-terminal-enabled",
             Self::TagsEnabled => "tags-enabled",
@@ -64,6 +70,7 @@ impl Field {
     pub fn help_id(self) -> Option<&'static str> {
         match self {
             Self::Animations => Some("appearance-animations-help"),
+            Self::ProbeBudget => Some("probe-budget-help"),
             _ => None,
         }
     }
@@ -137,6 +144,7 @@ impl Field {
             Self::AutoFocusSearch => {
                 preferences.files.auto_focus_search != defaults.files.auto_focus_search
             }
+            Self::ProbeBudget => preferences.files.probe_budget != defaults.files.probe_budget,
             Self::SidebarVolumes => {
                 preferences.files.sidebar.show_volumes != defaults.files.sidebar.show_volumes
             }
@@ -169,6 +177,7 @@ impl Field {
             Self::AutoFocusSearch => {
                 preferences.files.auto_focus_search = defaults.files.auto_focus_search
             }
+            Self::ProbeBudget => preferences.files.probe_budget = defaults.files.probe_budget,
             Self::SidebarVolumes => {
                 preferences.files.sidebar.show_volumes = defaults.files.sidebar.show_volumes
             }
@@ -189,6 +198,7 @@ impl Field {
     pub fn number_range(self) -> Option<NumberRange> {
         match self {
             Self::ContentOpacity | Self::SidebarOpacity => Some(PERCENTAGE_RANGE),
+            Self::ProbeBudget => Some(PROBE_BUDGET_RANGE),
             _ => None,
         }
     }
@@ -197,6 +207,7 @@ impl Field {
         match self {
             Self::ContentOpacity => Some(preferences.appearance.content_opacity * 100.0),
             Self::SidebarOpacity => Some(preferences.appearance.sidebar_opacity * 100.0),
+            Self::ProbeBudget => Some(preferences.files.probe_budget as f32),
             _ => None,
         }
     }
@@ -209,6 +220,10 @@ impl Field {
             Self::SidebarOpacity => {
                 Self::replace(&mut preferences.appearance.sidebar_opacity, value / 100.0)
             }
+            Self::ProbeBudget => Self::replace(
+                &mut preferences.files.probe_budget,
+                value.round().max(0.0) as usize,
+            ),
             _ => unreachable!("only numeric fields own numeric controls"),
         }
     }
@@ -278,7 +293,7 @@ impl Choice<std::path::PathBuf> {
         entries: &[gds::appearance::theme::provider::custom::Entry],
         cx: &App,
     ) -> Vec<Self> {
-        let locale = cx.gds_ro().i18n().language().locale();
+        let locale = cx.gds().i18n().language().locale();
         entries
             .iter()
             .map(|entry| {
@@ -390,6 +405,12 @@ impl<T: Clone + PartialEq + 'static> ChoiceControl<T> {
 }
 
 pub(super) use gds::ui::settings::{CONTROL_WIDTH, NumberRange, PERCENTAGE_RANGE};
+
+pub(super) const PROBE_BUDGET_RANGE: NumberRange = NumberRange {
+    min: 0.0,
+    max: 2048.0,
+    step: 32.0,
+};
 
 pub(super) struct NumberControl(NumericControl);
 impl std::ops::Deref for NumberControl {

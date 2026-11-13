@@ -25,15 +25,15 @@ pub fn run() -> anyhow::Result<()> {
         .with_quit_mode(gpui_kit::QuitMode::Explicit)
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
-            cx.gds().initialize(tasks.clone(), logs);
+            cx.gds_mut().initialize(tasks.clone(), logs);
             cx.set_app_identity("io.github.GanDesktop.GdsNixes", "GDS Nixes");
             if let Err(error) = crate::shared::i18n::install(cx) {
                 eprintln!("{error}");
-                cx.gds().tasks().request_quit();
+                cx.gds_mut().tasks().request_quit();
                 return;
             }
             if let Err(error) = cx
-                .gds()
+                .gds_mut()
                 .appearance()
                 .theme()
                 .apply(&theme::Appearance::default())
@@ -41,27 +41,27 @@ pub fn run() -> anyhow::Result<()> {
                 eprintln!("{error}");
             }
             if let Err(error) = cx
-                .gds()
+                .gds_mut()
                 .appearance()
                 .typography()
                 .apply(&typography::Preferences::default())
             {
                 eprintln!("{error}");
             }
-            cx.gds().ui().logs().init(gds::ui::logs::Options {
+            cx.gds_mut().ui().logs().init(gds::ui::logs::Options {
                 app_id: Some("io.github.GanDesktop.GdsNixes".into()),
                 app_name: "GDS Nixes".into(),
                 ..Default::default()
             });
             #[cfg(unix)]
-            cx.gds()
+            cx.gds_mut()
                 .tasks()
-                .signals(|cx| cx.gds().tasks().request_quit());
+                .signals(|cx| cx.gds_mut().tasks().request_quit());
             cx.on_window_closed(|cx, _| {
-                cx.gds().tasks().quit_when_idle();
+                cx.gds_mut().tasks().quit_when_idle();
             })
             .detach();
-            cx.gds().tasks().ready(false);
+            cx.gds_mut().tasks().ready(false);
             let options = WindowOptions {
                 app_id: Some("io.github.GanDesktop.GdsNixes".into()),
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -77,7 +77,7 @@ pub fn run() -> anyhow::Result<()> {
                 cx.new(|cx| crate::pages::home::HomePage::new(tasks, args.flake, window, cx))
             }) {
                 eprintln!("{error}");
-                cx.gds().tasks().request_quit();
+                cx.gds_mut().tasks().request_quit();
             }
         });
     Ok(())

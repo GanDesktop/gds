@@ -15,7 +15,7 @@ impl Frame {
         let width = self.sidebar_width;
         let boundary = width.unwrap_or(0.);
         let divider = self.vertical_divider(cx);
-        let theme = cx.gds_ro().appearance().theme();
+        let theme = cx.gds().appearance().theme();
         el! {
             .div { relative; flex; w_full; h: FOOTER_HEIGHT.px; flex_shrink_0 } [
                 @if (let Some(width) = width)

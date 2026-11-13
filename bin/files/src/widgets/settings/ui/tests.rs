@@ -59,4 +59,13 @@ fn numeric_fields_detect_modifications_and_reset_to_defaults() {
     assert!(Field::SidebarOpacity.is_modified(&preferences));
     Field::SidebarOpacity.reset(&mut preferences);
     assert!(!Field::SidebarOpacity.is_modified(&preferences));
+
+    assert!(!Field::ProbeBudget.is_modified(&preferences));
+    assert_eq!(Field::ProbeBudget.number(&preferences), Some(256.0));
+    Field::ProbeBudget.set_number(&mut preferences, 512.0);
+    assert_eq!(preferences.files.probe_budget, 512);
+    assert!(Field::ProbeBudget.is_modified(&preferences));
+    Field::ProbeBudget.reset(&mut preferences);
+    assert_eq!(preferences.files.probe_budget, 256);
+    assert!(!Field::ProbeBudget.is_modified(&preferences));
 }

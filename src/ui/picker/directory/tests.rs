@@ -31,11 +31,11 @@ impl Render for Host {
 fn fixture(cx: &mut TestAppContext) -> Fixture {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds()
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::English)
             .expect("catalog");
-        cx.gds().ui().register_dialogs();
+        cx.gds_mut().ui().register_dialogs();
     });
     let requests = Rc::new(RefCell::new(VecDeque::new()));
     let queued = requests.clone();

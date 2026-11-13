@@ -26,7 +26,7 @@ container_traits!(HelpPage);
 impl RenderOnce for HelpPage {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         self.base
-            .bg(cx.gds_ro().appearance().theme().content_background())
+            .bg(cx.gds().appearance().theme().content_background())
             .test_support()
     }
 }

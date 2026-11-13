@@ -501,7 +501,7 @@ impl Host {
             .flex()
             .flex_col()
             .when(!matches!(page.content, Content::Help), |surface| {
-                surface.bg(cx.gds_ro().appearance().theme().content_background())
+                surface.bg(cx.gds().appearance().theme().content_background())
             })
             .key_context("BasWorkspacePage")
             .track_focus(&self.focus)

@@ -19,17 +19,47 @@ pub use task_manager::Tasks;
 #[cfg(feature = "ui")]
 pub use ui::Ui;
 
+pub trait Context: Deref<Target = App> {
+    type Reborrowed<'a>: Context
+    where
+        Self: 'a;
+
+    fn reborrow(&mut self) -> Self::Reborrowed<'_>;
+}
+
+impl<'cx> Context for &'cx App {
+    type Reborrowed<'a>
+        = &'cx App
+    where
+        Self: 'a;
+
+    fn reborrow(&mut self) -> &'cx App {
+        *self
+    }
+}
+
+impl Context for &mut App {
+    type Reborrowed<'a>
+        = &'a mut App
+    where
+        Self: 'a;
+
+    fn reborrow(&mut self) -> &mut App {
+        self
+    }
+}
+
 pub trait AppExt {
-    fn gds(&mut self) -> Gds<&mut App>;
-    fn gds_ro(&self) -> Gds<&App>;
+    fn gds(&self) -> Gds<&App>;
+    fn gds_mut(&mut self) -> Gds<&mut App>;
 }
 
 impl AppExt for App {
-    fn gds(&mut self) -> Gds<&mut App> {
+    fn gds(&self) -> Gds<&App> {
         Gds { cx: self }
     }
 
-    fn gds_ro(&self) -> Gds<&App> {
+    fn gds_mut(&mut self) -> Gds<&mut App> {
         Gds { cx: self }
     }
 }
@@ -44,37 +74,53 @@ impl<C> Gds<C> {
     pub fn into_inner(self) -> C {
         self.cx
     }
+}
 
-    pub fn tasks(self) -> Tasks<C> {
-        Tasks { cx: self.cx }
+impl<C: Context> Gds<C> {
+    pub fn reborrow(&mut self) -> Gds<C::Reborrowed<'_>> {
+        Gds {
+            cx: self.cx.reborrow(),
+        }
+    }
+
+    pub fn tasks(&mut self) -> Tasks<C::Reborrowed<'_>> {
+        Tasks {
+            cx: self.cx.reborrow(),
+        }
     }
 
     #[cfg(feature = "appearance")]
-    pub fn appearance(self) -> Appearance<C> {
-        Appearance { cx: self.cx }
+    pub fn appearance(&mut self) -> Appearance<C::Reborrowed<'_>> {
+        Appearance {
+            cx: self.cx.reborrow(),
+        }
     }
 
     #[cfg(feature = "i18n")]
-    pub fn i18n(self) -> I18n<C> {
-        I18n { cx: self.cx }
+    pub fn i18n(&mut self) -> I18n<C::Reborrowed<'_>> {
+        I18n {
+            cx: self.cx.reborrow(),
+        }
     }
 
     #[cfg(feature = "ui")]
-    pub fn ui(self) -> Ui<C> {
-        Ui { cx: self.cx }
+    pub fn ui(&mut self) -> Ui<C::Reborrowed<'_>> {
+        Ui {
+            cx: self.cx.reborrow(),
+        }
     }
 }
 
 impl<C: Deref<Target = App>> Gds<C> {
     /// Underlying read-only context for application-specific accessor extensions.
-    pub fn app_ro(&self) -> &App {
+    pub fn app(&self) -> &App {
         &self.cx
     }
 }
 
 impl Gds<&mut App> {
     /// Underlying context for application-specific accessor extensions.
-    pub fn app(&mut self) -> &mut App {
+    pub fn app_mut(&mut self) -> &mut App {
         self.cx
     }
 }

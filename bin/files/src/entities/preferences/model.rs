@@ -7,11 +7,12 @@ use gds::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FilesPreferences {
     pub show_hidden: bool,
     pub auto_focus_search: bool,
+    pub probe_budget: usize,
     pub sidebar: SidebarPreferences,
     /// Preferred content height above the terminal dock; shared by this window.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,6 +20,19 @@ pub struct FilesPreferences {
     /// Default browsing root, keyed by the volume's stable identity.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub volume_mount_points: std::collections::BTreeMap<String, std::path::PathBuf>,
+}
+
+impl Default for FilesPreferences {
+    fn default() -> Self {
+        Self {
+            show_hidden: false,
+            auto_focus_search: false,
+            probe_budget: crate::entities::file::x::preferences::DEFAULT_PROBE_BUDGET,
+            sidebar: SidebarPreferences::default(),
+            terminal_content_height: None,
+            volume_mount_points: std::collections::BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

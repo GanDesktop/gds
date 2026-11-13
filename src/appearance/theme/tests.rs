@@ -30,13 +30,13 @@ fn palette_reinstallation_preserves_thin_semantic_focus(cx: &mut gpui_kit::TestA
                             let prepared = appearance
                                 .prepare(WindowAppearance::Dark)
                                 .expect("prepare palette");
-                            cx.gds()
+                            cx.gds_mut()
                                 .appearance()
                                 .theme()
                                 .install(prepared)
                                 .expect("reload palette");
                         } else {
-                            cx.gds()
+                            cx.gds_mut()
                                 .appearance()
                                 .theme()
                                 .apply(&appearance)
@@ -47,10 +47,7 @@ fn palette_reinstallation_preserves_thin_semantic_focus(cx: &mut gpui_kit::TestA
                             !theme.focus_ring,
                             "{builtin:?} {mode:?} must not restore outer halos"
                         );
-                        assert_eq!(
-                            theme.ring,
-                            cx.gds_ro().appearance().theme().colors().primary
-                        );
+                        assert_eq!(theme.ring, cx.gds().appearance().theme().colors().primary);
                         assert!(theme.ring.a > 0.0, "focus ink must remain visible");
                         let mut control = div()
                             .w(px(100.))

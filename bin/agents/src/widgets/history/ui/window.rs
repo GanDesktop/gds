@@ -187,7 +187,7 @@ impl Render for Host {
                 size_full;
                 flex;
                 flex_col;
-                bg: $(cx.gds_ro().appearance().theme().content_background());
+                bg: $(cx.gds().appearance().theme().content_background());
                 text_color: $(cx.theme().foreground);
                 on_action: $(cx.listener(Self::close_action));
             } [

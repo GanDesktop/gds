@@ -19,8 +19,10 @@ pub(super) use std::{
 };
 
 use crate::entities::location::volumes as storage;
+pub(super) use crate::entities::location::volumes::VolumesExt;
 use crate::entities::preferences as configuration;
-pub(super) use crate::shared::app::FilesExt;
+pub(super) use crate::entities::preferences::PreferencesExt;
+pub(super) use crate::shared::lib::clipboard::ClipboardExt;
 pub(super) use crate::shared::lib::selection::{Selection, SelectionBacking};
 use crate::shared::ui::actions::*;
 pub(super) use gds::app::AppExt;
@@ -180,6 +182,9 @@ pub(in crate::pages::workspace) struct TabCycleTargets {
     pub(in crate::pages::workspace) previous: Option<u64>,
     pub(in crate::pages::workspace) next: Option<u64>,
 }
+
+/// Minimum inclusive span before materializing a full `SelectionBacking` for `O(1)` range slicing.
+const RANGE_BACKING_MIN_SPAN: usize = 64;
 
 impl OpenTab {
     fn new(id: u64, location: Location, path: Option<PathBuf>, pinned: bool) -> Self {
@@ -395,6 +400,63 @@ impl OpenTab {
         backing
     }
 
+    fn position_of_path(&self, path: &Path) -> Option<usize> {
+        if let Some(backing) = &self.row_backing {
+            return backing.position(path);
+        }
+        let picker_narrows = self
+            .picker
+            .as_ref()
+            .is_some_and(picker::Projection::narrows);
+        if self.sort.is_canonical()
+            && self.filter().is_empty()
+            && !picker_narrows
+            && let Some(directory) = self.navigation.directory()
+            && let Some(entry) = directory.entry_for_path(path)
+        {
+            return self
+                .table_rows
+                .binary_search_by(|candidate| {
+                    (entry.kind == directory::EntryKind::Directory)
+                        .cmp(&(candidate.kind == directory::EntryKind::Directory))
+                        .then_with(|| candidate.name.cmp(&entry.name))
+                        .then_with(|| candidate.path.as_os_str().cmp(entry.path.as_os_str()))
+                })
+                .ok();
+        }
+        self.table_rows.iter().position(|entry| entry.path == path)
+    }
+
+    pub(super) fn select_index_range(&mut self, start: usize, end: usize) {
+        if self.table_rows.is_empty() {
+            self.navigation.view_mut().selected.clear();
+            return;
+        }
+        let (lo, hi) = (start.min(end), start.max(end));
+        if hi >= self.table_rows.len() {
+            self.navigation.view_mut().selected.clear();
+            return;
+        }
+        if lo == hi {
+            let path = self.table_rows[lo].path.clone();
+            self.navigation.view_mut().selected.set_single(path);
+            return;
+        }
+        if self.row_backing.is_some() || hi - lo + 1 >= RANGE_BACKING_MIN_SPAN {
+            let backing = self.row_backing();
+            self.navigation
+                .view_mut()
+                .selected
+                .set_range(&backing, lo, hi);
+        } else {
+            let paths: Vec<PathBuf> = self.table_rows[lo..=hi]
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect();
+            self.navigation.view_mut().selected.replace(paths);
+        }
+    }
+
     pub(super) fn resolve_cursor_index(&mut self) -> Option<usize> {
         let Some(path) = self.cursor.as_deref() else {
             self.cursor_index = None;
@@ -408,11 +470,7 @@ impl OpenTab {
         {
             return Some(index);
         }
-        let backing = self.row_backing();
-        let resolved = self
-            .cursor
-            .as_deref()
-            .and_then(|path| backing.position(path));
+        let resolved = self.position_of_path(path);
         self.cursor_index = resolved;
         resolved
     }
@@ -430,11 +488,7 @@ impl OpenTab {
         {
             return Some(index);
         }
-        let backing = self.row_backing();
-        let resolved = self
-            .anchor
-            .as_deref()
-            .and_then(|path| backing.position(path));
+        let resolved = self.position_of_path(path);
         self.anchor_index = resolved;
         resolved
     }
@@ -443,12 +497,11 @@ impl OpenTab {
         if self.cursor.is_some() {
             return self.resolve_cursor_index();
         }
-        let backing = self.row_backing();
         self.navigation
             .view()
             .selected
             .last()
-            .and_then(|path| backing.position(path))
+            .and_then(|path| self.position_of_path(path))
     }
 
     /// Update `table_rows` in place after an enrichment batch whose changes cannot
@@ -492,56 +545,142 @@ impl OpenTab {
             });
         }
 
-        let backing = self.row_backing();
-        let mut rows: Option<Vec<directory::Entry>> = None;
+        let share_unfiltered_proj = unfiltered
+            && self.sorted_projection.as_ref().is_some_and(|proj| {
+                proj.sort == self.sort && Arc::ptr_eq(&proj.entries, &self.table_rows)
+            });
+        if share_unfiltered_proj && let Some(proj) = &mut self.sorted_projection {
+            proj.entries = Arc::from([]);
+        }
+
         let mut touched_viewport = viewport_range.is_none();
-        for update in batch_updates {
-            let Some(index) = backing.position(update.path.as_path()) else {
-                continue;
-            };
-            let Some(existing) = self.table_rows.get(index) else {
-                continue;
-            };
-            if existing.ptr_eq(update) {
-                continue;
+        let updates_by_path: Option<std::collections::HashMap<&Path, &directory::Entry>> =
+            (self.row_backing.is_none() || !unfiltered).then(|| {
+                batch_updates
+                    .iter()
+                    .map(|entry| (entry.path.as_path(), entry))
+                    .collect()
+            });
+
+        if let Some(backing) = self.row_backing.clone() {
+            if let Some(slice) = Arc::get_mut(&mut self.table_rows) {
+                for update in batch_updates {
+                    let Some(index) = backing.position(update.path.as_path()) else {
+                        continue;
+                    };
+                    let Some(existing) = slice.get_mut(index) else {
+                        continue;
+                    };
+                    if existing.ptr_eq(update) {
+                        continue;
+                    }
+                    let visible_changed = &*existing != update;
+                    *existing = update.clone();
+                    if visible_changed
+                        && let Some(range) = &viewport_range
+                        && range.contains(&index)
+                    {
+                        touched_viewport = true;
+                    }
+                }
+            } else {
+                let mut rows: Option<Vec<directory::Entry>> = None;
+                for update in batch_updates {
+                    let Some(index) = backing.position(update.path.as_path()) else {
+                        continue;
+                    };
+                    let Some(existing) = self.table_rows.get(index) else {
+                        continue;
+                    };
+                    if existing.ptr_eq(update) {
+                        continue;
+                    }
+                    let visible_changed = existing != update;
+                    rows.get_or_insert_with(|| self.table_rows.iter().cloned().collect())[index] =
+                        update.clone();
+                    if visible_changed
+                        && let Some(range) = &viewport_range
+                        && range.contains(&index)
+                    {
+                        touched_viewport = true;
+                    }
+                }
+                if let Some(rows) = rows {
+                    self.table_rows = rows.into();
+                }
             }
-            let visible_changed = existing != update;
-            rows.get_or_insert_with(|| self.table_rows.iter().cloned().collect())[index] =
-                update.clone();
-            if visible_changed
-                && let Some(range) = &viewport_range
-                && range.contains(&index)
-            {
-                touched_viewport = true;
+        } else if let Some(updates_by_path) = &updates_by_path {
+            if let Some(slice) = Arc::get_mut(&mut self.table_rows) {
+                for (index, existing) in slice.iter_mut().enumerate() {
+                    let Some(update) = updates_by_path.get(existing.path.as_path()) else {
+                        continue;
+                    };
+                    if existing.ptr_eq(update) {
+                        continue;
+                    }
+                    let visible_changed = &*existing != *update;
+                    *existing = (*update).clone();
+                    if visible_changed
+                        && let Some(range) = &viewport_range
+                        && range.contains(&index)
+                    {
+                        touched_viewport = true;
+                    }
+                }
+            } else {
+                let mut rows: Option<Vec<directory::Entry>> = None;
+                for (index, existing) in self.table_rows.iter().enumerate() {
+                    let Some(update) = updates_by_path.get(existing.path.as_path()) else {
+                        continue;
+                    };
+                    if existing.ptr_eq(update) {
+                        continue;
+                    }
+                    let visible_changed = existing != *update;
+                    rows.get_or_insert_with(|| self.table_rows.iter().cloned().collect())[index] =
+                        (*update).clone();
+                    if visible_changed
+                        && let Some(range) = &viewport_range
+                        && range.contains(&index)
+                    {
+                        touched_viewport = true;
+                    }
+                }
+                if let Some(rows) = rows {
+                    self.table_rows = rows.into();
+                }
             }
         }
-        if let Some(rows) = rows {
-            self.table_rows = rows.into();
-        }
+
         if let Some(proj) = &mut self.sorted_projection
             && proj.sort == self.sort
         {
             if unfiltered {
                 proj.source = Arc::clone(&next_snapshot.entries);
                 proj.entries = Arc::clone(&self.table_rows);
-            } else {
-                let updates_by_path: std::collections::HashMap<&Path, &directory::Entry> =
-                    batch_updates
-                        .iter()
-                        .map(|entry| (entry.path.as_path(), entry))
-                        .collect();
-                let mut updated_entries: Option<Vec<directory::Entry>> = None;
-                for (index, existing) in proj.entries.iter().enumerate() {
-                    if let Some(update) = updates_by_path.get(existing.path.as_path())
-                        && !existing.ptr_eq(update)
-                    {
-                        updated_entries
-                            .get_or_insert_with(|| proj.entries.iter().cloned().collect())[index] =
-                            (*update).clone();
+            } else if let Some(updates_by_path) = &updates_by_path {
+                if let Some(slice) = Arc::get_mut(&mut proj.entries) {
+                    for existing in slice.iter_mut() {
+                        if let Some(update) = updates_by_path.get(existing.path.as_path())
+                            && !existing.ptr_eq(update)
+                        {
+                            *existing = (*update).clone();
+                        }
                     }
-                }
-                if let Some(updated_entries) = updated_entries {
-                    proj.entries = updated_entries.into();
+                } else {
+                    let mut updated_entries: Option<Vec<directory::Entry>> = None;
+                    for (index, existing) in proj.entries.iter().enumerate() {
+                        if let Some(update) = updates_by_path.get(existing.path.as_path())
+                            && !existing.ptr_eq(update)
+                        {
+                            updated_entries
+                                .get_or_insert_with(|| proj.entries.iter().cloned().collect())
+                                [index] = (*update).clone();
+                        }
+                    }
+                    if let Some(updated_entries) = updated_entries {
+                        proj.entries = updated_entries.into();
+                    }
                 }
                 proj.source = Arc::clone(&next_snapshot.entries);
             }
@@ -689,6 +828,15 @@ impl OpenTab {
                 self.navigation.view_mut().selected.replace(selected);
             }
         }
+        if self.navigation.view().selected.is_range() {
+            if !self.table_rows.is_empty()
+                && self.navigation.view().selected.len() == self.table_rows.len()
+            {
+                self.select_index_range(0, self.table_rows.len() - 1);
+            } else {
+                self.navigation.view_mut().selected.compact();
+            }
+        }
     }
 
     fn scroll_to_entry(&self, index: usize) {
@@ -748,8 +896,8 @@ impl Browser {
             home,
             picker,
         } = options;
-        let tasks = cx.gds_ro().tasks().scope();
-        let preferences = cx.gds_ro().files().preferences().current();
+        let tasks = cx.gds().tasks().scope();
+        let preferences = cx.gds().preferences().current();
         if picker.is_some() {
             // The picker's own decisions live in their own key scope, so they
             // cannot take Alt+A / Alt+C away from a dialog or the workspace.
@@ -770,7 +918,7 @@ impl Browser {
             menus: menu::State::default(),
             operations: file_actions::State::new(window, cx),
             background_tasks: cx.new(|_| background_tasks::State::default()),
-            clipboard_details: cx.new(|_| clipboard_status::Details::new(host.tasks.clone())),
+            clipboard_details: cx.new(|cx| clipboard_status::Details::new(host.tasks.clone(), cx)),
             selection_details: {
                 let browser = cx.entity();
                 cx.new(|cx| selection_status::Details::new(browser, cx))
@@ -808,7 +956,7 @@ impl Browser {
         } else {
             this.open_tab(start, false, window, cx);
         }
-        cx.gds().files().clipboard().refresh();
+        cx.gds_mut().clipboard().refresh();
         this.sync_workspace_state(cx);
         this
     }
@@ -854,7 +1002,7 @@ impl Browser {
             return;
         }
         let content_width = self.content_width();
-        let font_scale = f32::from(cx.gds_ro().appearance().typography().scaled(1.));
+        let font_scale = f32::from(cx.gds().appearance().typography().scaled(1.));
         let mode = self.view_mode();
         let is_collection = self.collection().is_some();
         if let Some(slot) = self.current_tab_mut() {
@@ -877,10 +1025,12 @@ impl Browser {
                     .active()
                     .filter(|slot| slot.navigation.directory().is_some())
                 {
+                    let enrichment_need = self.enrichment_need(slot.id).unwrap_or_default();
                     let data = table::Data {
                         rows: slot.table_rows.clone(),
                         selected: slot.navigation.view().selected.clone(),
                         sort: slot.sort,
+                        enrichment_need,
                         scroll: slot.scroll.clone(),
                         content_width,
                         layout: self.columns_layout(&self.current_location()).clone(),
@@ -911,6 +1061,15 @@ impl Browser {
     fn sync_workspace_state(&mut self, cx: &mut Context<Self>) {
         if !self.pages.is_empty() {
             self.menus.open = None;
+            if self.clipboard_details.read(cx).is_open() {
+                self.clipboard_details
+                    .update(cx, |details, cx| details.set_open(false, cx));
+            }
+            if self.selection_details.read(cx).is_open() {
+                let browser = cx.entity();
+                self.selection_details
+                    .update(cx, |details, cx| details.set_open(false, &browser, cx));
+            }
         }
         if !self.pages.is_empty() || self.collection().is_some() {
             self.menus.sort = None;
@@ -925,6 +1084,13 @@ impl Browser {
         if self.pages.is_empty() {
             let sort = columns::sort_for(&self.current_location(), &self.locations.places);
             let is_collection = self.collection().is_some();
+            let should_refresh = !is_collection
+                && self
+                    .current_tab()
+                    .is_some_and(|slot| slot.sort != sort || slot.projection_dirty);
+            if should_refresh {
+                self.release_active_selection_mirrors(cx);
+            }
             let mut needs_enrich = false;
             if let Some(slot) = self.current_tab_mut()
                 && !is_collection
@@ -1245,7 +1411,7 @@ impl Browser {
             self.toolbar.finish_path_edit();
         }
         self.start_request(id, request, cx);
-        cx.gds().files().clipboard().refresh();
+        cx.gds_mut().clipboard().refresh();
     }
 
     fn read_options(&self, id: u64) -> ReadOptions {
@@ -1305,6 +1471,7 @@ impl Browser {
             return;
         }
         self.save_tab_view(self.tabs.active_id, cx);
+        self.release_active_selection_mirrors(cx);
         self.tabs.active_id = id;
         self.pages.clear();
         self.toolbar.finish_path_edit();
@@ -1318,7 +1485,7 @@ impl Browser {
         self.refresh_if_hidden_changed(cx);
         self.schedule_enrichment(id, cx);
         self.enter_location(cx);
-        cx.gds().files().clipboard().refresh();
+        cx.gds_mut().clipboard().refresh();
 
         self.window.focus.focus(window, cx);
         cx.notify();
@@ -1361,6 +1528,7 @@ impl Browser {
         if self.tabs.items.is_empty() {
             self.open_tab(self.locations.home.clone(), false, window, cx);
         } else if was_active {
+            self.release_active_selection_mirrors(cx);
             self.tabs.active_id = self.tabs.items[index.min(self.tabs.items.len() - 1)].id;
             if let Some(slot) = self.current_tab_mut() {
                 slot.refresh_visible_if_dirty();
@@ -2059,7 +2227,7 @@ impl Browser {
                     self.toolbar.finish_path_edit();
                     self.pages.clear();
                     // Copy contents remain available after Escape.
-                    cx.gds().files().clipboard().refresh();
+                    cx.gds_mut().clipboard().refresh();
                     self.window.focus.focus(window, cx);
                     if self.picker.is_some() && !local_mode {
                         self.cancel_picker(cx);
@@ -2123,7 +2291,7 @@ fn report_directory_warnings(snapshot: &directory::DirectorySnapshot, cx: &mut A
 }
 
 /// Report that preferences could not be applied or saved.
-fn report_settings_failure(error: impl std::fmt::Display, cx: &mut App) {
+fn report_settings_failure(error: configuration::Error, cx: &mut App) {
     notifications::Report::new(
         notifications::Level::Error,
         i18n::t!(@cx, "settings-apply-failed", error = error.to_string()),

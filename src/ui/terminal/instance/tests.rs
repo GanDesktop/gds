@@ -10,8 +10,8 @@ fn installed_themes_reach_starting_and_hidden_terminals_without_paint(cx: &mut T
     let directory = tempfile::tempdir().expect("terminal query directory");
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
-        cx.gds()
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut()
             .appearance()
             .theme()
             .apply(&theme::Appearance::default())
@@ -65,7 +65,7 @@ dd bs=1 count=25 of=second.reply 2>/dev/null
 
 fn install(mode: theme::ModePreference, cx: &mut TestAppContext) -> String {
     cx.update(|cx| {
-        cx.gds()
+        cx.gds_mut()
             .appearance()
             .theme()
             .apply(&theme::Appearance {

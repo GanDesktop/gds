@@ -196,8 +196,7 @@ impl Bridge {
         cx.spawn(async move |cx| {
             write.await?;
             cx.update(|cx| {
-                cx.default_global::<Cache>().record_uri_copy(copyable);
-                cx.refresh_windows();
+                Cache::record_uri_copy_in(copyable, cx);
             });
             Ok(())
         })
@@ -316,10 +315,23 @@ pub(crate) struct Accessor<C> {
     cx: C,
 }
 
-impl<C> crate::shared::app::Files<C> {
-    pub(crate) fn clipboard(self) -> Accessor<C> {
+pub(crate) trait ClipboardExt {
+    type Context<'a>: gds::app::Context
+    where
+        Self: 'a;
+
+    fn clipboard(&mut self) -> Accessor<Self::Context<'_>>;
+}
+
+impl<C: gds::app::Context> ClipboardExt for gds::app::Gds<C> {
+    type Context<'a>
+        = C::Reborrowed<'a>
+    where
+        C: 'a;
+
+    fn clipboard(&mut self) -> Accessor<C::Reborrowed<'_>> {
         Accessor {
-            cx: self.into_inner(),
+            cx: self.reborrow().into_inner(),
         }
     }
 }
@@ -437,6 +449,13 @@ impl Accessor<&mut App> {
     pub(crate) fn note_cut_paste(&mut self, pasted: &Snapshot, succeeded: &[PathBuf]) {
         Cache::note_cut_paste(pasted, succeeded, self.cx);
     }
+}
+
+pub(crate) fn observe<V: 'static>(
+    cx: &mut gpui_kit::Context<V>,
+    on_change: impl Fn(&mut V, &mut gpui_kit::Context<V>) + 'static,
+) -> gpui_kit::Subscription {
+    Cache::observe(cx, on_change)
 }
 
 #[cfg(test)]

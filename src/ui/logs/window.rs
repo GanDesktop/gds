@@ -32,7 +32,7 @@ impl Default for Options {
             app_name: "GDS".into(),
             background: |_| crate::appearance::tokens::WINDOW_BACKGROUND,
             root: |view, window, cx| {
-                cx.gds().appearance().theme().attach_observer(window);
+                cx.gds_mut().appearance().theme().attach_observer(window);
                 let surface = crate::ui::notifications::surface::wrap(view, window, cx);
                 Root::new(surface, window, cx).text_size(crate::appearance::tokens::SMALL)
             },

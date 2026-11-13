@@ -47,6 +47,13 @@ impl Motion {
 }
 
 impl Browser {
+    /// Drop UI-layer clones of the active tab's selection and drag snapshot so
+    /// subsequent `Selection` mutations can update their `Arc` backing in place.
+    pub(in crate::pages::workspace) fn release_active_selection_mirrors(&mut self, cx: &mut App) {
+        self.files.grid_selection.clear();
+        table::FileTable::release_selection(&self.files.table, cx);
+    }
+
     pub(in crate::pages::workspace) fn on_list_background_press(
         &mut self,
         _: &MouseDownEvent,
@@ -75,6 +82,7 @@ impl Browser {
                 }
             }
             None => {
+                self.release_active_selection_mirrors(cx);
                 if let Some(slot) = self.active_mut() {
                     {
                         let tab = &mut slot.navigation;
@@ -185,7 +193,7 @@ impl Browser {
                     } else {
                         (current + step).min(count - 1)
                     };
-                    self.select_row(index, modifiers);
+                    self.select_row(index, modifiers, cx);
                     if let Some(slot) = self.active() {
                         let scroll = &slot.scroll.0.borrow().base_handle;
                         let direction = if event.keystroke.key == "pageup" {
@@ -224,7 +232,7 @@ impl Browser {
             let Some(index) = target else {
                 return;
             };
-            self.select_row(index, modifiers);
+            self.select_row(index, modifiers, cx);
             if let Some(slot) = self.active() {
                 slot.scroll_to_entry(index);
             }
@@ -262,6 +270,7 @@ impl Browser {
                 shift: extend,
                 ..Default::default()
             },
+            cx,
         );
         if let Some(slot) = self.active() {
             slot.scroll_to_entry(index);
@@ -407,24 +416,25 @@ impl Browser {
         modifiers: Modifiers,
         cx: &mut Context<Self>,
     ) {
-        if self.select_row(visible_index, modifiers) {
+        if self.select_row(visible_index, modifiers, cx) {
             cx.notify();
         }
     }
 
-    fn select_row(&mut self, visible_index: usize, modifiers: Modifiers) -> bool {
+    fn select_row(&mut self, visible_index: usize, modifiers: Modifiers, cx: &mut App) -> bool {
         let single_selection = self
             .picker
             .as_ref()
             .is_some_and(|picker| !picker.session.allows_multiple());
-        let Some(slot) = self.active_mut() else {
-            return false;
-        };
-        let Some(path) = slot
-            .table_rows
-            .get(visible_index)
+        let Some(path) = self
+            .active()
+            .and_then(|slot| slot.table_rows.get(visible_index))
             .map(|entry| entry.path.clone())
         else {
+            return false;
+        };
+        self.release_active_selection_mirrors(cx);
+        let Some(slot) = self.active_mut() else {
             return false;
         };
         // Single-selection pickers replace the selection on every motion.
@@ -447,12 +457,7 @@ impl Browser {
                 slot.anchor = Some(slot.table_rows[anchor].path.clone());
                 slot.anchor_index = Some(anchor);
             }
-            let backing = slot.row_backing();
-            slot.navigation.view_mut().selected.set_range(
-                &backing,
-                anchor.min(visible_index),
-                anchor.max(visible_index),
-            );
+            slot.select_index_range(anchor, visible_index);
         } else if modifiers.control || modifiers.platform {
             slot.navigation.view_mut().selected.toggle(path.clone());
             slot.anchor = Some(path.clone());
@@ -492,6 +497,10 @@ impl Browser {
                     .collect()
             })
         });
+        if self.active().is_none() {
+            return;
+        }
+        self.release_active_selection_mirrors(cx);
         let Some(slot) = self.active_mut() else {
             return;
         };
@@ -501,11 +510,7 @@ impl Browser {
             slot.navigation.view_mut().selected.clear();
         } else {
             let last = slot.table_rows.len() - 1;
-            let backing = slot.row_backing();
-            slot.navigation
-                .view_mut()
-                .selected
-                .set_range(&backing, 0, last);
+            slot.select_index_range(0, last);
         }
         if picker_mode {
             slot.cursor = slot.navigation.view().selected.first().cloned();
@@ -525,12 +530,13 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         let location = self.current_location();
+        if self.active().is_none_or(|slot| slot.sort == sort) {
+            return;
+        }
+        self.release_active_selection_mirrors(cx);
         let Some(slot) = self.active_mut() else {
             return;
         };
-        if slot.sort == sort {
-            return;
-        }
         slot.sort = sort;
         slot.refresh_visible();
         if let Some(index) = slot.resolve_cursor_index() {

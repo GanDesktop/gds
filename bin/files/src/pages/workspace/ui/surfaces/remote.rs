@@ -402,12 +402,14 @@ impl Browser {
         let subscribe_filter = cx.subscribe(
             &self.toolbar.filter.input,
             move |this, _, _: &gpui_kit::component::input::InputEvent, cx| {
-                this.sync_remote_directory(tab, cx);
+                let hidden = this.settings.preferences.files.show_hidden;
+                this.sync_remote_directory(tab, hidden, cx);
             },
         );
-        let preferences = cx.gds_ro().files().preferences().service();
-        let observe_preferences = cx.observe(&preferences, move |this, _, cx| {
-            this.sync_remote_directory(tab, cx);
+        let preferences = cx.gds().preferences().service();
+        let observe_preferences = cx.observe(&preferences, move |this, preferences, cx| {
+            let hidden = preferences.read(cx).current().files.show_hidden;
+            this.sync_remote_directory(tab, hidden, cx);
         });
         let observe_bounds = cx.observe_window_bounds(window, move |this, window, cx| {
             let compact = responsive::Layout::for_width(window.bounds().size.width).compact;
@@ -433,7 +435,7 @@ impl Browser {
         }
     }
 
-    fn sync_remote_directory(&self, tab: u64, cx: &mut Context<Self>) {
+    fn sync_remote_directory(&self, tab: u64, hidden: bool, cx: &mut Context<Self>) {
         let Some(slot) = self.tab_slot(tab) else {
             return;
         };
@@ -441,7 +443,6 @@ impl Browser {
             return;
         };
         let filter = slot.filter().to_owned();
-        let hidden = self.settings.preferences.files.show_hidden;
         let compact = self.window.layout.compact;
         view.update(cx, |view, cx| {
             view.set_filter(filter, hidden, cx);

@@ -6,24 +6,50 @@
 //! matcher works on the raw basename so non-UTF-8 names still match.
 
 use std::ffi::OsString;
-use std::io::Write as _;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::process::ExitCode;
+use std::sync::{Arc, OnceLock};
 
 use gds::service::desktop::protocol::chooser::{self, Mode, Pattern};
 use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::Serialize;
 use thiserror::Error;
 
-/// Exit status reported after the window closes: the user confirmed a file.
-const EXIT_CONFIRMED: u8 = 0;
-/// Exit status for cancellation, window close and startup failures.
-const EXIT_CANCELLED: u8 = 1;
-/// Exit status when the selection could not be written to stdout.
-const EXIT_FAILED: u8 = 2;
+/// Terminal outcome of one picker session, mapped to the process exit status.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Outcome {
+    /// The user confirmed a selection and it was written to stdout.
+    Confirmed = 0,
+    /// The user cancelled, closed the window, or terminated the process.
+    #[default]
+    Cancelled = 1,
+    /// Startup failed or the selection could not be written to stdout.
+    Failed = 2,
+}
 
-/// Outcome of one picker session, shared with the process exit path.
-static EXIT: AtomicU8 = AtomicU8::new(EXIT_CANCELLED);
+impl From<Outcome> for ExitCode {
+    fn from(outcome: Outcome) -> Self {
+        Self::from(outcome as u8)
+    }
+}
+
+/// Write-once handle carrying a picker session's [`Outcome`] across the GPUI event loop.
+#[derive(Clone, Debug, Default)]
+pub struct OutcomeSlot(Arc<OnceLock<Outcome>>);
+
+impl OutcomeSlot {
+    pub(super) fn record(&self, outcome: Outcome) -> bool {
+        self.0.set(outcome).is_ok()
+    }
+
+    /// Returns the recorded outcome, defaulting to [`Outcome::Cancelled`] when the window
+    /// closes without explicit confirmation.
+    pub fn get(&self) -> Outcome {
+        self.0.get().copied().unwrap_or_default()
+    }
+}
 
 /// Picker behaviour handed to the browser.
 #[derive(Clone, Debug)]
@@ -37,6 +63,8 @@ pub struct Options {
     /// Allow multiple selections of the requested type.
     pub multiple: bool,
     pub portal: Option<chooser::Request>,
+    /// Optional sink bound by the process bootstrap to observe the session's exit outcome.
+    pub outcome: Option<OutcomeSlot>,
 }
 
 impl Options {
@@ -58,6 +86,7 @@ impl Options {
             directory: false,
             multiple: false,
             portal: None,
+            outcome: None,
         }
     }
 
@@ -96,7 +125,16 @@ impl Options {
             directory,
             multiple,
             portal: Some(request),
+            outcome: None,
         })
+    }
+
+    /// Attaches a write-once [`OutcomeSlot`] to these options and returns a reader handle for the
+    /// caller driving the event loop.
+    pub fn bind_outcome(&mut self) -> OutcomeSlot {
+        self.outcome
+            .get_or_insert_with(OutcomeSlot::default)
+            .clone()
     }
 
     pub fn valid_name(name: &std::ffi::OsStr) -> bool {
@@ -279,33 +317,35 @@ impl Filter {
     }
 }
 
-/// Writes the confirmed selection to stdout as one JSON line and flushes it.
+/// Writes the confirmed selection as one JSON line and flushes `writer`.
 ///
 /// Nothing else in the picker writes to stdout. The file itself is neither
 /// opened nor modified.
 ///
 /// # Errors
 /// Reports a path that cannot be made absolute, a serialization failure, or a
-/// failed stdout write.
-pub fn emit_selections(
+/// failed output write.
+pub(super) fn write_selections(
+    mut writer: impl Write,
     paths: &[PathBuf],
     read_only: bool,
     filter_index: usize,
 ) -> Result<(), Error> {
     let line = Selection::encode_line(paths, read_only, filter_index)?;
-    let mut stdout = std::io::stdout().lock();
-    stdout.write_all(&line).map_err(Error::Output)?;
-    stdout.write_all(b"\n").map_err(Error::Output)?;
-    stdout.flush().map_err(Error::Output)
+    writer.write_all(&line).map_err(Error::Output)?;
+    writer.write_all(b"\n").map_err(Error::Output)?;
+    writer.flush().map_err(Error::Output)
 }
 
 /// # Errors
-/// Reports serialization or stdout failures.
-pub fn emit_portal_result(result: &chooser::Result) -> Result<(), Error> {
-    let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer(&mut stdout, result).map_err(Error::Serialize)?;
-    stdout.write_all(b"\n").map_err(Error::Output)?;
-    stdout.flush().map_err(Error::Output)
+/// Reports serialization or output write failures.
+pub(super) fn write_portal_result(
+    mut writer: impl Write,
+    result: &chooser::Result,
+) -> Result<(), Error> {
+    serde_json::to_writer(&mut writer, result).map_err(Error::Serialize)?;
+    writer.write_all(b"\n").map_err(Error::Output)?;
+    writer.flush().map_err(Error::Output)
 }
 
 /// The selection line. A non-UTF-8 path is reported as `path: null` plus
@@ -362,26 +402,6 @@ impl Selection<'_> {
             .map_err(Error::Serialize)
         }
     }
-}
-
-/// Records that the user picked a file and the result reached stdout.
-pub fn mark_confirmed() {
-    EXIT.store(EXIT_CONFIRMED, Ordering::Relaxed);
-}
-
-/// Records that the user cancelled or closed the window. This is the default.
-pub fn mark_cancelled() {
-    EXIT.store(EXIT_CANCELLED, Ordering::Relaxed);
-}
-
-/// Records that the selection could not be reported.
-pub fn mark_failed() {
-    EXIT.store(EXIT_FAILED, Ordering::Relaxed);
-}
-
-/// Exit status of the picker session.
-pub fn exit_code() -> u8 {
-    EXIT.load(Ordering::Relaxed)
 }
 
 #[derive(Debug, Error)]

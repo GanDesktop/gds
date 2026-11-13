@@ -1,6 +1,6 @@
 use super::*;
-use crate::shared::app::FilesExt as _;
 use crate::shared::lib::clipboard;
+use crate::shared::lib::clipboard::ClipboardExt as _;
 use gds::app::AppExt as _;
 use gds::ui::DialogActions;
 use gds_uim::el;
@@ -428,7 +428,7 @@ impl View {
         if self.selected.is_empty() {
             return;
         }
-        let work = cx.gds().files().clipboard().write_uris(
+        let work = cx.gds_mut().clipboard().write_uris(
             self.selected
                 .iter()
                 .map(|address| address.uri().to_owned())
@@ -468,7 +468,7 @@ impl View {
     }
 
     pub(super) fn paste(&mut self, cx: &mut Context<Self>) {
-        let work = cx.gds().files().clipboard().read_uris();
+        let work = cx.gds_mut().clipboard().read_uris();
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {

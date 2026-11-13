@@ -582,7 +582,7 @@ pub fn suffix_anchor(
         return div().size_0().into_any_element();
     };
     let label = ShortcutBadge::path_label(&[binding.clone()], held).unwrap_or_default();
-    let typography = cx.gds_ro().appearance().typography();
+    let typography = cx.gds().appearance().typography();
     let text_size = typography.scaled(LABEL_TEXT_SIZE);
     let run = window.text_style().to_run(label.len());
     let width = window
@@ -1023,11 +1023,7 @@ fn compact_label(
     held: HeldModifier,
     cx: &App,
 ) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
-    let text_size = cx
-        .gds_ro()
-        .appearance()
-        .typography()
-        .scaled(LABEL_TEXT_SIZE);
+    let text_size = cx.gds().appearance().typography().scaled(LABEL_TEXT_SIZE);
     let label = ShortcutBadge::path_label(bindings, held).unwrap_or_default();
     div()
         .id(SharedString::from(format!("keytip-{key}")))

@@ -204,7 +204,7 @@ impl TableDelegate for LocationTable {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         el! { .div { size_full; flex; items_center;
-            text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::HEADER_SIZE)); text_color: $cx.theme().muted_foreground;
+            text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::HEADER_SIZE)); text_color: $cx.theme().muted_foreground;
         } [$(self.columns[column].name.clone())] }
     }
 
@@ -315,7 +315,7 @@ impl TableDelegate for LocationTable {
                 tooltip_show_delay: tokens::TOOLTIP_DELAY;
                 tooltip: $(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx));
             @end;
-            text_size: $(cx.gds_ro().appearance().typography().scaled(if column == 0 { DataListStyle::NAME_SIZE } else { DataListStyle::META_SIZE }));
+            text_size: $(cx.gds().appearance().typography().scaled(if column == 0 { DataListStyle::NAME_SIZE } else { DataListStyle::META_SIZE }));
         } [
             @if (column == 0) icon, @end,
             cell,

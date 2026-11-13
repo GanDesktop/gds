@@ -28,7 +28,7 @@ pub(in crate::pages::workspace) struct State {
 impl State {
     pub(in crate::pages::workspace) fn new(window: &mut Window, cx: &mut Context<Browser>) -> Self {
         Self {
-            service: cx.gds_ro().files().volumes().service(),
+            service: cx.gds().volumes().service(),
             table: table::VolumeTable::make_state(cx.entity().downgrade(), window, cx),
             defaults: std::collections::HashMap::new(),
             pending_removals: Vec::new(),

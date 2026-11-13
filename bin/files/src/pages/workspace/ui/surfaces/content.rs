@@ -5,6 +5,7 @@ use gpui_kit::component::table::TableState;
 
 pub(in crate::pages::workspace) struct State {
     pub table: Entity<TableState<table::FileTable>>,
+    pub grid_selection: grid::SelectionCache,
     pub columns: Entity<columns::Editor>,
     pub marquee: marquee::State,
     pub preview: Entity<preview::View>,
@@ -17,6 +18,7 @@ impl State {
         cx.observe(&inspections, |_, _, cx| cx.notify()).detach();
         Self {
             table: table::FileTable::make_state(cx.entity().downgrade(), window, cx),
+            grid_selection: grid::SelectionCache::default(),
             columns: cx.new(|_| columns::Editor::new()),
             marquee: marquee::State::default(),
             preview: cx.new(|cx| preview::View::new(inspections.clone(), cx)),

@@ -306,6 +306,7 @@ impl Browser {
             }
             picker.session.projection()
         };
+        self.release_active_selection_mirrors(cx);
         self.reproject_picker(&projection);
         self.schedule_enrichment(self.tabs.active_id, cx);
         cx.notify();

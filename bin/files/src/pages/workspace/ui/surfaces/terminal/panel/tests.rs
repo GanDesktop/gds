@@ -13,12 +13,12 @@ fn open_test_panel(cx: &mut TestAppContext) -> (WindowHandle<Root>, Entity<Panel
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
-        cx.gds().ui().init_terminal();
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
         let catalog = crate::shared::i18n::prepare(gds::i18n::Language::English)
             .expect("prepare English translations");
-        cx.gds().i18n().install_catalog(catalog);
-        cx.gds()
+        cx.gds_mut().i18n().install_catalog(catalog);
+        cx.gds_mut()
             .appearance()
             .theme()
             .apply(&Default::default())
@@ -209,7 +209,7 @@ async fn ctrl_d_exits_and_auto_closes_tabs_including_after_nonzero_command(
     })
     .expect("verify last terminal tab cleanup and focus fallback");
 
-    let scope = cx.update(|cx| cx.gds_ro().tasks().scope());
+    let scope = cx.update(|cx| cx.gds().tasks().scope());
     cx.update_window(window.into(), |_, window, _| window.remove_window())
         .expect("remove test window");
     scope.shutdown().await;
@@ -389,7 +389,7 @@ async fn background_and_unfocused_auto_close_preserve_active_tab_and_external_fo
             panel.update(cx, |panel, cx| panel.shutdown(cx))
         })
         .expect("verify external focus preserved");
-    let scope = cx.update(|cx| cx.gds_ro().tasks().scope());
+    let scope = cx.update(|cx| cx.gds().tasks().scope());
     cx.update_window(window.into(), |_, window, _| window.remove_window())
         .expect("remove test window");
     shutdown.await;

@@ -1,27 +1,23 @@
 //! GPUI runtime services, appearance fallbacks, and global keybindings for Files.
 
 use super::{APP_ID, APP_NAME};
-use crate::entities::preferences;
-use crate::shared::{
-    app::{Files, FilesExt as _},
-    i18n,
-    ui::actions,
+use crate::entities::{
+    location::volumes::VolumesExt as _,
+    preferences::{self, PreferencesExt as _},
 };
+use crate::shared::{i18n, ui::actions};
 use gds::app::AppExt as _;
 use gds::appearance::{theme, typography};
+use gds::service::task_manager::Scope;
+use gpui_kit::App;
 
-impl Files<&mut gpui_kit::App> {
-    /// Binds the task supervisor scope, Unix termination signals, and idle window-close handling
-    /// before asynchronous startup I/O begins.
-    pub(in crate::app) fn bind_lifecycle(&mut self, tasks: gds::service::task_manager::Scope) {
-        let cx = self.app();
-        cx.gds().tasks().init(tasks);
-        #[cfg(unix)]
-        cx.gds()
-            .tasks()
-            .signals(|cx| cx.gds().tasks().request_quit());
-        cx.on_window_closed(|cx, _| cx.gds().tasks().quit_when_idle())
-            .detach();
+pub(super) struct Initializer<'a> {
+    cx: &'a mut App,
+}
+
+impl<'a> Initializer<'a> {
+    pub fn new(cx: &'a mut App) -> Self {
+        Self { cx }
     }
 
     /// Initializes global UI services, appearance, preferences, and keybindings before opening
@@ -30,40 +26,40 @@ impl Files<&mut gpui_kit::App> {
     /// # Errors
     /// Returns an error if base translations cannot be loaded, the built-in fallback theme fails
     /// to initialize, or the preferences entity cannot be installed.
-    pub(in crate::app) fn init_ui(
+    pub fn run(
         &mut self,
+        tasks: &Scope,
         mut preferences: preferences::Preferences,
         logs: Option<gds::service::logs::Store>,
         notices: &mut Vec<String>,
     ) -> anyhow::Result<()> {
-        let cx = self.app();
-        let tasks = cx.gds_ro().tasks().scope();
-        cx.gds().initialize(tasks, logs);
-        cx.gds()
+        self.cx.gds_mut().init_ui(logs);
+        self.cx
+            .gds_mut()
             .appearance()
             .motion()
             .set_enabled(preferences.animations_enabled.unwrap_or(true));
-        cx.gds().appearance().motion().follow_system();
-        cx.gds().ui().logs().init(gds::ui::logs::Options {
+        self.cx.gds_mut().appearance().motion().follow_system();
+        self.cx.gds_mut().ui().logs().init(gds::ui::logs::Options {
             app_id: Some(APP_ID.into()),
             app_name: APP_NAME.into(),
             ignored_contexts: &[actions::TERMINAL_TABS_CONTEXT],
             ..Default::default()
         });
-        cx.set_app_identity(APP_ID, APP_NAME);
+        self.cx.set_app_identity(APP_ID, APP_NAME);
 
         self.install_i18n(preferences.language)?;
-        self.app().gds().ui().time().apply(preferences.time_format);
+        self.cx.gds_mut().ui().time().apply(preferences.time_format);
         self.apply_theme(&mut preferences.appearance, notices)?;
         self.apply_typography(&preferences.font, notices);
-        self.app()
-            .gds()
+        self.cx
+            .gds_mut()
             .appearance()
             .theme()
             .init_hot_reload(preferences.appearance.clone());
-        self.install_preferences(preferences)?;
-        self.app().gds().files().volumes().initialize();
-        self.register_actions();
+        self.install_preferences(preferences, tasks)?;
+        self.cx.gds_mut().volumes().initialize(tasks);
+        actions::Command::register(self.cx);
         Ok(())
     }
 
@@ -72,7 +68,7 @@ impl Files<&mut gpui_kit::App> {
     fn install_i18n(&mut self, language: Option<i18n::Language>) -> anyhow::Result<()> {
         let catalog = i18n::prepare(language.unwrap_or_else(i18n::Language::detect))
             .inspect_err(|error| tracing::error!("Cannot load application messages: {error}"))?;
-        self.app().gds().i18n().install_catalog(catalog);
+        self.cx.gds_mut().i18n().install_catalog(catalog);
         Ok(())
     }
 
@@ -83,8 +79,7 @@ impl Files<&mut gpui_kit::App> {
         appearance: &mut theme::Appearance,
         notices: &mut Vec<String>,
     ) -> anyhow::Result<()> {
-        let cx = self.app();
-        let Err(error) = cx.gds().appearance().theme().apply(appearance) else {
+        let Err(error) = self.cx.gds_mut().appearance().theme().apply(appearance) else {
             return Ok(());
         };
         // Missing desktop theme integration degrades quietly and updates the active runtime source;
@@ -97,7 +92,7 @@ impl Files<&mut gpui_kit::App> {
             notices.push(error.to_string());
         }
         let fallback = appearance.builtin_fallback();
-        if let Err(error) = cx.gds().appearance().theme().apply(&fallback) {
+        if let Err(error) = self.cx.gds_mut().appearance().theme().apply(&fallback) {
             tracing::error!("Cannot initialize the built-in theme: {error}");
             return Err(error.into());
         }
@@ -108,8 +103,7 @@ impl Files<&mut gpui_kit::App> {
     }
 
     fn apply_typography(&mut self, font: &typography::Preferences, notices: &mut Vec<String>) {
-        let cx = self.app();
-        match cx.gds().appearance().typography().apply(font) {
+        match self.cx.gds_mut().appearance().typography().apply(font) {
             Ok(applied) => {
                 if let Some(unavailable) = applied.unavailable {
                     tracing::error!(
@@ -121,8 +115,9 @@ impl Files<&mut gpui_kit::App> {
                 notices.push(error.to_string());
                 // An out-of-range stored font size must not block window creation; apply the default
                 // metrics for this session while leaving the stored preference untouched.
-                if let Err(fallback) = cx
-                    .gds()
+                if let Err(fallback) = self
+                    .cx
+                    .gds_mut()
                     .appearance()
                     .typography()
                     .apply(&typography::Preferences::default())
@@ -135,14 +130,17 @@ impl Files<&mut gpui_kit::App> {
 
     /// # Errors
     /// Returns an error if the preferences configuration path cannot be resolved.
-    fn install_preferences(&mut self, preferences: preferences::Preferences) -> anyhow::Result<()> {
+    fn install_preferences(
+        &mut self,
+        preferences: preferences::Preferences,
+        tasks: &Scope,
+    ) -> anyhow::Result<()> {
         let entity = self
-            .app()
-            .gds()
-            .files()
+            .cx
+            .gds_mut()
             .preferences()
-            .initialize(preferences)?;
-        self.app()
+            .initialize(preferences, tasks)?;
+        self.cx
             .subscribe(&entity, |_, event: &preferences::SaveFailed, cx| {
                 gds::ui::notifications::Report::new(
                     gds::ui::notifications::Level::Error,

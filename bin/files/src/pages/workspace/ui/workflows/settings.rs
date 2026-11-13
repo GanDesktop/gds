@@ -42,10 +42,11 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Err(error) = cx.gds().files().preferences().update(preferences) {
+        if let Err(error) = cx.gds_mut().preferences().update(preferences) {
             report_settings_failure(error, cx);
         }
-        self.sync_preferences(window, cx);
+        let current = cx.gds().preferences().current();
+        self.sync_preferences(current, window, cx);
     }
 
     pub(in crate::pages::workspace) fn edit_preferences(
@@ -53,17 +54,17 @@ impl Browser {
         edit: impl FnOnce(&mut configuration::Preferences),
         cx: &mut Context<Self>,
     ) {
-        if let Err(error) = cx.gds().files().preferences().edit(edit) {
+        if let Err(error) = cx.gds_mut().preferences().edit(edit) {
             report_settings_failure(error, cx);
         }
     }
 
     pub(in crate::pages::workspace) fn sync_preferences(
         &mut self,
+        preferences: configuration::Preferences,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let preferences = cx.gds_ro().files().preferences().current();
         self.settings.view.update(cx, |view, cx| {
             view.set_preferences(preferences.clone(), window, cx);
         });
@@ -73,6 +74,8 @@ impl Browser {
         let language_changed = preferences.language != self.settings.preferences.language;
         let hidden_changed =
             preferences.files.show_hidden != self.settings.preferences.files.show_hidden;
+        let probe_budget_changed =
+            preferences.files.probe_budget != self.settings.preferences.files.probe_budget;
         let tags_changed = preferences.tags != self.settings.preferences.tags;
         let roots_changed = preferences.files.volume_mount_points
             != self.settings.preferences.files.volume_mount_points;
@@ -94,6 +97,11 @@ impl Browser {
         }
         if hidden_changed {
             self.refresh_current(cx);
+        } else if probe_budget_changed {
+            let tabs: Vec<_> = self.tabs.items.iter().map(|tab| tab.id).collect();
+            for tab in tabs {
+                self.schedule_enrichment(tab, cx);
+            }
         }
         if roots_changed {
             let tabs: Vec<_> = self

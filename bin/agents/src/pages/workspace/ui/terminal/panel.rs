@@ -433,7 +433,7 @@ impl Panel {
             .flex()
             .flex_col()
             .gap_1()
-            .text_color(cx.gds_ro().appearance().theme().colors().sidebar_foreground)
+            .text_color(cx.gds().appearance().theme().colors().sidebar_foreground)
             .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
             .on_action(cx.listener(Self::new_terminal))
             .on_action(cx.listener(Self::close_terminal))
@@ -470,7 +470,7 @@ impl Render for Panel {
                 .on_action(cx.listener(Self::new_terminal))
                 .on_action(cx.listener(Self::focus_terminal))
                 .p_3()
-                .bg(cx.gds_ro().appearance().theme().content_background())
+                .bg(cx.gds().appearance().theme().content_background())
                 .text_color(cx.theme().muted_foreground)
                 .child(if self.cwd.is_some() {
                     tr!("local-terminal-empty")

@@ -221,6 +221,23 @@ impl<V: Default> Navigation<V> {
         true
     }
 
+    /// Mutate the active directory snapshot in place when `revision` is still current,
+    /// without entering loading or bumping the snapshot `Arc`'s strong count.
+    pub fn mutate_directory<R>(
+        &mut self,
+        revision: u64,
+        f: impl FnOnce(&mut Arc<DirectorySnapshot>) -> R,
+    ) -> Option<R> {
+        if self.pending.is_some() || self.revision != revision {
+            return None;
+        }
+        let snapshot = self.directory.as_mut()?;
+        if self.path.as_deref() != Some(snapshot.path.as_path()) {
+            return None;
+        }
+        Some(f(snapshot))
+    }
+
     pub fn directory(&self) -> Option<&DirectorySnapshot> {
         self.directory.as_deref()
     }

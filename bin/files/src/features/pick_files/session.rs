@@ -1,5 +1,5 @@
 //! Selection and filter state independent of the picker window.
-use super::{Filter, Options};
+use super::{Filter, Options, Outcome};
 use crate::entities::file::directory::{Entry, EntryKind, LinkTarget};
 use gds::service::desktop::protocol::chooser;
 use std::{
@@ -210,6 +210,7 @@ pub(crate) struct Session {
     pub choices: Vec<chooser::Choice>,
     /// A confirmed selection must only be reported once.
     pub completing: bool,
+    outcome: Option<Outcome>,
 }
 
 impl Session {
@@ -225,6 +226,7 @@ impl Session {
             options: Arc::new(options),
             active_filter: 0,
             completing: false,
+            outcome: None,
         }
     }
 
@@ -279,22 +281,49 @@ impl Session {
         }
     }
 
-    /// Emit the confirmed picker result to stdout and update the process exit status.
+    fn record_outcome(&mut self, outcome: Outcome) -> bool {
+        if self.outcome.is_some() {
+            return false;
+        }
+        self.completing = true;
+        self.outcome = Some(outcome);
+        if let Some(slot) = &self.options.outcome {
+            slot.record(outcome);
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn outcome(&self) -> Outcome {
+        self.outcome.unwrap_or_default()
+    }
+
+    /// Emit the confirmed picker result to stdout and record the session outcome.
     ///
     /// # Errors
     /// Propagates serialization or stdout write failures from the underlying emitter.
     pub(crate) fn complete(&mut self, paths: &[PathBuf]) -> Result<(), super::model::Error> {
+        let stdout = std::io::stdout().lock();
+        self.complete_to(stdout, paths)
+    }
+
+    pub(super) fn complete_to(
+        &mut self,
+        writer: impl std::io::Write,
+        paths: &[PathBuf],
+    ) -> Result<(), super::model::Error> {
         self.completing = true;
         let written = if self.options.portal.is_some() {
             let result = self.portal_result(paths);
-            super::emit_portal_result(&result)
+            super::model::write_portal_result(writer, &result)
         } else {
-            super::emit_selections(paths, self.read_only, self.active_filter)
+            super::model::write_selections(writer, paths, self.read_only, self.active_filter)
         };
-        match &written {
-            Ok(()) => super::mark_confirmed(),
-            Err(_) => super::mark_failed(),
-        }
+        let outcome = match &written {
+            Ok(()) => Outcome::Confirmed,
+            Err(_) => Outcome::Failed,
+        };
+        self.record_outcome(outcome);
         written
     }
 
@@ -302,9 +331,7 @@ impl Session {
         if self.completing {
             return false;
         }
-        self.completing = true;
-        super::mark_cancelled();
-        true
+        self.record_outcome(Outcome::Cancelled)
     }
 
     pub(crate) fn filters(&self) -> &[Filter] {

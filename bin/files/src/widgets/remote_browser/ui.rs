@@ -129,6 +129,8 @@ pub(crate) struct View {
     message: Option<String>,
 }
 
+const RANGE_BACKING_MIN_SPAN: usize = 64;
+
 impl EventEmitter<Event> for View {}
 
 impl View {
@@ -164,6 +166,33 @@ impl View {
             SelectionBacking::from_items(self.rows.iter().map(|entry| entry.address.clone()));
         self.row_backing = Some(Arc::clone(&backing));
         backing
+    }
+
+    fn release_table_selection(&self, cx: &mut App) {
+        table::Files::release_selection(&self.table, cx);
+    }
+
+    fn select_range(&mut self, start: usize, end: usize) {
+        if self.rows.is_empty() {
+            self.selected.clear();
+            return;
+        }
+        let (lo, hi) = (start.min(end), start.max(end));
+        if hi >= self.rows.len() {
+            self.selected.clear();
+            return;
+        }
+        if lo == hi {
+            self.selected.set_single(self.rows[lo].address.clone());
+            return;
+        }
+        if self.row_backing.is_some() || hi - lo + 1 >= RANGE_BACKING_MIN_SPAN {
+            let backing = self.row_backing();
+            self.selected.set_range(&backing, lo, hi);
+        } else {
+            self.selected
+                .replace(self.rows[lo..=hi].iter().map(|entry| entry.address.clone()));
+        }
     }
 
     pub(super) fn filter_entries(
@@ -227,6 +256,10 @@ impl View {
     }
 
     pub(crate) fn deselect_address(&mut self, address: &Address, cx: &mut Context<Self>) {
+        if !self.selected.contains(address) {
+            return;
+        }
+        self.release_table_selection(cx);
         if self.selected.remove(address) {
             self.sync_table(cx);
         }
@@ -267,11 +300,15 @@ impl View {
             &self.filter,
             self.show_hidden,
         );
+        self.release_table_selection(cx);
         Self::retain_visible_selection(&self.rows, &mut self.selected);
         self.sync_table(cx);
     }
 
     pub(super) fn retain_visible_selection(rows: &[Entry], selected: &mut Selection<Address>) {
+        if selected.is_range() {
+            selected.compact();
+        }
         let visible: HashSet<&Address> = rows.iter().map(|entry| &entry.address).collect();
         // Hidden or filtered-out entries must not remain implicit targets of remote actions.
         selected.retain(|address| visible.contains(address));
@@ -294,13 +331,14 @@ impl View {
     ) {
         let delegate = state.delegate_mut();
         let rows_changed = !Arc::ptr_eq(&delegate.rows, &rows);
-        let selection_changed = delegate.selected != selected;
+        let selection_changed = delegate.selection_dirty || delegate.selected != selected;
         if rows_changed {
             delegate.rows = rows;
         }
         if selection_changed {
             delegate.selected = selected;
         }
+        delegate.selection_dirty = false;
         // Refresh table state only when the row slice changes; selection-only updates
         // notify the table in place without resetting scroll state or copying rows.
         if rows_changed {
@@ -318,15 +356,16 @@ impl View {
         cx: &mut Context<Self>,
     ) {
         self.options.focus.focus(window, cx);
+        if index >= self.rows.len() {
+            return;
+        }
         let modifiers = window.modifiers();
+        self.release_table_selection(cx);
         let entry = if modifiers.shift {
-            let Some(entry) = self.rows.get(index).cloned() else {
-                return;
-            };
+            let entry = self.rows[index].clone();
             let start = self.anchor.unwrap_or(index);
-            let backing = self.row_backing();
-            self.selected
-                .set_range(&backing, start.min(index), start.max(index));
+            self.anchor = Some(start);
+            self.select_range(start, index);
             entry
         } else {
             let Some(entry) = Self::apply_selection(
@@ -359,11 +398,16 @@ impl View {
         let entry = rows.get(index)?.clone();
         if shift {
             let start = anchor.unwrap_or(index);
-            selected.replace(
-                rows[start.min(index)..=start.max(index)]
-                    .iter()
-                    .map(|item| item.address.clone()),
-            );
+            *anchor = Some(start);
+            if start == index {
+                selected.set_single(entry.address.clone());
+            } else {
+                selected.replace(
+                    rows[start.min(index)..=start.max(index)]
+                        .iter()
+                        .map(|item| item.address.clone()),
+                );
+            }
         } else if toggle {
             selected.toggle(entry.address.clone());
             *anchor = Some(index);
@@ -445,16 +489,16 @@ impl View {
                 }
             }
             Command::SelectAll => {
+                self.release_table_selection(cx);
                 if self.rows.is_empty() {
                     self.selected.clear();
                 } else {
-                    let last = self.rows.len() - 1;
-                    let backing = self.row_backing();
-                    self.selected.set_range(&backing, 0, last);
+                    self.select_range(0, self.rows.len() - 1);
                 }
                 self.sync_table(cx);
             }
             Command::DeselectAll => {
+                self.release_table_selection(cx);
                 self.selected.clear();
                 self.cursor = None;
                 self.anchor = None;
@@ -502,8 +546,13 @@ impl View {
         {
             Some(index)
         } else {
-            let last = self.selected.last().cloned();
-            last.and_then(|address| self.row_backing().position(&address))
+            self.selected.last().and_then(|address| {
+                if let Some(backing) = &self.row_backing {
+                    backing.position(address)
+                } else {
+                    self.rows.iter().position(|entry| &entry.address == address)
+                }
+            })
         };
         let index = if edge {
             if delta < 0 { 0 } else { self.rows.len() - 1 }
@@ -516,12 +565,11 @@ impl View {
                 }
             })
         };
+        self.release_table_selection(cx);
         if extend {
             let anchor = self.anchor.unwrap_or(index);
             self.anchor = Some(anchor);
-            let backing = self.row_backing();
-            self.selected
-                .set_range(&backing, anchor.min(index), anchor.max(index));
+            self.select_range(anchor, index);
         } else {
             self.anchor = Some(index);
             self.selected.set_single(self.rows[index].address.clone());

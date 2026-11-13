@@ -40,15 +40,15 @@ pub(crate) fn run() -> Result<()> {
         .with_http_client(supervisor.block_on_named("Initialize HTTP client", http::client(&tasks))??)
         .with_assets(assets::Assets)
         .run(move |cx| {
-            cx.gds().initialize(tasks.clone(), logs);
-            cx.gds().appearance().motion().follow_system();
+            cx.gds_mut().initialize(tasks.clone(), logs);
+            cx.gds_mut().appearance().motion().follow_system();
             configuration::init(args.settings_file, cx);
             let profiles = routing::shared(cx);
             let server = match profiles.read(cx).startup_target(args.server) {
                 Ok(server) => server,
                 Err(error) => {
                     tracing::error!(%error, "cannot select frontend connection; refusing to fall back");
-                    cx.gds().tasks().request_quit();
+                    cx.gds_mut().tasks().request_quit();
                     return;
                 }
             };
@@ -59,15 +59,15 @@ pub(crate) fn run() -> Result<()> {
             theme::watch(cx);
             super::init(cx);
             #[cfg(unix)]
-            cx.gds().tasks().signals(super::request_quit);
+            cx.gds_mut().tasks().signals(super::request_quit);
             workspace::bind_keys(cx);
             settings::window::bind_keys(cx);
             history::window::bind_keys(cx);
             cx.on_window_closed(|cx, _| {
-                cx.gds().tasks().quit_when_idle();
+                cx.gds_mut().tasks().quit_when_idle();
             })
             .detach();
-            cx.gds().tasks().ready(false);
+            cx.gds_mut().tasks().ready(false);
             let options = workspace::windows::window_options(args.compact, cx);
             let opened = cx.open_window(options, |window, cx| {
                 let view = cx.new(|cx| {
@@ -90,7 +90,7 @@ pub(crate) fn run() -> Result<()> {
                 Ok(window) => workspace::windows::register(server, window, cx),
                 Err(error) => {
                     tracing::error!(%error, "cannot open the Agents window");
-                    cx.gds().tasks().request_quit();
+                    cx.gds_mut().tasks().request_quit();
                 }
             }
         });

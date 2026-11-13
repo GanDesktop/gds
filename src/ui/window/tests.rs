@@ -140,11 +140,11 @@ mod gui_tests {
     ) {
         cx.update(|cx| {
             gpui_kit::init(cx);
-            cx.gds()
+            cx.gds_mut()
                 .i18n()
                 .install(crate::i18n::Language::English)
                 .expect("translations");
-            cx.gds()
+            cx.gds_mut()
                 .appearance()
                 .theme()
                 .apply(&crate::appearance::theme::Appearance {

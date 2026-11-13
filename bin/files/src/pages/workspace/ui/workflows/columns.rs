@@ -882,6 +882,7 @@ impl Browser {
     /// A sort key whose column is now hidden falls back to the default ordering
     /// so the table never keeps an ordering with no visible header arrow.
     pub(in crate::pages::workspace) fn reproject_columns(&mut self, cx: &mut Context<Self>) {
+        self.release_active_selection_mirrors(cx);
         for slot in &mut self.tabs.items {
             let sort = sort_for(&slot.location(), &self.locations.places);
             slot.sort = sort;

@@ -70,7 +70,7 @@ struct Fixture {
 fn fixture(cx: &mut TestAppContext) -> Fixture {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds()
+        cx.gds_mut()
             .i18n()
             .install_resources(
                 crate::i18n::Language::English,
@@ -288,7 +288,7 @@ fn slider_validations() -> usize {
 fn slider_interactions_emit_one_change_and_programmatic_sync_emits_none(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds()
+        cx.gds_mut()
             .i18n()
             .install_resources(
                 crate::i18n::Language::English,
@@ -510,7 +510,7 @@ fn number_validation_checks_exact_integer_bounds_and_localizes_errors(cx: &mut T
                 "数值超出此字段可表示的范围",
             ),
         ] {
-            cx.gds()
+            cx.gds_mut()
                 .i18n()
                 .install_resources(language, &[])
                 .expect("catalog");

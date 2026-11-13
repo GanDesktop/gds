@@ -78,9 +78,14 @@ impl DragItem {
 }
 
 #[derive(Debug)]
-struct DragSnapshotInner {
+struct DragSnapshotSource {
     rows: Arc<[Entry]>,
     selected: Selection<PathBuf>,
+}
+
+#[derive(Debug)]
+pub(in crate::pages::workspace) struct DragSnapshotInner {
+    source: std::sync::Mutex<Option<DragSnapshotSource>>,
     entries: OnceLock<Arc<[DragItem]>>,
 }
 
@@ -88,14 +93,44 @@ impl DragSnapshotInner {
     fn entries(&self) -> &[DragItem] {
         self.entries
             .get_or_init(|| {
-                self.rows
+                let Some(source) = self
+                    .source
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                else {
+                    return Arc::from([]);
+                };
+                source
+                    .rows
                     .iter()
-                    .filter(|row| self.selected.contains(&row.path))
+                    .filter(|row| source.selected.contains(&row.path))
                     .map(DragItem::new)
                     .collect::<Vec<_>>()
                     .into()
             })
             .as_ref()
+    }
+
+    fn clear_source(&self) {
+        self.source
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
+    fn set_rows(&self, rows: Arc<[Entry]>) {
+        if self.entries.get().is_some() {
+            return;
+        }
+        if let Some(source) = self
+            .source
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            source.rows = rows;
+        }
     }
 }
 
@@ -160,10 +195,16 @@ impl FileDrag {
 
 /// Frozen selection for drag payloads. Storing the shared row slice and
 /// copy-on-write selection is O(1); the drag item slice is materialized lazily
-/// only when a drag actually starts.
+/// only when a drag actually starts. Single-item selections reuse each row's
+/// direct [`Entry`] without allocating a shared snapshot.
 #[derive(Clone, Default)]
 pub(in crate::pages::workspace) struct DragSnapshot {
     inner: Option<Arc<DragSnapshotInner>>,
+}
+
+pub(in crate::pages::workspace) struct SuspendedDrag {
+    inner: Option<Arc<DragSnapshotInner>>,
+    selected: Selection<PathBuf>,
 }
 
 impl DragSnapshot {
@@ -171,30 +212,96 @@ impl DragSnapshot {
         rows: &Arc<[Entry]>,
         selected: &Selection<PathBuf>,
     ) -> Self {
-        if rows.is_empty() || selected.is_empty() {
+        if rows.is_empty() || selected.len() <= 1 {
             return Self { inner: None };
         }
         Self {
             inner: Some(Arc::new(DragSnapshotInner {
-                rows: Arc::clone(rows),
-                selected: selected.clone(),
+                source: std::sync::Mutex::new(Some(DragSnapshotSource {
+                    rows: Arc::clone(rows),
+                    selected: selected.clone(),
+                })),
                 entries: OnceLock::new(),
             })),
         }
     }
 
-    pub(in crate::pages::workspace) fn is_selected(&self, path: &Path) -> bool {
-        self.inner
-            .as_ref()
-            .is_some_and(|inner| inner.selected.contains(path))
+    /// Release any unmaterialized row/selection references held by mounted row drag handlers
+    /// before mutating selection or directory entries in place.
+    pub(in crate::pages::workspace) fn clear_source(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            inner.clear_source();
+        }
+    }
+
+    /// Temporarily detach the row slice from mounted drag handlers during an in-place
+    /// enrichment update so `snapshot.entries` stays uniquely owned.
+    pub(in crate::pages::workspace) fn suspend_rows(&mut self) -> Option<SuspendedDrag> {
+        let inner = self.inner.take()?;
+        let source = inner
+            .source
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()?;
+        Some(SuspendedDrag {
+            inner: Some(inner),
+            selected: source.selected,
+        })
+    }
+
+    pub(in crate::pages::workspace) fn restore_rows(
+        &mut self,
+        suspended: Option<SuspendedDrag>,
+        rows: &Arc<[Entry]>,
+        selected: &Selection<PathBuf>,
+    ) {
+        let Some(mut suspended) = suspended else {
+            *self = Self::new(rows, selected);
+            return;
+        };
+        if rows.is_empty() || suspended.selected.len() <= 1 {
+            self.inner = None;
+            return;
+        }
+        if let Some(inner) = suspended.inner.take() {
+            if inner.entries.get().is_none() {
+                *inner
+                    .source
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(DragSnapshotSource {
+                        rows: Arc::clone(rows),
+                        selected: suspended.selected,
+                    });
+            }
+            self.inner = Some(inner);
+        } else {
+            *self = Self::new(rows, selected);
+        }
+    }
+
+    pub(in crate::pages::workspace) fn update_rows(
+        &mut self,
+        rows: &Arc<[Entry]>,
+        selected: &Selection<PathBuf>,
+    ) {
+        if let Some(inner) = &self.inner {
+            inner.set_rows(Arc::clone(rows));
+        } else {
+            *self = Self::new(rows, selected);
+        }
     }
 
     /// A drag started on `entry` carries the whole selection when that row
     /// belongs to it, and only that row otherwise. Starting a drag never
     /// rewrites the selection, so an unselected row drags alone.
-    #[allow(dead_code)]
-    pub(in crate::pages::workspace) fn drag_for(&self, entry: &Entry) -> FileDrag {
-        self.drag_for_row(entry, self.is_selected(&entry.path))
+    #[cfg(test)]
+    pub(in crate::pages::workspace) fn drag_for(
+        &self,
+        entry: &Entry,
+        selected: &Selection<PathBuf>,
+    ) -> FileDrag {
+        self.drag_for_row(entry, selected.contains(&entry.path))
     }
 
     pub(in crate::pages::workspace) fn drag_for_row(
@@ -571,7 +678,7 @@ mod tests {
             .collect();
         let unselected_drags: Vec<FileDrag> = rows[1_000..1_030]
             .iter()
-            .map(|entry| snapshot.drag_for(entry))
+            .map(|entry| snapshot.drag_for(entry, &selected))
             .collect();
         assert!(!snapshot.is_materialized());
 

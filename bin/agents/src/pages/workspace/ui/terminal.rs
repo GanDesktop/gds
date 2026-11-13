@@ -433,7 +433,7 @@ impl Workspace {
                 div()
                     .size_full()
                     .p_3()
-                    .bg(cx.gds_ro().appearance().theme().content_background())
+                    .bg(cx.gds().appearance().theme().content_background())
                     .text_color(cx.theme().muted_foreground)
                     .child(if local_ipc(&self.backend.server.target) {
                         tr!("local-terminal-no-cwd")

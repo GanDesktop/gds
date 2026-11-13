@@ -43,7 +43,7 @@ impl Timestamp {
 
 impl RenderOnce for Timestamp {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let time = cx.gds_ro().ui().time();
+        let time = cx.gds().ui().time();
         let format = self.format.unwrap_or_else(|| time.format());
         let presentation = format.presentation(self.value, time.now());
         let text = presentation.text(cx);

@@ -12,7 +12,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, WindowExt, dialog::AlertDialog, menu::PopupMenu};
 use gpui_kit::{prelude::*, *};
 
-use super::{AppExt as _, Browser, ClipboardNotice, FilesExt as _};
+use super::{AppExt as _, Browser, ClipboardExt as _, ClipboardNotice};
 use crate::entities::file::directory::EntryKind;
 use crate::features::file_operations as operations;
 
@@ -678,7 +678,7 @@ impl Browser {
             Ok(text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 // Path text replaces both the file summary and cut markers.
-                cx.gds().files().clipboard().clear();
+                cx.gds_mut().clipboard().clear();
                 notifications::Report::new(
                     notifications::Level::Success,
                     i18n::count("paths-copied", paths.len(), cx),

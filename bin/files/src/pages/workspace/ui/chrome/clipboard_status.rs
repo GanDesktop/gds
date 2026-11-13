@@ -21,10 +21,14 @@ pub(in crate::pages::workspace) struct Details {
     icons: HashMap<PathBuf, FileIcon>,
     scroll: UniformListScrollHandle,
     loading: Option<Task<()>>,
+    _changes: Subscription,
 }
 
 impl Details {
-    pub(in crate::pages::workspace) fn new(tasks: gds::service::task_manager::Scope) -> Self {
+    pub(in crate::pages::workspace) fn new(
+        tasks: gds::service::task_manager::Scope,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             open: false,
             busy: false,
@@ -33,6 +37,11 @@ impl Details {
             icons: HashMap::new(),
             scroll: UniformListScrollHandle::new(),
             loading: None,
+            _changes: clipboard::observe(cx, |this, cx| {
+                if this.open {
+                    this.sync_from_clipboard(cx);
+                }
+            }),
         }
     }
 
@@ -57,7 +66,7 @@ impl Details {
     }
 
     fn sync_state(&mut self, cx: &mut Context<Self>) -> bool {
-        let snapshot = cx.gds_ro().files().clipboard().current();
+        let snapshot = cx.gds().clipboard().current();
         let unchanged = match (&self.snapshot, &snapshot) {
             (Some(previous), Some(next)) => Arc::ptr_eq(previous, next) || previous == next,
             (None, None) => true,
@@ -137,7 +146,7 @@ impl Details {
             return;
         }
         self.busy = true;
-        let work = cx.gds().files().clipboard().remove_path(expected, path);
+        let work = cx.gds_mut().clipboard().remove_path(expected, path);
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -145,7 +154,7 @@ impl Details {
                 if let Err(error) = result {
                     notifications::error(error.to_string(), cx);
                 }
-                cx.gds().files().clipboard().refresh();
+                cx.gds_mut().clipboard().refresh();
                 this.sync_from_clipboard(cx);
                 cx.notify();
             });
@@ -194,10 +203,6 @@ impl Details {
 
 impl Render for Details {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.open {
-            self.open = true;
-        }
-        self.sync_state(cx);
         let Some(snapshot) = self
             .snapshot
             .as_ref()
@@ -237,7 +242,7 @@ impl Browser {
         &self,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let snapshot = cx.gds_ro().files().clipboard().current();
+        let snapshot = cx.gds().clipboard().current();
         let count = snapshot.as_ref().map_or(0, |snapshot| snapshot.paths.len());
         let icon = match snapshot.as_ref().map(|snapshot| snapshot.mode) {
             Some(clipboard::Mode::Cut) => IconName::Scissors,

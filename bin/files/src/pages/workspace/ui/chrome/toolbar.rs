@@ -65,7 +65,7 @@ impl Browser {
         if matches!(event, InputEvent::Blur) {
             if self.toolbar.path.editing && !notifications::is_focused(window, cx) {
                 self.toolbar.finish_path_edit();
-                cx.gds().files().clipboard().refresh();
+                cx.gds_mut().clipboard().refresh();
                 cx.notify();
             }
             return;
@@ -97,7 +97,7 @@ impl Browser {
             Ok(path) => {
                 self.navigate(path, cx);
                 Self::restore_file_focus(cx.entity().downgrade(), self.tabs.active_id, window);
-                cx.gds().files().clipboard().refresh();
+                cx.gds_mut().clipboard().refresh();
             }
             Err(error) => {
                 notifications::Report::new(
@@ -120,13 +120,14 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         if matches!(event, InputEvent::Blur) {
-            cx.gds().files().clipboard().refresh();
+            cx.gds_mut().clipboard().refresh();
             return;
         }
         if !matches!(event, InputEvent::Change) {
             return;
         }
         let value = input.read(cx).value().to_string();
+        self.release_active_selection_mirrors(cx);
         if let Some(slot) = self.current_tab_mut() {
             slot.set_filter(value);
             slot.refresh_visible();

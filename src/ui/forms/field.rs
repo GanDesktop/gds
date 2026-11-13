@@ -11,7 +11,7 @@ use gpui_kit::component::{
 use gpui_kit::{App, Entity, Styled};
 
 pub fn input(state: &Entity<InputState>, cx: &App) -> Input {
-    Input::new(state).bg(cx.gds_ro().appearance().theme().colors().content)
+    Input::new(state).bg(cx.gds().appearance().theme().colors().content)
 }
 
 pub fn select<D>(state: &Entity<SelectState<D>>, cx: &App) -> Select<D>
@@ -19,5 +19,5 @@ where
     D: SelectDelegate + 'static,
     <D::Item as SelectItem>::Value: PartialEq + Clone,
 {
-    Select::new(state).bg(cx.gds_ro().appearance().theme().colors().content)
+    Select::new(state).bg(cx.gds().appearance().theme().colors().content)
 }

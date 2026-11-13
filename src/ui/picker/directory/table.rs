@@ -70,11 +70,7 @@ impl TableDelegate for Directories {
         cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
         let color = if self.selected == Some(index) {
-            cx.gds_ro()
-                .appearance()
-                .theme()
-                .colors()
-                .selection_foreground
+            cx.gds().appearance().theme().colors().selection_foreground
         } else {
             cx.theme().foreground
         };

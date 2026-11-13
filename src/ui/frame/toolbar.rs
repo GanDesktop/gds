@@ -24,7 +24,7 @@ impl Frame {
         let width = self
             .sidebar_width
             .unwrap_or(2. * MENU_PADDING + ICON_BUTTON_SIZE);
-        let theme = cx.gds_ro().appearance().theme();
+        let theme = cx.gds().appearance().theme();
         let leading_background = if self.sidebar_width.is_some() {
             theme.sidebar_background()
         } else {

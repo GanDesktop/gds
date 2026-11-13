@@ -46,9 +46,9 @@ impl Render for Host {
 fn single_terminal_respects_its_hosts_key_map(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
-        cx.gds().ui().init_terminal();
-        cx.gds()
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::English)
             .expect("test messages");
@@ -143,9 +143,9 @@ fn screen(session: &Session) -> String {
 fn tab_routes_to_pty_and_outside_terminal_traversal_still_works(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
-        cx.gds().ui().init_terminal();
-        cx.gds()
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::English)
             .expect("test messages");
@@ -212,9 +212,9 @@ fn tab_routes_to_pty_and_outside_terminal_traversal_still_works(cx: &mut TestApp
 fn tab_completes_a_filename_in_a_real_interactive_shell(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
-        cx.gds().ui().init_terminal();
-        cx.gds()
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::English)
             .expect("test messages");
@@ -282,9 +282,9 @@ fn tab_completes_a_filename_in_a_real_interactive_shell(cx: &mut TestAppContext)
 fn changing_terminal_typography_updates_existing_grid_metrics(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
-        cx.gds().ui().init_terminal();
-        cx.gds()
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::English)
             .expect("test messages");
@@ -345,9 +345,9 @@ fn changing_terminal_typography_updates_existing_grid_metrics(cx: &mut TestAppCo
 fn cursor_blink_task_tracks_focus_preferences_and_reduced_motion(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
-        cx.gds().ui().init_terminal();
-        cx.gds()
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::English)
             .expect("test messages");
@@ -457,9 +457,9 @@ fn cursor_blink_task_tracks_focus_preferences_and_reduced_motion(cx: &mut TestAp
 fn terminal_grid_renders_tabs_and_combining_marks(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
-        cx.gds().ui().init_terminal();
-        cx.gds()
+        cx.gds_mut().tasks().init_test(false);
+        cx.gds_mut().ui().init_terminal();
+        cx.gds_mut()
             .i18n()
             .install(crate::i18n::Language::English)
             .expect("test messages");

@@ -29,7 +29,7 @@ impl RenderOnce for Keycap {
                 rounded: KEY_GAP.px; border_1;
                 border_color: $cx.theme().border;
                 bg: $cx.theme().secondary; text_color: $cx.theme().muted_foreground;
-                text_size: $(cx.gds_ro().appearance().typography().scaled(KEY_TEXT_SIZE));
+                text_size: $(cx.gds().appearance().typography().scaled(KEY_TEXT_SIZE));
             }
         }
     }

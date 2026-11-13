@@ -132,7 +132,7 @@ fn unloaded_ranges_open_a_catalog_and_only_the_chosen_turn_loads(cx: &mut TestAp
     let loaded_size = cx
         .update_window(fixture.window.into(), |_, window, cx| {
             window.activate_window();
-            cx.gds().appearance().motion().set_enabled(false);
+            cx.gds_mut().appearance().motion().set_enabled(false);
             assert!(window.try_find("turn-marker-1").is_none());
             assert!(window.try_find("turn-marker-17").is_none());
             assert!(window.find("turn-unloaded-1").visible());

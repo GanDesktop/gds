@@ -583,7 +583,7 @@ impl Render for ReplyPreview {
                 rounded_md;
                 border_1;
                 border_color: $(cx.theme().border);
-                bg: $(cx.gds_ro().appearance().theme().content_background());
+                bg: $(cx.gds().appearance().theme().content_background());
                 text_color: $(cx.theme().foreground);
                 refine_style: $(&theme::font_style(cx));
                 text_size: $(theme::content_font_size(cx));

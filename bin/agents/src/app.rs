@@ -17,14 +17,17 @@ pub(crate) fn init(cx: &mut App) {
         return;
     }
     cx.set_global(ActionsRegistered);
-    cx.gds().ui().register_actions();
-    cx.gds().ui().init_terminal();
+    cx.gds_mut().ui().register_actions();
+    cx.gds_mut().ui().init_terminal();
     crate::shared::config::terminal::init(cx);
     crate::pages::workspace::windows::bind_page_keys(cx);
     crate::features::navigation::install(crate::pages::workspace::routes(), cx);
-    cx.gds().ui().time().apply(gds::ui::time::Format::Relative);
-    cx.gds().ui().keytips().install();
-    cx.gds().ui().logs().init(gds::ui::logs::Options {
+    cx.gds_mut()
+        .ui()
+        .time()
+        .apply(gds::ui::time::Format::Relative);
+    cx.gds_mut().ui().keytips().install();
+    cx.gds_mut().ui().logs().init(gds::ui::logs::Options {
         app_id: Some("io.github.GanDesktop.GdsAgents".into()),
         app_name: "GDS Agents".into(),
         background: |cx| {
@@ -76,8 +79,8 @@ pub(crate) fn request_quit(cx: &mut App) {
     cx.set_global(QuitPending);
     settings::window::flush_pending(cx);
     let closed = crate::pages::workspace::windows::close_all(cx);
-    cx.gds().tasks().retain_until_quit(closed);
-    cx.gds().tasks().request_quit();
+    cx.gds_mut().tasks().retain_until_quit(closed);
+    cx.gds_mut().tasks().request_quit();
 }
 
 #[cfg(all(test, feature = "gui-tests"))]

@@ -12,12 +12,50 @@ use super::{
     ChildCount, ContentType, DirectorySnapshot, Entry, EntryData, EntryKind, Error, LinkTarget,
 };
 
-/// Off-screen entries probed per enrichment pass when `full_budget` is not requested.
+/// Off-screen entries probed per enrichment pass when unbounded probing is not required.
 pub const DEFAULT_PROBE_BUDGET: usize = 256;
 
 /// Entries processed per blocking batch so UI updates stream progressively and
 /// cancellation checks stay responsive.
 pub const BATCH_SIZE: usize = 32;
+
+/// Off-screen probe cap for a background directory enrichment pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeBudget {
+    /// Probe at most `n` off-screen entries after satisfying the visible viewport.
+    Bounded(usize),
+    /// Probe every entry in the directory (required when secondary metadata affects sort or filter).
+    Full,
+}
+
+impl Default for ProbeBudget {
+    fn default() -> Self {
+        Self::Bounded(DEFAULT_PROBE_BUDGET)
+    }
+}
+
+impl ProbeBudget {
+    pub const fn is_full(self) -> bool {
+        matches!(self, Self::Full)
+    }
+
+    pub const fn is_satisfied_by(self, covered: Self) -> bool {
+        match (self, covered) {
+            (_, Self::Full) => true,
+            (Self::Full, Self::Bounded(_)) => false,
+            (Self::Bounded(needed), Self::Bounded(done)) => needed <= done,
+        }
+    }
+
+    pub const fn union(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Full, _) | (_, Self::Full) => Self::Full,
+            (Self::Bounded(left), Self::Bounded(right)) => {
+                Self::Bounded(if left > right { left } else { right })
+            }
+        }
+    }
+}
 
 /// Secondary metadata dimensions required by the active view, visible columns,
 /// sort key, or file-picker filter.
@@ -26,12 +64,16 @@ pub struct EnrichmentNeed {
     pub children: bool,
     pub content: bool,
     pub symlinks: bool,
-    pub full_budget: bool,
+    pub budget: ProbeBudget,
 }
 
 impl EnrichmentNeed {
     pub const fn is_empty(self) -> bool {
         !self.children && !self.content && !self.symlinks
+    }
+
+    pub const fn is_full_budget(self) -> bool {
+        self.budget.is_full()
     }
 
     /// Whether a previously completed enrichment pass with `covered` already
@@ -43,7 +85,7 @@ impl EnrichmentNeed {
         (!self.children || covered.children)
             && (!self.content || covered.content)
             && (!self.symlinks || covered.symlinks)
-            && (!self.full_budget || covered.full_budget)
+            && self.budget.is_satisfied_by(covered.budget)
     }
 
     pub const fn union(self, other: Self) -> Self {
@@ -51,7 +93,7 @@ impl EnrichmentNeed {
             children: self.children || other.children,
             content: self.content || other.content,
             symlinks: self.symlinks || other.symlinks,
-            full_budget: self.full_budget || other.full_budget,
+            budget: self.budget.union(other.budget),
         }
     }
 }
@@ -80,7 +122,7 @@ impl Entry {
 ///
 /// Entries in `priority_paths` (typically the visible viewport) are scheduled first
 /// without a cap; remaining entries in `snapshot.entries` follow in canonical order
-/// up to [`DEFAULT_PROBE_BUDGET`] unless `need.full_budget` is set.
+/// according to `need.budget`.
 #[cfg(test)]
 pub fn plan_enrichment(
     snapshot: &DirectorySnapshot,
@@ -103,7 +145,9 @@ pub fn plan_enrichment(
 
     let mut offscreen = 0usize;
     for entry in snapshot.entries.iter() {
-        if !need.full_budget && offscreen >= DEFAULT_PROBE_BUDGET {
+        if let ProbeBudget::Bounded(limit) = need.budget
+            && offscreen >= limit
+        {
             break;
         }
         if !entry.needs_enrichment(need) || seen.contains(entry.path.as_path()) {

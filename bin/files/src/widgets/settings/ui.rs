@@ -14,6 +14,7 @@ pub use pages::Page;
 
 use controls::{
     Choice, ChoiceControl, ChoiceEvent, ChoiceState, Field, NumberControl, PERCENTAGE_RANGE,
+    PROBE_BUDGET_RANGE,
 };
 use gds_uim::el;
 use gpui_kit::{
@@ -56,6 +57,7 @@ pub struct View {
     mode: ChoiceControl<theme::ModePreference>,
     content_opacity: NumberControl,
     sidebar_opacity: NumberControl,
+    probe_budget: NumberControl,
     font: Entity<FontEditor>,
     terminal: Entity<TerminalEditor>,
     _subscriptions: Vec<Subscription>,
@@ -124,6 +126,11 @@ impl View {
             PERCENTAGE_RANGE,
             cx,
         );
+        let probe_budget = NumberControl::new(
+            preferences.files.probe_budget as f32,
+            PROBE_BUDGET_RANGE,
+            cx,
+        );
         let font = cx.new(|cx| FontEditor::new(preferences.font.clone(), window, cx));
         let terminal = cx.new(|cx| TerminalEditor::new(preferences.terminal.clone(), window, cx));
         let tag_editor = cx.new(|cx| {
@@ -167,6 +174,7 @@ impl View {
             mode,
             content_opacity,
             sidebar_opacity,
+            probe_budget,
             font,
             terminal,
             _subscriptions: Vec::new(),
@@ -315,6 +323,8 @@ impl View {
             window,
             cx,
         );
+        self.probe_budget
+            .sync(self.preferences.files.probe_budget as f32, window, cx);
         self.font.update(cx, |editor, cx| {
             editor.set_value(self.preferences.font.clone(), window, cx)
         });
@@ -505,6 +515,7 @@ impl View {
         match field {
             Field::ContentOpacity => &self.content_opacity,
             Field::SidebarOpacity => &self.sidebar_opacity,
+            Field::ProbeBudget => &self.probe_budget,
             _ => unreachable!("only numeric fields own numeric controls"),
         }
     }

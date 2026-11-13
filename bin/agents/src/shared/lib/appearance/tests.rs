@@ -47,7 +47,7 @@ fn application_watcher_survives_window_closure_and_updates_all_views(cx: &mut Te
     )
     .expect("external update");
     cx.update(|cx| {
-        cx.gds()
+        cx.gds_mut()
             .appearance()
             .theme()
             .observer()
@@ -68,7 +68,7 @@ fn application_watcher_survives_window_closure_and_updates_all_views(cx: &mut Te
     )
     .expect("update with only settings left");
     cx.update(|cx| {
-        cx.gds()
+        cx.gds_mut()
             .appearance()
             .theme()
             .observer()
@@ -80,7 +80,7 @@ fn application_watcher_survives_window_closure_and_updates_all_views(cx: &mut Te
     assert_eq!(second_size.get(), 24.);
     std::fs::write(&path, r#"{"appearance":{"ui_font_size":0}}"#).expect("invalid external update");
     cx.update(|cx| {
-        cx.gds()
+        cx.gds_mut()
             .appearance()
             .theme()
             .observer()

@@ -72,5 +72,5 @@ pub(crate) fn register(cx: &mut App) {
         })
         .collect::<Vec<_>>();
     cx.bind_keys(bindings);
-    cx.gds().ui().register_dialogs();
+    cx.gds_mut().ui().register_dialogs();
 }

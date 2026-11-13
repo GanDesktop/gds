@@ -9,7 +9,7 @@ impl gpui_kit::Global for TestConfiguration {}
 
 pub(super) fn init(cx: &mut App) {
     gpui_kit::init(cx);
-    cx.gds().tasks().init_test(false);
+    cx.gds_mut().tasks().init_test(false);
     if !cx.has_global::<crate::shared::config::Configuration>() {
         let directory = tempfile::tempdir().expect("frontend settings");
         crate::shared::config::init(Some(directory.path().join("frontend.json")), cx);

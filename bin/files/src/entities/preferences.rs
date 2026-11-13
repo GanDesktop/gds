@@ -3,6 +3,7 @@ mod api;
 mod model;
 mod presentation;
 mod service;
-pub(crate) use api::load;
-pub(crate) use model::{Preferences, PreferencesEditor};
-pub(crate) use service::SaveFailed;
+
+pub use api::load;
+pub use model::{Preferences, PreferencesEditor};
+pub(crate) use service::*;

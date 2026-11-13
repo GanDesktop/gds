@@ -100,7 +100,7 @@ impl Render for Fixture {
 fn init(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
+        cx.gds_mut().tasks().init_test(false);
         theme::init_default(cx);
     });
 }

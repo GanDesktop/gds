@@ -1,6 +1,7 @@
 use super::{
-    Browser, Command, FilesExt as _, InputEvent, KeyDownEvent, Keystroke, LaunchOptions, Location,
-    Modifiers, configuration, directory, pages, px, size, sorting, tokens,
+    Browser, Command, InputEvent, KeyDownEvent, Keystroke, LaunchOptions, Location, Modifiers,
+    PreferencesExt as _, VolumesExt as _, configuration, directory, pages, px, size, sorting,
+    tokens,
 };
 use crate::entities::location::places::Places;
 use gds::app::AppExt as _;
@@ -13,37 +14,41 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-fn init_test_workspace(cx: &mut TestAppContext) {
+fn init_test_workspace(cx: &mut TestAppContext) -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("create temporary workspace directory");
+    let settings_path = temp.path().join("settings.toml");
     cx.executor().allow_parking();
     cx.update(|cx| {
-        gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
-        let tasks = cx.gds_ro().tasks().scope();
-        cx.gds().initialize(tasks, None);
-        cx.gds().appearance().motion().set_enabled(true);
+        cx.gds_mut().tasks().init_test(false);
+        let tasks = cx.gds().tasks().scope();
+        cx.gds_mut().init_ui(None);
+        cx.gds_mut().appearance().motion().set_enabled(true);
         let catalog = crate::shared::i18n::prepare(gds::i18n::Language::English)
             .expect("prepare English translations");
-        cx.gds().i18n().install_catalog(catalog);
+        cx.gds_mut().i18n().install_catalog(catalog);
         let mut preferences = configuration::Preferences::default();
         preferences.appearance.source = gds::appearance::theme::Source::Builtin;
-        cx.gds()
+        cx.gds_mut()
             .appearance()
             .theme()
             .apply(&preferences.appearance)
             .expect("apply default theme");
-        cx.gds()
+        cx.gds_mut()
             .appearance()
             .typography()
             .apply(&preferences.font)
             .expect("apply default typography");
-        cx.gds()
-            .files()
+        cx.gds_mut()
+            .appearance()
+            .theme()
+            .init_hot_reload(preferences.appearance.clone());
+        cx.gds_mut()
             .preferences()
-            .initialize(preferences)
-            .expect("initialize preferences");
-        cx.gds().files().volumes().initialize();
-        cx.gds().files().register_actions();
+            .init_test(preferences, settings_path, &tasks);
+        cx.gds_mut().volumes().initialize(&tasks);
+        Command::register(cx);
     });
+    temp
 }
 
 fn open_test_browser(
@@ -95,7 +100,7 @@ fn wait_for_tabs_loaded(
 }
 
 async fn close_test_browser(cx: &mut TestAppContext, window: WindowHandle<Root>) {
-    let scope = cx.update(|cx| cx.gds_ro().tasks().scope());
+    let scope = cx.update(|cx| cx.gds().tasks().scope());
     cx.update_window(window.into(), |_, window, _| window.remove_window())
         .expect("remove test window");
     scope.shutdown().await;
@@ -199,8 +204,7 @@ fn dispatch_shift_down_batches(
 
 #[gpui_kit::test]
 async fn startup_sidebar_toggle_settings_and_resize_animate_in_render(cx: &mut TestAppContext) {
-    init_test_workspace(cx);
-    let directory = tempfile::tempdir().expect("create temporary workspace directory");
+    let directory = init_test_workspace(cx);
     let home = directory.path().join("home");
     std::fs::create_dir_all(&home).expect("create home directory");
     std::fs::write(home.join("sample.txt"), b"hello\n").expect("create sample file");
@@ -313,7 +317,7 @@ async fn startup_sidebar_toggle_settings_and_resize_animate_in_render(cx: &mut T
     })
     .expect("resize above compact threshold");
 
-    let scope = cx.update(|cx| cx.gds_ro().tasks().scope());
+    let scope = cx.update(|cx| cx.gds().tasks().scope());
     cx.update_window(window.into(), |_, window, _| window.remove_window())
         .expect("remove test window");
     scope.shutdown().await;
@@ -323,8 +327,7 @@ async fn startup_sidebar_toggle_settings_and_resize_animate_in_render(cx: &mut T
 async fn shift_down_600_rows_in_large_directory_scales_linearly_and_preserves_selection(
     cx: &mut TestAppContext,
 ) {
-    init_test_workspace(cx);
-    let directory = tempfile::tempdir().expect("create temporary workspace directory");
+    let directory = init_test_workspace(cx);
     let home = directory.path().join("home");
     std::fs::create_dir_all(&home).expect("create home directory");
     populate_large_directory(&home);
@@ -492,7 +495,7 @@ async fn shift_down_600_rows_in_large_directory_scales_linearly_and_preserves_se
     })
     .expect("verify Shift+Up shrink, Ctrl toggle, and plain Down collapse");
 
-    let scope = cx.update(|cx| cx.gds_ro().tasks().scope());
+    let scope = cx.update(|cx| cx.gds().tasks().scope());
     cx.update_window(window.into(), |_, window, _| window.remove_window())
         .expect("remove test window");
     scope.shutdown().await;
@@ -502,8 +505,7 @@ async fn shift_down_600_rows_in_large_directory_scales_linearly_and_preserves_se
 async fn non_canonical_sort_filter_reuses_projection_preserves_order_and_prunes_hidden_selection(
     cx: &mut TestAppContext,
 ) {
-    init_test_workspace(cx);
-    let temp = tempfile::tempdir().expect("create temporary workspace directory");
+    let temp = init_test_workspace(cx);
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("create home directory");
 
@@ -770,7 +772,7 @@ async fn non_canonical_sort_filter_reuses_projection_preserves_order_and_prunes_
     })
     .expect("verify Size descending sort with search filter");
 
-    let scope = cx.update(|cx| cx.gds_ro().tasks().scope());
+    let scope = cx.update(|cx| cx.gds().tasks().scope());
     cx.update_window(window.into(), |_, window, _| window.remove_window())
         .expect("remove test window");
     scope.shutdown().await;
@@ -796,8 +798,7 @@ fn populate_enrichment_directories(home: &Path, other: &Path) {
 async fn size_sort_enrichment_and_viewport_priority_settle_order_selection_and_revision(
     cx: &mut TestAppContext,
 ) {
-    init_test_workspace(cx);
-    let temp = tempfile::tempdir().expect("create temporary workspace directory");
+    let temp = init_test_workspace(cx);
     let home = temp.path().join("home");
     let other = temp.path().join("other");
     populate_enrichment_directories(&home, &other);
@@ -861,7 +862,7 @@ async fn size_sort_enrichment_and_viewport_priority_settle_order_selection_and_r
     wait_for_browser(cx, window, &browser, |view, _| {
         view.active().is_some_and(|slot| {
             slot.local_enrich()
-                .is_some_and(|job| !job.is_in_flight() && job.need().full_budget)
+                .is_some_and(|job| !job.is_in_flight() && job.need().is_full_budget())
                 && slot.table_rows[0].display_name == "folder-299"
                 && slot.table_rows[1].display_name == "folder-150"
                 && slot.table_rows[2].display_name == "folder-000"
@@ -1189,6 +1190,287 @@ async fn navigating_inside_pinned_tab_and_explicit_opens_record_to_recent(cx: &m
         assert_eq!(browser.read(cx).locations.places.recent.len(), 4);
     })
     .expect("verify open_location_tab recorded and switch_tab did not duplicate");
+
+    close_test_browser(cx, window).await;
+}
+
+#[gpui_kit::test]
+async fn live_enrichment_and_selection_cow_preserve_pointers_respect_budget_and_settle_type_sort(
+    cx: &mut TestAppContext,
+) {
+    let temp = init_test_workspace(cx);
+    let home = temp.path().join("home");
+    let plain_dir = temp.path().join("plain");
+    std::fs::create_dir_all(&home).expect("create home directory");
+    std::fs::create_dir_all(&plain_dir).expect("create plain directory");
+
+    // 100 directories: viewport covers the top rows, while tail rows 85..100 sit off-screen.
+    for index in 0..100 {
+        let dir = home.join(format!("folder-{index:03}"));
+        std::fs::create_dir_all(&dir).expect("create test folder");
+    }
+    std::fs::write(home.join("folder-095/child-a.txt"), b"a").expect("write tail child 1");
+    std::fs::write(home.join("folder-095/child-b.txt"), b"b").expect("write tail child 2");
+    std::fs::write(home.join("folder-099/child-a.txt"), b"a").expect("write tail child 3");
+
+    for index in 0..12 {
+        std::fs::write(plain_dir.join(format!("doc-{index:02}.txt")), b"plain text").unwrap();
+    }
+
+    // Configure off-screen probe_budget = 0 before opening the window so only viewport items probe initially.
+    cx.update(|cx| {
+        cx.gds_mut()
+            .preferences()
+            .edit(|prefs| prefs.files.probe_budget = 0)
+            .expect("set probe budget");
+    });
+
+    let (window, browser) = open_test_browser(
+        cx,
+        home.clone(),
+        Ok(crate::entities::location::places::Places::default()),
+    );
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            !slot.is_loading()
+                && slot.table_rows.len() == 100
+                && slot.local_enrich().is_some_and(|job| !job.is_in_flight())
+        })
+    });
+
+    // Verify Repr::Single and Repr::Set CoW across live rendered frames, then capture snapshot pointers.
+    let (snapshot_ptr, entries_ptr) = cx
+        .update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            browser.update(cx, |browser, cx| {
+                browser.window.focus.focus(window, cx);
+                browser.select(0, Modifiers::default(), cx);
+            });
+            window.render_frame(cx);
+            let single_ptr = browser
+                .read(cx)
+                .active()
+                .unwrap()
+                .navigation
+                .view()
+                .selected
+                .as_slice()
+                .as_ptr();
+
+            browser.update(cx, |browser, cx| {
+                browser.select(1, Modifiers::default(), cx);
+            });
+            window.render_frame(cx);
+            assert_eq!(
+                browser
+                    .read(cx)
+                    .active()
+                    .unwrap()
+                    .navigation
+                    .view()
+                    .selected
+                    .as_slice()
+                    .as_ptr(),
+                single_ptr,
+                "single-selection click after rendered frame must reuse Repr::Single allocation in place"
+            );
+
+            // Build a 4-item Set selection, render a frame (populating FileTable + DragSnapshot), then Ctrl-deselect 1 item.
+            browser.update(cx, |browser, cx| {
+                for row in [0, 2, 3] {
+                    browser.select(
+                        row,
+                        Modifiers {
+                            control: true,
+                            ..Default::default()
+                        },
+                        cx,
+                    );
+                }
+            });
+            window.render_frame(cx);
+            let set_ptr = browser
+                .read(cx)
+                .active()
+                .unwrap()
+                .navigation
+                .view()
+                .selected
+                .as_slice()
+                .as_ptr();
+
+            browser.update(cx, |browser, cx| {
+                browser.select(
+                    2,
+                    Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            });
+            window.render_frame(cx);
+            assert_eq!(
+                browser
+                    .read(cx)
+                    .active()
+                    .unwrap()
+                    .navigation
+                    .view()
+                    .selected
+                    .as_slice()
+                    .as_ptr(),
+                set_ptr,
+                "Ctrl+Click toggle after rendered frame must mutate Selection::Set in place without cloning"
+            );
+
+            let view = browser.read(cx);
+            let slot = view.active().expect("active tab");
+            let child_need = directory::EnrichmentNeed {
+                children: true,
+                ..Default::default()
+            };
+            // With probe_budget = 0, off-screen tail entry 95 has not been probed yet.
+            assert!(slot.table_rows[95].needs_enrichment(child_need));
+            // Small selections do not materialize a 2N SelectionBacking.
+            assert!(slot.row_backing.is_none());
+
+            let dir_arc = slot.navigation.directory_arc().expect("directory snapshot");
+            let snapshot_ptr = Arc::as_ptr(&dir_arc);
+            let entries_ptr = dir_arc.entries.as_ptr();
+            drop(dir_arc);
+
+            browser.update(cx, |browser, cx| {
+                let tail = browser.active().expect("active tab").table_rows[85..100].to_vec();
+                browser.request_viewport_enrichment(&tail, cx);
+            });
+            (snapshot_ptr, entries_ptr)
+        })
+        .expect("verify live Selection CoW, capture pointers, and request tail enrichment");
+
+    let child_need = directory::EnrichmentNeed {
+        children: true,
+        ..Default::default()
+    };
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            slot.local_enrich().is_some_and(|job| !job.is_in_flight())
+                && !slot.table_rows[95].needs_enrichment(child_need)
+        })
+    });
+
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let view = browser.read(cx);
+        let slot = view.active().expect("active tab");
+        let dir_arc = slot.navigation.directory_arc().expect("directory snapshot");
+        assert_eq!(
+            Arc::as_ptr(&dir_arc),
+            snapshot_ptr,
+            "live enrichment must mutate DirectorySnapshot in place without cloning"
+        );
+        assert_eq!(
+            dir_arc.entries.as_ptr(),
+            entries_ptr,
+            "live enrichment must mutate snapshot.entries slice in place without O(N) cloning"
+        );
+        assert_eq!(
+            slot.table_rows[95].details.children,
+            Some(directory::ChildCount {
+                count: 2,
+                truncated: false,
+            })
+        );
+
+        // Small Shift range (< 64) skips SelectionBacking; large Shift range (>= 64) materializes it.
+        browser.update(cx, |browser, cx| {
+            browser.select(0, Modifiers::default(), cx);
+            browser.select(
+                10,
+                Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+                cx,
+            );
+        });
+        assert!(browser.read(cx).active().unwrap().row_backing.is_none());
+
+        browser.update(cx, |browser, cx| {
+            browser.select(
+                70,
+                Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+                cx,
+            );
+        });
+        assert!(browser.read(cx).active().unwrap().row_backing.is_some());
+
+        // Navigate to `plain_dir` and switch to Sort::Type where probing `.txt` files yields `!changed_visible`.
+        browser.update(cx, |browser, cx| {
+            browser.navigate(plain_dir.clone(), cx);
+        });
+    })
+    .expect("verify in-place pointers, lazy row_backing threshold, and navigate to plain_dir");
+
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            !slot.is_loading()
+                && slot.navigation.path() == Some(plain_dir.as_path())
+                && slot.table_rows.len() == 12
+        })
+    });
+
+    cx.update_window(window.into(), |_, window, cx| {
+        browser.update(cx, |browser, cx| {
+            browser.set_sort(
+                sorting::Sort {
+                    key: sorting::Key::Type,
+                    direction: sorting::Direction::Ascending,
+                },
+                cx,
+            );
+        });
+        window.render_frame(cx);
+    })
+    .expect("switch plain_dir to Type sort");
+
+    let content_need = directory::EnrichmentNeed {
+        content: true,
+        ..Default::default()
+    };
+    wait_for_browser(cx, window, &browser, |view, _| {
+        view.active().is_some_and(|slot| {
+            slot.local_enrich().is_some_and(|job| !job.is_in_flight())
+                && slot
+                    .table_rows
+                    .iter()
+                    .all(|entry| !entry.needs_enrichment(content_need))
+        })
+    });
+
+    // Render multiple frames and ensure table rows stay probed so no infinite reschedule occurs.
+    for _ in 0..4 {
+        cx.update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+        })
+        .expect("render settled Type-sorted frame");
+        cx.run_until_parked();
+    }
+
+    cx.update_window(window.into(), |_, _, cx| {
+        let view = browser.read(cx);
+        let slot = view.active().expect("active tab");
+        assert!(
+            slot.table_rows
+                .iter()
+                .all(|entry| !entry.needs_enrichment(content_need))
+        );
+        assert!(slot.local_enrich().is_some_and(|job| !job.is_in_flight()));
+    })
+    .expect("verify Type sort enrichment stays settled without render reschedule loop");
 
     close_test_browser(cx, window).await;
 }

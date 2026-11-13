@@ -1,19 +1,24 @@
 //! Shared desktop startup assembly and UI service accessors.
 use std::ops::Deref;
 
-use super::{AppExt as _, Gds};
+use super::{Context, Gds};
 use crate::service::logs::Store;
 use gpui_kit::{App, Window, WindowHandle, component::Root};
 
 impl Gds<&mut App> {
     /// Install task ownership before UI services, with optional diagnostics.
     pub fn initialize(&mut self, scope: crate::service::task_manager::Scope, logs: Option<Store>) {
-        self.cx.gds().tasks().init(scope);
-        self.cx.gds().appearance().init();
-        self.cx.gds().ui().keytips().install();
-        self.cx.gds().ui().init_terminal();
+        self.tasks().init(scope);
+        self.init_ui(logs);
+    }
+
+    /// Install shared UI services when task ownership was already bound earlier in startup.
+    pub fn init_ui(&mut self, logs: Option<Store>) {
+        self.appearance().init();
+        self.ui().keytips().install();
+        self.ui().init_terminal();
         if let Some(logs) = logs {
-            self.cx.gds().ui().logs().install(logs);
+            self.ui().logs().install(logs);
         }
     }
 }
@@ -23,17 +28,23 @@ pub struct Ui<C> {
     pub(super) cx: C,
 }
 
-impl<C> Ui<C> {
-    pub fn time(self) -> Time<C> {
-        Time { cx: self.cx }
+impl<C: Context> Ui<C> {
+    pub fn time(&mut self) -> Time<C::Reborrowed<'_>> {
+        Time {
+            cx: self.cx.reborrow(),
+        }
     }
 
-    pub fn logs(self) -> Logs<C> {
-        Logs { cx: self.cx }
+    pub fn logs(&mut self) -> Logs<C::Reborrowed<'_>> {
+        Logs {
+            cx: self.cx.reborrow(),
+        }
     }
 
-    pub fn keytips(self) -> Keytips<C> {
-        Keytips { cx: self.cx }
+    pub fn keytips(&mut self) -> Keytips<C::Reborrowed<'_>> {
+        Keytips {
+            cx: self.cx.reborrow(),
+        }
     }
 }
 

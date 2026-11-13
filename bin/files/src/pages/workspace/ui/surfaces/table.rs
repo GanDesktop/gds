@@ -28,12 +28,12 @@ use gpui_kit::{prelude::*, *};
 use crate::entities::file::ui::{EntryPresentation, FileArtwork, FileIcon, UNKNOWN_VALUE};
 
 use super::{
-    Browser, FilesExt as _, Selection,
+    Browser, ClipboardExt as _, Selection,
     columns::sort_key,
     drag_drop::{self, DragPreview, DragSnapshot, FileDrag},
     entry_appearance::EntryAppearance,
 };
-use crate::entities::file::directory::{Entry, EntryKind};
+use crate::entities::file::directory::{EnrichmentNeed, Entry, EntryKind};
 use crate::entities::file::sorting::{Direction, Key, Sort};
 
 const NAME_MIN_WIDTH: f32 = 180.;
@@ -64,6 +64,7 @@ pub(in crate::pages::workspace) struct Data {
     pub rows: Arc<[Entry]>,
     pub selected: Selection<PathBuf>,
     pub sort: Sort,
+    pub enrichment_need: EnrichmentNeed,
     pub scroll: UniformListScrollHandle,
     pub content_width: f32,
     pub layout: Layout,
@@ -129,7 +130,7 @@ impl NameContent {
             foreground,
             icon_color,
             font_size: cx
-                .gds_ro()
+                .gds()
                 .appearance()
                 .typography()
                 .scaled(DataListStyle::NAME_SIZE),
@@ -165,10 +166,12 @@ pub(in crate::pages::workspace) struct FileTable {
     browser: WeakEntity<Browser>,
     rows: Arc<[Entry]>,
     selected: Selection<PathBuf>,
+    selection_dirty: bool,
     row_selection: Option<(usize, f32)>,
     sort: Sort,
     sort_pending: bool,
-    enrich_pending: bool,
+    enrichment_need: EnrichmentNeed,
+    enrich_range: Option<std::ops::Range<usize>>,
     /// The layout these `columns` were built from.
     layout: Layout,
     columns: Vec<Column>,
@@ -192,17 +195,19 @@ impl FileTable {
     ) -> Entity<TableState<Self>> {
         let layout = Layout::default();
         let columns = Self::columns_for(&layout, 0., Sort::default(), cx);
-        let language = cx.gds_ro().i18n().language();
+        let language = cx.gds().i18n().language();
         let state = cx.new(|cx| {
             TableState::new(
                 Self {
                     browser,
                     rows: Arc::from([]),
                     selected: Selection::new(),
+                    selection_dirty: false,
                     row_selection: None,
                     sort: Sort::default(),
                     sort_pending: false,
-                    enrich_pending: false,
+                    enrichment_need: EnrichmentNeed::default(),
+                    enrich_range: None,
                     layout,
                     columns,
                     location: None,
@@ -300,6 +305,7 @@ impl FileTable {
             rows,
             selected,
             sort,
+            enrichment_need,
             scroll,
             content_width,
             layout,
@@ -307,7 +313,7 @@ impl FileTable {
             widths,
         } = data;
         let content_width = content_width.max(0.);
-        let language = cx.gds_ro().i18n().language();
+        let language = cx.gds().i18n().language();
         let (scroll_changed, columns_dirty) = {
             let table = state.read(cx);
             let delegate = table.delegate();
@@ -358,10 +364,11 @@ impl FileTable {
                 false
             };
             let rows_changed = !Arc::ptr_eq(&delegate.rows, &rows);
-            let selection_changed = delegate.selected != selected;
+            let selection_changed = delegate.selection_dirty || delegate.selected != selected;
             let sort_changed = delegate.sort != sort;
             let changed = rows_changed || selection_changed || sort_changed;
             if changed {
+                delegate.drag.clear_source();
                 delegate.drag = DragSnapshot::new(&rows, &selected);
                 delegate.row_selection = None;
             }
@@ -370,13 +377,69 @@ impl FileTable {
             }
             delegate.rows = rows;
             delegate.selected = selected;
+            delegate.selection_dirty = false;
             delegate.sort = sort;
+            delegate.enrichment_need = enrichment_need;
             delegate.sort_pending = false;
             state.vertical_scroll_handle = scroll;
             if refresh {
                 state.refresh(cx);
             }
             if changed || scroll_changed || refresh {
+                cx.notify();
+            }
+        });
+    }
+
+    pub(in crate::pages::workspace) fn release_selection(
+        state: &Entity<TableState<Self>>,
+        cx: &mut App,
+    ) {
+        let should_release = {
+            let delegate = state.read(cx).delegate();
+            !delegate.selected.is_empty()
+        };
+        if !should_release {
+            return;
+        }
+        state.update(cx, |state, _| {
+            let delegate = state.delegate_mut();
+            delegate.drag.clear_source();
+            delegate.selected.clear();
+            delegate.selection_dirty = true;
+            delegate.row_selection = None;
+        });
+    }
+
+    pub(in crate::pages::workspace) fn suspend_rows_for_enrichment(
+        state: &Entity<TableState<Self>>,
+        cx: &mut App,
+    ) -> Option<drag_drop::SuspendedDrag> {
+        if state.read(cx).delegate().rows.is_empty() {
+            return None;
+        }
+        state.update(cx, |state, _| {
+            let delegate = state.delegate_mut();
+            delegate.rows = Arc::from([]);
+            delegate.row_selection = None;
+            delegate.drag.suspend_rows()
+        })
+    }
+
+    pub(in crate::pages::workspace) fn restore_rows_after_enrichment(
+        state: &Entity<TableState<Self>>,
+        rows: Arc<[Entry]>,
+        suspended_drag: Option<drag_drop::SuspendedDrag>,
+        notify: bool,
+        cx: &mut App,
+    ) {
+        state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
+            let selected = delegate.selected.clone();
+            delegate.drag.restore_rows(suspended_drag, &rows, &selected);
+            delegate.row_selection = None;
+            delegate.rows = rows;
+            if notify {
                 cx.notify();
             }
         });
@@ -390,7 +453,8 @@ impl FileTable {
     ) {
         state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
-            delegate.drag = DragSnapshot::new(&rows, &delegate.selected);
+            let selected = delegate.selected.clone();
+            delegate.drag.update_rows(&rows, &selected);
             delegate.row_selection = None;
             delegate.rows = rows;
             if notify {
@@ -585,7 +649,7 @@ impl FileTable {
             .div { size_full; flex; items_center; min_w_0; overflow_hidden } [
                 .div {
                     w_full; min_w_0; truncate;
-                    text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::META_SIZE));
+                    text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::META_SIZE));
                     text_color: foreground;
                     font_weight: weight; opacity: $appearance.opacity;
                     @if (cell.right_aligned) text_right; @end;
@@ -615,7 +679,7 @@ impl FileTable {
             } [
                 .div {
                     w_full; min_w_0; truncate;
-                    text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::META_SIZE)); text_color: foreground;
+                    text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::META_SIZE)); text_color: foreground;
                     opacity: $appearance.opacity;
                 } [text],
             ]
@@ -632,7 +696,7 @@ impl FileTable {
         move |event, window, cx| {
             // Text copied in this application's own inputs silently replaces the
             // file clipboard; revalidate the cut highlight on file interaction.
-            cx.gds().files().clipboard().refresh();
+            cx.gds_mut().clipboard().refresh();
             if let Some(browser) = browser.upgrade() {
                 browser.update(cx, |browser, cx| {
                     browser.select(row_ix, event.modifiers(), cx);
@@ -687,7 +751,7 @@ impl TableDelegate for FileTable {
             .div {
                 # $("file-column", col_ix);
                 size_full; flex; items_center; cursor_pointer; on_click: on_click;
-                text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::HEADER_SIZE));
+                text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::HEADER_SIZE));
                 font_weight: FontWeight::NORMAL; text_color: $(cx.theme().muted_foreground);
                 when: $(column == LayoutColumn::Name), m! { pl: $(NAME_ICON_WIDTH + NAME_ICON_GAP).px };
             } [name]
@@ -705,24 +769,32 @@ impl TableDelegate for FileTable {
         let Some(entry) = self.rows.get(row_ix) else {
             return row;
         };
-        let need = crate::entities::file::directory::EnrichmentNeed {
-            children: self.layout.columns().contains(&LayoutColumn::Size)
-                || self.sort.key == Key::Size,
-            content: true,
-            symlinks: true,
-            full_budget: false,
-        };
-        if !self.enrich_pending && entry.needs_enrichment(need) {
-            self.enrich_pending = true;
-            cx.defer_in(window, |state, _, cx| {
-                let delegate = state.delegate_mut();
-                delegate.enrich_pending = false;
-                if let Some(browser) = delegate.browser.upgrade() {
-                    browser.update(cx, |browser, cx| {
-                        browser.schedule_enrichment(browser.tabs.active_id, cx);
-                    });
-                }
+        if entry.needs_enrichment(self.enrichment_need) {
+            let first_this_frame = self.enrich_range.is_none();
+            let next_end = row_ix + 1;
+            self.enrich_range = Some(match self.enrich_range.take() {
+                Some(range) => range.start.min(row_ix)..range.end.max(next_end),
+                None => row_ix..next_end,
             });
+            if first_this_frame {
+                cx.defer_in(window, |state, _, cx| {
+                    let delegate = state.delegate_mut();
+                    let Some(range) = delegate.enrich_range.take() else {
+                        return;
+                    };
+                    let start = range.start.min(delegate.rows.len());
+                    let end = range.end.min(delegate.rows.len());
+                    if start >= end {
+                        return;
+                    }
+                    let rows = Arc::clone(&delegate.rows);
+                    if let Some(browser) = delegate.browser.upgrade() {
+                        browser.update(cx, |browser, cx| {
+                            browser.request_viewport_enrichment(&rows[start..end], cx);
+                        });
+                    }
+                });
+            }
         }
         let selected = self.is_selected(&entry.path);
         let selection = self.selection_progress(entry, selected, window, cx);

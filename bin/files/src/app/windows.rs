@@ -2,48 +2,46 @@
 use crate::entities::location::places::{Error as PlacesError, Places, Storage};
 use crate::features::pick_files as picker;
 use crate::pages::workspace::{Browser, LaunchOptions, NewWindowRequested};
-use crate::shared::app::Files;
 use gds::app::AppExt as _;
+use gds::service::task_manager::Scope;
 use gpui_kit::*;
 use std::{path::PathBuf, sync::Arc};
 
 /// Retains `Windows` for the lifetime of the `App` so `NewWindowRequested`
-/// subscriptions stay active and startup/desktop handlers can route window
-/// operations through the application context.
-struct Manager(Entity<Windows>);
+/// subscriptions stay active even when no desktop D-Bus listener is running.
+struct Manager {
+    _windows: Entity<Windows>,
+}
 impl Global for Manager {}
 
-#[derive(Clone, Copy)]
-pub(in crate::app) struct Accessor<C> {
-    cx: C,
-}
+/// Handle to the installed window host, passed explicitly to startup callers
+/// that open initial windows or route desktop commands.
+#[derive(Clone)]
+pub(super) struct Host(Entity<Windows>);
 
-impl<C> Files<C> {
-    pub(in crate::app) fn windows(self) -> Accessor<C> {
-        Accessor {
-            cx: self.into_inner(),
-        }
-    }
-}
-
-impl Accessor<&mut App> {
-    pub(in crate::app) fn install(
-        &mut self,
+impl Host {
+    pub(super) fn install(
+        tasks: Scope,
         home: PathBuf,
         storage: Arc<Storage>,
         notices: Vec<String>,
-    ) {
-        assert!(
-            !self.cx.has_global::<Manager>(),
+        cx: &mut App,
+    ) -> Self {
+        debug_assert!(
+            !cx.has_global::<Manager>(),
             "windows manager already installed"
         );
-        let manager = self.cx.new(|_| Windows {
+        let manager = cx.new(|_| Windows {
+            tasks,
             home,
             storage,
             notices,
             windows: Vec::new(),
         });
-        self.cx.set_global(Manager(manager));
+        cx.set_global(Manager {
+            _windows: manager.clone(),
+        });
+        Self(manager)
     }
 
     /// Opens the process's initial browser or picker window.
@@ -52,29 +50,31 @@ impl Accessor<&mut App> {
     ///
     /// Returns an error if the application is already shutting down or the
     /// platform window cannot be created.
-    pub(in crate::app) fn open_initial(
-        &mut self,
+    pub(super) fn open_initial(
+        &self,
         places: Result<Places, PlacesError>,
         start: PathBuf,
         picker: Option<picker::Options>,
+        cx: &mut App,
     ) -> anyhow::Result<()> {
-        let manager = self.cx.global::<Manager>().0.clone();
-        manager.update(self.cx, |windows, cx| {
+        self.0.update(cx, |windows, cx| {
             windows.open_initial(places, start, picker, cx)
         })
     }
 
     #[cfg(target_os = "linux")]
-    pub(in crate::app) fn dispatch_desktop(
-        &mut self,
+    pub(super) fn dispatch_desktop(
+        &self,
         command: gds::service::desktop::file_manager::Command,
+        cx: &mut App,
     ) {
-        let manager = self.cx.global::<Manager>().0.clone();
-        manager.update(self.cx, |windows, cx| windows.desktop_command(command, cx));
+        self.0
+            .update(cx, |windows, cx| windows.desktop_command(command, cx));
     }
 }
 
 struct Windows {
+    tasks: Scope,
     home: PathBuf,
     storage: Arc<Storage>,
     notices: Vec<String>,
@@ -118,7 +118,7 @@ impl Windows {
         launch: LaunchOptions,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<(AnyWindowHandle, Entity<Browser>)> {
-        anyhow::ensure!(!cx.gds_ro().tasks().is_shutting_down(), "Files is closing");
+        anyhow::ensure!(!cx.gds().tasks().is_shutting_down(), "Files is closing");
         let picking = launch.picker.is_some();
         let options = Self::window_options(launch.picker.as_ref(), cx);
         let (window, browser) = gpui_kit::open_window(options, cx, move |window, cx| {
@@ -133,11 +133,11 @@ impl Windows {
         }
         if picking {
             let picker_window = window.window_id();
-            // `EXIT` defaults to cancelled unless a selection is confirmed, so
+            // Picker sessions default to `Outcome::Cancelled` unless confirmed, so
             // closing the chooser window requests application quit directly.
             cx.on_window_closed(move |cx, closed| {
                 if closed == picker_window {
-                    cx.gds().tasks().request_quit();
+                    cx.gds_mut().tasks().request_quit();
                 }
             })
             .detach();
@@ -154,17 +154,16 @@ impl Windows {
     }
 
     fn request(&mut self, start: PathBuf, command: Option<DesktopCommand>, cx: &mut Context<Self>) {
-        let tasks = cx.gds_ro().tasks().scope();
+        let tasks = self.tasks.clone();
         let home = self.home.clone();
         let storage = self.storage.clone();
-        let storage_tasks = tasks.clone();
-        let work = tasks.spawn_named("Load window locations", async move {
-            storage.load(&storage_tasks).await
+        let work = self.tasks.spawn_named("Load window locations", async move {
+            storage.load(&tasks).await
         });
         cx.spawn(async move |this, cx| {
             let places = work.await.unwrap_or_else(|error| Err(error.into()));
             if let Err(error) = this.update(cx, |this, cx| {
-                if cx.gds_ro().tasks().is_shutting_down() {
+                if cx.gds().tasks().is_shutting_down() {
                     return;
                 }
                 let result = this.open(
@@ -278,7 +277,7 @@ impl Windows {
         let title = request
             .map(|request| request.title.as_str())
             .filter(|title| !title.is_empty());
-        let default_title = cx.gds_ro().i18n().text("app-title");
+        let default_title = cx.gds().i18n().text("app-title");
         window.set_window_title(title.unwrap_or(default_title.as_ref()));
         if let Some(request) = request.filter(|request| !request.parent_window.is_empty())
             && let Err(error) = window.set_external_parent(&request.parent_window)
@@ -289,7 +288,7 @@ impl Windows {
                 "cannot associate chooser with its parent"
             );
         }
-        cx.gds().appearance().theme().attach_observer(window);
+        cx.gds_mut().appearance().theme().attach_observer(window);
     }
 }
 

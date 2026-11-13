@@ -208,7 +208,7 @@ impl Render for Terminal {
                     Status::Closed => ("gds-terminal-exited", None),
                     _ => ("gds-terminal-stopping", None),
                 };
-                let theme = cx.gds_ro().appearance().theme();
+                let theme = cx.gds().appearance().theme();
                 let colors = theme.colors();
                 div()
                     .size_full()

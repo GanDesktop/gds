@@ -206,7 +206,7 @@ impl Button {
                 .child(super::keytips::anchor(window, cx, self.id, shortcut));
         }
         if self.variant == ButtonVariant::Ghost {
-            let colors = cx.gds_ro().appearance().theme().colors();
+            let colors = cx.gds().appearance().theme().colors();
             let selected = self.inner.is_selected();
             let variant = ButtonCustomVariant::new(cx)
                 .foreground(if selected {

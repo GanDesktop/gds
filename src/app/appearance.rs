@@ -1,6 +1,7 @@
 //! Application-context access to theme, typography and motion preferences.
 use std::ops::Deref;
 
+use super::Context;
 use crate::appearance::{motion, theme, typography};
 use gpui_kit::{App, Entity, Hsla, Pixels, Window};
 
@@ -9,17 +10,23 @@ pub struct Appearance<C> {
     pub(super) cx: C,
 }
 
-impl<C> Appearance<C> {
-    pub fn theme(self) -> Theme<C> {
-        Theme { cx: self.cx }
+impl<C: Context> Appearance<C> {
+    pub fn theme(&mut self) -> Theme<C::Reborrowed<'_>> {
+        Theme {
+            cx: self.cx.reborrow(),
+        }
     }
 
-    pub fn typography(self) -> Typography<C> {
-        Typography { cx: self.cx }
+    pub fn typography(&mut self) -> Typography<C::Reborrowed<'_>> {
+        Typography {
+            cx: self.cx.reborrow(),
+        }
     }
 
-    pub fn motion(self) -> Motion<C> {
-        Motion { cx: self.cx }
+    pub fn motion(&mut self) -> Motion<C::Reborrowed<'_>> {
+        Motion {
+            cx: self.cx.reborrow(),
+        }
     }
 }
 

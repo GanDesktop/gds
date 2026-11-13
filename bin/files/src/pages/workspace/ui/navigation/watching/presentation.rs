@@ -35,7 +35,7 @@ pub(in crate::pages::workspace) fn changed(
     let comparison = RowComparison {
         grid,
         layout,
-        now: cx.gds_ro().ui().time().now(),
+        now: cx.gds().ui().time().now(),
     };
     for (index, (before, after)) in previous.iter().zip(rows.iter()).enumerate() {
         if before == after {
@@ -65,7 +65,7 @@ fn row_changed(
     comparison: &RowComparison<'_>,
     cx: &App,
 ) -> bool {
-    let format = cx.gds_ro().ui().time().format();
+    let format = cx.gds().ui().time().format();
     if before.path != after.path
         || before.display_name != after.display_name
         || before.is_hidden != after.is_hidden

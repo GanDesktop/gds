@@ -134,7 +134,7 @@ fn builtin_palette_selection_applies_persists_and_resets_independently(cx: &mut 
         Root::new(view, window, cx)
     });
     let page = page.expect("appearance page");
-    let original = cx.update(|cx| cx.gds_ro().appearance().theme().colors());
+    let original = cx.update(|cx| cx.gds().appearance().theme().colors());
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         let select = page.read(cx).form.builtin.clone();
@@ -149,10 +149,10 @@ fn builtin_palette_selection_applies_persists_and_resets_independently(cx: &mut 
     assert_eq!(saved.builtin_theme, BuiltinTheme::Neon);
     assert_eq!(saved.theme_mode, theme::preferences::ThemeMode::Light);
     cx.update_window(window.into(), |_, window, cx| {
-        assert_ne!(cx.gds_ro().appearance().theme().colors(), original);
+        assert_ne!(cx.gds().appearance().theme().colors(), original);
         window.render_frame(cx);
         window.click("appearance-builtin-theme-default", cx);
-        assert_eq!(cx.gds_ro().appearance().theme().colors(), original);
+        assert_eq!(cx.gds().appearance().theme().colors(), original);
     })
     .expect("reset embedded palette");
     let saved = store.load().expect("saved reset").settings.appearance;
@@ -189,14 +189,8 @@ fn background_opacities_apply_save_and_reset_independently(cx: &mut TestAppConte
         page.update(cx, |page, cx| {
             page.apply_number(Field::SidebarOpacity, SliderValue::Single(26.), window, cx);
         });
-        assert_eq!(
-            cx.gds_ro().appearance().theme().content_background().a,
-            0.74
-        );
-        assert_eq!(
-            cx.gds_ro().appearance().theme().sidebar_background().a,
-            0.26
-        );
+        assert_eq!(cx.gds().appearance().theme().content_background().a, 0.74);
+        assert_eq!(cx.gds().appearance().theme().sidebar_background().a, 0.26);
         page.update(cx, |page, cx| {
             page.apply_number(Field::Opacity, SliderValue::Single(62.), window, cx);
         });
@@ -209,12 +203,9 @@ fn background_opacities_apply_save_and_reset_independently(cx: &mut TestAppConte
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         window.click("appearance-sidebar-opacity-default", cx);
+        assert_eq!(cx.gds().appearance().theme().content_background().a, 0.62);
         assert_eq!(
-            cx.gds_ro().appearance().theme().content_background().a,
-            0.62
-        );
-        assert_eq!(
-            cx.gds_ro().appearance().theme().sidebar_background().a,
+            cx.gds().appearance().theme().sidebar_background().a,
             gds::appearance::tokens::SurfaceOpacity::default().sidebar
         );
     })
@@ -225,7 +216,7 @@ fn background_opacities_apply_save_and_reset_independently(cx: &mut TestAppConte
     cx.update_window(window.into(), |_, window, cx| {
         window.click("appearance-opacity-default", cx);
         assert_eq!(
-            cx.gds_ro().appearance().theme().content_background().a,
+            cx.gds().appearance().theme().content_background().a,
             gds::appearance::tokens::SurfaceOpacity::default().content
         );
     })

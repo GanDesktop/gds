@@ -102,7 +102,7 @@ fn thin_control_focus_preserves_geometry_contrast_and_activation(cx: &mut TestAp
     for builtin in [BuiltinTheme::Bamboo, BuiltinTheme::HighContrast] {
         for mode in [ModePreference::Light, ModePreference::Dark] {
             cx.update_window(window.into(), |_, window, cx| {
-                cx.gds()
+                cx.gds_mut()
                     .appearance()
                     .theme()
                     .apply(&Appearance {
@@ -238,7 +238,7 @@ fn shortcut_button_grows_reverses_and_releases_its_hint_space(cx: &mut TestAppCo
     use std::time::Duration;
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().ui().keytips().install();
+        cx.gds_mut().ui().keytips().install();
         cx.bind_keys([KeyBinding::new(
             "alt-n",
             crate::ui::actions::FocusNotifications,

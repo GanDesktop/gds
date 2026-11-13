@@ -619,9 +619,9 @@ mod watcher_tests {
     fn held_modifier_skips_idle_rerenders_until_state_changes(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_kit::init(cx);
-            cx.gds().tasks().init_test(false);
-            let scope = cx.gds_ro().tasks().scope();
-            cx.gds().initialize(scope, None);
+            cx.gds_mut().tasks().init_test(false);
+            let scope = cx.gds().tasks().scope();
+            cx.gds_mut().initialize(scope, None);
             cx.bind_keys([binding("ctrl-r")]);
         });
 

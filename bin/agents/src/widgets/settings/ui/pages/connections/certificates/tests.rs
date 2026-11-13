@@ -8,7 +8,7 @@ fn setup(cx: &mut TestAppContext) -> (tempfile::TempDir, WindowHandle<Root>, Ent
     std::fs::write(&path, "{}").expect("settings");
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.gds().tasks().init_test(false);
+        cx.gds_mut().tasks().init_test(false);
         crate::shared::config::init(Some(path), cx);
         crate::shared::lib::appearance::init(cx);
         crate::app::init(cx);

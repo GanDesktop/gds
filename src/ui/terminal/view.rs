@@ -375,7 +375,7 @@ fn mouse_button(button: MouseButton) -> u8 {
 impl Render for View {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_blink(cx);
-        let theme = cx.gds_ro().appearance().theme();
+        let theme = cx.gds().appearance().theme();
         let colors = theme.colors();
         let content_background = theme.content_background();
         let status = match self.session.status() {

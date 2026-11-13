@@ -20,7 +20,7 @@ pub(in crate::ui::terminal) struct Palette {
 
 impl Palette {
     pub fn new(cx: &App) -> Self {
-        let theme = cx.gds_ro().appearance().theme();
+        let theme = cx.gds().appearance().theme();
         let roles = theme.colors().terminal;
         Self::from_roles(roles, theme.content_background().a)
     }

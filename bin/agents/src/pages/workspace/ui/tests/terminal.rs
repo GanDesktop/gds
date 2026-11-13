@@ -185,7 +185,7 @@ async fn terminal_navigation_occupies_bottom_dock_and_tracks_workspace(cx: &mut 
         .expect("workspace-owned terminal layout");
     cx.update_window(fixture.window.into(), |_, window, cx| {
         let before = window.find("local-terminal-navigation").bounds();
-        cx.gds().appearance().motion().set_enabled(false);
+        cx.gds_mut().appearance().motion().set_enabled(false);
         fixture
             .view
             .update(cx, |view, cx| view.toggle_sidebar(window, cx));
@@ -504,7 +504,7 @@ async fn terminal_close_controls(cx: &mut TestAppContext, collapsed: bool) {
     let panel = cx
         .update_window(fixture.window.into(), |_, window, cx| {
             fixture.view.update(cx, |view, cx| {
-                cx.gds().appearance().motion().set_enabled(false);
+                cx.gds_mut().appearance().motion().set_enabled(false);
                 view.window.sidebar_visible = !collapsed;
                 view.backend.server =
                     bas::service::Target::Unix("/tmp/terminal-test.sock".into()).into();

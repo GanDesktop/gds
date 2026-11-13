@@ -42,6 +42,7 @@ pub(super) struct Files {
     view: WeakEntity<View>,
     pub rows: Arc<[Entry]>,
     pub selected: Selection<Address>,
+    pub selection_dirty: bool,
     columns: Vec<Column>,
 }
 
@@ -73,6 +74,7 @@ impl Files {
                     view,
                     rows: Arc::from([]),
                     selected: Selection::new(),
+                    selection_dirty: false,
                     columns,
                 },
                 window,
@@ -85,6 +87,17 @@ impl Files {
             .col_resizable(false)
             .sortable(false)
         })
+    }
+
+    pub(super) fn release_selection(state: &Entity<TableState<Self>>, cx: &mut App) {
+        if state.read(cx).delegate().selected.is_empty() {
+            return;
+        }
+        state.update(cx, |state, _| {
+            let delegate = state.delegate_mut();
+            delegate.selected.clear();
+            delegate.selection_dirty = true;
+        });
     }
 
     pub(super) fn format_size(bytes: u64) -> String {
@@ -145,7 +158,7 @@ impl Files {
             .div {
                 # $("remote-name", index);
                 flex; items_center; size_full; min_w_0; overflow_hidden;
-                text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::NAME_SIZE));
+                text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::NAME_SIZE));
                 text_color: foreground;
                 when: $(hidden && !selected), { opacity: 0.65; };
             } [
@@ -174,7 +187,7 @@ impl Files {
             .div { size_full; flex; items_center; min_w_0; overflow_hidden } [
                 .div {
                     w_full; min_w_0; truncate;
-                    text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::META_SIZE));
+                    text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::META_SIZE));
                     text_color: foreground;
                     @if (right_aligned) text_right; @end;
                 } [content],
@@ -208,7 +221,7 @@ impl TableDelegate for Files {
             .div {
                 # $("remote-column", index);
                 flex; items_center; size_full;
-                text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::HEADER_SIZE));
+                text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::HEADER_SIZE));
                 font_weight: FontWeight::NORMAL;
                 text_color: $(cx.theme().muted_foreground);
                 when: $(index == 0), m! { pl: $(NAME_ICON_WIDTH + NAME_ICON_GAP).px };
@@ -299,7 +312,7 @@ impl TableDelegate for Files {
         el! {
             .div {
                 size_full; flex; items_center; justify_center;
-                text_size: $(cx.gds_ro().appearance().typography().scaled(DataListStyle::NAME_SIZE));
+                text_size: $(cx.gds().appearance().typography().scaled(DataListStyle::NAME_SIZE));
                 text_color: $(cx.theme().muted_foreground);
             } [label]
         }

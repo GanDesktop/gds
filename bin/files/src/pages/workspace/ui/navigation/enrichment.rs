@@ -25,6 +25,7 @@ const DEFAULT_VIEWPORT_ITEMS: usize = 64;
 const VIEWPORT_MARGIN_ITEMS: usize = 16;
 const MAX_CONCURRENT_BATCHES: usize = 4;
 const COALESCE_WINDOW: std::time::Duration = std::time::Duration::from_millis(32);
+const REORDER_COALESCE_WINDOW: std::time::Duration = std::time::Duration::from_millis(180);
 const COALESCE_MAX_UPDATES: usize = 512;
 
 struct EnrichBatch {
@@ -101,7 +102,9 @@ impl EnrichQueue {
         let mut backlog = VecDeque::new();
         let mut offscreen = 0usize;
         for entry in snapshot.entries.iter() {
-            if !need.full_budget && offscreen >= directory::DEFAULT_PROBE_BUDGET {
+            if let directory::ProbeBudget::Bounded(limit) = need.budget
+                && offscreen >= limit
+            {
                 break;
             }
             if !entry.needs_enrichment(need) || queued_or_done.contains(&entry.path) {
@@ -247,6 +250,15 @@ impl Browser {
         id: u64,
         cx: &mut Context<Self>,
     ) {
+        self.schedule_enrichment_inner(id, &[], cx);
+    }
+
+    fn schedule_enrichment_inner(
+        &mut self,
+        id: u64,
+        extra_priority: &[Entry],
+        cx: &mut Context<Self>,
+    ) {
         enum LoopEvent {
             Batch(Option<CompletedBatch>),
             FlushDeadline,
@@ -268,10 +280,12 @@ impl Browser {
         let Some(slot) = self.tab_slot(id) else {
             return;
         };
-        let priority_paths = viewport_priority_paths(slot);
+        let mut priority_paths = Vec::with_capacity(extra_priority.len() + DEFAULT_VIEWPORT_ITEMS);
+        priority_paths.extend(extra_priority.iter().map(|entry| entry.path.clone()));
+        priority_paths.extend(viewport_priority_paths(slot));
         if let Some(existing) = slot.local_enrich() {
             if existing.revision() == revision && need.is_satisfied_by(existing.need()) {
-                let viewport_needs_probe = !existing.need().full_budget
+                let viewport_needs_probe = !existing.need().is_full_budget()
                     && priority_paths.iter().any(|path| {
                         directory
                             .entry_for_path(path)
@@ -314,14 +328,27 @@ impl Browser {
             let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<CompletedBatch>();
             let mut in_flight =
                 fill_probe_slots(&tasks, &worker_queue, need, &worker_cancel, &done_tx, 0);
+            let coalesce_window = if need.is_full_budget() {
+                REORDER_COALESCE_WINDOW
+            } else {
+                COALESCE_WINDOW
+            };
             let mut pending_updates: Vec<Entry> = Vec::new();
+            let mut pending_has_viewport = false;
             let mut coalesce_deadline: Option<std::time::Instant> = None;
             let mut coalesce_timer: Option<IoTask<()>> = None;
 
             while in_flight > 0 || !pending_updates.is_empty() {
                 if in_flight == 0 {
+                    let has_viewport = std::mem::replace(&mut pending_has_viewport, false);
                     let _ = this.update(cx, |this, cx| {
-                        this.apply_enrichment_batch(id, revision, &pending_updates, cx)
+                        this.apply_enrichment_batch(
+                            id,
+                            revision,
+                            &pending_updates,
+                            has_viewport,
+                            cx,
+                        )
                     });
                     pending_updates.clear();
                     break;
@@ -375,7 +402,10 @@ impl Browser {
                             if !batch_updates.is_empty() {
                                 pending_updates.extend(batch_updates);
                                 if completed.is_viewport {
-                                    flush_now = true;
+                                    pending_has_viewport = true;
+                                    if !need.is_full_budget() {
+                                        flush_now = true;
+                                    }
                                 }
                             }
                             if pending_updates.len() >= COALESCE_MAX_UPDATES {
@@ -407,8 +437,15 @@ impl Browser {
                 }
 
                 if flush_now {
+                    let has_viewport = std::mem::replace(&mut pending_has_viewport, false);
                     let Ok(keep_going) = this.update(cx, |this, cx| {
-                        this.apply_enrichment_batch(id, revision, &pending_updates, cx)
+                        this.apply_enrichment_batch(
+                            id,
+                            revision,
+                            &pending_updates,
+                            has_viewport,
+                            cx,
+                        )
                     }) else {
                         worker_cancel.cancel();
                         break;
@@ -421,11 +458,11 @@ impl Browser {
                         break;
                     }
                 } else if coalesce_deadline.is_none() {
-                    coalesce_deadline = Some(std::time::Instant::now() + COALESCE_WINDOW);
+                    coalesce_deadline = Some(std::time::Instant::now() + coalesce_window);
                     coalesce_timer = Some(
                         tasks
                             .spawn_cancellable_named("Coalesce directory enrichment", async move {
-                                tokio::time::sleep(COALESCE_WINDOW).await;
+                                tokio::time::sleep(coalesce_window).await;
                             })
                             .cancel_on_drop(),
                     );
@@ -479,10 +516,10 @@ impl Browser {
             job.prioritize_viewport(rows);
             return;
         }
-        self.schedule_enrichment(id, cx);
+        self.schedule_enrichment_inner(id, rows, cx);
     }
 
-    fn enrichment_need(&self, id: u64) -> Option<EnrichmentNeed> {
+    pub(in crate::pages::workspace) fn enrichment_need(&self, id: u64) -> Option<EnrichmentNeed> {
         let slot = self.tab_slot(id)?;
         let location = slot.location();
         let layout = self.columns_layout(&location);
@@ -499,11 +536,16 @@ impl Browser {
             slot.sort.key,
             sorting::Key::Size | sorting::Key::Type | sorting::Key::DetailedType
         ) || picker_narrows;
+        let budget = if full_budget {
+            directory::ProbeBudget::Full
+        } else {
+            directory::ProbeBudget::Bounded(self.settings.preferences.files.probe_budget)
+        };
         Some(EnrichmentNeed {
             children,
             content: true,
             symlinks: true,
-            full_budget,
+            budget,
         })
     }
 
@@ -512,36 +554,108 @@ impl Browser {
         id: u64,
         revision: u64,
         batch_updates: &[Entry],
+        is_viewport: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         let is_active = id == self.tabs.active_id;
         let details_visible = self.details_visible();
-        let Some(slot) = self.tab_slot_mut(id) else {
-            return false;
-        };
-        if slot.is_loading() || slot.navigation.revision() != revision {
-            return false;
-        }
-        let Some(mut next_snapshot) = slot.navigation.directory_arc() else {
-            return false;
-        };
-        let Some(changed_visible) =
-            directory::merge_enriched_in_place(&mut next_snapshot, batch_updates)
-        else {
-            return true;
-        };
-        if !slot
-            .navigation
-            .update_directory(revision, Arc::clone(&next_snapshot))
-        {
+        let marquee_active = self.files.marquee.is_active();
+        if !self.tab_slot(id).is_some_and(|slot| {
+            !slot.is_loading()
+                && slot.navigation.revision() == revision
+                && slot.navigation.directory().is_some()
+        }) {
             return false;
         }
         if !is_active {
-            if changed_visible {
+            let Some(slot) = self.tab_slot_mut(id) else {
+                return false;
+            };
+            slot.table_rows = Arc::from([]);
+            slot.sorted_projection = None;
+            let Some(changed_opt) = slot.navigation.mutate_directory(revision, |snapshot| {
+                directory::merge_enriched_in_place(snapshot, batch_updates)
+            }) else {
+                return false;
+            };
+            if changed_opt.is_some() {
                 slot.projection_dirty = true;
             }
             return true;
         }
+
+        let suspended_table_drag =
+            super::table::FileTable::suspend_rows_for_enrichment(&self.files.table, cx);
+        let suspended_grid = self.files.grid_selection.suspend_for_enrichment();
+
+        let Some(slot) = self.tab_slot_mut(id) else {
+            return false;
+        };
+        let mut restore_canonical_rows = false;
+        let mut restore_proj_source = false;
+        if let Some(current_entries) = slot.navigation.directory().map(|dir| &dir.entries) {
+            if Arc::ptr_eq(&slot.table_rows, current_entries) {
+                slot.table_rows = Arc::from([]);
+                restore_canonical_rows = true;
+            }
+            if let Some(proj) = &mut slot.sorted_projection
+                && Arc::ptr_eq(&proj.source, current_entries)
+            {
+                proj.source = Arc::from([]);
+                restore_proj_source = true;
+            }
+        }
+
+        let Some(changed_opt) = slot.navigation.mutate_directory(revision, |snapshot| {
+            directory::merge_enriched_in_place(snapshot, batch_updates)
+        }) else {
+            if let Some(dir) = slot.navigation.directory() {
+                if restore_canonical_rows {
+                    slot.table_rows = Arc::clone(&dir.entries);
+                }
+                if restore_proj_source && let Some(proj) = &mut slot.sorted_projection {
+                    proj.source = Arc::clone(&dir.entries);
+                }
+            }
+            let current_rows = Arc::clone(&slot.table_rows);
+            super::table::FileTable::restore_rows_after_enrichment(
+                &self.files.table,
+                Arc::clone(&current_rows),
+                suspended_table_drag,
+                false,
+                cx,
+            );
+            self.files
+                .grid_selection
+                .restore_after_enrichment(suspended_grid, &current_rows);
+            return false;
+        };
+
+        let Some(next_snapshot) = slot.navigation.directory_arc() else {
+            return false;
+        };
+        if restore_canonical_rows {
+            slot.table_rows = Arc::clone(&next_snapshot.entries);
+        }
+
+        let Some(changed_visible) = changed_opt else {
+            if restore_proj_source && let Some(proj) = &mut slot.sorted_projection {
+                proj.source = Arc::clone(&next_snapshot.entries);
+            }
+            let current_rows = Arc::clone(&slot.table_rows);
+            super::table::FileTable::restore_rows_after_enrichment(
+                &self.files.table,
+                Arc::clone(&current_rows),
+                suspended_table_drag,
+                false,
+                cx,
+            );
+            self.files
+                .grid_selection
+                .restore_after_enrichment(suspended_grid, &current_rows);
+            return true;
+        };
+
         let picker_narrows = slot
             .picker
             .as_ref()
@@ -551,19 +665,58 @@ impl Browser {
                 slot.sort.key,
                 sorting::Key::Size | sorting::Key::Type | sorting::Key::DetailedType
             );
+
         if !changed_visible {
-            if !slot.projection_dirty && !can_alter_order_or_membership {
-                slot.apply_in_place_enrichment(&next_snapshot, batch_updates, None);
-                let updated_rows = Arc::clone(&slot.table_rows);
-                super::table::FileTable::update_rows(&self.files.table, updated_rows, false, cx);
+            if slot.projection_dirty && !marquee_active {
+                self.release_active_selection_mirrors(cx);
+                if let Some(slot) = self.tab_slot_mut(id) {
+                    slot.refresh_visible();
+                }
+                cx.notify();
+                return true;
             }
+            if !slot.projection_dirty {
+                slot.apply_in_place_enrichment(&next_snapshot, batch_updates, None);
+            }
+            let updated_rows = Arc::clone(&slot.table_rows);
+            super::table::FileTable::restore_rows_after_enrichment(
+                &self.files.table,
+                Arc::clone(&updated_rows),
+                suspended_table_drag,
+                false,
+                cx,
+            );
+            self.files
+                .grid_selection
+                .restore_after_enrichment(suspended_grid, &updated_rows);
             return true;
         }
+
         if slot.projection_dirty || can_alter_order_or_membership {
-            slot.refresh_visible();
+            slot.sorted_projection = None;
+            if marquee_active {
+                slot.projection_dirty = true;
+                let current_rows = Arc::clone(&slot.table_rows);
+                super::table::FileTable::restore_rows_after_enrichment(
+                    &self.files.table,
+                    Arc::clone(&current_rows),
+                    suspended_table_drag,
+                    false,
+                    cx,
+                );
+                self.files
+                    .grid_selection
+                    .restore_after_enrichment(suspended_grid, &current_rows);
+                return true;
+            }
+            self.release_active_selection_mirrors(cx);
+            if let Some(slot) = self.tab_slot_mut(id) {
+                slot.refresh_visible();
+            }
             cx.notify();
             return true;
         }
+
         let touched_preview = details_visible
             && slot.navigation.view().selected.len() == 1
             && slot
@@ -577,13 +730,22 @@ impl Browser {
                         .any(|entry| entry.path == *selected_path)
                 });
         let viewport_range = viewport_item_range(slot, slot.table_rows.len());
-        let touched_viewport =
+        let in_viewport =
             slot.apply_in_place_enrichment(&next_snapshot, batch_updates, viewport_range);
+        let touched_viewport = is_viewport || in_viewport;
         let updated_rows = Arc::clone(&slot.table_rows);
+        super::table::FileTable::restore_rows_after_enrichment(
+            &self.files.table,
+            Arc::clone(&updated_rows),
+            suspended_table_drag,
+            touched_viewport,
+            cx,
+        );
+        self.files
+            .grid_selection
+            .restore_after_enrichment(suspended_grid, &updated_rows);
         if touched_viewport || touched_preview {
             cx.notify();
-        } else {
-            super::table::FileTable::update_rows(&self.files.table, updated_rows, false, cx);
         }
         true
     }
