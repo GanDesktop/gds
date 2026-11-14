@@ -20,7 +20,7 @@ DMS 导出 / KDE 当前配色 / Qt 配置色板 / 内置 TOML
 
 ## 2. 来源与明暗
 
-主题下拉提供“系统主题”和“内置”。系统来源在 KDE Plasma 会话中读取当前 KDE 配色，GNOME 会话读取当前 GTK 3 主题，其它会话沿用 DankMaterialShell 的导出；Qt5ct / Qt6ct 保留代码与配置兼容，但不出现在主题下拉中。
+主题下拉提供“系统主题”和“内置”。系统来源在 KDE Plasma 会话中读取当前 KDE 配色，GNOME 会话通过纯 Rust 读取桌面 Portal 明暗与强调色、Adwaita 基准配色及用户 GTK 配置，其它会话沿用 DankMaterialShell 的导出；Qt5ct / Qt6ct 保留代码与配置兼容，但不出现在主题下拉中。
 
 Files defaults to the system palette and follows the desktop light/dark preference. 明暗还可单独选择浅色或深色。系统主题按当前会话选择来源，已有 `dms` 配置兼容读取为 `system`。`ModePreference` 表示系统 / 浅 / 深，实际 `Mode` 只有浅 / 深。切换来源不重置明暗、字体、内置配色或表面不透明度。
 
@@ -32,9 +32,9 @@ Files defaults to the system palette and follows the desktop light/dark preferen
 
 ### GNOME
 
-通过独立 Python/PyGObject 进程调用 GTK 3 的 `Gtk.StyleContext.lookup_color`，读取当前 GTK 主题及用户 `gtk-3.0/gtk.css` 解析后的颜色。必需的窗口、内容、文字和选中颜色成对导入；缺失必需角色时报错，缺失辅助角色从同一主题推导。没有自带 Adwaita 色表。运行时需要 Python 3、PyGObject 和 GTK 3 introspection 数据，原生包与 Nix 环境声明这些依赖。
+在进程内通过纯 Rust 读取 XDG Settings Portal（`org.freedesktop.appearance` 的 `color-scheme` 与 `accent-color`）、标准 Adwaita 浅/深色基准色板，以及用户 `$XDG_CONFIG_HOME/gtk-3.0/`、`$XDG_CONFIG_HOME/gtk-4.0/` 内的 `settings.ini` 与 `gtk.css` `@define-color` 覆盖（`gtk-4.0` 优先级高于 `gtk-3.0`）。不再启动 Python 子进程或依赖 PyGObject / GTK 3 运行时库。
 
-明暗偏好仅设置读取进程的 `gtk-application-prefer-dark-theme`，不改系统配置；系统模式结合 GNOME 的 `color-scheme` 选择变体，再从实际窗口底色确定模式。监听 dconf 用户库及 GTK 3 的 `gtk.css`、`settings.ini`，设置变化后重新读取。只提供一套颜色的第三方主题不会被自动生成另一套配色。这里读取的是 GTK 3 主题，不承诺与使用独立样式的 libadwaita 应用或 GNOME Shell 扩展一致。
+明暗在“跟随系统”模式下依次参考 Portal `color-scheme`、`settings.ini` 的 `gtk-application-prefer-dark-theme` 与平台窗口外观，也可在设置中显式选择浅色或深色。强调色优先采用用户 `gtk.css` 的 `@define-color` 覆盖，其次使用 Portal `accent-color` 并自动计算对比前景色，最后回落到 Adwaita 蓝色。监听 dconf 用户库、Settings Portal 信号及 GTK 3/4 的 `gtk.css`、`settings.ini`，变化后后台刷新。这里解析的是基准 Adwaita 语义与 `@define-color` 变量，不执行完整的第三方 GTK CSS 选择器引擎。
 
 ### KDE Plasma
 
@@ -66,8 +66,9 @@ Files、Agents 与公共组件共用 `src/appearance/theme/palette.rs` 的角色
 theme/
 ├── provider.rs              # Source、来源分派、加载结果与共同文件读取
 ├── provider/
-│   ├── system.rs + system/  # 按会话选择 KDE 当前配色或 DMS
-│   │   └── dms.rs           # 跟随 DMS 导出的活动方案
+│   ├── system.rs + system/  # 按会话选择 KDE、GNOME 或 DMS 系统来源
+│   │   ├── dms.rs           # 跟随 DMS 导出的活动方案
+│   │   └── gnome.rs         # Portal、Adwaita 基准与用户 GTK 3/4 覆盖
 │   ├── config.rs            # Qt5ct/Qt6ct 配置所指定的色板路径
 │   ├── qt.rs                # Qt 角色数组与 KDE 命名颜色组的共享解析
 │   ├── builtin.rs           # 内置主题目录、嵌入与配置解析

@@ -1,5 +1,7 @@
 //! Theme, typography and the shared visual language.
 pub mod motion;
+#[cfg(target_os = "linux")]
+pub(crate) mod portal;
 pub mod theme;
 pub mod tokens;
 pub mod typography;

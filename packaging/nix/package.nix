@@ -4,7 +4,6 @@
 , buildTag ? "unknown"
 }:
 let
-  gtkPython = pkgs.python3.withPackages (ps: [ ps.pygobject3 ]);
   binary = "gds-${application}";
   manifest = builtins.fromTOML (builtins.readFile ../../Cargo.toml);
   target = lib.findFirst (target: target.name == binary)
@@ -16,7 +15,7 @@ let
   ) (builtins.removeAttrs labels [ "default" ]);
   libraries = with pkgs; [
     wayland libxkbcommon fontconfig freetype openssl zstd zlib
-    libGL vulkan-loader dbus libx11 libxcb gtk3 gsettings-desktop-schemas
+    libGL vulkan-loader dbus libx11 libxcb
   ] ++ extraBuildInputs;
 in
 rustPlatform.buildRustPackage {
@@ -40,11 +39,10 @@ rustPlatform.buildRustPackage {
 
   cargoLock = import ./cargo-lock.nix;
 
-  nativeBuildInputs = [ pkg-config cmake makeWrapper copyDesktopItems rustPlatform.bindgenHook pkgs.wrapGAppsHook3 pkgs.gobject-introspection ];
+  nativeBuildInputs = [ pkg-config cmake makeWrapper copyDesktopItems rustPlatform.bindgenHook ];
   nativeCheckInputs = [ pkgs.dbus pkgs.ffmpeg-headless ] ++ extraNativeCheckInputs;
   buildInputs = libraries;
   dontUseCmakeConfigure = true;
-  dontWrapGApps = true;
   cargoBuildFlags = [ "--bin" binary ];
   buildFeatures = features;
   checkFeatures = features ++ [ "gpui-kit/test-support" ];
@@ -67,8 +65,8 @@ rustPlatform.buildRustPackage {
   '';
 
   postFixup = ''
-    wrapProgram "$out/bin/${binary}" "''${gappsWrapperArgs[@]}" \
-      --prefix PATH : ${lib.makeBinPath ([ pkgs.xdg-utils pkgs.xdg-terminal-exec gtkPython ] ++ lib.optionals (application == "files") [ pkgs.ffmpeg-headless ])} \
+    wrapProgram "$out/bin/${binary}" \
+      --prefix PATH : ${lib.makeBinPath ([ pkgs.xdg-utils pkgs.xdg-terminal-exec ] ++ lib.optionals (application == "files") [ pkgs.ffmpeg-headless ])} \
       --suffix TERMINFO_DIRS : ${pkgs.ncurses}/share/terminfo \
       ${lib.optionalString (application == "files") "--suffix XDG_DATA_DIRS : ${pkgs.shared-mime-info}/share"} \
       --prefix LD_LIBRARY_PATH : "/run/opengl-driver/lib:${lib.makeLibraryPath libraries}"

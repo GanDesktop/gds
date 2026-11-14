@@ -32,17 +32,8 @@ impl DesktopIntegration {
         }
 
         let (sender, receiver) = mpsc::channel(32);
-        match Server::connect(APP_ID, sender).await {
-            Ok(server) => {
-                if let Some(provider) = &server.provider_conflict {
-                    let message = format!(
-                        "org.freedesktop.FileManager1 is already provided by {provider}; Files did not take ownership of this interface."
-                    );
-                    tracing::warn!(%message, "file-manager integration unavailable");
-                    notices.push(message);
-                }
-                Ok(Acquire::Continue(Some(Self { server, receiver })))
-            }
+        match Server::claim_app(APP_ID, sender).await {
+            Ok(server) => Ok(Acquire::Continue(Some(Self { server, receiver }))),
             Err(Error::AlreadyRunning) => {
                 if let Mode::Browser { start } = mode {
                     let startup_id = std::env::var("XDG_ACTIVATION_TOKEN")
@@ -74,7 +65,7 @@ impl DesktopIntegration {
         cx: &mut gpui_kit::App,
     ) -> anyhow::Result<()> {
         let Self {
-            server,
+            mut server,
             mut receiver,
         } = self;
         let cancel = tasks.token();
@@ -83,6 +74,25 @@ impl DesktopIntegration {
             gds::service::task_manager::Execution::Supervisor,
         )?;
         cx.spawn(async move |cx| {
+            let claim = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => None,
+                claim = server.claim_file_manager() => Some(claim),
+            };
+            match claim {
+                Some(Ok(Some(provider))) => {
+                    let message = format!(
+                        "org.freedesktop.FileManager1 is already provided by {provider}; Files did not take ownership of this interface."
+                    );
+                    tracing::warn!(%message, "file-manager integration unavailable");
+                    cx.update(|cx| windows.report_notice(message, cx));
+                }
+                Some(Ok(None)) | None => {}
+                Some(Err(error)) => {
+                    tracing::warn!(%error, "file-manager integration unavailable");
+                    cx.update(|cx| windows.report_notice(error.to_string(), cx));
+                }
+            }
             loop {
                 let command = tokio::select! {
                     biased;

@@ -41,6 +41,10 @@ impl Desktop {
     }
 }
 
+pub(crate) fn is_gnome() -> bool {
+    Desktop::current() == Desktop::Gnome
+}
+
 pub(super) fn uses_platform_mode() -> bool {
     Desktop::current() == Desktop::Gnome
 }
@@ -51,6 +55,8 @@ pub(super) fn source_paths() -> Vec<PathBuf> {
             let desktop = Desktop::current();
             let mut paths = vec![desktop.path(&dirs)];
             if desktop == Desktop::Gnome {
+                paths.push(dirs.config_dir().join("gtk-4.0/gtk.css"));
+                paths.push(dirs.config_dir().join("gtk-4.0/settings.ini"));
                 paths.push(dirs.config_dir().join("gtk-3.0/gtk.css"));
                 paths.push(dirs.config_dir().join("gtk-3.0/settings.ini"));
             }
@@ -68,7 +74,7 @@ pub(super) fn load(
     let dirs = BaseDirs::new().ok_or(Error::NoUserDirectories)?;
     let desktop = Desktop::current();
     if desktop == Desktop::Gnome {
-        return gnome::load(preference, platform);
+        return gnome::load(preference, platform, &dirs);
     }
     let path = desktop.path(&dirs);
     let contents = read(&path)?;
@@ -82,7 +88,9 @@ pub(super) fn load(
                 source_path: Some(path),
             })
         }
-        Desktop::Gnome => unreachable!("GNOME uses GSettings rather than a palette file"),
+        Desktop::Gnome => unreachable!(
+            "GNOME uses Portal and GTK configuration rather than a single palette file"
+        ),
     }
 }
 

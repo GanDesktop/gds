@@ -109,4 +109,11 @@ impl Observer {
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         cx.emit(Change::Files);
     }
+
+    pub(in crate::appearance) fn refresh_if_active(cx: &mut App) {
+        if let Some(shared) = cx.try_global::<Shared>() {
+            let observer = shared.0.clone();
+            observer.update(cx, |_, cx| cx.emit(Change::Files));
+        }
+    }
 }

@@ -2,9 +2,9 @@
 let
   libraries = with pkgs; [
     wayland libxkbcommon fontconfig freetype openssl zstd zlib
-    libGL vulkan-loader dbus libx11 libxcb alsa-lib gtk3 gsettings-desktop-schemas
+    libGL vulkan-loader dbus libx11 libxcb alsa-lib
   ];
-  runtimePrograms = with pkgs; [ ffmpeg-headless xdg-terminal-exec (python3.withPackages (ps: [ ps.pygobject3 ])) ];
+  runtimePrograms = with pkgs; [ ffmpeg-headless xdg-terminal-exec ];
   libraryPath = "/run/opengl-driver/lib:${pkgs.lib.makeLibraryPath libraries}";
   runtime = pkgs.writeShellScript "gds-development-runtime" ''
     export PATH="${pkgs.lib.makeBinPath runtimePrograms}''${PATH:+:$PATH}"
@@ -16,7 +16,7 @@ let
 in
 pkgs.mkShell {
   packages = with pkgs; [
-    cargo rustc rustfmt clippy just nil just-lsp pkg-config clang lld cmake gobject-introspection ncurses git
+    cargo rustc rustfmt clippy just nil just-lsp pkg-config clang lld cmake python3 ncurses git
   ] ++ runtimePrograms;
   buildInputs = libraries;
   # FHS shells (e.g. steam-run) inject -L/usr/lib here, selecting a foreign glibc.

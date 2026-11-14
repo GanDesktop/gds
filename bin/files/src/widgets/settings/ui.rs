@@ -192,7 +192,7 @@ impl View {
             subscriptions.push(cx.observe_in(&state, window, Self::on_slider_notify(field)));
         }
         view._subscriptions = subscriptions;
-        view.refresh_themes(window, cx);
+        view.scan_custom_themes(window, cx);
         view.probe_tags(cx);
         view
     }
@@ -200,6 +200,10 @@ impl View {
     pub fn refresh_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.system_theme_available = theme::Source::system_available(cx.window_appearance());
         self.sync_controls(window, cx);
+        self.scan_custom_themes(window, cx);
+    }
+
+    fn scan_custom_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let work = self
             .tasks
             .spawn_blocking_named("Scan user themes", theme::provider::custom::catalog);

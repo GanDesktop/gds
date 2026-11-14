@@ -4,7 +4,7 @@ mod color;
 mod config;
 pub mod custom;
 mod qt;
-mod system;
+pub(crate) mod system;
 
 use gpui_kit::WindowAppearance;
 use serde::{Deserialize, Serialize};
