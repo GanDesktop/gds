@@ -1,4 +1,4 @@
-use super::{Item, Node, Prepared};
+use super::{DEFAULT_COPY_BUFFER_SIZE, Item, Node, Prepared};
 use std::{fs, path::PathBuf};
 use tokio_util::sync::CancellationToken;
 
@@ -31,6 +31,7 @@ impl CopiedTree {
             cancel: CancellationToken::new(),
             source: source.clone(),
             destination: destination.clone(),
+            buffer_size: DEFAULT_COPY_BUFFER_SIZE,
         }
         .copy_root()
         .expect("copy before concurrent write");
@@ -102,6 +103,7 @@ fn copies_file_and_directory_tags_before_restoring_readonly_permissions() {
         source: source.clone(),
         destination: destination.clone(),
         cancel: CancellationToken::new(),
+        buffer_size: DEFAULT_COPY_BUFFER_SIZE,
     }
     .copy_root();
     // Make the fixture removable even if an assertion fails.
@@ -189,6 +191,7 @@ fn preserves_modified_timestamps_on_files_links_and_directories() {
         cancel: CancellationToken::new(),
         source: source.clone(),
         destination: destination.clone(),
+        buffer_size: DEFAULT_COPY_BUFFER_SIZE,
     }
     .copy_root()
     .expect("copy source tree");

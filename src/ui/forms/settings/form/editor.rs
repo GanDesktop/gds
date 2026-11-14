@@ -2,7 +2,7 @@ use crate::appearance::tokens;
 use gds_uim::el;
 use gpui_kit::{
     component::{
-        ActiveTheme, IndexPath, Sizable,
+        ActiveTheme, Disableable, IndexPath, Sizable,
         input::{InputEvent, InputState, Textarea, TextareaState},
         select::{SearchableVec, SelectEvent, SelectState},
         slider::SliderValue,
@@ -44,6 +44,7 @@ pub struct Editor<T: Model> {
     controls: Vec<Control>,
     errors: Vec<Option<String>>,
     language: i18n::Language,
+    disabled: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -168,12 +169,24 @@ impl<T: Model> Editor<T> {
             fields,
             controls,
             language: cx.gds().i18n().language(),
+            disabled: false,
             _subscriptions: subscriptions,
         }
     }
 
     pub fn value(&self) -> &T {
         &self.value
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
+        if self.disabled != disabled {
+            self.disabled = disabled;
+            cx.notify();
+        }
     }
 
     /// Application acceptance or rollback synchronizes native widgets without emitting changes.
@@ -255,7 +268,12 @@ impl<T: Model> Editor<T> {
         }
     }
 
-    fn change(&mut self, index: usize, value: Value, _: &mut Window, cx: &mut Context<Self>) {
+    fn change(&mut self, index: usize, value: Value, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            self.sync(window, cx);
+            cx.notify();
+            return;
+        }
         let field = &self.fields[index];
         let mut next = self.value.clone();
         let result = (field.set)(&mut next, value).and_then(|_| next.validate());
@@ -282,6 +300,11 @@ impl<T: Model> Editor<T> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            self.sync(window, cx);
+            cx.notify();
+            return;
+        }
         let SliderValue::Single(display) = value else {
             return;
         };
@@ -319,6 +342,9 @@ impl<T: Model> Editor<T> {
     }
 
     fn reset(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         let value = (self.fields[index].get)(&T::default());
         self.change(index, value, window, cx);
         self.sync(window, cx);
@@ -331,6 +357,7 @@ impl<T: Model> Editor<T> {
         match &self.controls[index] {
             Control::Toggle => Switch::new(id)
                 .checked(field.effective(&self.value).as_bool().unwrap_or_default())
+                .disabled(self.disabled)
                 .small()
                 .accessibility_label(label)
                 .on_change(cx.listener(move |this, checked: &bool, window, cx| {
@@ -342,6 +369,7 @@ impl<T: Model> Editor<T> {
                     $(Textarea::new(state)
                         .accessibility_id(id)
                         .small()
+                        .disabled(self.disabled)
                         .w_full()
                         .aria_label(label)
                         .bg(cx.gds().appearance().theme().colors().content)),
@@ -351,12 +379,14 @@ impl<T: Model> Editor<T> {
             Control::Text(state) => ui::field::input(state, cx)
                 .id(id)
                 .small()
+                .disabled(self.disabled)
                 .w_full()
                 .aria_label(label)
                 .into_any_element(),
             Control::Choice { state, .. } => ui::field::select(state, cx)
                 .id(id)
                 .small()
+                .disabled(self.disabled)
                 .w_full()
                 .accessibility_label(label)
                 .search_placeholder(i18n::text("form-search", cx))
@@ -368,7 +398,12 @@ impl<T: Model> Editor<T> {
                 let display =
                     field.effective(&self.value).as_f64().unwrap_or(number.min) * number.scale;
                 control
-                    .element(id.into(), label, number.label(display as f32).into(), false)
+                    .element(
+                        id.into(),
+                        label,
+                        number.label(display as f32).into(),
+                        self.disabled,
+                    )
                     .into_any_element()
             }
         }
@@ -416,6 +451,7 @@ impl<T: Model> Render for Editor<T> {
                 .control_icon(gpui_kit::assets::IconName::RotateCcw)
                 .accessibility_label(i18n::text("form-reset", cx))
                 .tooltip(i18n::text("form-reset", cx))
+                .disabled(self.disabled)
                 .on_click(cx.listener(move |this, _, window, cx| this.reset(index, window, cx)))
                 .into_any_element()
             });
@@ -445,7 +481,12 @@ impl<T: Model> Render for Editor<T> {
                     .into_any_element(),
             );
         }
-        div().w_full().flex().flex_col().children(rows)
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .when(self.disabled, |this| this.opacity(0.6))
+            .children(rows)
     }
 }
 

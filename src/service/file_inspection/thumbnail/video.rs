@@ -8,7 +8,6 @@ use std::{
 
 use super::{EDGE, Error};
 
-const TIMEOUT: Duration = Duration::from_secs(10);
 const ERROR_BYTES: u64 = 4 * 1024;
 const MAX_FRAME_BYTES: u64 = (EDGE as u64) * (EDGE as u64) * 4 + 64 * 1024;
 
@@ -16,8 +15,10 @@ const MAX_FRAME_BYTES: u64 = (EDGE as u64) * (EDGE as u64) * 4 + 64 * 1024;
 /// Reports unavailable FFmpeg, extraction failures, timeouts and filesystem errors.
 pub(super) fn load(
     path: &Path,
+    timeout: Duration,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<::image::RgbaImage, Error> {
+    let timeout = timeout.max(Duration::from_secs(1));
     let directory = tempfile::tempdir()?;
     let frame = directory.path().join("frame.png");
     let errors = directory.path().join("ffmpeg.log");
@@ -54,7 +55,7 @@ pub(super) fn load(
             }
         })?;
     let mut child = crate::service::task_manager::process::ChildGuard::new(child);
-    let status = child.wait(cancel, TIMEOUT).map_err(|error| {
+    let status = child.wait(cancel, timeout).map_err(|error| {
         if error.kind() == std::io::ErrorKind::TimedOut {
             Error::VideoTimeout
         } else {

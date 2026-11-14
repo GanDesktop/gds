@@ -7,9 +7,10 @@ mod enrich;
 mod identity;
 mod inspection;
 
-pub use self::children::ChildCount;
+pub use self::children::{ChildCount, DEFAULT_CHILD_COUNT_LIMIT};
 pub use self::details::*;
 pub use self::enrich::*;
+pub use self::watching::{DEFAULT_WATCH_DEBOUNCE_MS, DEFAULT_WATCH_INCREMENTAL_LIMIT};
 
 use std::{
     ffi::{OsStr, OsString},

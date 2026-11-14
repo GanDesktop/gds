@@ -14,7 +14,6 @@ pub use pages::Page;
 
 use controls::{
     Choice, ChoiceControl, ChoiceEvent, ChoiceState, Field, NumberControl, PERCENTAGE_RANGE,
-    PROBE_BUDGET_RANGE,
 };
 use gds_uim::el;
 use gpui_kit::{
@@ -57,7 +56,8 @@ pub struct View {
     mode: ChoiceControl<theme::ModePreference>,
     content_opacity: NumberControl,
     sidebar_opacity: NumberControl,
-    probe_budget: NumberControl,
+    performance: Entity<pages::PerformanceFormEditor>,
+    performance_unlocked: bool,
     font: Entity<FontEditor>,
     terminal: Entity<TerminalEditor>,
     _subscriptions: Vec<Subscription>,
@@ -126,11 +126,15 @@ impl View {
             PERCENTAGE_RANGE,
             cx,
         );
-        let probe_budget = NumberControl::new(
-            preferences.files.probe_budget as f32,
-            PROBE_BUDGET_RANGE,
-            cx,
-        );
+        let performance = cx.new(|cx| {
+            let mut editor = pages::PerformanceFormEditor::new(
+                pages::PerformanceForm::from(&preferences.files),
+                window,
+                cx,
+            );
+            editor.set_disabled(true, cx);
+            editor
+        });
         let font = cx.new(|cx| FontEditor::new(preferences.font.clone(), window, cx));
         let terminal = cx.new(|cx| TerminalEditor::new(preferences.terminal.clone(), window, cx));
         let tag_editor = cx.new(|cx| {
@@ -141,6 +145,7 @@ impl View {
             )
         });
         let mut subscriptions = vec![
+            cx.subscribe_in(&performance, window, Self::on_performance_edited),
             cx.subscribe_in(&tag_editor, window, Self::on_tags_edited),
             cx.subscribe_in(&terminal, window, Self::on_terminal_edited),
             cx.subscribe_in(&general, window, Self::on_general_edited),
@@ -174,7 +179,8 @@ impl View {
             mode,
             content_opacity,
             sidebar_opacity,
-            probe_budget,
+            performance,
+            performance_unlocked: false,
             font,
             terminal,
             _subscriptions: Vec::new(),
@@ -323,8 +329,13 @@ impl View {
             window,
             cx,
         );
-        self.probe_budget
-            .sync(self.preferences.files.probe_budget as f32, window, cx);
+        self.performance.update(cx, |editor, cx| {
+            editor.set_value(
+                pages::PerformanceForm::from(&self.preferences.files),
+                window,
+                cx,
+            )
+        });
         self.font.update(cx, |editor, cx| {
             editor.set_value(self.preferences.font.clone(), window, cx)
         });
@@ -515,7 +526,6 @@ impl View {
         match field {
             Field::ContentOpacity => &self.content_opacity,
             Field::SidebarOpacity => &self.sidebar_opacity,
-            Field::ProbeBudget => &self.probe_budget,
             _ => unreachable!("only numeric fields own numeric controls"),
         }
     }

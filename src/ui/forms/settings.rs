@@ -15,7 +15,7 @@ use std::cell::Cell;
 pub const CONTROL_WIDTH: f32 = 260.0;
 const RESET_WIDTH: f32 = 32.0;
 const CONTROL_GAP: f32 = 8.0;
-const NUMBER_LABEL_WIDTH_REMS: f32 = 3.5;
+const NUMBER_LABEL_WIDTH_REMS: f32 = 4.5;
 
 #[derive(Clone, Copy, Debug)]
 pub struct NumberRange {

@@ -13,8 +13,13 @@ pub(in crate::pages::workspace) struct State {
 }
 
 impl State {
-    pub(in crate::pages::workspace) fn new(window: &mut Window, cx: &mut Context<Browser>) -> Self {
-        let inspections = cx.new(|_| ui::file_inspection::Cache::default());
+    pub(in crate::pages::workspace) fn new(
+        preferences: &configuration::Preferences,
+        window: &mut Window,
+        cx: &mut Context<Browser>,
+    ) -> Self {
+        let inspections =
+            cx.new(|_| ui::file_inspection::Cache::new(preferences.files.preview.cache_options()));
         cx.observe(&inspections, |_, _, cx| cx.notify()).detach();
         Self {
             table: table::FileTable::make_state(cx.entity().downgrade(), window, cx),

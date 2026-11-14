@@ -4,7 +4,10 @@ mod error;
 mod metadata;
 mod thumbnail;
 
-use std::{path::PathBuf, time::SystemTime};
+use std::{
+    path::PathBuf,
+    time::{Duration, SystemTime},
+};
 
 pub use audio::{Error as AudioError, Tags as AudioTags};
 pub use error::Error;
@@ -13,6 +16,25 @@ pub use metadata::{
     PixelSize, SymlinkFacts, TextEncoding, TextFacts, VideoFacts, VideoKind,
 };
 pub use thumbnail::{EDGE, Thumbnail};
+
+pub const DEFAULT_MAX_THUMBNAIL_SOURCE_MIB: u64 = 32;
+pub const DEFAULT_VIDEO_THUMBNAIL_TIMEOUT_SECS: u64 = 10;
+
+/// Tunable bounds for on-demand thumbnail decoding and metadata inspection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Options {
+    pub max_thumbnail_source_bytes: u64,
+    pub video_thumbnail_timeout: Duration,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            max_thumbnail_source_bytes: DEFAULT_MAX_THUMBNAIL_SOURCE_MIB * 1024 * 1024,
+            video_thumbnail_timeout: Duration::from_secs(DEFAULT_VIDEO_THUMBNAIL_TIMEOUT_SECS),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Kind {
@@ -85,6 +107,15 @@ impl Source {
         request: Request,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Inspection {
+        self.load_cancellable_with_options(request, Options::default(), cancel)
+    }
+
+    pub fn load_cancellable_with_options(
+        &self,
+        request: Request,
+        options: Options,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Inspection {
         if cancel.is_cancelled() {
             return Inspection::default();
         }
@@ -104,10 +135,12 @@ impl Source {
                         if cancel.is_cancelled() {
                             return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
                         }
-                        thumbnail::cover(&file)
+                        thumbnail::cover(&file, options.max_thumbnail_source_bytes)
                     })
                 } else {
-                    thumbnail::load_with(self, || self.generate_cancellable(cancel))
+                    thumbnail::load_with(self, || {
+                        self.generate_cancellable_with_options(options, cancel)
+                    })
                 };
                 match thumbnail {
                     Ok(thumbnail) => Field::Available(thumbnail),

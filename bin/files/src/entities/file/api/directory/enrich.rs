@@ -33,6 +33,7 @@ pub const DEFAULT_MAX_CONCURRENT_BATCHES: usize = 4;
 /// Entries processed per blocking batch so UI updates stream progressively and
 /// cancellation checks stay responsive.
 pub const BATCH_SIZE: usize = 32;
+pub const DEFAULT_BATCH_SIZE: usize = BATCH_SIZE;
 
 /// Off-screen probe cap for a background directory enrichment pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,7 +175,7 @@ pub fn plan_enrichment(
     planned
 }
 
-/// Run secondary filesystem probes for a batch of entries.
+/// Run secondary filesystem probes for a batch of entries using default child count limits.
 ///
 /// Probe completion flags are recorded even when a probe yields `None` so
 /// unreadable directories or files remain `None` without being re-probed on
@@ -182,14 +183,38 @@ pub fn plan_enrichment(
 ///
 /// # Errors
 /// Returns [`Error::Cancelled`] when `cancel` is triggered before or during the batch.
+#[allow(dead_code)]
 pub fn probe_batch(
     entries: &[Entry],
     need: EnrichmentNeed,
     cancel: &CancellationToken,
 ) -> Result<Vec<Entry>, Error> {
+    probe_batch_with_limit(
+        entries,
+        need,
+        super::children::DEFAULT_CHILD_COUNT_LIMIT,
+        cancel,
+    )
+}
+
+/// Run secondary filesystem probes for a batch of entries with a configurable child count bound.
+///
+/// Probe completion flags are recorded even when a probe yields `None` so
+/// unreadable directories or files remain `None` without being re-probed on
+/// subsequent passes.
+///
+/// # Errors
+/// Returns [`Error::Cancelled`] when `cancel` is triggered before or during the batch.
+pub fn probe_batch_with_limit(
+    entries: &[Entry],
+    need: EnrichmentNeed,
+    child_count_limit: u32,
+    cancel: &CancellationToken,
+) -> Result<Vec<Entry>, Error> {
     if cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
+    let child_count_limit = child_count_limit.max(1);
     let mut updated = Vec::with_capacity(entries.len());
     for entry in entries {
         if cancel.is_cancelled() {
@@ -202,7 +227,8 @@ pub fn probe_batch(
         match data.kind {
             EntryKind::Directory => {
                 if need.children && !data.children_probed {
-                    data.details.children = ChildCount::from_path(&data.path);
+                    data.details.children =
+                        ChildCount::from_path_with_limit(&data.path, child_count_limit);
                     data.children_probed = true;
                 }
             }

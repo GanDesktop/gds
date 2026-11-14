@@ -919,7 +919,7 @@ impl Browser {
             tabs: tabs::State::default(),
             sidebar: sidebar::State::new(&settings.preferences, cx),
             toolbar: toolbar::State::new(window, cx),
-            files: content::State::new(window, cx),
+            files: content::State::new(&settings.preferences, window, cx),
             collections: place_pages::State::new(window, cx),
             devices: devices::State::new(window, cx),
             remote: remote::State::new(host.tasks.clone(), cx),

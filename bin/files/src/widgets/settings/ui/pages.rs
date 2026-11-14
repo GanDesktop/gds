@@ -2,7 +2,10 @@ mod appearance;
 mod extensions;
 mod files;
 mod general;
+mod performance;
 mod terminal;
+
+pub(super) use performance::{PerformanceForm, PerformanceFormEditor};
 
 use gpui_kit::{Context, Div, assets::IconName};
 
@@ -15,15 +18,17 @@ pub enum Page {
     Terminal,
     Files,
     Extensions,
+    Performance,
 }
 
 impl Page {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::General,
         Self::Appearance,
         Self::Files,
         Self::Terminal,
         Self::Extensions,
+        Self::Performance,
     ];
 
     pub fn label_id(self) -> &'static str {
@@ -33,6 +38,7 @@ impl Page {
             Self::Terminal => "settings-terminal",
             Self::Files => "settings-files",
             Self::Extensions => "settings-extensions",
+            Self::Performance => "settings-performance",
         }
     }
 
@@ -43,6 +49,7 @@ impl Page {
             Self::Terminal => IconName::Terminal,
             Self::Files => IconName::Folder,
             Self::Extensions => IconName::Plug,
+            Self::Performance => IconName::Gauge,
         }
     }
 
@@ -54,6 +61,7 @@ impl Page {
             Self::Terminal => 3,
             Self::Files => 2,
             Self::Extensions => 4,
+            Self::Performance => 5,
         }
     }
 
@@ -64,6 +72,7 @@ impl Page {
             Self::Terminal => view.render_terminal(cx),
             Self::Files => view.render_files(cx),
             Self::Extensions => view.render_extensions(cx),
+            Self::Performance => view.render_performance(cx),
         }
     }
 }

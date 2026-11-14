@@ -288,15 +288,19 @@ fn re_requested_pending_items_move_to_the_front_of_lifo_priority(cx: &mut TestAp
             for source in &sources {
                 cache.request(source.clone(), Request::Thumbnail, cx);
             }
-            assert_eq!(cache.running, super::WORKERS);
+            assert_eq!(cache.running, super::DEFAULT_WORKERS);
             assert_eq!(
                 cache.pending,
-                std::collections::VecDeque::from(sources[super::WORKERS..].to_vec())
+                std::collections::VecDeque::from(sources[super::DEFAULT_WORKERS..].to_vec())
             );
             // Re-requesting an already-pending item promotes it to the back (next popped).
-            cache.request(sources[super::WORKERS].clone(), Request::Thumbnail, cx);
-            let mut expected = sources[(super::WORKERS + 1)..].to_vec();
-            expected.push(sources[super::WORKERS].clone());
+            cache.request(
+                sources[super::DEFAULT_WORKERS].clone(),
+                Request::Thumbnail,
+                cx,
+            );
+            let mut expected = sources[(super::DEFAULT_WORKERS + 1)..].to_vec();
+            expected.push(sources[super::DEFAULT_WORKERS].clone());
             assert_eq!(cache.pending, std::collections::VecDeque::from(expected));
         })
     });
@@ -313,6 +317,65 @@ fn re_requested_pending_items_move_to_the_front_of_lifo_priority(cx: &mut TestAp
             }
             assert!(cache.pending.is_empty());
             assert_eq!(cache.running, 0);
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn set_options_trims_cached_entries_to_lowered_capacity(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
+    cx.executor().allow_parking();
+    let directory = tempfile::tempdir().expect("trim directory");
+    let sources: Vec<Source> = (0..4)
+        .map(|index| {
+            let path = directory.path().join(format!("item-{index}.png"));
+            image::RgbImage::from_pixel(4, 4, image::Rgb([index, 40, 80]))
+                .save(&path)
+                .expect("image fixture");
+            Source {
+                path,
+                kind: Kind::Image,
+                size: Some(1),
+                modified: None,
+            }
+        })
+        .collect();
+    let cache = cx.update(|cx| cx.new(|_| Cache::default()));
+    cx.update(|cx| {
+        cache.update(cx, |cache, cx| {
+            for source in &sources {
+                cache.request(source.clone(), Request::Thumbnail, cx);
+            }
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        cache.update(cx, |cache, cx| {
+            assert_eq!(cache.entries.len(), 4);
+            cache.set_options(
+                super::Options {
+                    capacity: 2,
+                    ..super::Options::default()
+                },
+                cx,
+            );
+            assert_eq!(cache.entries.len(), 2);
+            assert!(cache.get(&sources[0]).is_none());
+            assert!(cache.get(&sources[1]).is_none());
+            assert!(matches!(
+                cache
+                    .get(&sources[2])
+                    .expect("newer entry retained")
+                    .thumbnail,
+                State::Ready(_)
+            ));
+            assert!(matches!(
+                cache
+                    .get(&sources[3])
+                    .expect("newest entry retained")
+                    .thumbnail,
+                State::Ready(_)
+            ));
         })
     });
 }
