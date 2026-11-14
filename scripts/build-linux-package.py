@@ -12,6 +12,26 @@ import shutil
 import subprocess
 import tomllib
 
+DEB_RELEASES = {
+    ('debian', 'bookworm'): '12',
+    ('debian', 'trixie'): '13',
+    ('debian', 'forky'): '14',
+    ('ubuntu', 'jammy'): '22.04',
+    ('ubuntu', 'noble'): '24.04',
+    ('ubuntu', 'oracular'): '24.10',
+    ('ubuntu', 'plucky'): '25.04',
+    ('ubuntu', 'questing'): '25.10',
+    ('ubuntu', 'resolute'): '26.04',
+}
+
+
+def resolve_deb_version_suffix(target: str, release: str) -> str | None:
+    if (target, release) in DEB_RELEASES:
+        return DEB_RELEASES[(target, release)]
+    if re.fullmatch(r'\d+(?:\.\d+)?', release):
+        return release
+    return None
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -63,11 +83,13 @@ def main():
     subprocess.run(build, check=True)
 
     if packaging == 'arch':
+        for stale in output.glob('*.pkg.tar.zst'):
+            stale.unlink()
         shutil.copy2(project / 'packaging/arch/PKGBUILD', work / 'PKGBUILD')
         recipe = (work / 'PKGBUILD').read_text()
         recipe = re.sub(r'^pkgver=.*$', f'pkgver={version}', recipe, flags=re.M)
         package_release = args.package_release or (1 if args.release_tag else stamp)
-        recipe = recipe.replace('pkgrel=1\n', f'pkgrel={package_release}\n')
+        recipe = re.sub(r'^pkgrel=.*$', f'pkgrel={package_release}', recipe, flags=re.M)
         if args.release_tag:
             archive = work / f'gds-{version}.tar.gz'
             subprocess.run(['curl', '--fail', '--location', '--retry', '3',
@@ -92,9 +114,19 @@ def main():
             entry = ['bash', '-ec', 'makepkg --noextract --nodeps --force; '
                      'makepkg --printsrcinfo > /output/.SRCINFO']
     else:
+        for directory in (output, cache):
+            for pattern in ('*.deb', '*.buildinfo', '*.changes'):
+                for stale in directory.glob(pattern):
+                    stale.unlink()
         shutil.copytree(project / 'packaging/debian', work / 'debian', dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns('Containerfile'))
-        package_release = str(args.package_release) if args.package_release else f'0.{stamp}'
+        if args.package_release is not None:
+            distro_version = resolve_deb_version_suffix(args.target, release)
+            if distro_version is None:
+                parser.error(f'Unknown numeric version for {args.target}:{release}')
+            package_release = f'{args.package_release}~{args.target}{distro_version}'
+        else:
+            package_release = f'0.{stamp}'
         (work / 'debian/changelog').write_text(
             f'gds ({version}-{package_release}) unstable; urgency=medium\n\n'
             f'  * Local {args.target} {release} build of {revision}.\n\n'

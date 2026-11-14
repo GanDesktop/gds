@@ -125,13 +125,13 @@ sudo nixos-rebuild switch --flake .
 
 ### Native packages
 
-Packages are available for x86_64 Arch Linux, Debian 13, and Fedora 43. Run:
+Prebuilt `x86_64` packages cover Arch Linux, Debian 13, Ubuntu 24.04 & 26.04 LTS, and Fedora 43 & 44 (as well as compatible rolling, interim Ubuntu, and derivative distributions such as CachyOS, Linux Mint, and Nobara). Run:
 
 ```sh
 curl -fsSL https://gds.gandesktop.dev/install.sh | bash
 ```
 
-You can also download a package from [GitHub Releases](https://github.com/GanDesktop/gds/releases) and install it with your system's package manager. Install a newer package to upgrade. For system file dialogs, pass `--with-portal` to the script (`bash -s -- --with-portal`) and follow the [Portal configuration guide](../../docs/apps/files/fedora.md#optional-gds-portal).
+Interactive terminals let you review install/upgrade state and toggle optional GDS Portal installation; pass `-y` (`bash -s -- -y` or `-y --with-portal`) for non-interactive runs, or `--dry-run` to preview the resolved target without modifying the system. You can also download packages directly from [GitHub Releases](https://github.com/GanDesktop/gds/releases) and follow the [Portal configuration guide](../../docs/apps/files/fedora.md#optional-gds-portal).
 
 After installation, open **GDS Files** from the application menu or run `gds-files`.
 
