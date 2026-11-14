@@ -417,7 +417,7 @@ Files 的终端标题栏提供显式“在新终端标签页打开当前文件�
 GDS_TERMINAL=alacritty cargo run --bin gds-files --features files
 ```
 
-未设置时调用 `xdg-terminal-exec --dir=…`。Nix 发布包与开发环境均提供该启动器，其它安装方式需要将它加入运行环境；不存在时应用会说明失败，不猜测终端模拟器的参数，也不硬编码用户 shell。
+未设置时调用 `xdg-terminal-exec --dir=…`。Nix 开发环境提供该启动器，正式安装时按需在用户环境中自行安装；不存在时应用会说明失败，不猜测终端模拟器的参数，也不硬编码用户 shell。
 
 ## 检查边界
 

@@ -2,10 +2,9 @@ ARG FEDORA_VERSION=43
 FROM registry.fedoraproject.org/fedora:${FEDORA_VERSION}
 
 RUN dnf --setopt=max_parallel_downloads=20 --setopt=install_weak_deps=False install -y \
-        cargo rust gcc-c++ clang lld cmake pkgconf-pkg-config git python3 \
-        openssl-devel wayland-devel libxkbcommon-devel libxkbcommon-x11-devel fontconfig-devel \
-        freetype-devel libX11-devel libxcb-devel alsa-lib-devel dbus-devel \
-        libzstd-devel zlib-devel mesa-libGL-devel vulkan-loader-devel \
+        cargo rust gcc-c++ clang lld pkgconf-pkg-config git python3 \
+        wayland-devel libxkbcommon-devel libxkbcommon-x11-devel fontconfig-devel \
+        freetype-devel libxcb-devel vulkan-loader-devel \
         rpm-build redhat-rpm-config desktop-file-utils systemd-rpm-macros \
     && dnf clean all
 

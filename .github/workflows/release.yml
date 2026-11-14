@@ -110,8 +110,8 @@ jobs:
             --allowed-uris https://static.rust-lang.org \
             --drv-path --show-trace \
             -I nixpkgs="$(nix-instantiate --find-file nixpkgs)" -I "$PWD"
-      - name: Build the suite and standalone portal
-        run: nix-build packaging/nix/nur.nix -A gds -A xdg-desktop-portal-gds --no-out-link
+      - name: Build Files and standalone portal
+        run: nix-build packaging/nix/nur.nix -A gds-files -A xdg-desktop-portal-gds --no-out-link
 
   build:
     name: Build ${{ matrix.target }} (x86_64)

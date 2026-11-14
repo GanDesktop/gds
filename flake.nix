@@ -7,8 +7,7 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
-      applications = builtins.attrNames (nixpkgs.lib.filterAttrs
-        (_: type: type == "directory") (builtins.readDir ./packaging/nix/apps));
+      applications = [ "files" ];
       applicationNames = map (name: "gds-${name}") applications;
       buildTag = builtins.substring 0 9 (self.rev or self.dirtyRev or "unknown");
     in {
@@ -17,15 +16,19 @@
           pkgs = import nixpkgs { inherit system; };
           packages = import ./packaging/nix/nur.nix { inherit pkgs buildTag; };
         in packages // {
-          default = packages.gds;
+          default = packages.gds-files;
         });
 
       apps = forEachSystem (system:
-        nixpkgs.lib.genAttrs applicationNames (name: {
-          type = "app";
-          meta.description = self.packages.${system}.${name}.meta.description;
-          program = "${self.packages.${system}.${name}}/bin/${name}";
-        }));
+        let
+          appSet = nixpkgs.lib.genAttrs applicationNames (name: {
+            type = "app";
+            meta.description = self.packages.${system}.${name}.meta.description;
+            program = "${self.packages.${system}.${name}}/bin/${name}";
+          });
+        in appSet // {
+          default = appSet.gds-files;
+        });
 
       nixosModules = nixpkgs.lib.genAttrs applicationNames (name:
         import (./packaging/nix/apps + "/${nixpkgs.lib.removePrefix "gds-" name}/module.nix") self

@@ -10,9 +10,9 @@ license=(Apache-2.0)
 # Cargo controls Rust LTO. GCC LTO objects from bundled C dependencies cannot
 # be consumed by Rust's lld linker (notably SQLite).
 options=(!debug !lto)
-makedepends=(rust clang lld cmake git python pkgconf openssl wayland libxkbcommon
-             libxkbcommon-x11 fontconfig freetype2 libx11 libxcb alsa-lib dbus
-             zstd zlib libglvnd vulkan-icd-loader desktop-file-utils)
+makedepends=(rust clang lld git python pkgconf wayland libxkbcommon
+             libxkbcommon-x11 fontconfig freetype2 libxcb libglvnd
+             vulkan-icd-loader desktop-file-utils)
 source=("gds-${pkgver}.tar.gz::https://github.com/GanDesktop/gds/archive/refs/tags/v${pkgver}.tar.gz")
 sha256sums=('6f541b3839d2b162c2e748d52de58b6b8fccf2bcf12dbd9560b2be092234da6d')
 
@@ -23,7 +23,7 @@ prepare() {
 
 build() {
     cd "$srcdir/gds-$pkgver"
-    export GDS_BUILD_TAG="${GDS_BUILD_TAG:-v$pkgver}"
+    export GDS_BUILD_TAG="${GDS_BUILD_TAG:-unknown}"
     export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$srcdir/target}"
     cargo build --locked --profile "${GDS_PROFILE:-release}" --bin gds-files --features files
     cargo build --locked --profile "${GDS_PROFILE:-release}" --bin xdg-desktop-portal-gds --features portal
@@ -38,11 +38,13 @@ check() {
 
 package_gds-files() {
     pkgdesc='Native GPUI file manager with embedded terminals'
-    depends=(gcc-libs glibc openssl wayland libxkbcommon libxkbcommon-x11 fontconfig
-             freetype2 libx11 libxcb alsa-lib dbus zstd zlib libglvnd vulkan-icd-loader
-             xdg-utils xdg-terminal-exec xdg-desktop-portal shared-mime-info udisks2)
+    depends=(libgcc glibc wayland libxkbcommon libxkbcommon-x11 fontconfig
+             freetype2 libxcb libglvnd vulkan-icd-loader xdg-desktop-portal
+             shared-mime-info hicolor-icon-theme)
     optdepends=('ffmpeg: video thumbnails'
-                'vulkan-driver: GPU rendering'
+                'udisks2: removable drive management'
+                'xdg-terminal-exec: open folders in external terminal'
+                'xdg-utils: open external web links'
                 'xdg-desktop-portal-gds: use Files as the system file picker')
     conflicts=(gds-files-git gds-files-bin)
     local profile=${GDS_PROFILE:-release}
@@ -54,7 +56,7 @@ package_gds-files() {
 
 package_xdg-desktop-portal-gds() {
     pkgdesc='GDS FileChooser desktop portal backend'
-    depends=(gcc-libs glibc xdg-desktop-portal)
+    depends=(libgcc glibc xdg-desktop-portal)
     optdepends=('gds-files: native file picker interface')
     conflicts=(xdg-desktop-portal-gds-git xdg-desktop-portal-gds-bin)
     local profile=${GDS_PROFILE:-release}
