@@ -112,13 +112,13 @@ sudo nixos-rebuild switch --flake .
 
 ### 原生安装包
 
-提供 x86_64 的 Arch Linux、Debian 13 和 Fedora 43 安装包，可运行：
+提供 `x86_64` 架构的 Arch Linux、Debian 13、Ubuntu 24.04 / 26.04 LTS 和 Fedora 43 / 44 安装包（同时支持 Ubuntu 非 LTS 中间版本，以及 CachyOS、Linux Mint、Nobara 等兼容衍生版）。运行：
 
 ```sh
 curl -fsSL https://gds.gandesktop.dev/install.sh | bash
 ```
 
-也可从 [GitHub Releases](https://github.com/GanDesktop/gds/releases) 下载对应安装包，使用系统包管理器安装；升级时重新安装新版即可。需要系统文件选择器时，给脚本追加 `--with-portal`（即 `bash -s -- --with-portal`），并按 [Portal 配置说明](../../../../../docs/apps/files/fedora.md#optional-gds-portal) 启用。
+在交互终端中运行会自动检测本机已安装版本（区分全新安装、升级或重装），并支持交互式勾选是否同时安装 GDS Portal；非交互环境请追加 `-y`（例如 `bash -s -- -y --with-portal`），预览计划可使用 `--dry-run`。也可从 [GitHub Releases](https://github.com/GanDesktop/gds/releases) 下载对应安装包，按 [Portal 配置说明](../../../../../docs/apps/files/fedora.md#optional-gds-portal) 手动启用。
 
 安装后，从应用菜单打开 **GDS Files**，或运行 `gds-files`。
 

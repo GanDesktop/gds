@@ -13,12 +13,13 @@ The host needs Python 3.11+ and Docker or Podman. From the repository root:
 just deb                              # Debian 13 (trixie), dev profile
 just deb debian trixie release         # optimized Debian build
 just deb ubuntu noble                 # Ubuntu 24.04, dev profile
-just deb ubuntu noble release         # optimized Ubuntu build
+just deb ubuntu noble release         # optimized Ubuntu 24.04 build
+just deb ubuntu resolute release      # optimized Ubuntu 26.04 build
 # Without just, distro-specific defaults are selected automatically:
 python3 scripts/build-linux-package.py ubuntu --engine podman
 ```
 
-Output is under `target/deb/debian-trixie/` or `target/deb/ubuntu-noble/`.
+Output is under `target/deb/debian-trixie/`, `target/deb/ubuntu-noble/`, or `target/deb/ubuntu-resolute/`.
 Cargo and packaging caches are under `target/<distribution>-<release>/`.
 `CARGO_BUILD_JOBS` limits compilation parallelism. The current working tree,
 including uncommitted changes, is compiled against the target distribution's
@@ -32,7 +33,10 @@ the image directly. Runtime users only need the dependencies declared in the DEB
 
 Debhelper generates shared-library dependencies and user-service lifecycle
 scripts. Files and Portal remain independently installable. Local package
-versions include a timestamp so a newer build upgrades the previous version.
+versions include a timestamp (`0.<timestamp>`) so a newer build upgrades the
+previous version; release builds passed `--package-release` append
+`~<distro><version>` (for example `1~ubuntu24.04` or `1~ubuntu26.04`) so packages
+across targets remain distinct and sort cleanly.
 This is a local binary-package workflow, not a Debian source-package submission:
 Cargo downloads its locked dependencies during the build, and the container
 provides the Rust toolchain instead of using the distribution's Rust packages.

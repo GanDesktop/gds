@@ -159,24 +159,22 @@ Fedora 原生 RPM 的构建与安装见 [Fedora 打包流程](apps/files/fedora.
 
 Arch/AUR 使用 `just arch`，见 [Arch 打包流程](apps/files/arch.md)；Debian 使用 `just deb`，Ubuntu 使用 `just deb ubuntu noble`，见 [DEB 打包流程](apps/files/debian.md)。这两种流程同样分别打包 Files 和 Portal，使用目标发行版的容器构建。AUR 上架与远程 APT 仓库发布不包含在本地构建命令中。
 
-GitHub Release 发布由 [release.yml](../.github/workflows/release.yml) 自动打包：先将代码和工作流提交、推送到 GitHub，更新 `Cargo.toml` 与 `Cargo.lock` 中的项目版本，再为该提交创建对应的版本 tag（例如 `v0.0.1`），在 Releases 页面点击 **Publish release**。草稿和普通 push 不触发打包，正式版和预发布都会触发。tag 指向的提交必须包含工作流及打包脚本。
+GitHub Release 发布由 [release.yml](../.github/workflows/release.yml) 按版本 tag 自动编排：先更新 `Cargo.toml` 与 `Cargo.lock` 中的项目版本，提交推送后推送版本 tag（例如 `v0.0.3`）。流水线采用 Draft-First 模式：`prepare` 先校验 tag 与 `Cargo.toml` 版本一致、运行安装脚本单测并创建（或复用）GitHub Draft Release；随后 `build` 在 Arch、Debian 13（trixie）、Ubuntu 24.04（noble）、Ubuntu 26.04（resolute）及 Fedora 43 / 44 容器中构建 `gds-files` 与 `xdg-desktop-portal-gds`（正式 DEB 修订号附带 `~<distro><version>` 后缀），并由 `nix` job 完成 NUR 限制求值与包构建。
 
-CI 检出该 tag，分别在 Arch、Debian 13（trixie）和 Fedora 43 容器中构建 x86_64 的 Files 与独立 Portal，使用 release profile 和固定包修订号 `1`。三项全部成功后，统一上传六个安装包及 `SHA256SUMS`；构建期间 Release 页面可能尚无附件。失败可在 Actions 中修复后重试；同一 tag 的重新运行覆盖同名附件。新版本应更新项目版本并使用新 tag，避免不同源码使用同一个 DEB/RPM 版本。发布 job 使用 GitHub 自带的 `GITHUB_TOKEN` 和 `contents: write` 权限，不需要另外配置发布 token，也不需要发行版账号。
+所有原生包构建完成后，`smoke-native` 在全新最小运行时容器（无 Rust 工具链）中执行 `install.sh --yes --with-portal`、`--help`、`desktop-file-validate` 及 `--uninstall` 门禁验证；全部与 `nix` 通过后，`publish` 才通过 [generate-release-manifest.py](../scripts/generate-release-manifest.py) 生成 `MANIFEST` 与 `SHA256SUMS`、上传制品至 GitHub Draft Release 与 Cloudflare R2 静态分发域名 `pkgs.gandesktop.dev`（稳定版切换 `channels/stable` 指针并同步部署 `gds.gandesktop.dev/install.sh`），最后原子公开 GitHub Release 并由 `nur` 推进 `nur` 与 `stable` 分支。预发布 tag（含 `-`）或手动勾选项跳过稳定指针、`nur` 与 `aur`。
 
-该流程在已发布的 Release 上补充附件，因此仓库应允许修改 Release 附件；如果启用了不可变 Release，应改用先构建草稿附件、最后发布的流程。安装方法见 [Files README](../bin/files/README.md#with-a-package-manager)。Nix 继续通过现有 flake 安装；若要固定到某次发布，可用 `nix profile add github:GanDesktop/gds/v0.0.1#gds-files`（将 tag 换成实际版本）。此工作流不发布 Nix 二进制缓存、AUR 配方或 APT/RPM 软件源。
+一键安装入口为 [scripts/install.sh](../scripts/install.sh)，通过 Cloudflare Workers 静态资源托管在 `https://gds.gandesktop.dev/install.sh`，包清单与安装包主源托管在 `https://pkgs.gandesktop.dev`（Cloudflare R2 `gds-pkgs`）。对 `scripts/`、`packaging/cloudflare/` 或相关工作流的 PR 与主分支合入由 [installer.yml](../.github/workflows/installer.yml) 自动运行 ShellCheck 与单测；合入 `main` 后自动同步部署 `gds.gandesktop.dev/install.sh`。
 
-一键安装入口为 [scripts/install.sh](../scripts/install.sh)，通过 Cloudflare Workers 静态资源托管在 `https://gds.gandesktop.dev/install.sh`。部署配置位于 [packaging/cloudflare](../packaging/cloudflare/)，使用新版 `cf` CLI；只发布安装脚本及响应头配置，不运行自定义 Worker 代码。Cloudflare 提供脚本，安装包与校验文件仍从 GitHub Releases 下载。
-
-修改脚本后，从仓库根目录重新部署：
+手动部署配置位于 [packaging/cloudflare](../packaging/cloudflare/)，使用 `cf` CLI：
 
 ```sh
 npm ci --prefix packaging/cloudflare
 npm run deploy --prefix packaging/cloudflare
 ```
 
-需要事先通过 `cf auth login` 登录有权管理该域名的 Cloudflare 账号。部署命令会从 `scripts/install.sh` 复制最新脚本、构建静态资源并更新 `gds-installer`。`cloudflare.config.ts` 绑定 `gds.gandesktop.dev`；`_headers` 指定纯文本响应和 5 分钟缓存。用户运行 `curl -fsSL https://gds.gandesktop.dev/install.sh | bash`，可用 `bash -s -- --with-portal` 同时安装 Portal，或用 `bash -s -- --version v0.0.1` 选择版本。
+需要事先通过 `cf auth login`（或在 CI 中通过 `CLOUDFLARE_API_TOKEN`）授权管理 `gandesktop.dev`。`install.sh` 默认采用交互式 `/dev/tty` 确认当前属于全新安装还是升级并可勾选 `xdg-desktop-portal-gds`，同时提供 `-y`（非交互跳过）、`--with-portal`、`--without-portal`、`--distro <ID:VER>`、`--version <TAG>`、`--nix`、`--dry-run` 与 `--uninstall`。
 
-安装脚本测试：`python3 -m unittest discover -s scripts/tests -v`。测试使用本地 Release 文件和模拟的系统命令，不会安装软件或请求管理员权限。
+安装脚本与 Manifest 测试：`python3 -m unittest discover -s scripts/tests -v`。测试通过环境变量（`GDS_OS_RELEASE`、`GDS_TTY` 等）与本地 mock 工具完成隔离验证，不会修改系统包或请求管理员权限。
 
 执行 `just release` 构建整个套件，或用 `just release files` / `just release agents` / `just release portal` 单独构建。等价的套件命令是 `cargo build --release --locked --bins --features files,agents,portal`，产物位于 `target/release/`，包含 `gds-files`、`gds-agents` 和 `xdg-desktop-portal-gds`。Nix 打包默认使用同一份 release 配置；安装命令见 [NixOS 安装](nixos.md)。
 

@@ -1,25 +1,103 @@
 name: Release Linux packages
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag to build and publish (e.g. v0.0.3)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Publish as prerelease (skips stable channel, NUR, and AUR)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.release.id }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
+  prepare:
+    name: Validate tag and create draft release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Determine release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          tag=${INPUT_TAG:-$REF_NAME}
+          [[ $tag =~ ^v[0-9][a-zA-Z0-9._-]*$ ]] || { echo "Invalid release tag: $tag" >&2; exit 1; }
+          prerelease=false
+          if [[ $INPUT_PRERELEASE == true || $tag == *-* ]]; then
+            prerelease=true
+          fi
+          {
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.meta.outputs.tag }}
+          persist-credentials: false
+      - name: Verify Cargo.toml version and installer tests
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          cargo_ver=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          expected="v$cargo_ver"
+          if [[ $RELEASE_TAG != "$expected" ]]; then
+            echo "Tag $RELEASE_TAG does not match Cargo.toml version ($expected)" >&2
+            exit 1
+          fi
+          bash -n scripts/install.sh
+          shellcheck scripts/install.sh
+          python3 -m unittest discover -s scripts/tests -v
+      - name: Ensure draft GitHub Release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          IS_PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft >/tmp/rel.json 2>/dev/null; then
+            is_draft=$(python3 -c 'import json; print(json.load(open("/tmp/rel.json"))["isDraft"])')
+            if [[ $is_draft != True ]]; then
+              echo "Release $RELEASE_TAG is already published; publish a new tag instead of mutating an existing release." >&2
+              exit 1
+            fi
+            echo "Reusing existing draft release $RELEASE_TAG."
+          else
+            args=(release create "$RELEASE_TAG" --draft --generate-notes --title "GDS $RELEASE_TAG")
+            if [[ $IS_PRERELEASE == true ]]; then
+              args+=(--prerelease)
+            fi
+            gh "${args[@]}"
+          fi
+
   nix:
     name: Build NUR packages (x86_64-linux)
+    needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
           persist-credentials: false
       - uses: cachix/install-nix-action@v31
         with:
@@ -37,24 +115,25 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }} (x86_64)
+    needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        target: [arch, debian-13, fedora-43]
+        target: [arch, debian-13, ubuntu-24.04, ubuntu-26.04, fedora-43, fedora-44]
     env:
       CARGO_BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
           persist-credentials: false
       - name: Build native packages from the release tag
         env:
           TARGET: ${{ matrix.target }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           case "$TARGET" in
             arch)
@@ -63,8 +142,17 @@ jobs:
             debian-13)
               python3 scripts/build-linux-package.py debian --release trixie --engine docker --profile release --package-release 1
               ;;
+            ubuntu-24.04)
+              python3 scripts/build-linux-package.py ubuntu --release noble --engine docker --profile release --package-release 1
+              ;;
+            ubuntu-26.04)
+              python3 scripts/build-linux-package.py ubuntu --release resolute --engine docker --profile release --package-release 1
+              ;;
             fedora-43)
               python3 scripts/build-rpm.py --fedora 43 --engine docker --profile release --package-release 1
+              ;;
+            fedora-44)
+              python3 scripts/build-rpm.py --fedora 44 --engine docker --profile release --package-release 1
               ;;
           esac
       - name: Collect Files and Portal packages
@@ -75,7 +163,10 @@ jobs:
           case "$TARGET" in
             arch) cp target/arch/arch-latest/*.pkg.tar.zst dist/ ;;
             debian-13) cp target/deb/debian-trixie/*.deb dist/ ;;
+            ubuntu-24.04) cp target/deb/ubuntu-noble/*.deb dist/ ;;
+            ubuntu-26.04) cp target/deb/ubuntu-resolute/*.deb dist/ ;;
             fedora-43) cp target/rpm/fedora-43/*/*.rpm dist/ ;;
+            fedora-44) cp target/rpm/fedora-44/*/*.rpm dist/ ;;
           esac
       - uses: actions/upload-artifact@v4
         with:
@@ -93,34 +184,188 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  smoke-native:
+    name: Smoke test ${{ matrix.target }} clean container
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: arch
+            image: archlinux:latest
+            distro: arch
+          - target: debian-13
+            image: debian:trixie-slim
+            distro: debian
+          - target: ubuntu-24.04
+            image: ubuntu:24.04
+            distro: ubuntu
+          - target: ubuntu-26.04
+            image: ubuntu:26.04
+            distro: ubuntu
+          - target: fedora-43
+            image: registry.fedoraproject.org/fedora:43
+            distro: fedora
+          - target: fedora-44
+            image: registry.fedoraproject.org/fedora:44
+            distro: fedora
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages-${{ matrix.target }}
+          path: smoke-repo/releases/${{ needs.prepare.outputs.tag }}
+      - name: Generate smoke repository manifest
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          mkdir -p smoke-repo/channels
+          python3 scripts/generate-release-manifest.py \
+            --tag "$RELEASE_TAG" \
+            --dir "smoke-repo/releases/$RELEASE_TAG"
+          printf '%s\n' "$RELEASE_TAG" > smoke-repo/channels/stable
+      - name: Verify fresh install, idempotency, CLI check, and uninstall
+        env:
+          IMAGE: ${{ matrix.image }}
+          DISTRO: ${{ matrix.distro }}
+        run: |
+          docker run --rm \
+            -v "$PWD/smoke-repo:/repo:ro" \
+            -v "$PWD/scripts/install.sh:/install.sh:ro" \
+            -e GDS_ALLOW_FILE_URL=1 \
+            -e GDS_DIST_URL=file:///repo \
+            -e DISTRO="$DISTRO" \
+            "$IMAGE" \
+            bash -euo pipefail -c '
+              case "$DISTRO" in
+                debian|ubuntu)
+                  export DEBIAN_FRONTEND=noninteractive
+                  apt-get update
+                  apt-get install -y --no-install-recommends curl ca-certificates desktop-file-utils
+                  portal_bin=/usr/libexec/xdg-desktop-portal-gds
+                  ;;
+                fedora)
+                  dnf install -y curl ca-certificates desktop-file-utils
+                  portal_bin=/usr/libexec/xdg-desktop-portal-gds
+                  ;;
+                arch)
+                  pacman -Sy --noconfirm curl ca-certificates desktop-file-utils
+                  portal_bin=/usr/lib/xdg-desktop-portal-gds
+                  ;;
+              esac
+              bash /install.sh --yes --with-portal
+              gds-files --help >/dev/null
+              "$portal_bin" --help >/dev/null
+              desktop-file-validate /usr/share/applications/io.github.GanDesktop.GdsFiles.desktop
+              bash /install.sh --yes --with-portal
+              bash /install.sh --yes --uninstall
+              ! command -v gds-files >/dev/null 2>&1
+            '
+
   publish:
-    name: Upload release assets
-    needs: build
+    name: Publish release manifest, CDN assets, and atomic flip
+    needs: [prepare, build, smoke-native, nix]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: actions/download-artifact@v4
         with:
           pattern: packages-*
           path: dist
           merge-multiple: true
-      - name: Generate checksums and upload all packages
+      - name: Generate MANIFEST, SHA256SUMS, and upload to draft release
         working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          sha256sum -- *.pkg.tar.zst *.deb *.rpm > SHA256SUMS
-          gh release upload "$RELEASE_TAG" --clobber -- ./*.pkg.tar.zst ./*.deb ./*.rpm
-          # Publish the manifest after all packages are available to the installer.
-          gh release upload "$RELEASE_TAG" --clobber -- ./SHA256SUMS
+          python3 ../scripts/generate-release-manifest.py --tag "$RELEASE_TAG" --dir .
+          cp ../scripts/install.sh ./install.sh
+          gh release upload "$RELEASE_TAG" --clobber -- ./*.pkg.tar.zst ./*.deb ./*.rpm ./MANIFEST ./SHA256SUMS
+      - name: Upload immutable release assets to Cloudflare R2 and flip channel
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          DIST_BASE_URL: ${{ vars.DIST_BASE_URL }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
+            echo 'CLOUDFLARE_API_TOKEN is not set; skipping R2 and Cloudflare Worker deployment.'
+            exit 0
+          fi
+          : "${CLOUDFLARE_ACCOUNT_ID:?Set CLOUDFLARE_ACCOUNT_ID repository variable}"
+          : "${CLOUDFLARE_ZONE_ID:?Set CLOUDFLARE_ZONE_ID repository variable}"
+          bucket=${R2_BUCKET:-gds-pkgs}
+          base_url=${DIST_BASE_URL:-https://pkgs.gandesktop.dev}
+          npm ci --prefix packaging/cloudflare
+
+          for file in dist/*; do
+            name=$(basename "$file")
+            case "$name" in
+              *.pkg.tar.zst) ctype='application/zstd' ;;
+              *.deb) ctype='application/vnd.debian.binary-package' ;;
+              *.rpm) ctype='application/x-rpm' ;;
+              MANIFEST|SHA256SUMS|install.sh) ctype='text/plain; charset=utf-8' ;;
+              *) ctype='application/octet-stream' ;;
+            esac
+            npx --prefix packaging/cloudflare wrangler r2 object put \
+              "$bucket/releases/$RELEASE_TAG/$name" \
+              --file "$file" \
+              --content-type "$ctype" \
+              --cache-control 'public, max-age=31536000, immutable' \
+              --remote
+          done
+
+          curl --fail --show-error --silent --head "$base_url/releases/$RELEASE_TAG/MANIFEST" >/dev/null
+          curl --fail --show-error --silent --head "$base_url/releases/$RELEASE_TAG/SHA256SUMS" >/dev/null
+          while IFS= read -r line; do
+            [[ -n $line && $line != \#* ]] || continue
+            read -r _ _ _ _ _ _ fname _ <<< "$line"
+            curl --fail --show-error --silent --head "$base_url/releases/$RELEASE_TAG/$fname" >/dev/null
+          done < dist/MANIFEST
+
+          if [[ $IS_PRERELEASE != true ]]; then
+            printf '%s\n' "$RELEASE_TAG" > dist/stable
+            npx --prefix packaging/cloudflare wrangler r2 object put \
+              "$bucket/channels/stable" \
+              --file dist/stable \
+              --content-type 'text/plain; charset=utf-8' \
+              --cache-control 'public, max-age=60, must-revalidate' \
+              --remote
+            npx --prefix packaging/cloudflare cf -q cache purge \
+              -z "$CLOUDFLARE_ZONE_ID" \
+              -f \
+              --body "{\"files\":[\"$base_url/channels/stable\"]}"
+            npm run deploy --prefix packaging/cloudflare
+          fi
+      - name: Atomically publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
 
   aur:
     name: Publish stable recipe to AUR
-    needs: publish
-    if: ${{ !github.event.release.prerelease && vars.AUR_ENABLED == 'true' }}
+    needs: [prepare, publish]
+    if: ${{ needs.prepare.outputs.prerelease != 'true' && vars.AUR_ENABLED == 'true' }}
     runs-on: ubuntu-24.04
     concurrency:
       group: aur-gds-files
@@ -134,7 +379,7 @@ jobs:
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
           : "${AUR_SSH_PRIVATE_KEY:?Set the AUR_SSH_PRIVATE_KEY repository secret}"
@@ -160,9 +405,9 @@ jobs:
           fi
 
   nur:
-    name: Publish stable revision for NUR
-    needs: [publish, nix]
-    if: '!github.event.release.prerelease'
+    name: Publish stable revision for NUR and stable branch
+    needs: [prepare, publish, nix]
+    if: ${{ needs.prepare.outputs.prerelease != 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -172,10 +417,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
-      - name: Advance the NUR release branch
-        run: git push origin HEAD:refs/heads/nur
+      - name: Advance the stable and NUR release branches
+        run: git push origin HEAD:refs/heads/nur HEAD:refs/heads/stable
       - name: Notify NUR after registration
         if: vars.NUR_REPOSITORY != ''
         env:
