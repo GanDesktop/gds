@@ -22,8 +22,6 @@ Requires:       xdg-terminal-exec
 Requires:       xdg-desktop-portal
 Requires:       shared-mime-info
 Requires:       udisks2
-Requires:       python3-gobject
-Requires:       gtk3
 Recommends:     ffmpeg-free
 Recommends:     mesa-vulkan-drivers
 

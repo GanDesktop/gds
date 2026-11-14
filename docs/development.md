@@ -281,7 +281,7 @@ Backend reuse decisions and retained host policy are documented in [Terminal bac
 
 GUI 适配器负责把主题调色板和网格尺寸传给服务；GPUI `Keystroke` / `Modifiers` 在 UI 边界转换为服务自己的输入类型。字体、选区绘制、焦点、IME 和窗口状态留在 `ui/terminal`。TM 根作用域取消会通知终端停止，并等待 PTY 回收；`cx.gds_mut().ui().init_terminal()`（由 `cx.gds_mut().initialize` 调用）只注册终端输入上下文的 Tab 行为，其他快捷键和标签页归应用。
 
-公共界面组件仍通过 `gds::ui::sidebar`、`gds::ui::page`、`gds::ui::settings` 等显式入口使用；实现按视觉职责分组，入口不暴露组件内部文件。外观模型与视觉默认值位于 `gds::appearance::{theme, typography, tokens}`，GPUI 上下文读写统一通过 `cx.gds().appearance()` / `cx.gds_mut().appearance()`、`i18n()` 与 `ui()` 访问器完成，存储机制为 `gds::persistence`。
+公共界面组件仍通过 `gds::ui::sidebar`、`gds::ui::page`、`gds::ui::settings` 等显式入口使用；实现按视觉职责分组，入口不暴露组件内部文件。外观模型与视觉默认值位于 `gds::appearance::{theme, typography, tokens}`，GPUI 上下文读写统一通过 `cx.gds().appearance()` / `cx.gds_mut().appearance()`、`i18n()` 与 `ui()` 访问器完成，存储机制为 `gds::persistence`。暂不改动的 `gpui-fast` 与 `cosmic-text` 启动优化 backlog 归档于 [GPUI 与字体冷启动后续优化规划](development/gpui-startup-backlog.md)。
 
 ### 本应用日志
 
@@ -392,7 +392,7 @@ gds::ui::notifications::error("操作失败的原因", cx);
 - 应用配置（Files）：`$XDG_CONFIG_HOME/gds/app/files/settings.toml`，默认 `~/.config/gds/app/files/settings.toml`。设置真实变化时立即请求应用并自动保存；重复选择同值不写入，程序回写不再发起应用请求。应用失败恢复上一次有效偏好并报错；持久化失败保留已生效的运行态，明确提示“已生效但未保存”。声明式符号链接或只读目标允许读取，但不被替换。应用与保存失败通过共享右上角通知气泡反馈，不插入设置页内容，也不另设全宽保存底栏。
 - Files 状态：`$XDG_STATE_HOME/gds/files/state.sqlite`，默认 `~/.local/state/gds/files/state.sqlite`。`locations` 保存收藏、最近访问和固定位置，远程 URI 使用独立记录；`view_settings` 保存应用默认值与各位置的列布局、列宽、排序、详情栏开关和列表／网格模式。列编辑器默认只作用于当前位置；“本应用默认”在同一 Toasty 事务中更新数据库默认列并清除当前位置的列覆盖，其它视图字段保留。`settings.toml` 保存主题、字体、语言、隐藏文件、侧栏等应用偏好，列与视图状态统一由 SQLite 管理。
 - Agents 的连接历史缓存继续位于 `$XDG_CACHE_HOME/gds/agents/history-v1/history.sqlite`（默认 `~/.cache/gds/agents/history-v1/history.sqlite`）。数据库执行接入公共 `service::storage`，窗口边界、连接命名空间和 512 MiB 淘汰策略仍由 Agents 管理；缓存可删除重建，不与 Files 的持久状态共库。
-- GNOME 系统来源通过隔离的 Python/PyGObject 进程读取 GTK 3 实际解析出的主题角色，监听 dconf 与用户 GTK 配置；不维护硬编码 Adwaita 色板。详见 [主题来源](vistual-language/theme.md#gnome)。
+- GNOME 系统来源在进程内通过纯 Rust 结合 XDG Settings Portal、Adwaita 基准色板与用户 GTK 3/4 `settings.ini` / `gtk.css` 解析颜色，监听 Portal、dconf 与用户 GTK 配置；不启动 Python 或依赖 GTK 运行时库。详见 [主题来源](vistual-language/theme.md#gnome)。
 - Qt 来源沿实际 qtct 配置中的 `color_scheme_path` 读取，不硬编码某个桌面生成文件。DMS 来源读取已经生成的 `DankMaterialShell/dms-colors.json`。缺失 / 不支持 / 格式错误会报错，不把内置主题伪装成成功跟随。
 - 外部主题在启动或主题 / 明暗选择变化时读取。DMS 的跟随系统模式读取导出的活动模式；内置 / Qt 读取平台明暗偏好。`theme::Observer` 统一监听 DMS、Qt 配置及解析后的色板路径，跟随原子替换与托管符号链接；后台读取成功后才安装，失败保留最后有效主题，旧来源结果不覆盖新选择。透明度变化只更新材质，不重读色板。
 - 透明度仅影响表面；窗口允许 alpha，Root 清除不透明垫底。整条左列（顶栏左区、文件或设置侧栏、终端左区、底部留白）各区域仅绘制一次相同侧栏背景，不叠加内容底色；右侧区域独立绘制内容背景。底部左区没有分割顶线。没有启用或宣称支持 Niri 的桌面背板模糊。

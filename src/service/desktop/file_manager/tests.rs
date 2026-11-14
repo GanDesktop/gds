@@ -115,7 +115,7 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
                 )
                 .await;
             assert!(invalid.is_err());
-            server._connection.close().await.expect("release provider");
+            server.connection.close().await.expect("release provider");
             client
                 .request_name(BUS_NAME)
                 .await
@@ -144,7 +144,7 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
                 closing.to_string().contains("file manager is closing"),
                 "unexpected error: {closing}"
             );
-            other._connection.close().await.expect("close Files");
+            other.connection.close().await.expect("close Files");
             client.close().await.expect("close other provider");
         });
 }

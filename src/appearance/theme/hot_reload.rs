@@ -39,7 +39,19 @@ impl HotReload {
                 this.request(cx);
             }
         });
-        Self::watch(appearance.source_paths(), cx);
+        let mut paths = appearance.source_paths();
+        let already_applied = cx
+            .try_global::<super::CurrentApplied>()
+            .filter(|applied| applied.appearance == appearance)
+            .map(|applied| applied.source_path.clone());
+        let needs_initial_reload = match already_applied {
+            Some(source_path) => {
+                paths.extend(source_path);
+                false
+            }
+            None => true,
+        };
+        Self::watch(paths, cx);
         let mut reload = Self {
             appearance,
             generation: 0,
@@ -47,7 +59,9 @@ impl HotReload {
             error: None,
             _changes: changes,
         };
-        reload.request(cx);
+        if needs_initial_reload {
+            reload.request(cx);
+        }
         reload
     }
 

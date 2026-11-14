@@ -154,14 +154,19 @@ where
 }
 
 pub struct Server {
-    _connection: Connection,
+    connection: Connection,
     pub provider_conflict: Option<String>,
 }
 
 impl Server {
+    /// Claim the application's own single-instance bus name without yet registering `FileManager1`.
+    ///
     /// # Errors
     /// Reports another application instance or an unavailable session bus.
-    pub async fn connect(app_bus_name: &str, sender: mpsc::Sender<Command>) -> Result<Self, Error> {
+    pub async fn claim_app(
+        app_bus_name: &str,
+        sender: mpsc::Sender<Command>,
+    ) -> Result<Self, Error> {
         let connection = zbus::connection::Builder::session()?
             .serve_at(
                 OBJECT_PATH,
@@ -180,25 +185,41 @@ impl Server {
             Ok(_) | Err(zbus::Error::NameTaken) => return Err(Error::AlreadyRunning),
             Err(error) => return Err(error.into()),
         }
-        let conn = &connection;
-        let provider_conflict = resolve_provider_conflict(
+        Ok(Self {
+            connection,
+            provider_conflict: None,
+        })
+    }
+
+    /// Claim `org.freedesktop.FileManager1` on the established session bus connection.
+    ///
+    /// Returns `Ok(Some(owner))` when another provider already owns the well-known name.
+    ///
+    /// # Errors
+    /// Reports session-bus query failures while negotiating ownership.
+    pub async fn claim_file_manager(&mut self) -> Result<Option<String>, Error> {
+        let conn = &self.connection;
+        let conflict = resolve_provider_conflict(
             || conn.request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into()),
-            || {
-                let conn = conn;
-                async move {
-                    let dbus = zbus::fdo::DBusProxy::new(conn).await?;
-                    let owner = dbus
-                        .get_name_owner(BUS_NAME.try_into().expect("standard bus name"))
-                        .await?;
-                    Ok(owner.to_string())
-                }
+            || async move {
+                let dbus = zbus::fdo::DBusProxy::new(conn).await?;
+                let owner = dbus
+                    .get_name_owner(BUS_NAME.try_into().expect("standard bus name"))
+                    .await?;
+                Ok(owner.to_string())
             },
         )
         .await?;
-        Ok(Self {
-            _connection: connection,
-            provider_conflict,
-        })
+        self.provider_conflict.clone_from(&conflict);
+        Ok(conflict)
+    }
+
+    /// # Errors
+    /// Reports another application instance or an unavailable session bus.
+    pub async fn connect(app_bus_name: &str, sender: mpsc::Sender<Command>) -> Result<Self, Error> {
+        let mut server = Self::claim_app(app_bus_name, sender).await?;
+        server.claim_file_manager().await?;
+        Ok(server)
     }
 
     /// Forward to the application's own bus name without taking over another provider.

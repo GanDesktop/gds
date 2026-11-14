@@ -5,26 +5,56 @@ use crate::widgets::settings as widget;
 
 pub(in crate::pages::workspace) struct State {
     pub preferences: configuration::Preferences,
-    pub view: Entity<widget::View>,
+    pub view: Option<Entity<widget::View>>,
 }
 
 impl State {
-    pub(in crate::pages::workspace) fn new(
-        preferences: configuration::Preferences,
-        tasks: Scope,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Self {
+    pub(in crate::pages::workspace) fn new(preferences: configuration::Preferences) -> Self {
         Self {
-            view: cx.new(|cx| {
-                widget::View::new(preferences.clone(), Default::default(), tasks, window, cx)
-            }),
             preferences,
+            view: None,
         }
     }
 }
 
 impl Browser {
+    pub(in crate::pages::workspace) fn ensure_settings_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<widget::View> {
+        if let Some(view) = &self.settings.view {
+            return view.clone();
+        }
+        let preferences = self.settings.preferences.clone();
+        let presentation = self.sidebar.presentation;
+        let tasks = self.window.tasks.clone();
+        let view = cx.new(|cx| widget::View::new(preferences, presentation, tasks, window, cx));
+        self.window
+            .subscriptions
+            .push(cx.subscribe_in(&view, window, Self::on_settings_event));
+        self.settings.view = Some(view.clone());
+        view
+    }
+
+    pub(in crate::pages::workspace) fn open_settings_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.settings.view.clone() {
+            let preferences = self.settings.preferences.clone();
+            let presentation = self.sidebar.presentation;
+            view.update(cx, |view, cx| {
+                view.set_preferences(preferences, window, cx);
+                view.set_sidebar_presentation(presentation, cx);
+                view.refresh_themes(window, cx);
+            });
+            return;
+        }
+        self.ensure_settings_view(window, cx);
+    }
+
     pub(in crate::pages::workspace) fn on_settings_event(
         &mut self,
         _: &Entity<widget::View>,
@@ -65,9 +95,11 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings.view.update(cx, |view, cx| {
-            view.set_preferences(preferences.clone(), window, cx);
-        });
+        if let Some(view) = &self.settings.view {
+            view.update(cx, |view, cx| {
+                view.set_preferences(preferences.clone(), window, cx);
+            });
+        }
         if preferences == self.settings.preferences {
             return;
         }

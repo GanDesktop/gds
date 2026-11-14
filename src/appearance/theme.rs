@@ -182,6 +182,12 @@ struct Material {
 }
 impl Global for Material {}
 
+pub(super) struct CurrentApplied {
+    pub appearance: Appearance,
+    pub source_path: Option<PathBuf>,
+}
+impl Global for CurrentApplied {}
+
 /// Read the selected source and apply one fully parsed palette to GPUI Kit.
 ///
 /// Install the initial appearance after `gpui_kit::init`, before the first window.
@@ -250,6 +256,10 @@ fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result
         sidebar: palette.sidebar,
         content_opacity: appearance.content_opacity,
         sidebar_opacity: appearance.sidebar_opacity,
+    });
+    cx.set_global(CurrentApplied {
+        appearance: appearance.clone(),
+        source_path: source_path.clone(),
     });
     update_window_corners(appearance.rounded_corners, cx);
     material::Material::install(cx);
@@ -349,6 +359,15 @@ fn validate_opacity(name: &'static str, value: f32) -> Result<(), Error> {
 }
 
 impl Appearance {
+    /// Prime asynchronous desktop session state (such as the XDG Settings Portal on GNOME)
+    /// before resolving the initial theme synchronously on the UI thread.
+    pub async fn prime_session(&self) {
+        #[cfg(target_os = "linux")]
+        if self.source == Source::System && provider::system::is_gnome() {
+            super::portal::prime().await;
+        }
+    }
+
     /// Provider inputs; a prepared palette adds its resolved palette file.
     pub fn source_paths(&self) -> Vec<PathBuf> {
         self.source.source_paths()

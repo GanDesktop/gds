@@ -52,9 +52,11 @@ impl Render for Browser {
             cx,
         );
         if self.sidebar.presentation != previous_presentation {
-            self.settings.view.update(cx, |view, cx| {
-                view.set_sidebar_presentation(self.sidebar.presentation, cx)
-            });
+            if let Some(view) = &self.settings.view {
+                view.update(cx, |view, cx| {
+                    view.set_sidebar_presentation(self.sidebar.presentation, cx)
+                });
+            }
             if (self.sidebar.presentation.width() - previous_presentation.width()).abs()
                 > f32::EPSILON
             {
@@ -71,7 +73,8 @@ impl Render for Browser {
         let body = if self.pages.current() == Some(&pages::Page::Help) {
             el! { .div { flex_1; min_h_0; } [.FilesHelp::default] }.into_any_element()
         } else if !self.pages.is_empty() {
-            el! { .div { flex_1; min_h_0 } [$(self.settings.view.clone())] }.into_any_element()
+            let view = self.ensure_settings_view(window, cx);
+            el! { .div { flex_1; min_h_0 } [$(view)] }.into_any_element()
         } else {
             let opacity = motion::tab_content(self.tabs.active_id, window, cx);
             let content = self.render_content(window, cx);

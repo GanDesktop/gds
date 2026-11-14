@@ -93,8 +93,13 @@ impl Bootstrap {
 
         let storage = Storage::start(config.state_path.clone(), &tasks);
         let places = if config.mode.needs_initial_window() {
-            Some(storage.load(&tasks).await)
+            let (places, ()) = tokio::join!(
+                storage.load(&tasks),
+                config.preferences.appearance.prime_session(),
+            );
+            Some(places)
         } else {
+            config.preferences.appearance.prime_session().await;
             None
         };
         Ok(Some(PreparedIo {

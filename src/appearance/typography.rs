@@ -113,11 +113,13 @@ pub(crate) fn scaled(base_px: f32, cx: &App) -> Pixels {
 /// changed in that case.
 pub(crate) fn install(preferences: &Preferences, cx: &mut App) -> Result<Applied, Error> {
     validate_size(preferences.size)?;
-    let resolved = ResolvedFamily::resolve(
-        preferences.family.as_deref(),
-        &installed_families(cx),
-        system_family,
-    );
+    let installed = if preferences.family.is_some() {
+        installed_families(cx)
+    } else {
+        Vec::new()
+    };
+    let resolved =
+        ResolvedFamily::resolve(preferences.family.as_deref(), &installed, system_family);
     apply(&resolved.family, preferences.size, cx);
     cx.set_global(Current {
         family: resolved.family.clone(),
@@ -181,21 +183,41 @@ impl ResolvedFamily {
 }
 
 #[cfg(target_os = "linux")]
+struct SystemFamilies {
+    sans_serif: SharedString,
+    monospace: SharedString,
+}
+
+#[cfg(target_os = "linux")]
 pub(super) fn system_family() -> SharedString {
-    system_alias("sans-serif", SYSTEM_FAMILY)
+    system_families().sans_serif.clone()
 }
 
 #[cfg(target_os = "linux")]
 pub(super) fn system_mono_family() -> SharedString {
-    system_alias("monospace", ".ZedMono")
+    system_families().monospace.clone()
 }
 
 #[cfg(target_os = "linux")]
-fn system_alias(alias: &str, fallback: &str) -> SharedString {
-    use font_kit::source::SystemSource;
+fn system_families() -> &'static SystemFamilies {
+    static FAMILIES: std::sync::OnceLock<SystemFamilies> = std::sync::OnceLock::new();
+    FAMILIES.get_or_init(|| {
+        let source = font_kit::source::SystemSource::new();
+        SystemFamilies {
+            sans_serif: resolve_system_alias(&source, "sans-serif", SYSTEM_FAMILY),
+            monospace: resolve_system_alias(&source, "monospace", ".ZedMono"),
+        }
+    })
+}
 
+#[cfg(target_os = "linux")]
+fn resolve_system_alias(
+    source: &font_kit::source::SystemSource,
+    alias: &str,
+    fallback: &str,
+) -> SharedString {
     // Resolve Fontconfig aliases to real families before Kit probes its defaults.
-    let family = match SystemSource::new().select_family_by_name(alias) {
+    let family = match source.select_family_by_name(alias) {
         Ok(family) => family,
         Err(error) => {
             tracing::warn!(alias, %error, "cannot resolve the Fontconfig font; using GPUI fallback");

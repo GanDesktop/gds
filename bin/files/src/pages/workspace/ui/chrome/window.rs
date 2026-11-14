@@ -56,7 +56,6 @@ impl Browser {
             cx.subscribe(&self.terminal.split, Self::on_terminal_split),
             cx.subscribe_in(&self.toolbar.path.input, window, Self::on_path_input),
             cx.subscribe_in(&self.toolbar.filter.input, window, Self::on_filter_input),
-            cx.subscribe_in(&self.settings.view, window, Self::on_settings_event),
             cx.observe(&self.devices.service, Self::on_storage_changed),
             cx.observe(&self.sidebar.split, |_, _, cx| cx.notify()),
             cx.subscribe(&self.sidebar.split, Self::on_sidebar_split),

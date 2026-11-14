@@ -40,7 +40,7 @@ package_gds-files() {
     pkgdesc='Native GPUI file manager with embedded terminals'
     depends=(gcc-libs glibc openssl wayland libxkbcommon libxkbcommon-x11 fontconfig
              freetype2 libx11 libxcb alsa-lib dbus zstd zlib libglvnd vulkan-icd-loader
-             xdg-utils xdg-terminal-exec xdg-desktop-portal shared-mime-info udisks2 python-gobject gtk3)
+             xdg-utils xdg-terminal-exec xdg-desktop-portal shared-mime-info udisks2)
     optdepends=('ffmpeg: video thumbnails'
                 'vulkan-driver: GPU rendering'
                 'xdg-desktop-portal-gds: use Files as the system file picker')

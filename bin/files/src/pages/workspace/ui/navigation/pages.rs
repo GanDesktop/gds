@@ -22,12 +22,7 @@ impl Browser {
             return;
         }
         if page == Page::Settings {
-            let preferences = self.settings.preferences.clone();
-            let presentation = self.sidebar.presentation;
-            self.settings.view.update(cx, |view, cx| {
-                view.set_preferences(preferences, window, cx);
-                view.set_sidebar_presentation(presentation, cx);
-            });
+            self.open_settings_view(window, cx);
         }
         self.pages.push(Entry {
             content: page,

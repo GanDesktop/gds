@@ -913,7 +913,7 @@ impl Browser {
         }
         notifications::bind_window(window, cx);
         let host = window::State::new(tasks.clone(), window, cx);
-        let settings = settings::State::new(preferences, tasks.clone(), window, cx);
+        let settings = settings::State::new(preferences);
         let mut this = Self {
             locations: locations::State::new(home, places),
             tabs: tabs::State::default(),
@@ -1986,10 +1986,6 @@ impl Browser {
                 // reachable until a settings control takes focus.
                 self.show_page(pages::Page::Settings, window, cx);
                 self.toolbar.finish_path_edit();
-                self.settings.view.update(cx, |view, cx| {
-                    view.set_preferences(self.settings.preferences.clone(), window, cx);
-                    view.refresh_themes(window, cx);
-                });
             }
             Command::NewFolder => {
                 if let Some(path) = self.current_path() {
@@ -2019,9 +2015,9 @@ impl Browser {
             Command::NextTab | Command::PreviousTab => {
                 let backwards = matches!(command, Command::PreviousTab);
                 if self.pages.current() == Some(&pages::Page::Settings) {
-                    self.settings
-                        .view
-                        .update(cx, |view, cx| view.cycle_page(backwards, window, cx));
+                    if let Some(view) = &self.settings.view {
+                        view.update(cx, |view, cx| view.cycle_page(backwards, window, cx));
+                    }
                 } else {
                     self.cycle_tab(backwards, window, cx);
                 }

@@ -3,8 +3,6 @@
 use gpui_kit::base::{Root, RootPlugin};
 use gpui_kit::{App, Context, Empty, Global, IntoElement, Render, Window};
 
-#[cfg(target_os = "linux")]
-mod portal;
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
 
@@ -61,12 +59,12 @@ pub(crate) fn follow_system(tasks: &crate::service::task_manager::Scope, cx: &mu
     }
     cx.global_mut::<Policy>().following = true;
     #[cfg(target_os = "linux")]
-    portal::follow(tasks, cx);
+    super::portal::follow(tasks, cx);
     #[cfg(not(target_os = "linux"))]
     let _ = tasks;
 }
 
-fn system_changed(reduced: bool, cx: &mut App) {
+pub(super) fn system_changed(reduced: bool, cx: &mut App) {
     cx.global_mut::<Policy>().system_reduced = reduced;
     apply(cx);
 }

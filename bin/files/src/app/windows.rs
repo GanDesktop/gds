@@ -71,6 +71,20 @@ impl Host {
         self.0
             .update(cx, |windows, cx| windows.desktop_command(command, cx));
     }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn report_notice(&self, message: String, cx: &mut App) {
+        if cx
+            .active_window()
+            .or_else(|| cx.windows().first().copied())
+            .is_some()
+        {
+            gds::ui::notifications::error(message, cx);
+        } else {
+            self.0
+                .update(cx, |windows, _| windows.notices.push(message));
+        }
+    }
 }
 
 struct Windows {
