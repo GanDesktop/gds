@@ -14,15 +14,6 @@ just release agents
 
 The equivalent Cargo entry is `cargo run --features agents --bin gds-agents -- ...`. The default is the full workspace; `--compact` opens the input popup. `--cwd` sets the working directory for new sessions. `--server` or `BAS_SERVER` overrides the saved connection. Connection configuration supports local IPC, Unix sockets, Windows pipes, TCP and TLS.
 
-Nix provides `gds-agents` as a package and application:
-
-```sh
-nix build .#gds-agents
-nix run .#gds-agents
-```
-
-The `gds.nixosModules.gds-agents` and `gds.homeManagerModules.gds-agents` modules install the frontend through `programs.gds-agents.enable` at the system or user level. Neither module starts or configures Bas. See [Nix and Home Manager installation](../../nixos.md).
-
 ## Workspace and settings
 
 Session management, Agent installation, About and settings appear inside the main window. The top-left arrow returns one level at a time; session management, Agent installation and About also accept Esc, Alt+Left and Ctrl+W (Cmd+W on macOS). Opening these views preserves the workspace, unsent drafts and backend sessions. Restoring a historical session returns to its connection's workspace.

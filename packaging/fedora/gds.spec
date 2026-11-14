@@ -17,13 +17,13 @@ Requires:       libxkbcommon
 Requires:       fontconfig
 Requires:       mesa-libEGL
 Requires:       vulkan-loader
-Requires:       xdg-utils
-Requires:       xdg-terminal-exec
 Requires:       xdg-desktop-portal
 Requires:       shared-mime-info
-Requires:       udisks2
-Recommends:     ffmpeg-free
-Recommends:     mesa-vulkan-drivers
+Suggests:       ffmpeg-free
+Suggests:       udisks2
+Suggests:       xdg-terminal-exec
+Suggests:       xdg-utils
+Suggests:       xdg-desktop-portal-gds
 
 %description
 GDS Files browses local folders, mounted volumes and SFTP/SMB locations,
@@ -32,6 +32,7 @@ with file operations, previews and embedded terminals.
 %package -n xdg-desktop-portal-gds
 Summary:        GDS desktop portal backend
 Requires:       xdg-desktop-portal
+Suggests:       gds-files
 %{?systemd_requires}
 
 %description -n xdg-desktop-portal-gds

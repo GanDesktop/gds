@@ -7,9 +7,9 @@ develop := "nix develop --impure --expr 'import ./shell.nix'"
 default:
     @just --list
 
-# 打开测试虚拟机桌面，或执行 start / stop / ssh / copy。
-vm machine action="open" *args:
-    @python3 scripts/vm.py "$@"
+# 打开测试虚拟机桌面，或执行 status / start / stop / reset / ssh / copy（machine 可传 all）。
+vm machine="all" *args:
+    @just _python scripts/vm.py "$@"
 
 # 编译并启动指定目标，可继续传应用参数。
 dev app *args:
@@ -29,19 +29,19 @@ release app="all":
 
 # 在宿主机的 Fedora 容器中增量构建 Files 和可选 Portal 的原生 RPM。
 rpm fedora="43" profile="dev":
-    @python3 scripts/build-rpm.py --fedora "$1" --profile "$2"
+    @just _python scripts/build-rpm.py --fedora "$1" --profile "$2"
 
 # 在 Arch 容器中构建 Files 和独立 Portal 的 pacman 包。
 arch profile="dev":
-    @python3 scripts/build-linux-package.py arch --profile "$1"
+    @just _python scripts/build-linux-package.py arch --profile "$1"
 
 # 在 Debian/Ubuntu 容器中构建可通过 APT 安装的原生 DEB。
 deb distro="debian" release="" profile="dev":
-    @python3 scripts/build-linux-package.py "$1" --release "$2" --profile "$3"
+    @just _python scripts/build-linux-package.py "$1" --release "$2" --profile "$3"
 
-# 安装整个套件，或指定 files / agents 到当前用户的 Nix profile。
-install app="all":
-    nix profile add {{ if app == "all" { ".#gds" } else if app == "files" { ".#gds-files" } else if app == "agents" { ".#gds-agents" } else { error("未知应用：" + app + "；可选 all、files、agents") } }}
+# 安装 Files（或指定 portal）到当前用户的 Nix profile。
+install app="files":
+    nix profile add {{ if app == "files" { ".#gds-files" } else if app == "portal" { ".#xdg-desktop-portal-gds" } else { error("未知组件：" + app + "；可选 files、portal") } }}
 
 # 使用 target/debug 缓存构建，并安装本机开发版入口。
 install-dev app="all":
@@ -108,3 +108,12 @@ _cargo command app *args:
         targets+=(--)
     fi
     {{ develop }} --command cargo "$command" "${targets[@]}" "$@"
+
+[private]
+_python *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v python3 >/dev/null 2>&1; then
+        exec python3 "$@"
+    fi
+    exec {{ develop }} --command python3 "$@"
