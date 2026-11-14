@@ -6,7 +6,8 @@ mod video;
 use super::{Error, Kind, Source};
 
 pub const EDGE: u32 = 512;
-const MAX_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
+#[cfg(test)]
+const MAX_SOURCE_BYTES: u64 = super::DEFAULT_MAX_THUMBNAIL_SOURCE_MIB * 1024 * 1024;
 
 /// A decoded 8-bit RGBA thumbnail image ready for UI rendering and desktop caching.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,25 +49,29 @@ impl Source {
 
     #[cfg(test)]
     pub(super) fn generate(&self) -> Result<::image::RgbaImage, Error> {
-        self.generate_cancellable(&tokio_util::sync::CancellationToken::new())
+        self.generate_cancellable_with_options(
+            super::Options::default(),
+            &tokio_util::sync::CancellationToken::new(),
+        )
     }
 
-    pub(super) fn generate_cancellable(
+    pub(super) fn generate_cancellable_with_options(
         &self,
+        options: super::Options,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<::image::RgbaImage, Error> {
         if cancel.is_cancelled() {
             return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
         }
         match self.kind {
-            Kind::Image => image::load(&self.path),
-            Kind::Video => video::load(&self.path, cancel),
+            Kind::Image => image::load(&self.path, options.max_thumbnail_source_bytes),
+            Kind::Video => video::load(&self.path, options.video_thumbnail_timeout, cancel),
             Kind::Audio => {
                 let bytes = super::audio::cover(&self.path)?.ok_or(Error::NoCover)?;
                 if cancel.is_cancelled() {
                     return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
                 }
-                image::load_bytes(&bytes, None)
+                image::load_bytes(&bytes, None, options.max_thumbnail_source_bytes)
             }
             _ => Err(Error::NoCover),
         }
@@ -84,9 +89,12 @@ pub(super) fn load_with(
 
 /// # Errors
 /// Reports absent artwork and image decoding failures.
-pub(super) fn cover(file: &lofty::file::TaggedFile) -> Result<::image::RgbaImage, Error> {
+pub(super) fn cover(
+    file: &lofty::file::TaggedFile,
+    max_source_bytes: u64,
+) -> Result<::image::RgbaImage, Error> {
     let picture = super::audio::picture(file).ok_or(Error::NoCover)?;
-    image::load_bytes(picture.data(), None)
+    image::load_bytes(picture.data(), None, max_source_bytes)
 }
 
 #[cfg(test)]

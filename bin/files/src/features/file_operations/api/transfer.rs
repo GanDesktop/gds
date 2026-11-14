@@ -107,12 +107,15 @@ impl Error {
     }
 }
 
+pub const DEFAULT_COPY_BUFFER_SIZE: usize = 64 * 1024;
+
 #[derive(Clone, Debug)]
 pub struct Batch {
     request: Request,
     /// Explicit target leaves; sources absent here keep their original name.
     names: Vec<NamedTarget>,
     cancel: tokio_util::sync::CancellationToken,
+    buffer_size: usize,
 }
 
 impl Batch {
@@ -142,7 +145,13 @@ impl Batch {
             cancel: tokio_util::sync::CancellationToken::new(),
             request,
             names: Vec::new(),
+            buffer_size: DEFAULT_COPY_BUFFER_SIZE,
         })
+    }
+
+    pub fn with_buffer_size(mut self, bytes: usize) -> Self {
+        self.buffer_size = bytes.max(4096);
+        self
     }
 
     /// Freeze the same request with explicit target leaves for some sources.
@@ -206,6 +215,7 @@ impl Batch {
                 request,
                 names,
                 cancel,
+                buffer_size: _,
             } = self;
             let mode = request.mode;
             let items = request
@@ -234,6 +244,7 @@ impl Batch {
             request,
             names,
             cancel,
+            buffer_size,
         } = self;
         let mode = request.mode;
         let items = request
@@ -253,7 +264,7 @@ impl Batch {
                 item.result = if cancel.is_cancelled() {
                     Err(Error::Cancelled)
                 } else {
-                    item.transfer(mode, &cancel)
+                    item.transfer(mode, buffer_size, &cancel)
                 };
                 item
             })
@@ -414,6 +425,7 @@ impl Item {
     fn transfer(
         &mut self,
         mode: Mode,
+        buffer_size: usize,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<(), Error> {
         let prepared = Prepared::new(self)?;
@@ -438,6 +450,7 @@ impl Item {
             source: prepared.source.clone(),
             destination: stage.payload(),
             cancel: cancel.clone(),
+            buffer_size,
         };
         let mut copied = None;
         let result = node.copy_root().and_then(|manifest| {
@@ -473,6 +486,7 @@ struct Node {
     cancel: tokio_util::sync::CancellationToken,
     source: PathBuf,
     destination: PathBuf,
+    buffer_size: usize,
 }
 
 #[cfg(target_os = "linux")]
@@ -549,8 +563,7 @@ impl Node {
             .open(&self.destination)
             .map_err(|error| Error::filesystem("create staged file", &self.destination, error))?;
         use std::io::{Read, Write};
-        const COPY_BUFFER_SIZE: usize = 64 * 1024;
-        let mut buffer = vec![0; COPY_BUFFER_SIZE];
+        let mut buffer = vec![0; self.buffer_size.max(4096)];
         loop {
             if self.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
@@ -613,6 +626,7 @@ impl Node {
                 cancel: self.cancel.clone(),
                 source: self.source.join(name),
                 destination: self.destination.join(name),
+                buffer_size: self.buffer_size,
             }
             .copy_at(&source, name)?;
             children.push(CopiedChild {

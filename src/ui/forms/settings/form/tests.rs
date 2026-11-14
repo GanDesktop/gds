@@ -622,3 +622,55 @@ fn number_validation_checks_exact_integer_bounds_and_localizes_errors(cx: &mut T
         }
     });
 }
+
+#[gpui_kit::test]
+fn disabled_editor_blocks_edits_and_resets_until_enabled(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        let mut modified = Preferences::default();
+        modified.enabled = true;
+        modified.count = 4;
+        fixture.editor.update(cx, |editor, cx| {
+            editor.set_value(modified, window, cx);
+            editor.set_disabled(true, cx);
+        });
+        assert!(fixture.editor.read(cx).is_disabled());
+        window.render_frame(cx);
+    })
+    .expect("initialize disabled editor");
+    let before = fixture.changes.borrow().len();
+
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.click("config-field-count", cx);
+        window.press("right", cx);
+        window.click("config-reset-count", cx);
+        window.render_frame(cx);
+        assert_eq!(fixture.editor.read(cx).value().count, 4);
+        assert!(fixture.editor.read(cx).value().enabled);
+    })
+    .expect("disabled editor ignores edits and resets");
+    assert_eq!(fixture.changes.borrow().len(), before);
+
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture
+            .editor
+            .update(cx, |editor, cx| editor.set_disabled(false, cx));
+        assert!(!fixture.editor.read(cx).is_disabled());
+        window.render_frame(cx);
+
+        window.click("config-reset-count", cx);
+        window.render_frame(cx);
+        assert_eq!(fixture.editor.read(cx).value().count, 2);
+    })
+    .expect("enabled editor allows reset");
+    assert_eq!(
+        fixture
+            .changes
+            .borrow()
+            .iter()
+            .skip(before)
+            .map(|change| change.field)
+            .collect::<Vec<_>>(),
+        ["count"]
+    );
+}

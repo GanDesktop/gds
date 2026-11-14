@@ -139,6 +139,12 @@ impl<C: Deref<Target = App>> Accessor<C> {
         self.service().read(&self.cx).current.clone()
     }
 
+    pub(crate) fn try_current(&self) -> Option<Preferences> {
+        self.cx
+            .try_global::<Installed>()
+            .map(|installed| installed.0.read(&self.cx).current.clone())
+    }
+
     pub(crate) fn service(&self) -> Entity<Service> {
         self.cx.global::<Installed>().0.clone()
     }

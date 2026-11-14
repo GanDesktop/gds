@@ -272,7 +272,15 @@ impl Browser {
             return;
         }
         let count = paste.job.pending.len();
-        let batch = match paste.job.prepare_batch() {
+        let batch = match paste.job.prepare_batch().map(|batch| {
+            batch.with_buffer_size(
+                self.settings
+                    .preferences
+                    .files
+                    .transfer
+                    .local_buffer_bytes(),
+            )
+        }) {
             Ok(batch) => batch,
             Err(error) => {
                 self.abort_paste(paste, error.to_string(), window, cx);

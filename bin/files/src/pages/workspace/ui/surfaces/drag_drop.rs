@@ -593,7 +593,15 @@ impl Browser {
             destination,
             mode,
         };
-        let batch = match transfer::Batch::new(request) {
+        let batch = match transfer::Batch::new(request).map(|batch| {
+            batch.with_buffer_size(
+                self.settings
+                    .preferences
+                    .files
+                    .transfer
+                    .local_buffer_bytes(),
+            )
+        }) {
             Ok(batch) => batch,
             Err(error) => {
                 self.finish_background(

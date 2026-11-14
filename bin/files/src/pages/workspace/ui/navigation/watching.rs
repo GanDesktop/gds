@@ -4,8 +4,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 
-const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
-
 struct WatchTarget {
     revision: u64,
     snapshot: Arc<directory::DirectorySnapshot>,
@@ -26,7 +24,7 @@ enum WatchEvent {
 }
 
 pub(in crate::pages::workspace) struct Watch {
-    path: PathBuf,
+    pub(in crate::pages::workspace) path: PathBuf,
     cancel: CancellationToken,
     _events: Task<()>,
 }
@@ -52,13 +50,16 @@ impl Browser {
         }
         slot.set_watch(None);
         let Some(path) = path else { return };
-        let mut watcher = match directory::Watching::new(path) {
-            Ok(watcher) => watcher,
-            Err(error) => {
-                tracing::warn!(%error, path = %path.display(), "cannot watch directory");
-                return;
-            }
-        };
+        let watching_prefs = self.settings.preferences.files.watching;
+        let debounce = watching_prefs.debounce();
+        let mut watcher =
+            match directory::Watching::with_limit(path, watching_prefs.incremental_limit) {
+                Ok(watcher) => watcher,
+                Err(error) => {
+                    tracing::warn!(%error, path = %path.display(), "cannot watch directory");
+                    return;
+                }
+            };
         let tasks = self.window.tasks.clone();
         let worker_tasks = tasks.clone();
         let cancel = tasks.token().child_token();
@@ -67,7 +68,7 @@ impl Browser {
         let watcher_task = tasks
             .spawn_cancellable_named("Watch directory", async move {
                 while watcher.changed().await {
-                    tokio::time::sleep(DEBOUNCE).await;
+                    tokio::time::sleep(debounce).await;
                     if worker_cancel.is_cancelled() {
                         return;
                     }
@@ -79,7 +80,7 @@ impl Browser {
                             return;
                         }
                         match reply_rx.await {
-                            Ok(WatchState::Loading) => tokio::time::sleep(DEBOUNCE).await,
+                            Ok(WatchState::Loading) => tokio::time::sleep(debounce).await,
                             Ok(WatchState::Ready(target)) => break target,
                             Ok(WatchState::Closed) | Err(_) => return,
                         }

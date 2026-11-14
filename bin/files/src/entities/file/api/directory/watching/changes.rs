@@ -7,15 +7,32 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-const MAX_PATHS: usize = 256;
+pub const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 150;
+pub const DEFAULT_WATCH_INCREMENTAL_LIMIT: usize = 256;
+#[cfg(all(test, target_os = "linux"))]
+const MAX_PATHS: usize = DEFAULT_WATCH_INCREMENTAL_LIMIT;
 
-#[derive(Default)]
 pub(crate) struct Changes {
     paths: HashSet<PathBuf>,
     full: bool,
+    pub(super) max_paths: usize,
+}
+
+impl Default for Changes {
+    fn default() -> Self {
+        Self::with_limit(DEFAULT_WATCH_INCREMENTAL_LIMIT)
+    }
 }
 
 impl Changes {
+    pub(crate) fn with_limit(max_paths: usize) -> Self {
+        Self {
+            paths: HashSet::new(),
+            full: false,
+            max_paths: max_paths.max(1),
+        }
+    }
+
     pub fn rescan(&mut self) {
         self.full = true;
         self.paths.clear();
@@ -32,7 +49,7 @@ impl Changes {
             return;
         }
         self.paths.extend(event.paths);
-        if self.paths.len() > MAX_PATHS {
+        if self.paths.len() > self.max_paths {
             self.rescan();
         }
     }

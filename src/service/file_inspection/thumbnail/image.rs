@@ -7,30 +7,36 @@ use std::{
 
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage};
 
-use super::{EDGE, Error, MAX_SOURCE_BYTES};
+use super::{EDGE, Error};
 
 const MAX_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 const SVG_PREFIX_BYTES: usize = 4 * 1024;
 
 /// # Errors
 /// Reports unreadable, unsupported or oversized images.
-pub(super) fn load(path: &Path) -> Result<RgbaImage, Error> {
+pub(super) fn load(path: &Path, max_source_bytes: u64) -> Result<RgbaImage, Error> {
+    let max_source_bytes = max_source_bytes.max(1);
     let file = File::open(path)?;
-    if file.metadata()?.len() > MAX_SOURCE_BYTES {
+    if file.metadata()?.len() > max_source_bytes {
         return Err(Error::TooLarge);
     }
     let mut bytes = Vec::new();
-    file.take(MAX_SOURCE_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_SOURCE_BYTES {
+    file.take(max_source_bytes + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_source_bytes {
         return Err(Error::TooLarge);
     }
-    load_bytes(&bytes, Some(path))
+    load_bytes(&bytes, Some(path), max_source_bytes)
 }
 
 /// # Errors
 /// Reports unsupported, malformed or oversized embedded images.
-pub(super) fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<RgbaImage, Error> {
-    if bytes.len() as u64 > MAX_SOURCE_BYTES {
+pub(super) fn load_bytes(
+    bytes: &[u8],
+    path: Option<&Path>,
+    max_source_bytes: u64,
+) -> Result<RgbaImage, Error> {
+    let max_source_bytes = max_source_bytes.max(1);
+    if bytes.len() as u64 > max_source_bytes {
         return Err(Error::TooLarge);
     }
     if is_svg(bytes) {

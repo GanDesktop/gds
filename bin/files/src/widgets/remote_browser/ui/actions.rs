@@ -1,4 +1,5 @@
 use super::*;
+use crate::entities::preferences::PreferencesExt as _;
 use crate::shared::lib::clipboard;
 use crate::shared::lib::clipboard::ClipboardExt as _;
 use gds::app::AppExt as _;
@@ -284,12 +285,20 @@ impl View {
         if self.busy() || sources.is_empty() {
             return;
         }
+        let buffer_size = cx
+            .gds()
+            .preferences()
+            .try_current()
+            .map_or(operations::DEFAULT_BUFFER_SIZE, |preferences| {
+                preferences.files.transfer.remote_buffer_bytes()
+            });
         let cancel = self.tasks.token().child_token();
         let (sender, receiver) = watch::channel(Default::default());
         let work = operations::copy(
             (*self.tasks).clone(),
             sources,
             target,
+            operations::CopyOptions { buffer_size },
             cancel.clone(),
             sender,
         );

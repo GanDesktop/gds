@@ -74,9 +74,14 @@ impl Browser {
         let language_changed = preferences.language != self.settings.preferences.language;
         let hidden_changed =
             preferences.files.show_hidden != self.settings.preferences.files.show_hidden;
+        let child_limit_changed = preferences.files.enrichment.child_count_limit
+            != self.settings.preferences.files.enrichment.child_count_limit;
         let enrichment_changed = preferences.files.probe_budget
             != self.settings.preferences.files.probe_budget
             || preferences.files.enrichment != self.settings.preferences.files.enrichment;
+        let preview_changed = preferences.files.preview != self.settings.preferences.files.preview;
+        let watching_changed =
+            preferences.files.watching != self.settings.preferences.files.watching;
         let tags_changed = preferences.tags != self.settings.preferences.tags;
         let roots_changed = preferences.files.volume_mount_points
             != self.settings.preferences.files.volume_mount_points;
@@ -96,12 +101,32 @@ impl Browser {
             // the native window title are not read during render, so push them.
             self.sync_localized_fields(window, cx);
         }
-        if hidden_changed {
+        if preview_changed {
+            let options = preferences.files.preview.cache_options();
+            self.files
+                .inspections
+                .update(cx, |cache, cx| cache.set_options(options, cx));
+        }
+        if hidden_changed || child_limit_changed {
             self.refresh_current(cx);
         } else if enrichment_changed {
             let tabs: Vec<_> = self.tabs.items.iter().map(|tab| tab.id).collect();
             for tab in tabs {
                 self.schedule_enrichment(tab, cx);
+            }
+        }
+        if watching_changed {
+            let watched: Vec<_> = self
+                .tabs
+                .items
+                .iter()
+                .filter_map(|tab| tab.watch().map(|watch| (tab.id, watch.path.clone())))
+                .collect();
+            for (id, path) in watched {
+                if let Some(slot) = self.tab_slot_mut(id) {
+                    slot.set_watch(None);
+                }
+                self.watch_directory(id, Some(&path), cx);
             }
         }
         if roots_changed {

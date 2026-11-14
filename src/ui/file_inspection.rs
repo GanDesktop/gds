@@ -9,9 +9,29 @@ use std::{
     sync::Arc,
 };
 
-const CAPACITY: usize = 256;
-const BYTE_BUDGET: usize = 128 * 1024 * 1024;
-const WORKERS: usize = 2;
+pub const DEFAULT_CACHE_ENTRIES: usize = 256;
+pub const DEFAULT_CACHE_MIB: usize = 128;
+pub const DEFAULT_WORKERS: usize = 2;
+
+/// Configurable cache bounds and worker options for [`Cache`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Options {
+    pub capacity: usize,
+    pub byte_budget: usize,
+    pub workers: usize,
+    pub inspection: crate::service::file_inspection::Options,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            capacity: DEFAULT_CACHE_ENTRIES,
+            byte_budget: DEFAULT_CACHE_MIB * 1024 * 1024,
+            workers: DEFAULT_WORKERS,
+            inspection: crate::service::file_inspection::Options::default(),
+        }
+    }
+}
 
 pub enum State<T> {
     NotRequested,
@@ -105,9 +125,27 @@ pub struct Cache {
     running: usize,
     clock: u64,
     bytes: usize,
+    options: Options,
 }
 
 impl Cache {
+    pub fn new(options: Options) -> Self {
+        Self {
+            options,
+            ..Self::default()
+        }
+    }
+
+    pub fn set_options(&mut self, options: Options, cx: &mut Context<Self>) {
+        if self.options == options {
+            return;
+        }
+        self.options = options;
+        self.trim(cx);
+        self.pump(cx);
+        cx.notify();
+    }
+
     pub fn get(&self, source: &Source) -> Option<Snapshot> {
         self.entries.get(source).map(|entry| entry.snapshot.clone())
     }
@@ -153,7 +191,9 @@ impl Cache {
     }
 
     fn trim(&mut self, cx: &mut App) {
-        while self.entries.len() > CAPACITY || self.bytes > BYTE_BUDGET {
+        let capacity = self.options.capacity.max(1);
+        let byte_budget = self.options.byte_budget.max(1);
+        while self.entries.len() > capacity || self.bytes > byte_budget {
             let Some(key) = self
                 .entries
                 .iter()
@@ -191,7 +231,9 @@ impl Cache {
     }
 
     fn pump(&mut self, cx: &mut Context<Self>) {
-        while self.running < WORKERS {
+        let workers = self.options.workers.max(1);
+        let inspection = self.options.inspection;
+        while self.running < workers {
             let Some(source) = self.next_pending() else {
                 break;
             };
@@ -213,7 +255,9 @@ impl Cache {
                 String::new()
             };
             let work = async move {
-                Snapshot::from_inspection(work_source.load_cancellable(request, &cancel))
+                Snapshot::from_inspection(
+                    work_source.load_cancellable_with_options(request, inspection, &cancel),
+                )
             };
             let Ok(work) = scope.track_named(
                 &label,

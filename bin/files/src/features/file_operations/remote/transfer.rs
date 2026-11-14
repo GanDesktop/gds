@@ -12,8 +12,21 @@ use std::{
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-const BUFFER_SIZE: usize = 128 * 1024;
+pub(crate) const DEFAULT_BUFFER_SIZE: usize = 128 * 1024;
 const STAGING_ATTEMPTS: usize = 64;
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CopyOptions {
+    pub buffer_size: usize,
+}
+
+impl Default for CopyOptions {
+    fn default() -> Self {
+        Self {
+            buffer_size: DEFAULT_BUFFER_SIZE,
+        }
+    }
+}
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -51,6 +64,7 @@ pub(crate) async fn copy(
     tasks: gds::service::task_manager::Scope,
     sources: Vec<Resource>,
     destination: Resource,
+    options: CopyOptions,
     cancel: CancellationToken,
     updates: watch::Sender<Progress>,
 ) -> Report {
@@ -59,7 +73,7 @@ pub(crate) async fn copy(
         cancel,
         updates,
         progress: Progress::default(),
-        buffer: vec![0; BUFFER_SIZE],
+        buffer: vec![0; options.buffer_size.max(4096)],
     };
     let mut report = Report::default();
     for source in sources {

@@ -2,7 +2,7 @@
 mod resource;
 mod transfer;
 pub(crate) use resource::Resource;
-pub(crate) use transfer::{Progress, Report, copy, delete};
+pub(crate) use transfer::{CopyOptions, DEFAULT_BUFFER_SIZE, Progress, Report, copy, delete};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {

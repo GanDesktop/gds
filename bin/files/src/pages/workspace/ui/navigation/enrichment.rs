@@ -74,6 +74,7 @@ struct EnrichQueue {
     /// Paths already popped by [`Self::pop_batch`] and handed to worker tasks.
     dispatched: HashSet<PathBuf>,
     priority_limit: usize,
+    batch_size: usize,
 }
 
 impl Default for EnrichQueue {
@@ -83,6 +84,7 @@ impl Default for EnrichQueue {
             backlog: VecDeque::new(),
             dispatched: HashSet::new(),
             priority_limit: directory::DEFAULT_PRIORITY_LIMIT,
+            batch_size: directory::DEFAULT_BATCH_SIZE,
         }
     }
 }
@@ -93,10 +95,13 @@ impl EnrichQueue {
         priority_paths: &[PathBuf],
         need: EnrichmentNeed,
         priority_limit: usize,
+        batch_size: usize,
     ) -> Self {
+        let batch_size = batch_size.max(1);
         if need.is_empty() {
             return Self {
                 priority_limit,
+                batch_size,
                 ..Self::default()
             };
         }
@@ -131,6 +136,7 @@ impl EnrichQueue {
             backlog,
             dispatched: HashSet::new(),
             priority_limit,
+            batch_size,
         }
     }
 
@@ -164,8 +170,9 @@ impl EnrichQueue {
     }
 
     fn pop_batch(&mut self) -> Option<EnrichBatch> {
-        let mut entries = Vec::with_capacity(directory::BATCH_SIZE);
-        while entries.len() < directory::BATCH_SIZE {
+        let batch_size = self.batch_size.max(1);
+        let mut entries = Vec::with_capacity(batch_size);
+        while entries.len() < batch_size {
             let Some(entry) = self.priority.pop_front() else {
                 break;
             };
@@ -179,7 +186,7 @@ impl EnrichQueue {
                 is_viewport: true,
             });
         }
-        while entries.len() < directory::BATCH_SIZE {
+        while entries.len() < batch_size {
             let Some(entry) = self.backlog.pop_front() else {
                 break;
             };
@@ -274,6 +281,10 @@ impl EnrichJob {
     fn set_priority_limit(&self, priority_limit: usize) {
         self.queue.borrow_mut().priority_limit = priority_limit;
     }
+
+    fn set_batch_size(&self, batch_size: usize) {
+        self.queue.borrow_mut().batch_size = batch_size.max(1);
+    }
 }
 
 impl Drop for EnrichJob {
@@ -334,6 +345,7 @@ impl Browser {
                 });
                 if existing.is_in_flight() {
                     existing.set_priority_limit(enrich_prefs.priority_limit);
+                    existing.set_batch_size(enrich_prefs.batch_size);
                     if viewport_needs_probe {
                         let viewport_entries: Vec<Entry> = priority_paths
                             .iter()
@@ -373,6 +385,7 @@ impl Browser {
             &priority_paths,
             queue_need,
             enrich_prefs.priority_limit,
+            enrich_prefs.batch_size,
         );
         if queue.is_empty() {
             if let Some(slot) = self.tab_slot_mut(id) {
@@ -381,6 +394,10 @@ impl Browser {
             return;
         }
 
+        let probe = ProbeTarget {
+            need,
+            child_count_limit: enrich_prefs.child_count_limit.max(1),
+        };
         let max_concurrent = enrich_prefs.max_concurrent_batches.max(1);
         let coalesce_window = std::time::Duration::from_millis(if need.is_full_budget() {
             enrich_prefs.reorder_coalesce_ms
@@ -400,7 +417,7 @@ impl Browser {
             let mut in_flight = fill_probe_slots(
                 &tasks,
                 &worker_queue,
-                need,
+                probe,
                 &worker_cancel,
                 &done_tx,
                 0,
@@ -444,7 +461,7 @@ impl Browser {
                         in_flight = fill_probe_slots(
                             &tasks,
                             &worker_queue,
-                            need,
+                            probe,
                             &worker_cancel,
                             &done_tx,
                             in_flight,
@@ -468,7 +485,7 @@ impl Browser {
                             in_flight = fill_probe_slots(
                                 &tasks,
                                 &worker_queue,
-                                need,
+                                probe,
                                 &worker_cancel,
                                 &done_tx,
                                 in_flight,
@@ -868,10 +885,16 @@ impl Browser {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ProbeTarget {
+    need: EnrichmentNeed,
+    child_count_limit: u32,
+}
+
 fn fill_probe_slots(
     tasks: &Scope,
     queue: &Rc<RefCell<EnrichQueue>>,
-    need: EnrichmentNeed,
+    probe: ProbeTarget,
     cancel: &CancellationToken,
     done_tx: &tokio::sync::mpsc::UnboundedSender<CompletedBatch>,
     mut in_flight: usize,
@@ -881,7 +904,7 @@ fn fill_probe_slots(
         let Some(batch) = queue.borrow_mut().pop_batch() else {
             break;
         };
-        spawn_probe_batch(tasks, batch, need, cancel, done_tx.clone());
+        spawn_probe_batch(tasks, batch, probe, cancel, done_tx.clone());
         in_flight += 1;
     }
     in_flight
@@ -890,14 +913,19 @@ fn fill_probe_slots(
 fn spawn_probe_batch(
     tasks: &Scope,
     batch: EnrichBatch,
-    need: EnrichmentNeed,
+    probe: ProbeTarget,
     cancel: &CancellationToken,
     done_tx: tokio::sync::mpsc::UnboundedSender<CompletedBatch>,
 ) {
     let batch_cancel = cancel.clone();
     let sender = BatchSender::new(done_tx, batch.is_viewport);
     let _task: IoTask<()> = tasks.spawn_blocking_named("Enrich directory entries", move || {
-        let updates = directory::probe_batch(&batch.entries, need, &batch_cancel);
+        let updates = directory::probe_batch_with_limit(
+            &batch.entries,
+            probe.need,
+            probe.child_count_limit,
+            &batch_cancel,
+        );
         sender.send(updates);
     });
 }
@@ -980,7 +1008,13 @@ mod tests {
             ..Default::default()
         };
         let custom_limit = 64usize;
-        let mut queue = EnrichQueue::new(&snapshot, &[], need, custom_limit);
+        let mut queue = EnrichQueue::new(
+            &snapshot,
+            &[],
+            need,
+            custom_limit,
+            directory::DEFAULT_BATCH_SIZE,
+        );
         assert!(queue.is_empty());
 
         // Simulate rapid scrolling across 10 viewports (200 entries total).
@@ -1018,7 +1052,13 @@ mod tests {
             budget: directory::ProbeBudget::Full,
             ..Default::default()
         };
-        let mut queue = EnrichQueue::new(&snapshot, &[], need, directory::DEFAULT_PRIORITY_LIMIT);
+        let mut queue = EnrichQueue::new(
+            &snapshot,
+            &[],
+            need,
+            directory::DEFAULT_PRIORITY_LIMIT,
+            directory::DEFAULT_BATCH_SIZE,
+        );
 
         for step in 0..10 {
             let start = step * 20;
