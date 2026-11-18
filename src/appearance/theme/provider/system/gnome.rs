@@ -2,8 +2,9 @@
 #[cfg(test)]
 mod tests;
 
+use crate::appearance::theme::provider::color::ColorExt as _;
+use anti_webui::prelude::{Color, rgb};
 use directories::BaseDirs;
-use gpui_kit::{Hsla, Rgba, WindowAppearance, rgb};
 use ini::Ini;
 use std::{
     collections::{HashMap, HashSet},
@@ -19,7 +20,7 @@ use crate::appearance::portal::Snapshot as PortalSnapshot;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct PortalSnapshot {
     color_scheme: Option<Mode>,
-    accent_color: Option<Rgba>,
+    accent_color: Option<Color>,
     primed: bool,
 }
 
@@ -77,57 +78,57 @@ const ADWAITA_COLORS: &[(&str, u32)] = &[
 ];
 
 struct BaseRoles {
-    window_bg: Hsla,
-    window_fg: Hsla,
-    view_bg: Hsla,
-    view_fg: Hsla,
-    sidebar_bg: Hsla,
-    sidebar_fg: Hsla,
-    popover_bg: Hsla,
-    popover_fg: Hsla,
-    accent_bg: Hsla,
-    accent_fg: Hsla,
+    window_bg: Color,
+    window_fg: Color,
+    view_bg: Color,
+    view_fg: Color,
+    sidebar_bg: Color,
+    sidebar_fg: Color,
+    popover_bg: Color,
+    popover_fg: Color,
+    accent_bg: Color,
+    accent_fg: Color,
 }
 
 impl BaseRoles {
-    fn for_mode(mode: Mode, accent_override: Option<Rgba>) -> Self {
+    fn for_mode(mode: Mode, accent_override: Option<Color>) -> Self {
         let mut roles = match mode {
             Mode::Light => Self {
-                window_bg: rgb(0xfafafa).into(),
-                window_fg: rgb(0x323232).into(),
-                view_bg: rgb(0xffffff).into(),
-                view_fg: rgb(0x333333).into(),
-                sidebar_bg: rgb(0xebebeb).into(),
-                sidebar_fg: rgb(0x323232).into(),
-                popover_bg: rgb(0xffffff).into(),
-                popover_fg: rgb(0x333333).into(),
-                accent_bg: rgb(0x3584e4).into(),
-                accent_fg: rgb(0xffffff).into(),
+                window_bg: rgb(0xfafafa),
+                window_fg: rgb(0x323232),
+                view_bg: rgb(0xffffff),
+                view_fg: rgb(0x333333),
+                sidebar_bg: rgb(0xebebeb),
+                sidebar_fg: rgb(0x323232),
+                popover_bg: rgb(0xffffff),
+                popover_fg: rgb(0x333333),
+                accent_bg: rgb(0x3584e4),
+                accent_fg: rgb(0xffffff),
             },
             Mode::Dark => Self {
-                window_bg: rgb(0x242424).into(),
-                window_fg: rgb(0xffffff).into(),
-                view_bg: rgb(0x1e1e1e).into(),
-                view_fg: rgb(0xffffff).into(),
-                sidebar_bg: rgb(0x303030).into(),
-                sidebar_fg: rgb(0xffffff).into(),
-                popover_bg: rgb(0x383838).into(),
-                popover_fg: rgb(0xffffff).into(),
-                accent_bg: rgb(0x3584e4).into(),
-                accent_fg: rgb(0xffffff).into(),
+                window_bg: rgb(0x242424),
+                window_fg: rgb(0xffffff),
+                view_bg: rgb(0x1e1e1e),
+                view_fg: rgb(0xffffff),
+                sidebar_bg: rgb(0x303030),
+                sidebar_fg: rgb(0xffffff),
+                popover_bg: rgb(0x383838),
+                popover_fg: rgb(0xffffff),
+                accent_bg: rgb(0x3584e4),
+                accent_fg: rgb(0xffffff),
             },
         };
         if let Some(accent) = accent_override {
-            roles.accent_bg = accent.into();
+            roles.accent_bg = accent;
             roles.accent_fg = contrasting_foreground(accent);
         }
         roles
     }
 
-    fn seed_colors(&self) -> HashMap<String, Hsla> {
+    fn seed_colors(&self) -> HashMap<String, Color> {
         let mut colors = HashMap::with_capacity(ADWAITA_COLORS.len() + 20);
         for &(name, hex) in ADWAITA_COLORS {
-            colors.insert(name.to_owned(), rgb(hex).into());
+            colors.insert(name.to_owned(), rgb(hex));
         }
         colors.insert("window_bg_color".into(), self.window_bg);
         colors.insert("window_fg_color".into(), self.window_fg);
@@ -151,12 +152,12 @@ impl BaseRoles {
     }
 }
 
-fn contrasting_foreground(accent: Rgba) -> Hsla {
+fn contrasting_foreground(accent: Color) -> Color {
     let luminance = 0.2126 * accent.r + 0.7152 * accent.g + 0.0722 * accent.b;
     if luminance > 0.62 {
-        rgb(0x1e1e1e).into()
+        rgb(0x1e1e1e)
     } else {
-        rgb(0xffffff).into()
+        rgb(0xffffff)
     }
 }
 
@@ -164,7 +165,7 @@ fn contrasting_foreground(accent: Rgba) -> Hsla {
 /// Reports unreadable GTK configuration files; missing files fall back to Adwaita and Portal defaults.
 pub(super) fn load(
     preference: ModePreference,
-    platform: WindowAppearance,
+    platform: Mode,
     dirs: &BaseDirs,
 ) -> Result<Loaded, Error> {
     #[cfg(target_os = "linux")]
@@ -176,7 +177,7 @@ pub(super) fn load(
 
 fn resolve(
     preference: ModePreference,
-    platform: WindowAppearance,
+    platform: Mode,
     portal: PortalSnapshot,
     config_dir: &Path,
 ) -> Result<Loaded, Error> {
@@ -200,7 +201,7 @@ fn resolve(
         }
     }
 
-    let pick = |modern: &str, legacy: &str, default: Hsla| -> Hsla {
+    let pick = |modern: &str, legacy: &str, default: Color| -> Color {
         if overridden.contains(modern) {
             colors[modern]
         } else if overridden.contains(legacy) {
@@ -220,7 +221,7 @@ fn resolve(
     let mode = match (explicit_or_session_mode, window_overridden) {
         (Some(mode), _) => mode,
         (None, true) => {
-            if window.l < 0.5 {
+            if window.lightness() < 0.5 {
                 Mode::Dark
             } else {
                 Mode::Light
@@ -266,7 +267,7 @@ fn resolve(
     let primary_fg = if accent_fg_overridden {
         pick("accent_fg_color", "theme_selected_fg_color", base.accent_fg)
     } else if accent_bg_overridden {
-        contrasting_foreground(Rgba::from(primary))
+        contrasting_foreground(primary)
     } else {
         base.accent_fg
     };
@@ -286,18 +287,18 @@ fn resolve(
     palette.selection = primary;
     palette.selection_foreground = primary_fg;
     palette.muted_foreground = if overridden.contains("insensitive_fg_color") {
-        palette.content.blend(colors["insensitive_fg_color"])
+        palette.content.overlay(colors["insensitive_fg_color"])
     } else {
         palette
             .content
-            .blend(palette.foreground.opacity(MUTED_OPACITY))
+            .overlay(palette.foreground.with_alpha(MUTED_OPACITY))
     };
     palette.border = if overridden.contains("borders") {
-        palette.content.blend(colors["borders"])
+        palette.content.overlay(colors["borders"])
     } else {
         palette
             .content
-            .blend(palette.foreground.opacity(BORDER_OPACITY))
+            .overlay(palette.foreground.with_alpha(BORDER_OPACITY))
     };
     palette.outline = palette.border;
     match (
@@ -377,7 +378,7 @@ fn parse_ini_bool(value: &str) -> Option<bool> {
     }
 }
 
-fn parse_gtk_css(css: &str, colors: &mut HashMap<String, Hsla>, overridden: &mut HashSet<String>) {
+fn parse_gtk_css(css: &str, colors: &mut HashMap<String, Color>, overridden: &mut HashSet<String>) {
     let stripped = strip_css_comments(css);
     let mut cursor = stripped.as_str();
     while let Some(pos) = cursor.find("@define-color") {
@@ -440,7 +441,7 @@ fn is_css_ident(token: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
-fn parse_color_expr(expr: &str, colors: &HashMap<String, Hsla>, depth: usize) -> Option<Hsla> {
+fn parse_color_expr(expr: &str, colors: &HashMap<String, Color>, depth: usize) -> Option<Color> {
     if depth >= MAX_COLOR_DEPTH {
         return None;
     }
@@ -449,21 +450,13 @@ fn parse_color_expr(expr: &str, colors: &HashMap<String, Hsla>, depth: usize) ->
         return None;
     }
     if expr.eq_ignore_ascii_case("transparent") {
-        return Some(
-            Rgba {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 0.0,
-            }
-            .into(),
-        );
+        return Some(Color::TRANSPARENT);
     }
     if expr.eq_ignore_ascii_case("black") {
-        return Some(rgb(0x000000).into());
+        return Some(rgb(0x000000));
     }
     if expr.eq_ignore_ascii_case("white") {
-        return Some(rgb(0xffffff).into());
+        return Some(rgb(0xffffff));
     }
     if let Some(name) = expr.strip_prefix('@') {
         return is_css_ident(name)
@@ -514,7 +507,7 @@ fn split_last_top_level_comma(args: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn parse_css_hex(hex: &str) -> Option<Hsla> {
+fn parse_css_hex(hex: &str) -> Option<Color> {
     let hex = hex.trim();
     if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
@@ -525,7 +518,7 @@ fn parse_css_hex(hex: &str) -> Option<Hsla> {
             let r = ((value >> 8) & 0xf) * 17;
             let g = ((value >> 4) & 0xf) * 17;
             let b = (value & 0xf) * 17;
-            Rgba {
+            Color {
                 r: r as f32 / 255.0,
                 g: g as f32 / 255.0,
                 b: b as f32 / 255.0,
@@ -537,7 +530,7 @@ fn parse_css_hex(hex: &str) -> Option<Hsla> {
             let g = ((value >> 8) & 0xf) * 17;
             let b = ((value >> 4) & 0xf) * 17;
             let a = (value & 0xf) * 17;
-            Rgba {
+            Color {
                 r: r as f32 / 255.0,
                 g: g as f32 / 255.0,
                 b: b as f32 / 255.0,
@@ -545,7 +538,7 @@ fn parse_css_hex(hex: &str) -> Option<Hsla> {
             }
         }
         6 => rgb(value),
-        8 => Rgba {
+        8 => Color {
             r: ((value >> 24) & 0xff) as f32 / 255.0,
             g: ((value >> 16) & 0xff) as f32 / 255.0,
             b: ((value >> 8) & 0xff) as f32 / 255.0,
@@ -553,10 +546,10 @@ fn parse_css_hex(hex: &str) -> Option<Hsla> {
         },
         _ => return None,
     };
-    Some(rgba.into())
+    Some(rgba)
 }
 
-fn parse_rgb_call(args: &str, expect_alpha: bool) -> Option<Hsla> {
+fn parse_rgb_call(args: &str, expect_alpha: bool) -> Option<Color> {
     let parts: Vec<&str> = args.split(',').map(str::trim).collect();
     let (r, g, b, a) = match (expect_alpha, parts.as_slice()) {
         (false, [r, g, b]) => (
@@ -579,7 +572,7 @@ fn parse_rgb_call(args: &str, expect_alpha: bool) -> Option<Hsla> {
         ),
         _ => return None,
     };
-    Some(Rgba { r, g, b, a }.into())
+    Some(Color { r, g, b, a })
 }
 
 fn parse_rgb_channel(token: &str) -> Option<f32> {

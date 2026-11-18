@@ -1,375 +1,387 @@
 mod form;
 use super::model::{Intent, Request};
+use anti_webui::prelude::*;
 use form::Form;
-
-use crate::shared::i18n;
-use gds::service::task_manager::Scope;
-use gds::service::task_manager::Task as IoTask;
 use gds::{
-    service::remote::{Address, ConnectOptions, HostKeyChallenge, Session},
-    t,
-    ui::{
-        DialogActions,
-        dialog::{DialogCommand, DialogDecision, DialogFooter},
-        notifications,
+    i18n,
+    service::{
+        remote::{Address, ConnectOptions, HostKeyChallenge, Session},
+        task_manager::{Owner as TaskOwner, Scope},
     },
+    ui::{DialogActions, dialog::Dialog},
 };
 use gds_uim::el;
-use gpui_kit::assets::IconName;
-use gpui_kit::{component::WindowExt, *};
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
-    ops::Deref,
-    rc::Rc,
-};
-use tokio::sync::mpsc;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use tokio::sync::{mpsc, oneshot};
 
-const DIALOG_WIDTH: f32 = 480.0;
-const HOST_KEY_DIALOG_WIDTH: f32 = 520.0;
+type Completion = Rc<dyn Fn(Result<Address, String>)>;
 
-pub(crate) struct Connected {
-    pub tab: u64,
-    pub address: Address,
-    pub intent: Intent,
+#[derive(Clone)]
+struct Attempt {
+    intent: Intent,
+    completed: Completion,
 }
-
-pub(crate) struct Failed {
-    pub tab: u64,
-    pub intent: Intent,
+#[derive(Clone)]
+struct Challenge {
+    changed: bool,
+    description: String,
+    answer: Rc<RefCell<Option<oneshot::Sender<bool>>>>,
 }
-
+impl Challenge {
+    fn answer(&self, trusted: bool) {
+        if let Some(answer) = self.answer.borrow_mut().take() {
+            let _ = answer.send(trusted);
+        }
+    }
+}
+#[derive(Clone)]
+enum DialogState {
+    Closed,
+    Form {
+        form: Form,
+        attempt: Attempt,
+        error: Option<String>,
+    },
+    Connecting {
+        address: Address,
+        attempt: Attempt,
+        tasks: Rc<TaskOwner>,
+        challenge: Option<Challenge>,
+    },
+}
 struct Connection {
     address: Address,
     session: Session,
 }
-
-#[derive(Clone)]
-pub(crate) struct Pending {
-    pub tab: u64,
-    pub address: Address,
-    pub intent: Intent,
-}
-
-struct Attempt {
-    request: Request,
-    pending: Pending,
-}
-
-enum State {
-    Idle,
-    Connecting {
-        pending: Pending,
-        task: Task<()>,
-        challenges: Task<()>,
-    },
-}
-
-#[doc(hidden)]
-pub(crate) struct Status {
-    pub connecting: bool,
-}
-
-const IDLE_STATUS: Status = Status { connecting: false };
-const CONNECTING_STATUS: Status = Status { connecting: true };
-
-pub(crate) struct Connector {
+struct State {
     tasks: Scope,
-    sessions: HashMap<String, Connection>,
-    state: State,
+    owner: Owner,
+    dialog: Signal<DialogState>,
+    sessions: RefCell<HashMap<String, Connection>>,
 }
-
-impl Deref for Connector {
-    type Target = Status;
-
-    fn deref(&self) -> &Self::Target {
-        if self.is_connecting() {
-            &CONNECTING_STATUS
-        } else {
-            &IDLE_STATUS
-        }
-    }
-}
-
-impl EventEmitter<Connected> for Connector {}
-impl EventEmitter<Failed> for Connector {}
+#[derive(Clone)]
+pub(crate) struct Connector(Rc<State>);
 
 impl Connector {
-    pub(crate) fn new(tasks: Scope) -> Self {
-        Self {
+    pub fn new(tasks: Scope) -> Self {
+        Self(Rc::new(State {
             tasks,
-            sessions: HashMap::new(),
-            state: State::Idle,
+            owner: Owner::current().expect("connector belongs to a window"),
+            dialog: signal(DialogState::Closed),
+            sessions: RefCell::new(HashMap::new()),
+        }))
+    }
+    pub fn is_connecting(&self) -> bool {
+        matches!(self.0.dialog.get(), DialogState::Connecting { .. })
+    }
+    pub fn pending(&self) -> Option<(Address, Intent)> {
+        match self.0.dialog.get() {
+            DialogState::Connecting {
+                address, attempt, ..
+            } => Some((address, attempt.intent)),
+            _ => None,
         }
     }
-
-    pub(crate) fn is_connecting(&self) -> bool {
-        matches!(self.state, State::Connecting { .. })
-    }
-
-    pub(crate) fn session(&self, address: &Address) -> Option<Session> {
-        self.sessions
-            .get(&address.connection_key())
-            .map(|c| c.session.clone())
-    }
-
-    pub(crate) fn connections(&self) -> Vec<Address> {
-        let mut addresses = self
+    pub fn session(&self, address: &Address) -> Option<Session> {
+        self.0
             .sessions
+            .borrow()
+            .get(&address.connection_key())
+            .map(|connection| connection.session.clone())
+    }
+    pub fn connections(&self) -> Vec<Address> {
+        let mut addresses = self
+            .0
+            .sessions
+            .borrow()
             .values()
-            .map(|c| c.address.clone())
+            .map(|connection| connection.address.clone())
             .collect::<Vec<_>>();
         addresses.sort_by(|a, b| a.uri().cmp(b.uri()));
         addresses
     }
-
-    pub(crate) fn pending(&self) -> Option<&Pending> {
-        match &self.state {
-            State::Idle => None,
-            State::Connecting { pending, .. } => Some(pending),
-        }
-    }
-
-    pub(crate) fn prompt(
-        &mut self,
+    pub fn prompt(
+        &self,
         address: Option<Address>,
         intent: Intent,
-        tab: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
+        completed: impl Fn(Result<Address, String>) + 'static,
     ) {
-        if self.is_connecting() {
-            notifications::info(t!(@cx, "remote-task-running"), cx);
-            cx.emit(Failed { tab, intent });
+        if !matches!(self.0.dialog.get_untracked(), DialogState::Closed) {
+            completed(Err(i18n::text("remote-task-running")));
             return;
         }
-        let form = cx.new(|cx| Form::new(address, window, cx));
-        let connector = cx.entity().downgrade();
-        let started = Rc::new(Cell::new(false));
-        let focus = form.clone();
-        window.open_alert_dialog(cx, move |dialog, _, cx| {
-            let form = form.clone();
-            let connector = connector.clone();
-            let submit_form = form.clone();
-            let close_connector = connector.clone();
-            let submitted = started.clone();
-            let closed = started.clone();
-            let footer = if form.read(cx).protocol().is_some() {
-                let primary_label = if intent == Intent::Add {
-                    t!(@cx, "remote-add")
-                } else {
-                    t!(@cx, "remote-connect-action")
-                };
-                let primary_icon = if intent == Intent::Add {
-                    IconName::Plus
-                } else {
-                    IconName::Plug
-                };
-                el! { .DialogActions::default {
-                    primary_label: primary_label;
-                    primary_icon: primary_icon;
-                } }
-                .into_any_element()
-            } else {
-                el! { .DialogFooter::default [DialogCommand::Cancel.DialogDecision::new] }
-                    .into_any_element()
-            };
-            let title = if intent == Intent::Add {
-                t!(@cx, "remote-add-location")
-            } else {
-                t!(@cx, "remote-connect")
-            };
-            let on_ok = move |_: &ClickEvent, window: &mut Window, cx: &mut App| match submit_form
-                .read(cx)
-                .request(cx)
-            {
-                Ok(request) => {
-                    submitted.set(true);
-                    let pending = Pending {
-                        tab,
-                        address: request.address.clone(),
-                        intent,
-                    };
-                    let _ = connector.update(cx, |this, cx| {
-                        this.begin(Attempt { request, pending }, window, cx)
-                    });
-                    true
-                }
-                Err(error) => {
-                    notifications::error(i18n::text(error.label(), cx), cx);
-                    false
-                }
-            };
-            let on_close = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                if !closed.get() {
-                    let _ = close_connector.update(cx, |_, cx| cx.emit(Failed { tab, intent }));
-                }
-            };
-            el! { dialog {
-                confirm; width: DIALOG_WIDTH.px;
-                title: title;
-                footer: footer;
-                on_ok: on_ok;
-                on_close: on_close;
-            } [form] }
-        });
-        window.on_next_frame(move |window, cx| {
-            focus.update(cx, |form, cx| form.focus(window, cx));
+        self.0.owner.with(|| {
+            let form = Form::new(address);
+            form.focus();
+            self.0.dialog.set(DialogState::Form {
+                form,
+                attempt: Attempt {
+                    intent,
+                    completed: Rc::new(completed),
+                },
+                error: None,
+            })
         });
     }
-
-    fn begin(&mut self, attempt: Attempt, window: &mut Window, cx: &mut Context<Self>) {
-        let Attempt { request, pending } = attempt;
-        let Request {
-            address,
-            credentials,
-        } = request;
-        let tab = pending.tab;
-        let intent = pending.intent;
+    pub fn cancel(&self) {
+        let current = self.0.dialog.get_untracked();
+        self.0.dialog.set(DialogState::Closed);
+        let attempt = match current {
+            DialogState::Closed => return,
+            DialogState::Form { attempt, .. } => attempt,
+            DialogState::Connecting {
+                tasks,
+                challenge,
+                attempt,
+                ..
+            } => {
+                if let Some(challenge) = challenge {
+                    challenge.answer(false);
+                }
+                tasks.cancel();
+                attempt
+            }
+        };
+        (attempt.completed)(Err(i18n::text("remote-cancelled")));
+    }
+    fn submit(&self) {
+        let DialogState::Form { form, attempt, .. } = self.0.dialog.get_untracked() else {
+            return;
+        };
+        match form.request() {
+            Ok(request) => self.begin(request, attempt),
+            Err(error) => self.0.dialog.set(DialogState::Form {
+                form,
+                attempt,
+                error: Some(i18n::text(error.label())),
+            }),
+        }
+    }
+    fn begin(&self, request: Request, attempt: Attempt) {
         let Some(dirs) = directories::BaseDirs::new() else {
-            notifications::error(t!(@cx, "remote-state-unavailable"), cx);
-            cx.emit(Failed { tab, intent });
+            (attempt.completed)(Err(i18n::text("remote-state-unavailable")));
+            self.0.dialog.set(DialogState::Closed);
             return;
         };
         let known_hosts = dirs
             .state_dir()
             .unwrap_or(dirs.data_local_dir())
             .join("gds/files/known_hosts");
-        let (sender, mut receiver) = mpsc::channel::<HostKeyChallenge>(1);
-        let target = window.window_handle();
-        let challenges = cx.spawn(async move |_, cx| {
-            while let Some(challenge) = receiver.recv().await {
-                let _ = target.update(cx, |_, window, cx| Self::host_key(challenge, window, cx));
+        let Request {
+            address,
+            credentials,
+        } = request;
+        let tasks = Rc::new(self.0.tasks.named_child("Remote connection"));
+        let weak = Rc::downgrade(&self.0);
+        let challenge_tasks = tasks.clone();
+        let challenges = self.0.owner.with(|| {
+            ui_channel(move |challenge: HostKeyChallenge| {
+                let Some(state) = weak.upgrade() else { return };
+                state.dialog.update(|dialog| {
+                    if let DialogState::Connecting {
+                        tasks,
+                        challenge: pending,
+                        ..
+                    } = dialog
+                        && Rc::ptr_eq(tasks, &challenge_tasks)
+                    {
+                        *pending = Some(Challenge {
+                            changed: challenge.changed,
+                            description: format!(
+                                "{}:{}\n{}",
+                                challenge.host, challenge.port, challenge.fingerprint
+                            ),
+                            answer: Rc::new(RefCell::new(Some(challenge.answer))),
+                        });
+                    }
+                });
+            })
+        });
+        let (sender, mut receiver) = mpsc::channel(1);
+        let cancel = tasks.token();
+        tasks.spawn_named("Verify remote host", async move {
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    challenge = receiver.recv() => match challenge {
+                        Some(challenge) => challenges.send(challenge),
+                        None => break,
+                    },
+                }
             }
         });
         let destination = address.clone();
-        let work = IoTask::cancel_on_drop(self.tasks.spawn_cancellable_named(
-            "Connect to remote server",
-            async move {
-                let session = Session::connect(
-                    &destination,
-                    ConnectOptions {
-                        credentials,
-                        known_hosts,
-                    },
-                    sender,
+        let intent = attempt.intent;
+        let work = tasks.spawn_cancellable_named("Connect to remote server", async move {
+            let session = Session::connect(
+                &destination,
+                ConnectOptions {
+                    credentials,
+                    known_hosts,
+                },
+                sender,
+            )
+            .await?;
+            if intent == Intent::Add {
+                session.list(&destination).await?;
+            }
+            Ok::<_, gds::service::remote::Error>(session)
+        });
+        self.0.dialog.set(DialogState::Connecting {
+            address: address.clone(),
+            attempt: attempt.clone(),
+            tasks: tasks.clone(),
+            challenge: None,
+        });
+        let weak = Rc::downgrade(&self.0);
+        self.0.owner.with(|| {
+            let (delivery, done) = Task::pending();
+            work.on_complete(&tasks, move |result| {
+                done.complete(
+                    result
+                        .map_err(|error| error.to_string())
+                        .and_then(|result| result.map_err(|error| error.to_string())),
                 )
-                .await?;
-                if intent == Intent::Add {
-                    session.list(&destination).await?;
+            });
+            delivery.then(move |result| {
+                let Some(state) = weak.upgrade() else {
+                    return;
+                };
+                let current = state.dialog.get_untracked();
+                if !matches!(&current, DialogState::Connecting { tasks: active, .. } if Rc::ptr_eq(active, &tasks)) {
+                    return;
                 }
-                Ok::<_, gds::service::remote::Error>(session)
-            },
-        ));
-        let task = cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.state = State::Idle;
-                match result {
-                    Ok(Ok(session)) => {
-                        this.sessions.insert(
-                            address.connection_key(),
-                            Connection {
-                                address: address.clone(),
-                                session,
-                            },
-                        );
-                        cx.emit(Connected {
-                            tab,
-                            address,
-                            intent,
-                        });
-                    }
-                    Ok(Err(error)) => {
-                        notifications::error(error.to_string(), cx);
-                        cx.emit(Failed { tab, intent });
-                    }
-                    Err(error) => {
-                        notifications::error(error.to_string(), cx);
-                        cx.emit(Failed { tab, intent });
-                    }
-                }
-                cx.notify();
+                let result = result.map(|session| {
+                    state.sessions.borrow_mut().insert(
+                        address.connection_key(),
+                        Connection {
+                            address: address.clone(),
+                            session,
+                        },
+                    );
+                    address
+                });
+                state.dialog.set(DialogState::Closed);
+                (attempt.completed)(result);
             });
         });
-        self.state = State::Connecting {
-            pending,
-            task,
-            challenges,
+    }
+    pub fn disconnect(
+        &self,
+        address: Address,
+        finished: impl FnOnce(Result<(), String>) + 'static,
+    ) {
+        let Some(connection) = self
+            .0
+            .sessions
+            .borrow_mut()
+            .remove(&address.connection_key())
+        else {
+            finished(Ok(()));
+            return;
         };
-        cx.notify();
-    }
-
-    fn host_key(challenge: HostKeyChallenge, window: &mut Window, cx: &mut App) {
-        let title = if challenge.changed {
-            t!(@cx, "remote-host-changed")
-        } else {
-            t!(@cx, "remote-host-new")
-        };
-        let message = format!(
-            "{}:{}\n{}",
-            challenge.host, challenge.port, challenge.fingerprint
-        );
-        let answer = Rc::new(RefCell::new(Some(challenge.answer)));
-        window.open_alert_dialog(cx, move |dialog, _, cx| {
-            let accept = answer.clone();
-            let close = answer.clone();
-            let footer = el! { .DialogActions::default {
-                primary_label: $(t!(@cx, "remote-host-trust"));
-            } };
-            let on_ok = move |_: &ClickEvent, _: &mut Window, _: &mut App| {
-                if let Some(reply) = accept.borrow_mut().take() {
-                    let _ = reply.send(true);
-                }
-                true
-            };
-            let on_close = move |_: &ClickEvent, _: &mut Window, _: &mut App| {
-                if let Some(reply) = close.borrow_mut().take() {
-                    let _ = reply.send(false);
-                }
-            };
-            el! { dialog {
-                confirm; width: HOST_KEY_DIALOG_WIDTH.px; title: ~title; description: ~message; footer: footer;
-                on_ok: on_ok;
-                on_close: on_close;
-            } }
-        });
-    }
-
-    pub(crate) fn cancel(&mut self, cx: &mut Context<Self>) {
-        if let State::Connecting {
-            pending,
-            task,
-            challenges,
-        } = std::mem::replace(&mut self.state, State::Idle)
-        {
-            drop(task);
-            drop(challenges);
-            cx.emit(Failed {
-                tab: pending.tab,
-                intent: pending.intent,
-            });
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn disconnect(&mut self, address: &Address, cx: &mut Context<Self>) {
-        if let Some(connection) = self.sessions.remove(&address.connection_key()) {
-            let session = connection.session;
-            let work = self
+        self.0.owner.with(|| {
+            let (delivery, done) = Task::pending();
+            self.0
                 .tasks
-                .spawn_named("Close remote session", async move { session.close().await });
-            cx.spawn(async move |_, cx| match work.await {
-                Ok(Ok(())) => (),
-                Ok(Err(error)) => {
-                    cx.update(|cx| notifications::error(error.to_string(), cx));
-                }
-                Err(error) => {
-                    cx.update(|cx| notifications::error(error.to_string(), cx));
-                }
-            })
-            .detach();
+                .spawn_named("Close remote session", async move {
+                    connection.session.close().await
+                })
+                .on_complete(&self.0.tasks, move |result| {
+                    done.complete(
+                        result
+                            .map_err(|error| error.to_string())
+                            .and_then(|result| result.map_err(|error| error.to_string())),
+                    )
+                });
+            delivery.then(finished);
+        });
+    }
+    pub fn view(&self) -> impl IntoView {
+        let shown = self.clone();
+        let cancel = self.clone();
+        let content = self.clone();
+        Dialog::show(
+            move || !matches!(shown.0.dialog.get(), DialogState::Closed),
+            move || cancel.cancel(),
+            move || content.dialog(),
+        )
+    }
+    fn dialog(&self) -> View {
+        let cancel = self.clone();
+        match self.0.dialog.get() {
+            DialogState::Closed => div().into_view(),
+            DialogState::Form {
+                form,
+                attempt,
+                error,
+            } => {
+                let submit = self.clone();
+                let enter = self.clone();
+                let ready = form.clone();
+                let (title, label) = match attempt.intent {
+                    Intent::Add => ("remote-add-location", "remote-add"),
+                    Intent::Open => ("remote-connect", "remote-connect-action"),
+                };
+                let actions = el! { .DialogActions::default.[
+                    $(i18n::text("dialog-cancel")).button.{on_click: move _ => $(cancel.cancel())},
+                    $(show(move || ready.ready(), move || {
+                        let submit = submit.clone();
+                        el! { $(i18n::text(label)).primary_button.{
+                            on_click: move _ => $(submit.submit());
+                        } }
+                    })),
+                ] };
+                el! { .Dialog::default.{
+                    title: $(i18n::text(title)); w: 480.0_f32; actions: actions;
+                }.[
+                    $(form.view(move || enter.submit())),
+                    if let Some(error) = error [
+                        error.text.{text_color: $(theme().danger)},
+                    ],
+                ] }
+                .into_view()
+            }
+            DialogState::Connecting {
+                address,
+                challenge: None,
+                ..
+            } => {
+                let actions = el! { .DialogActions::default.[
+                    $(i18n::text("dialog-cancel")).button.{on_click: move _ => $(cancel.cancel())},
+                ] };
+                el! { .Dialog::default.{title: $(i18n::text("remote-connect")); actions: actions}.[
+                    $(address.to_string()).text,
+                    $(i18n::text("remote-connecting")).text,
+                ] }
+                .into_view()
+            }
+            DialogState::Connecting {
+                challenge: Some(challenge),
+                ..
+            } => {
+                let trust = challenge.clone();
+                let connector = self.clone();
+                let title = if challenge.changed {
+                    "remote-host-changed"
+                } else {
+                    "remote-host-new"
+                };
+                let actions = el! { .DialogActions::default.[
+                        $(i18n::text("dialog-cancel")).button.{on_click: move _ => $(cancel.cancel())},
+                        $(i18n::text("remote-host-trust")).primary_button.{on_click: move _ => ${
+                            trust.answer(true);
+                            connector.0.dialog.update(|dialog| {
+                                if let DialogState::Connecting { challenge, .. } = dialog {
+                                    *challenge = None;
+                                }
+                            });
+                        }},
+                ] };
+                el! { .Dialog::default.{title: $(i18n::text(title)); w: 520.0_f32; actions: actions}.[
+                    challenge->description.text,
+                ] }.into_view()
+            }
         }
-        cx.notify();
     }
 }

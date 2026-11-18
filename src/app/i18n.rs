@@ -1,55 +1,46 @@
-//! Application-context access to localization and Fluent catalogs.
-use std::ops::Deref;
-
-use crate::i18n::{self, Catalog, Error, FluentArgs, Language};
-use gpui_kit::{App, SharedString};
+//! Application-owned reactive Fluent catalogue.
+use crate::i18n::{Catalog, Error, FluentArgs, Language};
+use anti_webui::prelude::{Signal, signal};
+use std::rc::Rc;
 
 #[derive(Clone, Copy)]
-pub struct I18n<C> {
-    pub(super) cx: C,
+pub struct I18n {
+    catalog: Signal<Rc<Catalog>>,
 }
-
-impl<C: Deref<Target = App>> I18n<C> {
+impl I18n {
+    pub(super) fn new() -> Self {
+        Self {
+            catalog: signal(Rc::new(
+                Catalog::new(Language::detect(), &[]).expect("bundled Fluent is valid"),
+            )),
+        }
+    }
     pub fn language(&self) -> Language {
-        i18n::language(&self.cx)
+        self.catalog.with(|catalog| catalog.language())
     }
-
-    pub fn text(&self, id: &str) -> SharedString {
-        i18n::text(id, &self.cx)
+    pub fn text(&self, id: &str) -> String {
+        self.catalog.with(|catalog| catalog.message(id, None))
     }
-
-    pub fn format(&self, id: &str, arguments: Option<&FluentArgs<'_>>) -> SharedString {
-        i18n::format(id, arguments, &self.cx)
+    pub fn format(&self, id: &str, arguments: Option<&FluentArgs<'_>>) -> String {
+        self.catalog.with(|catalog| catalog.message(id, arguments))
     }
-
-    pub fn count(&self, id: &str, count: usize) -> SharedString {
-        i18n::count(id, count, &self.cx)
+    pub fn count(&self, id: &str, count: usize) -> String {
+        let mut arguments = FluentArgs::new();
+        arguments.set("count", count as i64);
+        self.format(id, Some(&arguments))
     }
-}
-
-impl I18n<&mut App> {
-    /// Install the suite's base messages and component translations.
-    ///
     /// # Errors
-    /// Returns an error when bundled Fluent cannot be parsed or registered.
-    pub fn install(&mut self, language: Language) -> Result<(), Error> {
-        i18n::install(language, self.cx)
+    /// Reports invalid Fluent or duplicate message IDs.
+    pub fn install(&self, language: Language) -> Result<(), Error> {
+        self.install_resources(language, &[])
     }
-
-    /// Install messages owned by the current application alongside the base catalog.
-    ///
     /// # Errors
-    /// Returns an error for invalid Fluent or duplicate message IDs.
-    pub fn install_resources(
-        &mut self,
-        language: Language,
-        application: &[&str],
-    ) -> Result<(), Error> {
-        i18n::install_resources(language, application, self.cx)
+    /// Reports invalid Fluent or duplicate message IDs without replacing the current catalogue.
+    pub fn install_resources(&self, language: Language, application: &[&str]) -> Result<(), Error> {
+        self.install_catalog(Catalog::new(language, application)?);
+        Ok(())
     }
-
-    /// Install a fully parsed catalog without introducing another fallible step.
-    pub fn install_catalog(&mut self, catalog: Catalog) {
-        catalog.install(self.cx);
+    pub fn install_catalog(&self, catalog: Catalog) {
+        self.catalog.set(Rc::new(catalog));
     }
 }

@@ -1,104 +1,84 @@
-//! Read-only help content. Shortcut badges always resolve the live keymap.
-use super::{Shortcut, ShortcutBadge, container::container_traits};
-use crate::app::AppExt as _;
+//! Shortcut reference anatomy shared by application help pages.
+use super::container::container_traits;
+use anti_webui::prelude::*;
 use gds_uim::el;
-use gpui_kit::{
-    App, Div, IntoElement, SharedString, Stateful, TestSupportExt, Window, actions,
-    component::{ActiveTheme, StyledExt},
-    div,
-    prelude::*,
-};
-
-actions!(help, [OpenHelp]);
-
-#[derive(IntoElement)]
-pub struct HelpPage {
-    base: Stateful<Div>,
-}
-impl Default for HelpPage {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { # "help-page"; size_full; min_h_0; overflow_y_scroll; p_6; } },
+macro_rules! part {
+    ($name:ident, $base:expr) => {
+        pub struct $name {
+            base: Div,
         }
-    }
-}
-container_traits!(HelpPage);
-impl RenderOnce for HelpPage {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        self.base
-            .bg(cx.gds().appearance().theme().content_background())
-            .test_support()
-    }
-}
-
-#[derive(IntoElement)]
-pub struct ShortcutSection {
-    base: Div,
-}
-impl Default for ShortcutSection {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { pb_6; } },
+        impl Default for $name {
+            fn default() -> Self {
+                Self { base: $base }
+            }
         }
-    }
+        container_traits!($name);
+    };
 }
-container_traits!(ShortcutSection);
-impl RenderOnce for ShortcutSection {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
-    }
-}
-
-#[derive(IntoElement)]
-pub struct ShortcutHeading {
-    base: Div,
-}
-impl Default for ShortcutHeading {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { text_2xl; font_semibold; pb_4; } },
-        }
-    }
-}
-container_traits!(ShortcutHeading);
-impl RenderOnce for ShortcutHeading {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
-    }
-}
-
-#[derive(IntoElement)]
+part!(
+    HelpPage,
+    el! { .div.{ flex; flex_col; p: 24.0_f32; overflow_y_scroll; flex_1; min_h: 0.0_f32 } }
+);
+part!(
+    ShortcutSection,
+    el! { .div.{ flex; flex_col; pb:24.0_f32 } }
+);
+part!(
+    ShortcutHeading,
+    el! { .div.{ font_weight: FontWeight::SEMIBOLD; pb:16.0_f32; dyn_style:s=>$(s.text_size(crate::app::Gds::current().appearance().typography().scaled(24.0))) } }
+);
 pub struct ShortcutRow {
-    label: SharedString,
-    shortcut: Shortcut,
-    range_end: Option<Shortcut>,
+    base: Div,
 }
 impl ShortcutRow {
-    pub fn new(label: impl Into<SharedString>, shortcut: impl Into<Shortcut>) -> Self {
+    pub fn new(label: impl Into<String>, shortcut: impl Into<String>) -> Self {
+        let label = label.into();
+        let shortcut = shortcut.into();
         Self {
-            label: label.into(),
-            shortcut: shortcut.into(),
-            range_end: None,
-        }
-    }
-    pub fn range(mut self, last: impl Into<Shortcut>) -> Self {
-        self.range_end = Some(last.into());
-        self
-    }
-}
-impl RenderOnce for ShortcutRow {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        el! {
-            .div { flex; items_center; justify_between; gap_6; py_2; border_b_1; border_color: $(cx.theme().border); } [
-                .div { flex_1; min_w_0; } [$self.label],
-                .div { flex; items_center; gap_2; } [
-                    $(self.shortcut).ShortcutBadge::bound,
-                    @if (let Some(last) = self.range_end)
-                        "–",
-                        last.ShortcutBadge::bound,
-                    @end,
-                ],
-            ]
+            base: el! { .div.{ flex; items_center; gap: 24.0_f32; py:8.0_f32; border_b:1.0_f32; dyn_style:s=>$(s.border_color(theme().border)) }.[
+                label.text.{ flex_1 },
+                $(ShortcutBadge::new(&shortcut)),
+            ] },
         }
     }
 }
+container_traits!(ShortcutRow);
+
+pub struct ShortcutBadge {
+    base: Div,
+}
+
+impl ShortcutBadge {
+    pub fn new(stroke: &str) -> Self {
+        let keys = stroke.split(['-', '+', ' ']).filter(|key| !key.is_empty()).map(|key| {
+            let label = match key {
+                "ctrl" => "Ctrl".into(),
+                "alt" => "Alt".into(),
+                "shift" => "Shift".into(),
+                "space" => "Space".into(),
+                "escape" => "Esc".into(),
+                "left" => "←".into(),
+                "right" => "→".into(),
+                "up" => "↑".into(),
+                "down" => "↓".into(),
+                "–" => return el! { .div.[ $(key.to_owned()).text ] },
+                _ => {
+                    let mut characters = key.chars();
+                    let initial = characters.next().expect("nonempty key");
+                    format!("{}{}", initial.to_uppercase(), characters.as_str())
+                }
+            };
+            el! { .div.{
+                flex; items_center; justify_center;
+                h: 22.0_f32; min_w: 22.0_f32; px: 6.0_f32; rounded: 4.0_f32; border: 1.0_f32;
+                whitespace_nowrap;
+                dyn_style: s => $(s.bg(theme().surface).text_color(theme().text_muted).border_color(theme().border)
+                    .text_size(crate::app::Gds::current().appearance().typography().scaled(12.0)));
+            }.[label.text] }
+        });
+        Self {
+            base: el! { .div.{ flex; items_center; flex_none; gap: 4.0_f32 }.[..keys] },
+        }
+    }
+}
+container_traits!(ShortcutBadge);

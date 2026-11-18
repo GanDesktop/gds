@@ -28,7 +28,6 @@ pub enum NameError {
 }
 
 impl NameError {
-    /// Message id describing this rejection in the file manager's dialogs.
     pub fn label_id(self) -> &'static str {
         match self {
             Self::Empty => "transfer-name-empty",
@@ -74,13 +73,6 @@ impl NamedTarget {
 pub struct Collision {
     pub source: PathBuf,
     pub target: OsString,
-}
-
-impl Collision {
-    /// Display form of the conflicting target, safe for dialog text.
-    pub fn target_label(&self) -> String {
-        self.target.to_string_lossy().escape_debug().to_string()
-    }
 }
 
 /// Check one leaf name; no filesystem access is performed.

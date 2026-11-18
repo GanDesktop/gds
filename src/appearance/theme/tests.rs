@@ -1,73 +1,3 @@
-use gpui_kit::WindowAppearance;
-
-#[cfg(feature = "gui-tests")]
-#[gpui_kit::test]
-fn palette_reinstallation_preserves_thin_semantic_focus(cx: &mut gpui_kit::TestAppContext) {
-    use crate::app::AppExt as _;
-    use gpui_kit::{
-        Styled,
-        component::{Theme, ThemeStyled},
-        div, px, size,
-    };
-
-    cx.update(gpui_kit::init);
-    let window = cx.open_window(size(px(300.), px(80.)), |_, _| gpui_kit::Empty);
-    for builtin in super::BuiltinTheme::ALL {
-        for mode in [ModePreference::Light, ModePreference::Dark] {
-            let appearance = Appearance {
-                source: Source::Builtin,
-                builtin,
-                mode,
-                ..Appearance::default()
-            };
-            // Initial/manual apply and the prepared hot-reload path must agree,
-            // even when Kit's previous theme enabled its external ring.
-            for prepared in [false, true] {
-                window
-                    .update(cx, |_, window, cx| {
-                        Theme::update(cx, |theme| theme.focus_ring = true);
-                        if prepared {
-                            let prepared = appearance
-                                .prepare(WindowAppearance::Dark)
-                                .expect("prepare palette");
-                            cx.gds_mut()
-                                .appearance()
-                                .theme()
-                                .install(prepared)
-                                .expect("reload palette");
-                        } else {
-                            cx.gds_mut()
-                                .appearance()
-                                .theme()
-                                .apply(&appearance)
-                                .expect("apply palette");
-                        }
-                        let theme = Theme::global(cx);
-                        assert!(
-                            !theme.focus_ring,
-                            "{builtin:?} {mode:?} must not restore outer halos"
-                        );
-                        assert_eq!(theme.ring, cx.gds().appearance().theme().colors().primary);
-                        assert!(theme.ring.a > 0.0, "focus ink must remain visible");
-                        let mut control = div()
-                            .w(px(100.))
-                            .h(px(32.))
-                            .border_1()
-                            .rounded(theme.radius);
-                        let before = control.style().clone();
-                        let mut focused = control.focus_ring_style(window, cx);
-                        let after = focused.style();
-                        assert_eq!(before.size, after.size);
-                        assert_eq!(before.border_widths, after.border_widths);
-                        assert_eq!(before.corner_radii, after.corner_radii);
-                        assert_eq!(after.border_color, Some(theme.ring));
-                    })
-                    .expect("check installed focus policy");
-            }
-        }
-    }
-}
-
 use super::{Appearance, Error, Mode, ModePreference, Source, validate_opacity};
 
 #[test]
@@ -145,11 +75,9 @@ fn missing_palette_fallback_preserves_valid_opacity_and_selected_builtin() {
         sidebar_opacity: 0.8,
         rounded_corners: true,
     };
-    assert!(requested.prepare(WindowAppearance::Dark).is_err());
+    assert!(requested.prepare(Mode::Dark).is_err());
     let fallback = requested.builtin_fallback();
-    let prepared = fallback
-        .prepare(WindowAppearance::Dark)
-        .expect("local fallback");
+    let prepared = fallback.prepare(Mode::Dark).expect("local fallback");
     assert_eq!(prepared.appearance.content_opacity, 1.0);
     assert_eq!(prepared.appearance.sidebar_opacity, 0.8);
     assert_eq!(prepared.appearance.builtin, super::BuiltinTheme::Neon);
@@ -159,22 +87,10 @@ fn missing_palette_fallback_preserves_valid_opacity_and_selected_builtin() {
 
 #[test]
 fn platform_appearance_is_only_used_for_system_mode() {
-    assert_eq!(
-        ModePreference::System.resolve(WindowAppearance::VibrantLight),
-        Mode::Light
-    );
-    assert_eq!(
-        ModePreference::System.resolve(WindowAppearance::VibrantDark),
-        Mode::Dark
-    );
-    assert_eq!(
-        ModePreference::Light.resolve(WindowAppearance::Dark),
-        Mode::Light
-    );
-    assert_eq!(
-        ModePreference::Dark.resolve(WindowAppearance::Light),
-        Mode::Dark
-    );
+    assert_eq!(ModePreference::System.resolve(Mode::Light), Mode::Light);
+    assert_eq!(ModePreference::System.resolve(Mode::Dark), Mode::Dark);
+    assert_eq!(ModePreference::Light.resolve(Mode::Dark), Mode::Light);
+    assert_eq!(ModePreference::Dark.resolve(Mode::Light), Mode::Dark);
 }
 
 #[test]

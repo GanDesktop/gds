@@ -1,72 +1,57 @@
-//! Compact floating preview card for multi-item drag payloads.
+//! Floating preview card for a drag carrying several objects.
 
-mod content;
-mod footer;
-mod header;
+use crate::{app::Gds, appearance::tokens::DataListStyle, ui::container::container_traits};
+use anti_webui::prelude::*;
+use gds_uim::el;
 
-pub use content::DragCardContent;
-pub use footer::DragCardFooter;
-pub use header::DragCardHeader;
-
-use gds_uim::{component, el};
-use gpui_kit::component::{ActiveTheme as _, StyledExt as _, ThemeStyled as _};
-use gpui_kit::{IntoElement, prelude::*, *};
-
-use super::container::container_traits;
-
-const MIN_WIDTH: f32 = 140.;
-const MAX_WIDTH: f32 = 248.;
-const PADDING_X: f32 = 10.;
-const HEADER_PADDING_Y: f32 = 6.;
-const HEADER_GAP: f32 = 8.;
-const CONTENT_PADDING_Y: f32 = 6.;
-const CONTENT_GAP: f32 = 3.;
-const FOOTER_PADDING_BOTTOM: f32 = 6.;
-
-/// Floating preview card that follows the pointer during a multi-item drag.
-#[component]
-#[derive(IntoElement)]
-pub struct DragCard {
-    /// Pointer grab offset supplied by GPUI's `on_drag`, keeping the pointer
-    /// itself clear over the drop target.
-    #[attr(option)]
-    offset: Option<Point<Pixels>>,
-    base: Div,
-}
-
-impl DragCard {
-    /// Distance from the pointer tip to the card's top-left corner.
-    pub const POINTER_GAP: f32 = 12.;
-}
-
-impl Default for DragCard {
-    fn default() -> Self {
-        Self {
-            offset: None,
-            base: el! { .div { flex; flex_col; min_w: MIN_WIDTH.px; max_w: MAX_WIDTH.px; overflow_hidden; border_1; } },
+macro_rules! part {
+    ($name:ident, $base:expr) => {
+        pub struct $name {
+            base: Div,
         }
-    }
-}
 
-container_traits!(DragCard);
-
-impl RenderOnce for DragCard {
-    fn render(mut self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let style = std::mem::take(self.base.style());
-        let card = el! {
-            $(self.base) {
-                popover_style: cx;
-                border_color: $(cx.theme().border);
-                font_family: $(cx.theme().font_family.clone());
-                refine_style: $&style;
+        impl Default for $name {
+            fn default() -> Self {
+                Self { base: $base }
             }
-        };
-        match self.offset {
-            Some(offset) => {
-                let position = offset + point(px(Self::POINTER_GAP), px(Self::POINTER_GAP));
-                el! { .div { pl: $position.x; pt: $position.y; } [card] }.into_any_element()
-            }
-            None => card.into_any_element(),
         }
-    }
+
+        container_traits!($name);
+    };
 }
+
+part!(
+    DragCard,
+    el! { .div.{
+        flex; flex_col; min_w: 140.0_f32; max_w: 248.0_f32; overflow_hidden;
+        border: 1.0_f32; rounded: 8.0_f32; shadow_md;
+        dyn_style: style => $(style.bg(theme().overlay).border_color(theme().border).text_color(theme().text));
+    } }
+);
+
+part!(
+    DragCardHeader,
+    el! { .div.{
+        flex; items_center; gap: 8.0_f32; min_w: 0.0_f32; px: 10.0_f32; py: 6.0_f32;
+        border_b: 1.0_f32; font_weight: FontWeight::SEMIBOLD;
+        dyn_style: style => $(style.border_color(theme().border)
+            .text_size(Gds::current().appearance().typography().scaled(DataListStyle::META_SIZE)));
+    } }
+);
+
+part!(
+    DragCardContent,
+    el! { .div.{
+        flex; flex_col; gap: 3.0_f32; min_w: 0.0_f32; px: 10.0_f32; py: 6.0_f32;
+        dyn_style: style => $(style.text_size(Gds::current().appearance().typography().scaled(DataListStyle::NAME_SIZE)));
+    } }
+);
+
+part!(
+    DragCardFooter,
+    el! { .div.{
+        flex; items_center; min_w: 0.0_f32; px: 10.0_f32; pb: 6.0_f32;
+        dyn_style: style => $(style.text_color(theme().text_muted)
+            .text_size(Gds::current().appearance().typography().scaled(DataListStyle::META_SIZE)));
+    } }
+);

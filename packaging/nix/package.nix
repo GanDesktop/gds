@@ -44,7 +44,7 @@ rustPlatform.buildRustPackage {
   dontUseCmakeConfigure = true;
   cargoBuildFlags = [ "--bin" binary ];
   buildFeatures = features;
-  checkFeatures = features ++ [ "gpui-kit/test-support" ];
+  checkFeatures = features;
   cargoTestFlags = [ "--bin" binary "--lib" ];
 
   desktopItems = [ (makeDesktopItem (desktopItem // {

@@ -1,239 +1,190 @@
-//! Composable suite navigation rows, independent of the sidebar's layout.
+//! Navigation anatomy shared by settings and workspace sidebars.
+use super::{Icon, container::container_traits};
+use crate::appearance::tokens::{SIDEBAR_ICON_SIZE, SIDEBAR_ITEM_HEIGHT};
+use anti_webui::prelude::*;
+use gds_uim::el;
+use std::rc::Rc;
 
-use crate::appearance::tokens::{
-    ICON_BUTTON_SIZE, SIDEBAR_ICON_SIZE, SIDEBAR_ITEM_HEIGHT, SMALL, TOOLTIP_DELAY,
-};
-mod action;
-mod actions;
-mod content;
-mod details;
-mod header;
-mod icon;
-mod label;
+macro_rules! part {
+    ($name:ident, $base:expr) => {
+        pub struct $name {
+            base: Div,
+        }
+        impl Default for $name {
+            fn default() -> Self {
+                Self { base: $base }
+            }
+        }
+        container_traits!($name);
+    };
+}
+part!(
+    NavItemContent,
+    el! { .div.{ relative; flex; flex_col; w_full; min_w:0.0_f32 } }
+);
+part!(
+    NavItemHeader,
+    el! { .div.{ flex; items_center; flex_none; w_full; min_w:0.0_f32; h:SIDEBAR_ITEM_HEIGHT; px:8.0_f32; gap:8.0_f32 } }
+);
+part!(
+    NavItemLabel,
+    el! { .div.{ flex_1; min_w:0.0_f32; overflow_hidden; whitespace_nowrap } }
+);
+part!(NavItemDetails, el! { .div.{ w_full; min_w:0.0_f32 } });
+part!(
+    NavItemActions,
+    el! { .div.{ absolute; right:0.0_f32; top:3.0_f32; flex } }
+);
 
-pub use actions::NavItemActions;
-pub use content::NavItemContent;
-pub use details::NavItemDetails;
-pub use header::NavItemHeader;
-pub use label::NavItemLabel;
-
-pub use action::{corner_action, corner_button, hover_action};
-pub use icon::{pinned_icon, with_pin};
-
-use super::button::Button;
-use super::shortcut::ShortcutHint as Hint;
-use super::*;
-use gds_uim::{component, el};
-use gpui_kit::assets::IconName;
-use gpui_kit::component::{
-    ActiveTheme, Disableable as _, Icon, Selectable as _, button::ButtonVariants as _,
-};
-use gpui_kit::{IntoElement, prelude::*, *};
-
-const ITEM_GAP: f32 = 8.;
-const ITEM_RADIUS: f32 = 6.;
-
-/// Navigation rows supply their own full-width content to Kit's Button.
-/// This avoids its independently centered label container.
-#[component(gpui = gpui_kit)]
-#[derive(IntoElement)]
 pub struct NavItem {
-    id: ElementId,
-    button: Button,
-    icon: IconName,
-    label: SharedString,
-    #[attr]
-    compact: bool,
-    #[attr(option)]
-    presentation: Option<sidebar::SidebarPresentation>,
-    command: Option<Shortcut>,
-    shortcut: Option<Shortcut>,
-    disabled: bool,
-    /// Describe the compact row's state and properties on hover.
-    #[attr(into, option)]
-    tooltip_text: Option<SharedString>,
-    #[attr]
-    tooltip_enabled: bool,
-    /// Secondary content shares the row's hover, selection and click target.
-    #[attr(any_element, option)]
-    details: Option<AnyElement>,
-    /// Independent controls in the row's trailing slots.
-    #[attr]
-    trailing: Vec<AnyElement>,
-    on_middle_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    base: Div,
+    icon: Option<Icon>,
+    label: Rc<dyn Fn() -> String>,
+    active: Rc<dyn Fn() -> bool>,
+    expanded: Rc<dyn Fn() -> bool>,
+    presentation: Option<super::sidebar::SidebarPresentation>,
+    keytips: Vec<super::keytips::Anchor>,
+    trailing: Vec<View>,
+    corner: Option<View>,
 }
-
 impl NavItem {
-    pub fn new(id: impl Into<ElementId>, icon: IconName, label: impl Into<SharedString>) -> Self {
-        let id = id.into();
+    pub fn new(label: impl Into<String>) -> Self {
         let label = label.into();
-        let button =
-            el! { (~id).Button::new { ghost; text_size: SMALL; accessibility_label: ~label } };
         Self {
-            id,
-            button,
-            icon,
-            label,
-            compact: false,
+            base: div(),
+            label: Rc::new(move || label.clone()),
+            icon: None,
+            active: Rc::new(|| false),
+            expanded: Rc::new(|| true),
             presentation: None,
-            command: None,
-            shortcut: None,
-            disabled: false,
-            tooltip_text: None,
-            tooltip_enabled: true,
-            details: None,
+            keytips: Vec::new(),
             trailing: Vec::new(),
-            on_middle_click: None,
+            corner: None,
         }
     }
-
-    pub fn selected(mut self, selected: bool) -> Self {
-        self.button = self.button.selected(selected);
+    pub fn label_fn(mut self, label: impl Fn() -> String + 'static) -> Self {
+        self.label = Rc::new(label);
         self
     }
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self.button = self.button.disabled(disabled);
+    pub fn icon(mut self, icon: Icon) -> Self {
+        self.icon = Some(icon);
         self
     }
-    pub fn command(mut self, command: impl Into<Shortcut>) -> Self {
-        self.command = Some(command.into());
+    pub fn active(mut self, active: bool) -> Self {
+        self.active = Rc::new(move || active);
         self
     }
-
-    /// The binding this row performs outside the file workspace, where the
-    /// workspace command list does not apply.
-    pub fn shortcut(mut self, shortcut: Shortcut) -> Self {
-        self.shortcut = Some(shortcut);
+    pub fn active_when(mut self, active: impl Fn() -> bool + 'static) -> Self {
+        self.active = Rc::new(active);
         self
     }
-
-    pub fn on_click(
+    pub fn expanded_when(mut self, expanded: impl Fn() -> bool + 'static) -> Self {
+        self.expanded = Rc::new(expanded);
+        self
+    }
+    pub fn presentation(mut self, presentation: super::sidebar::SidebarPresentation) -> Self {
+        self.presentation = Some(presentation);
+        self
+    }
+    pub fn keytip(self, stroke: &'static str) -> Self {
+        self.keytip_when(stroke, || true)
+    }
+    pub fn keytip_when(
         mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        stroke: &'static str,
+        available: impl Fn() -> bool + 'static,
     ) -> Self {
-        self.button = self.button.on_click(handler);
+        self.keytips.push(
+            super::keytips::Anchor::new(stroke)
+                .trailing()
+                .when(available),
+        );
         self
     }
-
-    pub fn on_middle_click(
-        mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.on_middle_click = Some(Box::new(handler));
+    pub fn trailing(mut self, control: impl IntoView) -> Self {
+        self.trailing.push(control.into_view());
+        self
+    }
+    pub fn corner_action(mut self, control: impl IntoView) -> Self {
+        self.corner = Some(control.into_view());
+        self
+    }
+    pub fn on_click(mut self, callback: impl Fn(&PointerEvent) + 'static) -> Self {
+        self.base = self.base.on_click(callback);
+        self
+    }
+    pub fn on_aux_click(mut self, callback: impl Fn(&PointerEvent) + 'static) -> Self {
+        self.base = self.base.on_aux_click(callback);
         self
     }
 }
-
-impl RenderOnce for NavItem {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+impl IntoView for NavItem {
+    fn into_view(self) -> View {
         let Self {
-            id,
-            button,
+            base,
             icon,
             label,
-            compact,
+            active,
+            expanded,
             presentation,
-            command,
-            shortcut,
-            disabled,
-            tooltip_text,
-            tooltip_enabled,
-            details,
+            keytips,
             trailing,
-            on_middle_click,
+            corner,
         } = self;
-        let compact = presentation.map_or(compact, |value| value.progress() == 0.0);
-        let show_actions = presentation.is_none_or(|value| value.actions_visible());
-        let icon_inset = presentation.map(|value| {
-            value.interpolate(
-                ITEM_GAP,
-                (crate::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH
-                    - 2.0 * crate::appearance::tokens::SIDEBAR_PADDING
-                    - SIDEBAR_ICON_SIZE)
-                    / 2.0,
-            )
-        });
-        let trailing_width = trailing.len() as f32 * ICON_BUTTON_SIZE;
-        let header_right_padding = px(ITEM_GAP + trailing_width);
-        let trailing: Vec<_> = trailing.into_iter().map(|control| {
-            el! { .div { size: ICON_BUTTON_SIZE.px; flex; items_center; justify_center } [control] }
-        }).collect();
-        let has_details = details.is_some();
-        let selected = button.is_selected();
-        let content = el! {
-            .NavItemContent::default [
-                .NavItemHeader::default {
-                    overflow_hidden;
-                    @if (let Some(inset) = icon_inset)
-                        pl: inset.px; pr: header_right_padding;
-                    @else
-                        @if (compact) justify_center; @else pr: header_right_padding; @end;
-                    @end;
-                } [
-                    icon.Icon::new { size: SIDEBAR_ICON_SIZE.px; flex_shrink_0 },
-                    @if (!compact || presentation.is_some())
-                        .NavItemLabel::default {
-                            @if (let Some(value) = presentation) opacity: $(value.label_opacity()); @end;
-                        } [~label],
-                    @end,
+        let accessible_label = label.clone();
+        let tooltip_label = label.clone();
+        let accessible_active = active.clone();
+        let hovered = signal(false);
+        let focused = signal(false);
+        let layout = expanded.clone();
+        let actions = expanded.clone();
+        let trailing_width = trailing.len() as f32 * 32.0;
+        let item = el! { base.{
+            relative; flex; w_full; min_w: 0.0_f32; rounded: 6.0_f32;
+            cursor: CursorIcon::Pointer; focusable; select_none;
+            on_hover: move value => hovered.{ set: value };
+            on_focus_visible: move value => focused.{ set: value };
+            access: move a => $(a.role(Role::Button).label(accessible_label()).selected(accessible_active()));
+            dyn_style: move s => ${
+                let palette = crate::app::Gds::current().appearance().theme().colors();
+                s.bg(if active() { palette.selection } else if hovered.get() { palette.sidebar_hover() } else { Color::TRANSPARENT })
+                    .text_color(if active() { palette.selection_foreground } else { palette.sidebar_foreground })
+                    .outline(if focused.get() { 1.0_f32 } else { 0.0_f32 })
+                    .outline_offset(-1.0_f32)
+                    .outline_color(palette.primary)
+            };
+        }.[
+            .NavItemContent::default.[
+                .NavItemHeader::default.{
+                    dyn_style: move s => $({ let progress = presentation.map_or_else(|| if layout() {1.0} else {0.0}, |p| p.progress()); s.pl(10.0 - 2.0 * progress).pr(10.0 + (trailing_width - 2.0) * progress) });
+                }.[
+                    if let Some(icon) = icon [$(icon.view(SIDEBAR_ICON_SIZE))],
+                    .NavItemLabel::default.{
+                        dyn_style: move s => $(if let Some(presentation) = presentation { s.opacity(presentation.progress()) } else if expanded() { s } else { s.hidden() });
+                    }.[(move () => .label).text.{ ellipsis }],
                 ],
-                @if (let Some(details) = details) .NavItemDetails::default [details], @end,
-            ]
-        };
-        let button = el! {
-            button { w_full; p_0; rounded: ITEM_RADIUS.px;
-                @if (has_details) h_auto; @else h: SIDEBAR_ITEM_HEIGHT.px; @end;
-                text_color: $(cx.theme().sidebar_foreground);
-                @if (selected)
-                    bg: $(cx.theme().sidebar_accent); text_color: $(cx.theme().sidebar_accent_foreground);
-                @end;
-            } [content]
-        };
-        let shortcut = shortcut.or(command);
-        // A full-width row shows its key in its own trailing space, where it
-        // covers no other row; a collapsed row has no such space, so its label
-        // becomes a corner badge on the row itself.
-        let hint = match &shortcut {
-            Some(shortcut) if !disabled => Some(if compact {
-                keytips::anchor(window, cx, id.clone(), shortcut.clone())
-            } else {
-                keytips::row_anchor(window, cx, id.clone(), shortcut.clone())
-            }),
-            _ => None,
-        };
-        let tooltip_text = tooltip_text.unwrap_or_else(|| label.clone());
-        let tooltip = match shortcut {
-            Some(shortcut) => Hint::shortcut(tooltip_text, shortcut),
-            None => Hint::command(tooltip_text, None),
-        }
-        .builder();
-        let on_aux_click = (!disabled)
-            .then_some(on_middle_click)
-            .flatten()
-            .map(|handler| {
-                move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
-                    if event.is_middle_click() {
-                        cx.stop_propagation();
-                        handler(event, window, cx);
-                    }
-                }
-            });
-        el! {
-            .div {
-                # id; relative; w_full; flex_shrink_0;
-                @if (!has_details) h: SIDEBAR_ITEM_HEIGHT.px; @end;
-                @if (tooltip_enabled) tooltip_show_delay: TOOLTIP_DELAY; tooltip: tooltip; @end;
-                @if (let Some(on_aux_click) = on_aux_click) on_aux_click: on_aux_click; @end;
-            } [
-                button,
-                @if (show_actions && !trailing.is_empty())
-                    .NavItemActions::default [
-                        ..trailing,
-                    ],
-                @end,
-                @if (let Some(hint) = hint) hint, @end,
-            ]
-        }
+                .NavItemActions::default.{
+                    dyn_style: move s => $(if presentation.map_or_else(||actions(), |p| p.actions_visible()) && (hovered.get() || focused.get()) { s.flex() } else { s.hidden() });
+                }.[..trailing],
+                if let Some(corner) = corner [
+                    .div.{absolute; top: 0.0_f32; right: 0.0_f32;
+                        dyn_style: move s => $(if presentation.is_some_and(|p| p.progress() == 0.0)
+                            && (hovered.get() || focused.get()) {s.flex()} else {s.hidden()});
+                    }.[corner],
+                ],
+            ],
+            ..keytips,
+        ] };
+        tooltip_with(item, TooltipOptions::new(), move |_| {
+            let label = tooltip_label.clone();
+            move || {
+                let label = label.clone();
+                el! { .div.{
+                    max_w:280.0_f32; px:8.0_f32; py:4.0_f32; rounded:4.0_f32;
+                    dyn_style:s=>$(s.bg(theme().tooltip).text_color(theme().on_tooltip)
+                        .text_size(crate::app::Gds::current().appearance().typography().scaled(12.0)));
+                }.[(move()=>.label).text] }
+            }
+        }).into_view()
     }
 }

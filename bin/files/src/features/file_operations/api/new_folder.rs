@@ -5,10 +5,6 @@ use std::{ffi::OsString, fs, io, path::PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error("operation cancelled")]
-    Cancelled,
-    #[error(transparent)]
-    Task(#[from] gds::service::task_manager::Error),
     #[error(transparent)]
     Name(#[from] names::NameError),
     #[error("an item named {name} already exists in {directory}")]
@@ -61,21 +57,5 @@ impl Request {
                 source,
             }),
         }
-    }
-}
-
-impl Request {
-    pub fn spawn(
-        self,
-        tasks: &gds::service::task_manager::Scope,
-        cancel: tokio_util::sync::CancellationToken,
-    ) -> gds::service::task_manager::Task<Result<Created, Error>> {
-        tasks.spawn_blocking_named("Create folder", move || {
-            if cancel.is_cancelled() {
-                Err(Error::Cancelled)
-            } else {
-                self.execute()
-            }
-        })
     }
 }

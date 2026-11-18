@@ -1,17 +1,4 @@
-//! Suite-wide decisions and notification navigation. Applications own their commands.
-use crate::app::AppExt as _;
-use gpui_kit::{Action, App, KeyBinding, actions};
-
-actions!(
-    gds,
-    [
-        FocusNotifications,
-        CloseNotification,
-        CloseAllNotifications,
-        Cancel
-    ]
-);
-
+//! Suite-wide command metadata; applications own their event routing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
     FocusNotifications,
@@ -35,17 +22,6 @@ impl Command {
             Self::Cancel => "close",
         }
     }
-    pub fn action(self) -> Box<dyn Action> {
-        match self {
-            Self::FocusNotifications => Box::new(FocusNotifications),
-            Self::CloseNotification => Box::new(CloseNotification),
-            Self::CloseAllNotifications => Box::new(CloseAllNotifications),
-            Self::Cancel => Box::new(Cancel),
-        }
-    }
-    pub fn context(self) -> Option<&'static str> {
-        None
-    }
     pub fn default_stroke(self) -> &'static str {
         match self {
             Self::FocusNotifications => "alt-n",
@@ -54,23 +30,4 @@ impl Command {
             Self::Cancel => "escape",
         }
     }
-}
-
-pub(crate) fn register(cx: &mut App) {
-    let bindings = Command::ALL
-        .into_iter()
-        .map(|command| {
-            KeyBinding::load(
-                command.default_stroke(),
-                command.action(),
-                None,
-                false,
-                None,
-                cx,
-            )
-            .expect("suite shortcuts are valid")
-        })
-        .collect::<Vec<_>>();
-    cx.bind_keys(bindings);
-    cx.gds_mut().ui().register_dialogs();
 }

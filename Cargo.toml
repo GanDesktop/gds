@@ -14,22 +14,13 @@ repository = "https://github.com/GanDesktop/gds"
 feedback = "https://github.com/GanDesktop/gds/issues"
 license-file = "LICENSE"
 credits = [
-    { name = "GPUI", website = "https://github.com/zed-industries/zed" },
-    { name = "gpui-kit", website = "https://github.com/longbridge/gpui-kit" },
+    { name = "AntiWebUI", website = "https://github.com/bea4dev/AntiWebUI" },
     { name = "gds-uim", website = "https://github.com/GanDesktop/gds-uim" },
 ]
 
 [package.metadata.gds.about.applications.gds-files]
 name = "GDS Files"
 icon = "assets/files/icon-solid.svg"
-
-[package.metadata.gds.about.applications.gds-agents]
-name = "GDS Agents"
-icon = "assets/agents/icon-solid.svg"
-
-[package.metadata.gds.about.applications.gds-images]
-name = "GDS Images"
-icon = "assets/images/icon-solid.svg"
 
 [workspace]
 members = ["macros/gds-settings-derive"]
@@ -80,31 +71,16 @@ path = "bin/files/src/main.rs"
 required-features = ["files"]
 
 [[bin]]
-name = "gds-agents"
-path = "bin/agents/src/main.rs"
-required-features = ["agents"]
-
-[[bin]]
 name = "xdg-desktop-portal-gds"
 path = "bin/portal/src/main.rs"
 required-features = ["portal"]
-
-[[bin]]
-name = "gds-nixes"
-path = "bin/nixes/src/main.rs"
-required-features = ["nixes"]
-
-[[bin]]
-name = "gds-images"
-path = "bin/images/src/main.rs"
-required-features = ["images"]
 
 [features]
 # Capability features. Dependencies are declared once in the group of the
 # capability that owns them; every feature enables the packages its own code
 # uses directly.
 default = []
-app = ["task-manager", "dep:gpui-kit", "dep:tracing"]
+app = ["task-manager", "dep:anti-webui", "dep:tracing"]
 task-manager = ["dep:tokio", "dep:tokio-util", "dep:thiserror", "dep:nix"]
 desktop-protocol = ["dep:serde"]
 persistence = ["dep:thiserror", "dep:tempfile", "dep:nix"]
@@ -139,17 +115,16 @@ remote = [
 ]
 appearance = [
     "app", "persistence", "task-manager",
-    "watch", "dep:gpui-kit", "dep:fontconfig-sys", "dep:directories", "dep:tracing",
+    "watch", "dep:fontconfig-sys", "dep:directories", "dep:tracing",
     "dep:serde", "dep:serde_json", "dep:thiserror", "dep:toml", "dep:rust-ini",
     "dep:zbus", "dep:futures-lite",
 ]
-i18n = ["dep:fluent-bundle", "dep:fluent-syntax", "dep:gpui-kit", "dep:serde", "dep:thiserror", "dep:unic-langid"]
+i18n = ["app", "dep:fluent-bundle", "dep:fluent-syntax", "dep:serde", "dep:thiserror", "dep:unic-langid"]
 ui = [
     "app",
     "appearance", "i18n", "persistence", "logs", "terminal", "file-inspection",
-    "dep:gds-settings-derive", "dep:gds-uim", "dep:gpui", "dep:anyhow",
+    "dep:gds-settings-derive", "dep:gds-uim", "dep:anyhow",
     "dep:unicode-segmentation", "dep:unicode-width", "dep:chrono", "dep:serde_json",
-    "dep:rust-embed",
 ]
 files = [
     "ui", "desktop", "file-tags", "storage", "remote", "dep:clap", "dep:globset",
@@ -168,7 +143,7 @@ agents = [
     "gpui-kit/tree-sitter-typescript", "gpui-kit/tree-sitter-diff",
     "dep:arboard", "dep:dirs", "dep:which",
     "dep:strum", "dep:time", "dep:agent-client-protocol",
-    "dep:process-wrap",
+    "dep:process-wrap", "dep:rust-embed",
 ]
 nixes = ["ui", "dep:clap", "dep:tokio", "dep:serde", "dep:serde_json", "dep:anyhow"]
 image-engine = [
@@ -197,13 +172,14 @@ images = [
     "dep:toml",
     "dep:trash",
     "dep:url",
+    "dep:rust-embed",
 ]
 portal = [
     "desktop-protocol", "dep:anyhow", "dep:tokio", "dep:clap", "dep:nix",
     "dep:serde_json", "dep:thiserror", "dep:url", "dep:zbus",
 ]
-gui-tests = ["files", "agents", "gpui-kit/test-support", "zbus?/p2p"]
-files-e2e = ["files", "gpui-kit/test-support", "dep:futures"]
+gui-tests = ["files", "zbus?/p2p"]
+files-e2e = ["files", "dep:futures"]
 
 [dependencies]
 # Async runtime, errors and serialization shared by several capabilities.
@@ -250,7 +226,6 @@ markup5ever_rcdom = { version = "=0.3.0", optional = true }
 
 # Desktop integration and filesystem watching.
 notify = { version = "8", optional = true }
-open = { version = "5", optional = true }
 infer = { version = "0.19", default-features = false, optional = true }
 
 # Persistence and SQLite storage.
@@ -301,9 +276,10 @@ fluent-bundle = { version = "0.16", optional = true }
 fluent-syntax = { version = "0.12", optional = true }
 unic-langid = { version = "0.9", optional = true }
 
-# Shared UI.
+# Shared UI. Files uses the native Wayland runtime; other GUI binaries are excluded during migration.
+anti-webui = { git = "https://github.com/GanDesktop/AntiWebUI", rev = "1e55adecf93bf14d69c0150712de628dced1147b", default-features = false, features = ["wayland", "svg"], optional = true }
 gpui = { package = "gpui", git = "https://github.com/GanDesktop/gpui-fast", branch = "gds-0.1.16", optional = true }
-gds-uim = { git = "https://github.com/GanDesktop/gds-uim", rev = "90f5424edf6ba9c5ffaacc2b11cb5ffe24960519", optional = true }
+gds-uim = { git = "https://github.com/GanDesktop/gds-uim", rev = "b67c2a3bb6071b6a92c8f1d0aa739928397c9cb6", optional = true }
 gds-settings-derive = { path = "macros/gds-settings-derive", optional = true }
 # Kit's RustEmbed sources must stay self-contained in installed dev builds too.
 rust-embed = { version = "8", optional = true, features = ["debug-embed"] }
@@ -342,6 +318,9 @@ rustix = { version = "1.1", features = ["fs", "event"], optional = true }
 # Owner/group names come from the system NSS interfaces (`getpwuid_r` /
 # `getgrgid_r`); we do not parse passwd files ourselves.
 nix = { version = "0.31", features = ["user", "fs", "process", "signal"], optional = true }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+open = { version = "5", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 arboard = { version = "=3.6.1", optional = true }

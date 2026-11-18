@@ -6,23 +6,23 @@ Write code with holistic architectural taste. Every change should move GDS towar
 
 ## Project Goal & Platform Support
 
-GDS (Gan Desktop Suit) is a suite of native desktop applications built on GPUI around one shared visual language.
+GDS (Gan Desktop Suit) shares a native visual language. This experimental branch builds Files with AntiWebUI and the UI-independent Portal; Agents, Nixes and Images retain their source but are excluded from binary targets.
 
 - **Primary target**: Linux + Wayland (verified internally first on NixOS + Niri; user-facing docs present Linux + Wayland as the primary target without over-indexing on internal test setups).
-- **Secondary target**: Linux + X11.
+- **Current Files backend**: Wayland only; X11 is outside this migration.
 - **Future targets**: Windows and macOS.
 
 ## Tech Stack
 
-1. **UI Runtime**: [GPUI](https://www.gpui.rs/) (`gpui-fast` backend)
-2. **Component Primitives**: [gpui-kit](https://github.com/longbridge/gpui-kit)
-3. **Declarative UI Composition (Mandatory)**: Use **[gds-uim](https://github.com/GanDesktop/gds-uim)** (`el!`, `m!`) to construct UI trees. Declare reusable multi-part components in anatomical form (like `ContentPage::default()`) and instantiate structural components via `Default::default()`. Do not bypass `gds-uim` with sprawling imperative builder chains.
+1. **UI Runtime**: [AntiWebUI](https://github.com/bea4dev/AntiWebUI), using the pinned GanDesktop fork.
+2. **Component Primitives**: AntiWebUI native builders, widgets, signals and owners.
+3. **Declarative UI Composition (Mandatory)**: Use v2 of **[gds-uim](https://github.com/GanDesktop/gds-uim)** (`el!`, `m!`) to construct UI trees. Declare reusable multi-part components in anatomical form (like `ContentPage::default()`) and instantiate structural components via `Default::default()`. Do not bypass `gds-uim` with sprawling imperative builder chains.
 4. **Internationalization**: Mozilla Fluent (`gds::i18n::t` / `tr!`).
 
 ## Repository & Crate Architecture
 
 - **Single root crate**: Shared library code lives in `src/lib.rs` (default features empty). Applications live in `bin/<app>/src/` (`files`, `agents`, `portal`, `nixes`) and are declared as `[[bin]]` targets with `required-features` in the root `Cargo.toml`. Procedural macros live in `macros/` (e.g., `macros/gds-settings-derive`).
-- **Strict feature isolation**: Optional modules and dependencies share capability feature names. `desktop-protocol` stays pure Serde; `portal` must never pull in GPUI, SQLite, terminal, or remote file backends.
+- **Strict feature isolation**: Optional modules and dependencies share capability feature names. `desktop-protocol` stays pure Serde; `portal` must never pull in a UI runtime, SQLite, terminal, or remote file backends.
 - **Packaging**: Build and distro definitions live in `packaging/` (`nix/`, `fedora/`, `debian/`, `arch/`, `linux/`, `cloudflare/`). Root `flake.nix`, `flake.lock`, and `shell.nix` delegate to `packaging/nix/`. Build outputs stay in `target/`.
 - **Single license**: All first-party code shares the root `LICENSE` (Apache-2.0). Do not duplicate `LICENSE` or `NOTICE` inside `bin/*`.
 - **Application identity & icons**: Use namespace `io.github.GanDesktop`. In-app identity icons use `assets/<app>/icon-solid.svg`; desktop launchers use `assets/<app>/icon-desktop.svg` and localized entries from `assets/<app>/desktop.toml`.
@@ -31,9 +31,9 @@ GDS (Gan Desktop Suit) is a suite of native desktop applications built on GPUI a
 ## Dependencies & Runtime Boundaries
 
 - **No vendored third-party source**: Never copy upstream crates into `vendor/`. Maintain required forks on versioned branches in `GanDesktop/*`, reference them directly via Cargo Git dependencies (`branch`/`rev`) without `[patch.crates-io]`, pin commits in `Cargo.lock` + `packaging/nix/cargo-lock.nix`, and document active forks in [docs/decisions/upstream-patches.md](docs/decisions/upstream-patches.md).
-- **Tokio for application I/O, GPUI for UI**: All application async I/O (processes, signals, timers, `zbus`, SQLite, SFTP/SMB, PTY) runs on Tokio owned by `service::task_manager::Supervisor`. Do not introduce `async-io`, `async-process`, or `async-signal` in application code. Services accept task `Scope`s rather than raw Tokio runtime handles, and `src/service/*` never depends on `ui` or GPUI types.
+- **Tokio for application I/O, AntiWebUI for UI**: All application async I/O (processes, signals, timers, `zbus`, SQLite, SFTP/SMB, PTY) runs on Tokio owned by `service::task_manager::Supervisor`. Do not introduce `async-io`, `async-process`, or `async-signal` in application code. Services accept task `Scope`s rather than raw Tokio runtime handles, and `src/service/*` never depends on `ui` or AntiWebUI types.
 - **Application slices (FSD)**: GUI binaries follow Feature-Sliced Design (`app → pages → widgets → features → entities → shared`). Cross-slice imports go strictly through `<slice>.rs` public APIs; same-layer slices never depend on each other except explicit entity relationships exposed under `entities/<provider>/x/<consumer>`.
-- **Context accessors**: `gds::app::AppExt` is the sole root extension trait on GPUI `App` (`cx.gds()` / `cx.gds_mut()`), exposing inherent accessors (`tasks()`, `appearance()`, `i18n()`, `ui()`). App FSD slices attach domain accessors onto `Gds` via local extension traits exported from their slice root.
+- **Context accessors**: `Gds::current()` returns the typed application services (`tasks()`, `appearance()`, `i18n()`, `ui()`). Native signals and callbacks belong to explicit reactive owners. App-wide channels use `Gds::with`; window work uses the window owner and its supervised task scope. Do not recreate GPUI contexts or entities.
 - **Opt-in diagnostics**: CLI flags use `clap`. In-memory logs and the debug/task viewer (`Ctrl+Shift+L`) are created **only** when `--enable-logs` is passed.
 
 ## UI & Reusability Principles
@@ -71,12 +71,13 @@ GDS (Gan Desktop Suit) is a suite of native desktop applications built on GPUI a
 - **Magic values**: Trivial constants (`0`, `1`, `24` hours) and one-off test literals are fine inline; user-tunable values belong in configuration defaults; fixed non-trivial domain constants belong in named `const` or `static` items.
 - **Prefer proven standard/ecosystem APIs**: Use `str::strip_prefix`, `split`, `trim`, and battle-tested crates rather than hand-rolled byte slicing or half-baked wheels.
 
-### UIM & GPUI Conventions
+### UIM & Native Ownership Conventions
 
 - Import `el`, `m`, and `t` / `tr` locally at call sites rather than writing full paths.
-- Declare element IDs with `# expr` (e.g., `# format!("audio-{id}")`). Pass constants, paths, variables, and macro calls directly as DSL values; wrap in `$(...)` only when Rust field access, method chains, or arithmetic require escaping.
-- Prefer member methods or pre-bound closures over deeply nested inline `on_click` closures.
-- **One-way parent-to-child entity borrows**: Enforce strictly unidirectional synchronous borrowing across GPUI `Entity<T>` graphs—a parent may `read`/`update` its child entities, never the reverse while the child's lease is active. Because `EntityMap` checks exclusive update leases at runtime, a child entity or third-party stateful delegate (e.g., `TableDelegate`, `InputState`) must never call `parent.update(cx, ...)` while leased: capture `WeakEntity<Parent>` directly in DOM listeners without wrapping in `child.update`, close `child.update` before calling `parent.update`, or defer parent callbacks via `cx.defer` (and if a synchronous trait signature cannot defer, clear local mirror state in place and guard against re-entrant child borrows). Whenever adding parent-side CoW (`Arc::make_mut`) mirror-release helpers that borrow child entities, audit all inbound callbacks from those children to ensure no synchronous borrow cycle can form.
+- Use UIM v2 explicit attribute and child application (`.div.{ ... }.[ ... ]`). Read the installed `gds-uim` skill and current grammar; do not mix in the old implicit-block syntax.
+- Prefer member methods or pre-bound closures over deeply nested inline event handlers.
+- Construct state under its stable owner. A transient `dyn_view` subtree must not own signals or delivery channels used after that subtree is replaced. Create reactive views inside their owning callbacks.
+- Release `RefCell` borrows before publishing signal changes, reporting notices, or invoking callbacks that may render or read the same state. Use weak window references and request identities for asynchronous completion; keep cleanup work supervised until it actually finishes.
 
 ### Comments
 

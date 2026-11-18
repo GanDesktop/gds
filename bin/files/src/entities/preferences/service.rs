@@ -1,17 +1,15 @@
-//! One application snapshot and an ordered writer drained by the task supervisor.
+//! Reactive application preferences and an ordered writer drained at shutdown.
 
 use super::{Preferences, api, presentation};
-use gds::app::AppExt as _;
-use gds::service::task_manager::Scope;
-use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
+use anti_webui::prelude::*;
+use gds::{app::Gds, service::task_manager::Scope};
 use std::{
-    ops::Deref,
+    cell::RefCell,
     path::PathBuf,
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 use tokio::sync::mpsc;
-
-pub struct SaveFailed(pub String);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -25,184 +23,128 @@ pub enum Error {
 
 type Queue = Arc<Mutex<Option<mpsc::UnboundedSender<Preferences>>>>;
 
-struct Installed(Entity<Service>);
-impl Global for Installed {}
-
-pub struct Service {
-    current: Preferences,
-    queue: Queue,
-    _updates: Task<()>,
+thread_local! {
+    static INSTALLED: RefCell<Option<Service>> = const { RefCell::new(None) };
 }
-impl EventEmitter<SaveFailed> for Service {}
+
+#[derive(Clone)]
+pub struct Service(Rc<State>);
+
+struct State {
+    current: Signal<Preferences>,
+    error: Signal<Option<String>>,
+    queue: Queue,
+    tasks: Scope,
+}
 
 impl Service {
-    pub fn current(&self) -> &Preferences {
-        &self.current
+    /// # Errors
+    /// Reports an unavailable configuration directory.
+    pub fn install(preferences: Preferences, tasks: &Scope) -> Result<Self, Error> {
+        let service = Self::new(preferences, api::path()?, tasks);
+        INSTALLED.with(|installed| *installed.borrow_mut() = Some(service.clone()));
+        on_cleanup(|| {
+            INSTALLED.with(|installed| installed.borrow_mut().take());
+        });
+        Ok(service)
     }
 
-    fn new(preferences: Preferences, path: PathBuf, tasks: &Scope, cx: &mut Context<Self>) -> Self {
+    pub fn current() -> Self {
+        INSTALLED.with(|installed| {
+            installed
+                .borrow()
+                .as_ref()
+                .expect("Files preferences installed before windows")
+                .clone()
+        })
+    }
+
+    pub fn snapshot(&self) -> Preferences {
+        self.0.current.get()
+    }
+    pub fn state(&self) -> Signal<Preferences> {
+        self.0.current
+    }
+    pub fn error(&self) -> Signal<Option<String>> {
+        self.0.error
+    }
+
+    fn new(preferences: Preferences, path: PathBuf, tasks: &Scope) -> Self {
         let (sender, mut receiver) = mpsc::unbounded_channel::<Preferences>();
         let queue = Arc::new(Mutex::new(Some(sender)));
         let closing = queue.clone();
         let cancel = tasks.token();
-        // Closing the sender seals admission. The writer drains accepted changes
-        // before its blocking task completes, including during application exit.
         tasks.spawn_named("Close preferences writer on exit", async move {
             cancel.cancelled().await;
             closing.lock().expect("preferences queue lock").take();
         });
-        let (results, mut saved) = mpsc::unbounded_channel();
+        let error = signal(None);
+        let results = ui_channel(move |result: Result<(), String>| {
+            if let Err(message) = result {
+                error.set(Some(message));
+            }
+        });
         let mut store = api::Store::new(path);
         let writer = tasks.spawn_blocking_named("Save preferences", move || {
             while let Some(mut preferences) = receiver.blocking_recv() {
                 while let Ok(newer) = receiver.try_recv() {
                     preferences = newer;
                 }
-                let result = store.save(&preferences);
+                let result = store.save(&preferences).map_err(|error| error.to_string());
                 if let Err(error) = &result {
                     tracing::error!(%error, "Cannot save Files preferences");
                 }
-                let _ = results.send(result);
+                results.send(result);
             }
         });
-        let updates = cx.spawn(async move |this, cx| {
-            while let Some(result) = saved.recv().await {
-                if let Err(error) = result {
-                    let _ = this.update(cx, |_, cx| cx.emit(SaveFailed(error.to_string())));
+        Gds::current()
+            .tasks()
+            .spawn("Observe preferences writer", writer)
+            .then(move |result| {
+                if let Err(failure) = result.and_then(std::convert::identity) {
+                    error.set(Some(failure.to_string()));
                 }
-            }
-            if let Err(error) = writer.await {
-                tracing::error!(%error, "Files preferences writer stopped");
-                let _ = this.update(cx, |_, cx| cx.emit(SaveFailed(error.to_string())));
-            }
-        });
-        Self {
-            current: preferences,
+            });
+        Self(Rc::new(State {
+            current: signal(preferences),
+            error,
             queue,
-            _updates: updates,
-        }
+            tasks: tasks.clone(),
+        }))
     }
 
-    fn update(&mut self, preferences: Preferences, cx: &mut Context<Self>) -> Result<(), Error> {
-        let prepared = presentation::Prepared::new(&preferences, &self.current, cx)?;
-        let queue = self.queue.lock().expect("preferences queue lock");
+    /// # Errors
+    /// Rejects invalid presentation values and edits after shutdown admission closes.
+    pub fn update(&self, preferences: Preferences) -> Result<(), Error> {
+        let prepared = presentation::Prepared::new(&preferences, &self.0.current.get_untracked())?;
+        let queue = self.0.queue.lock().expect("preferences queue lock");
         let sender = queue.as_ref().ok_or(Error::Closed)?;
-        if cx.gds().tasks().is_shutting_down() || sender.is_closed() {
+        if self.0.tasks.token().is_cancelled() || sender.is_closed() {
             return Err(Error::Closed);
         }
-        // Persist failures leave this accepted snapshot active in every window.
-        // The lock prevents shutdown from closing admission during the commit.
         sender
             .send(preferences.clone())
             .map_err(|_| Error::Closed)?;
-        prepared.install(&preferences, cx);
-        cx.gds_mut()
-            .appearance()
-            .theme()
-            .configure_hot_reload(preferences.appearance.clone());
-        if self.current != preferences {
-            self.current = preferences;
-            cx.notify();
-        }
+        drop(queue);
+        batch(|| {
+            prepared.install(&preferences);
+            Gds::current()
+                .appearance()
+                .theme()
+                .configure_hot_reload(preferences.appearance.clone());
+            self.0.current.set_if_changed(preferences);
+        });
         Ok(())
     }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct Accessor<C> {
-    cx: C,
-}
-
-pub(crate) trait PreferencesExt {
-    type Context<'a>: gds::app::Context
-    where
-        Self: 'a;
-
-    fn preferences(&mut self) -> Accessor<Self::Context<'_>>;
-}
-
-impl<C: gds::app::Context> PreferencesExt for gds::app::Gds<C> {
-    type Context<'a>
-        = C::Reborrowed<'a>
-    where
-        C: 'a;
-
-    fn preferences(&mut self) -> Accessor<C::Reborrowed<'_>> {
-        Accessor {
-            cx: self.reborrow().into_inner(),
-        }
-    }
-}
-
-impl<C: Deref<Target = App>> Accessor<C> {
-    pub(crate) fn current(&self) -> Preferences {
-        self.service().read(&self.cx).current.clone()
-    }
-
-    pub(crate) fn try_current(&self) -> Option<Preferences> {
-        self.cx
-            .try_global::<Installed>()
-            .map(|installed| installed.0.read(&self.cx).current.clone())
-    }
-
-    pub(crate) fn service(&self) -> Entity<Service> {
-        self.cx.global::<Installed>().0.clone()
-    }
-}
-
-impl Accessor<&mut App> {
-    /// # Errors
-    /// Reports an unavailable application configuration directory.
-    pub(crate) fn initialize(
-        &mut self,
-        preferences: Preferences,
-        tasks: &Scope,
-    ) -> Result<Entity<Service>, Error> {
-        Ok(self.install(preferences, api::path()?, tasks))
-    }
-
-    #[cfg(all(test, feature = "gui-tests"))]
-    pub(crate) fn init_test(
-        &mut self,
-        preferences: Preferences,
-        path: PathBuf,
-        tasks: &Scope,
-    ) -> Entity<Service> {
-        self.install(preferences, path, tasks)
-    }
-
-    fn install(
-        &mut self,
-        preferences: Preferences,
-        path: PathBuf,
-        tasks: &Scope,
-    ) -> Entity<Service> {
-        assert!(
-            !self.cx.has_global::<Installed>(),
-            "preferences already initialized"
-        );
-        let service = self.cx.new(|cx| Service::new(preferences, path, tasks, cx));
-        self.cx.set_global(Installed(service.clone()));
-        service
-    }
 
     /// # Errors
     /// Rejects invalid presentation values or updates during shutdown.
-    pub(crate) fn update(&mut self, preferences: Preferences) -> Result<(), Error> {
-        let service = self.service();
-        service.update(self.cx, |service, cx| service.update(preferences, cx))
-    }
-
-    /// Edit the latest application snapshot, preserving other windows' changes.
-    ///
-    /// # Errors
-    /// Rejects invalid presentation values or updates during shutdown.
-    pub(crate) fn edit(&mut self, edit: impl FnOnce(&mut Preferences)) -> Result<(), Error> {
-        let mut preferences = self.current();
+    pub fn edit(&self, edit: impl FnOnce(&mut Preferences)) -> Result<(), Error> {
+        let mut preferences = self.0.current.get_untracked();
         edit(&mut preferences);
         self.update(preferences)
     }
 }
 
-#[cfg(all(test, feature = "gui-tests"))]
+#[cfg(test)]
 mod tests;

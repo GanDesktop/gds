@@ -269,19 +269,6 @@ pub enum Kind {
     Restore,
 }
 
-impl Kind {
-    pub fn label_id(self) -> &'static str {
-        match self {
-            Self::Copy => "history-copy",
-            Self::Move => "history-move",
-            Self::Rename => "history-rename",
-            Self::NewFolder => "history-new-folder",
-            Self::Trash => "history-trash",
-            Self::Restore => "history-restore",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrashPolicy {
     Unmodified,

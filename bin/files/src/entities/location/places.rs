@@ -145,16 +145,25 @@ impl Save {
 }
 
 impl Places {
-    #[cfg(all(test, feature = "gui-tests"))]
-    pub(crate) fn for_tests(pinned: Vec<Location>, recent: Vec<Location>) -> Self {
-        Self {
-            snapshot: Snapshot {
-                pinned,
-                recent,
-                ..Snapshot::default()
-            },
-            ..Self::default()
-        }
+    /// Keep accepted edits alive until the closing window has drained them.
+    pub(crate) fn drain_on_close(
+        &self,
+        tasks: &gds::service::task_manager::Scope,
+        closing: tokio_util::sync::CancellationToken,
+    ) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        let save = Save {
+            store,
+            pending: self.pending.clone(),
+        };
+        tasks.spawn_named("Flush closing Files window", async move {
+            closing.cancelled().await;
+            if let Err(error) = save.run().await {
+                tracing::error!(%error, "Cannot flush Files places");
+            }
+        });
     }
 
     pub(crate) fn shutdown(&self) -> Option<Shutdown> {
@@ -177,6 +186,10 @@ impl Places {
     pub(crate) fn record(&mut self, location: impl Into<Location>) {
         self.change(Change::Recent(location.into()));
     }
+    #[expect(
+        dead_code,
+        reason = "Remote favorite edits retain their typed domain entry point"
+    )]
     pub(crate) fn toggle_remote_favorite(&mut self, address: gds::service::remote::Address) {
         self.toggle_favorite(Location::Remote(address));
     }

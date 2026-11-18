@@ -64,10 +64,6 @@ pub(crate) fn validate_name(name: impl AsRef<OsStr>, current: &OsStr) -> Result<
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error("operation cancelled")]
-    Cancelled,
-    #[error(transparent)]
-    Task(#[from] gds::service::task_manager::Error),
     #[error(transparent)]
     Name(#[from] NameError),
     #[error("cannot rename a path without a parent and file name: {path}")]
@@ -179,20 +175,6 @@ impl Request {
         // API is added here.
         Err(Error::Unsupported {
             path: source.to_path_buf(),
-        })
-    }
-
-    pub fn spawn(
-        self,
-        tasks: &gds::service::task_manager::Scope,
-        cancel: tokio_util::sync::CancellationToken,
-    ) -> gds::service::task_manager::Task<Result<Renamed, Error>> {
-        tasks.spawn_blocking_named("Rename file", move || {
-            if cancel.is_cancelled() {
-                Err(Error::Cancelled)
-            } else {
-                self.execute()
-            }
         })
     }
 }

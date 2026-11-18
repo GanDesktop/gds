@@ -1,17 +1,4 @@
 use crate::entities::preferences::FilesPreferences;
-use crate::widgets::settings::ui::View;
-use gds::app::AppExt as _;
-use gds::i18n::t;
-use gds::ui::{
-    button::Button,
-    settings::{SettingReset, form},
-};
-use gds_uim::el;
-use gpui_kit::{
-    assets::IconName,
-    component::{ActiveTheme, Icon, Sizable, button::ButtonVariants},
-    *,
-};
 
 /// Form model for GDS Files runtime performance parameters displayed on [`super::Page::Performance`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, gds::ConfigEditor)]
@@ -245,10 +232,6 @@ impl Default for PerformanceForm {
 }
 
 impl PerformanceForm {
-    pub(in crate::widgets::settings::ui) fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
-
     pub(in crate::widgets::settings::ui) fn apply_to(&self, files: &mut FilesPreferences) -> bool {
         if *self == Self::from(&*files) {
             return false;
@@ -277,134 +260,75 @@ impl PerformanceForm {
     }
 }
 
-impl View {
-    pub(in crate::widgets::settings::ui) fn render_performance(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let colors = cx.gds().appearance().theme().colors();
+impl super::super::View {
+    pub(in crate::widgets::settings::ui) fn performance(&self) -> anti_webui::prelude::Div {
+        use anti_webui::prelude::*;
+        use gds::{
+            i18n,
+            ui::{Icon, IconButton, settings::SettingsReset},
+        };
+        use gds_uim::el;
+
         let unlocked = self.performance_unlocked;
-        let reset_label = t!(@cx, "form-reset");
-        let on_reset = cx.listener(Self::reset_performance);
-        let reset = (unlocked && !PerformanceForm::from(&self.preferences.files).is_default())
-            .then(|| {
-                Button::icon_button("settings-performance-reset")
-                    .control_icon(IconName::RotateCcw)
-                    .accessibility_label(reset_label.clone())
-                    .tooltip(reset_label)
-                    .on_click(on_reset)
-            });
-        let action = if unlocked {
-            el! { .SettingReset::default [..reset] }.into_any_element()
-        } else {
-            Button::new("settings-performance-unlock")
-                .small()
-                .primary()
-                .label(t!(@cx, "settings-performance-unlock"))
-                .on_click(cx.listener(Self::unlock_performance))
-                .into_any_element()
-        };
-        let (border_color, bg_color, icon) = if unlocked {
-            (
-                colors.border,
-                colors.surface.opacity(0.5),
-                Icon::new(IconName::Info)
-                    .size_4()
-                    .mt_0p5()
-                    .flex_shrink_0()
-                    .text_color(cx.theme().muted_foreground),
-            )
-        } else {
-            (
-                colors.warning.opacity(0.4),
-                colors.warning.opacity(0.08),
-                Icon::new(IconName::TriangleAlert)
-                    .size_4()
-                    .mt_0p5()
-                    .flex_shrink_0()
-                    .text_color(colors.warning),
-            )
-        };
-        let notice = el! {
-            .div {
-                # "settings-performance-notice";
-                test_support;
-                flex; items_start; justify_between; gap_4;
-                p_4; mb_4;
-                rounded: $(cx.theme().radius);
-                border_1;
-                border_color: border_color;
-                bg: bg_color;
-            } [
-                .div { flex; items_start; gap_3; flex_1; min_w_0; } [
-                    $(icon),
-                    .div { flex; flex_col; gap_1; flex_1; min_w_0; } [
-                        .div {
-                            text_sm;
-                            font_weight: FontWeight::SEMIBOLD;
-                            text_color: $(cx.theme().foreground);
-                        } [$(t!(@cx, "settings-performance-notice-title"))],
-                        .div {
-                            text_sm;
-                            whitespace_normal;
-                            text_color: $(cx.theme().muted_foreground);
-                        } [$(t!(@cx, "settings-performance-notice"))],
-                    ],
+        let editor = self.clone();
+        let reset = self.clone();
+        let focus = self.page_focus;
+        let preferences = self.preferences;
+        el! { .div.{flex; flex_col}.[
+            .div.{
+                flex; items_start; gap: 12.0_f32; p: 16.0_f32; mb: 32.0_f32; rounded: 6.0_f32; border: 1.0_f32;
+                dyn_style: move s => ${
+                    if unlocked.get() {
+                        s.bg(theme().surface.with_alpha(0.5)).border_color(theme().border)
+                    } else {
+                        s.bg(theme().warning.with_alpha(0.08)).border_color(theme().warning.with_alpha(0.4))
+                    }
+                };
+            }.[
+                .div.{pt: 2.0_f32;
+                    dyn_style: move s => $(s.text_color(if unlocked.get() { theme().text_muted } else { theme().warning }));
+                }.[(move () => $(if unlocked.get() { Icon::Info.view(16.0) } else { Icon::Warning.view(16.0) })).dyn_view],
+                .div.{flex_1; min_w: 0.0_f32; flex; flex_col; gap: 4.0_f32}.[
+                    (() => "settings-performance-notice-title".i18n::text).text.{font_weight: FontWeight::SEMIBOLD},
+                    (() => "settings-performance-notice".i18n::text).text.{dyn_style: s => $(s.text_color(theme().text_muted))},
                 ],
-                .div { flex_shrink_0; flex; items_center; } [action],
-            ]
-        };
-        el! {
-            .div [
-                .div { # "settings-performance-page"; test_support; flex; flex_col; } [
-                    notice,
-                    $(self.performance.clone()),
-                ],
-            ]
-        }
-    }
-
-    pub(in crate::widgets::settings::ui) fn unlock_performance(
-        &mut self,
-        _: &ClickEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.performance_unlocked {
-            return;
-        }
-        self.performance_unlocked = true;
-        self.performance
-            .update(cx, |editor, cx| editor.set_disabled(false, cx));
-        cx.notify();
-    }
-
-    pub(in crate::widgets::settings::ui) fn reset_performance(
-        &mut self,
-        _: &ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.performance_unlocked {
-            return;
-        }
-        self.change(window, cx, |preferences| {
-            PerformanceForm::default().apply_to(&mut preferences.files)
-        });
-    }
-
-    pub(in crate::widgets::settings::ui) fn on_performance_edited(
-        &mut self,
-        _: &Entity<PerformanceFormEditor>,
-        event: &form::Changed<PerformanceForm>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.performance_unlocked {
-            return;
-        }
-        self.change(window, cx, |preferences| {
-            event.value.apply_to(&mut preferences.files)
-        });
+                (move () => ${
+                    let reset = reset.clone();
+                    el! { .div.{flex_none}.[
+                        if unlocked.{get} [
+                            .SettingsReset::default.[
+                                (move () => $(preferences.with(|p| PerformanceForm::from(&p.files) != PerformanceForm::default())),
+                                move () => ${
+                                    let reset = reset.clone();
+                                    el! { "settings-performance-reset".IconButton::new.{
+                                        icon: Icon::Reset; label_fn: () => "form-reset".i18n::text;
+                                        on_click: move _ => ${
+                                            reset.apply(|p| { PerformanceForm::default().apply_to(&mut p.files); });
+                                            focus.focus();
+                                        };
+                                    } }
+                                }).show,
+                            ],
+                        ] else [
+                            (() => "settings-performance-unlock".i18n::text).primary_button.{
+                                h: 24.0_f32; px: 8.0_f32; py: 0.0_f32; font_weight: FontWeight::NORMAL;
+                                on_click: move _ => ${
+                                    unlocked.set(true);
+                                    focus.focus();
+                                };
+                            },
+                        ],
+                    ] }
+                }).dyn_view,
+            ],
+            (move () => ${
+                let disabled = !unlocked.get();
+                untrack(|| {
+                    editor.subform(|p| PerformanceForm::from(&p.files), |p, v| {
+                        v.apply_to(&mut p.files);
+                    }).disabled(disabled)
+                })
+            }).dyn_view,
+        ] }
     }
 }

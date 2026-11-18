@@ -193,6 +193,7 @@ filter-count = 显示 { $visible } / { $total } 个项目
 selection-count = 已选择 { $count } 个
 warning-count = { $count } 个项目的信息读取不完整
 load-failed = 无法打开此位置
+load-cancelled = 已取消加载。
 retry = 重试
 clear-recent = 清空最近记录
 about = 关于

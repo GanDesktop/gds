@@ -5,8 +5,9 @@ mod kde;
 mod material;
 mod noctalia;
 
+use crate::appearance::theme::Mode;
 use directories::BaseDirs;
-use gpui_kit::WindowAppearance;
+
 use std::path::{Path, PathBuf};
 
 use super::{Error, Loaded, ModePreference, read};
@@ -159,15 +160,6 @@ fn find_live_socket(runtime_dir: &Path, matches_name: impl Fn(&str) -> bool) -> 
     candidates.into_iter().find(|path| socket_alive(path))
 }
 
-pub(crate) fn is_gnome() -> bool {
-    Desktop::from_session(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default())
-        == Some(Desktop::Gnome)
-}
-
-pub(super) fn uses_platform_mode() -> bool {
-    is_gnome()
-}
-
 pub(super) fn source_paths() -> Vec<PathBuf> {
     let Some(dirs) = BaseDirs::new() else {
         return Vec::new();
@@ -205,10 +197,7 @@ pub(super) fn source_paths() -> Vec<PathBuf> {
 /// # Errors
 /// Reports missing user directories, inactive desktop shells, unreadable files,
 /// or invalid desktop palettes.
-pub(super) fn load(
-    preference: ModePreference,
-    platform: WindowAppearance,
-) -> Result<Loaded, Error> {
+pub(super) fn load(preference: ModePreference, platform: Mode) -> Result<Loaded, Error> {
     let dirs = BaseDirs::new().ok_or(Error::NoUserDirectories)?;
     let desktop = Desktop::current(&dirs).ok_or(Error::UnsupportedDesktop)?;
     match desktop {

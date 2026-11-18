@@ -67,6 +67,10 @@ pub enum Action {
 #[derive(Debug)]
 pub struct Outcome {
     pub entry: Entry,
+    #[expect(
+        dead_code,
+        reason = "Restore reports retain the requested path alongside the resulting snapshot"
+    )]
     pub original_path: PathBuf,
     pub restored: Option<super::history::Snapshot>,
     pub result: Result<(), Error>,

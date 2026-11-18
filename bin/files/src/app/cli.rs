@@ -8,11 +8,11 @@ use std::path::PathBuf;
 #[command(
     name = "gds-files",
     version,
-    about = "A native GPUI file browser for Linux + Wayland."
+    about = "A native file browser for Linux + Wayland."
 )]
 #[command(group(ArgGroup::new("picker_mode").args(["pick_file", "pick_directory", "portal_request"])))]
 #[command(
-    after_help = "Run inside a graphical Wayland or X11 session.\nPicker exit status: 0 selected, 1 cancelled, 2 output or argument failure."
+    after_help = "Run inside a graphical Wayland session.\nPicker exit status: 0 selected, 1 cancelled, 2 output or argument failure."
 )]
 pub(super) struct Arguments {
     /// Directory to open (default: home). Use -- before names starting with '-'.

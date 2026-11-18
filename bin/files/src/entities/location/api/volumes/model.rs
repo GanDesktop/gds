@@ -94,6 +94,10 @@ impl Snapshot {
     }
 
     /// A reconnect needs a unique stable identity; duplicated UUIDs are not proof.
+    #[expect(
+        dead_code,
+        reason = "Reconnection by stable identity remains available to volume clients"
+    )]
     pub fn reconnect(&self, id: &VolumeId) -> Option<&Volume> {
         if let Some(volume) = self.volume(id) {
             return Some(volume);
@@ -163,16 +167,9 @@ impl Snapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeviceAction {
     Mount(VolumeId),
-    SetLabel {
-        volume: VolumeId,
-        label: String,
-    },
+    SetLabel { volume: VolumeId, label: String },
     Unmount(VolumeId),
     PowerOff(VolumeId),
-    #[expect(
-        dead_code,
-        reason = "UDisks supports optical-media ejection; Files currently exposes unmount and power-off"
-    )]
     Eject(VolumeId),
 }
 
@@ -191,6 +188,10 @@ impl DeviceAction {
 
 #[derive(Debug)]
 pub struct OperationOutcome {
+    #[expect(
+        dead_code,
+        reason = "Mount operations retain the resolved path in their domain result"
+    )]
     pub mount_point: Option<PathBuf>,
 }
 

@@ -64,8 +64,9 @@ mod metadata {
             let tag = Self::tag()?;
             println!("cargo:rustc-env=GDS_BUILD_TAG={tag}");
             let mut output = format!(
-                "const LICENSE_TEXT: &str = {:?};\npub static APPLICATIONS: &[Application] = &[\n",
-                Self::asset(&about.license_file)?
+                "const LICENSE_TEXT: &str = {:?};\nstatic REGISTERED: [Application; {}] = [\n",
+                Self::asset(&about.license_file)?,
+                about.applications.len(),
             );
             for (binary, app) in &about.applications {
                 if !manifest.bin.iter().any(|target| &target.name == binary) {
@@ -75,6 +76,11 @@ mod metadata {
                     output,
                     "Application {{ binary: {:?}, name: {:?}, icon: {:?},",
                     binary, app.name, app.icon
+                )?;
+                writeln!(
+                    output,
+                    "artwork: SvgAsset::new(include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/\", {:?}))),",
+                    app.icon
                 )?;
                 writeln!(
                     output,
@@ -103,7 +109,7 @@ mod metadata {
                 }
                 output.push_str("] },\n");
             }
-            output.push_str("];\n");
+            output.push_str("];\npub static APPLICATIONS: &[Application] = &REGISTERED;\n");
             fs::write(
                 PathBuf::from(env::var_os("OUT_DIR").ok_or("Cargo OUT_DIR is missing")?)
                     .join("about.rs"),

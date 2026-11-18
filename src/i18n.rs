@@ -5,9 +5,9 @@ mod translate;
 pub use crate::t;
 pub use fluent_bundle::FluentArgs;
 
+use crate::app::Gds;
 use fluent_bundle::{FluentResource, concurrent::FluentBundle};
 use fluent_syntax::ast::Entry;
-use gpui_kit::{App, Global, SharedString};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -56,11 +56,11 @@ pub enum Error {
 }
 
 /// A Fluent catalog composed of suite messages and the owning application's resources.
-/// Static labels are cached for consumers that render outside a GPUI context.
+/// Static labels are cached for consumers that render outside a reactive view.
 pub struct Catalog {
     language: Language,
     bundle: FluentBundle<FluentResource>,
-    labels: HashMap<String, SharedString>,
+    labels: HashMap<String, String>,
 }
 
 impl Catalog {
@@ -117,7 +117,7 @@ impl Catalog {
         };
         for id in ids {
             if let Some(value) = catalog.format(&id, &FluentArgs::new()) {
-                catalog.labels.insert(id, value.into());
+                catalog.labels.insert(id, value);
             }
         }
         Ok(catalog)
@@ -137,40 +137,21 @@ impl Catalog {
     }
 }
 
-#[cfg_attr(not(feature = "app"), allow(dead_code))]
-struct Messages(Catalog);
-impl Global for Messages {}
-
-/// Install the suite's base messages and component translations.
-///
-/// # Errors
-/// Returns an error when bundled Fluent cannot be parsed or registered.
-#[cfg(feature = "app")]
-pub(crate) fn install(language: Language, cx: &mut App) -> Result<(), Error> {
-    install_resources(language, &[], cx)
-}
-
-/// Install messages owned by the current application alongside the base catalog.
-///
-/// # Errors
-/// Returns an error for invalid Fluent or duplicate message IDs.
-#[cfg(feature = "app")]
-pub(crate) fn install_resources(
-    language: Language,
-    application: &[&str],
-    cx: &mut App,
-) -> Result<(), Error> {
-    Catalog::new(language, application)?.install(cx);
-    Ok(())
-}
-
 impl Catalog {
-    /// Install a fully parsed catalog without introducing another fallible step.
-    #[cfg(feature = "app")]
-    pub(crate) fn install(self, cx: &mut App) {
-        gpui_kit::component::set_locale(self.language.locale());
-        cx.set_global(Messages(self));
-        cx.refresh_windows();
+    pub fn language(&self) -> Language {
+        self.language
+    }
+    pub fn message(&self, id: &str, arguments: Option<&FluentArgs<'_>>) -> String {
+        if arguments.is_none()
+            && let Some(value) = self.labels.get(id)
+        {
+            return value.clone();
+        }
+        self.format(id, arguments.unwrap_or(&FluentArgs::new()))
+            .unwrap_or_else(|| {
+                report_missing_message(self.language, id);
+                id.to_owned()
+            })
     }
 }
 
@@ -208,41 +189,18 @@ fn report_missing_message(language: Language, id: &str) {
     });
 }
 
-pub fn text(id: &str, cx: &App) -> SharedString {
-    cx.global::<Messages>()
-        .0
-        .labels
-        .get(id)
-        .cloned()
-        .unwrap_or_else(|| format(id, None, cx))
+pub fn text(id: &str) -> String {
+    Gds::current().i18n().text(id)
 }
-
-/// Fix the deferred callback's input type before UIM checks its arguments.
 #[doc(hidden)]
-pub fn deferred(callback: impl FnOnce(&App) -> SharedString) -> impl FnOnce(&App) -> SharedString {
+pub fn deferred(callback: impl FnOnce(&Gds) -> String) -> impl FnOnce(&Gds) -> String {
     callback
 }
-
-#[cfg(feature = "app")]
-pub(crate) fn language(cx: &App) -> Language {
-    cx.global::<Messages>().0.language
+pub fn format(id: &str, arguments: Option<&FluentArgs<'_>>) -> String {
+    Gds::current().i18n().format(id, arguments)
 }
-
-pub fn format(id: &str, arguments: Option<&FluentArgs<'_>>, cx: &App) -> SharedString {
-    let catalog = &cx.global::<Messages>().0;
-    catalog
-        .format(id, arguments.unwrap_or(&FluentArgs::new()))
-        .unwrap_or_else(|| {
-            report_missing_message(catalog.language, id);
-            id.to_owned()
-        })
-        .into()
-}
-
-pub fn count(id: &str, count: usize, cx: &App) -> SharedString {
-    let mut arguments = FluentArgs::new();
-    arguments.set("count", count as i64);
-    format(id, Some(&arguments), cx)
+pub fn count(id: &str, count: usize) -> String {
+    Gds::current().i18n().count(id, count)
 }
 
 #[cfg(test)]
@@ -315,51 +273,5 @@ test-attr-only =
             emitted.fetch_add(1, Ordering::Relaxed);
         });
         assert_eq!(emitted.load(Ordering::Relaxed), 3);
-    }
-
-    #[cfg(all(feature = "app", feature = "gui-tests"))]
-    #[gpui_kit::test]
-    fn text_hits_cached_labels_without_isolating_marks(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            install_resources(
-                Language::English,
-                &[
-                    "-test-term = GanDesktop\ntest-cached-greeting = Welcome to { -test-term }!\ntest-param-msg = Count: { $count }",
-                ],
-                cx,
-            )
-            .expect("install test resources");
-
-            let greeting = text("test-cached-greeting", cx);
-            assert_eq!(greeting.as_ref(), "Welcome to GanDesktop!");
-            assert_eq!(
-                cx.global::<Messages>().0.text("test-cached-greeting"),
-                Some("Welcome to GanDesktop!")
-            );
-            assert!(!greeting.contains(['\u{2068}', '\u{2069}']));
-            // Fast-path `text()` serves cached `labels` directly without invoking `FluentBundle`.
-            cx.global_mut::<Messages>()
-                .0
-                .labels
-                .insert("test-cache-only".to_owned(), SharedString::from("from-cache"));
-            assert_eq!(text("test-cache-only", cx).as_ref(), "from-cache");
-
-            // Runtime count formatting also strips isolating marks.
-            let counted = count("test-param-msg", 3, cx);
-            assert_eq!(counted.as_ref(), "Count: 3");
-            assert!(!counted.contains(['\u{2068}', '\u{2069}']));
-
-            // Missing keys and missing-arg lookups fall back to the key and record once.
-            assert_eq!(text("test-missing-key", cx).as_ref(), "test-missing-key");
-            assert_eq!(text("test-missing-key", cx).as_ref(), "test-missing-key");
-            assert_eq!(text("test-param-msg", cx).as_ref(), "test-param-msg");
-            let reported = REPORTED_MISSING_MESSAGES
-                .get()
-                .expect("missing lookups should record reported keys")
-                .lock()
-                .unwrap();
-            assert!(reported.contains(&(Language::English, "test-missing-key".to_owned())));
-            assert!(reported.contains(&(Language::English, "test-param-msg".to_owned())));
-        });
     }
 }

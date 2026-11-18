@@ -1,6 +1,7 @@
 logs-title = Debug
 logs-open-error = 无法打开 Debug 面板
 logs-search = 搜索消息和来源…
+logs-search-clear = 清除搜索
 logs-all = 所有级别
 logs-level = 按级别筛选
 logs-target = 按 tracing 来源筛选

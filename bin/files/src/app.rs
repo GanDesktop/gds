@@ -1,5 +1,4 @@
-//! Files application startup and native window lifecycle.
-
+//! Files startup and native Wayland application lifetime.
 mod cli;
 mod config;
 #[cfg(target_os = "linux")]
@@ -7,24 +6,31 @@ mod desktop;
 mod ui;
 mod windows;
 
-use crate::entities::location::places::{Error as PlacesError, Places, Storage};
-use crate::features::pick_files as picker;
+use crate::{
+    entities::location::places::{Error as PlacesError, Places, Storage},
+    features::pick_files as picker,
+};
+use anti_webui::prelude::*;
 use anyhow::Context as _;
 use clap::Parser;
 use config::{Config, Mode};
-use gds::app::AppExt as _;
-use gds::service::{
-    logs::{self, Store},
-    task_manager::{Scope, Supervisor},
+use gds::{
+    app::Gds,
+    service::{
+        logs::{self, Store},
+        task_manager::{Scope, Supervisor},
+    },
 };
-use std::{process::ExitCode, sync::Arc};
+use std::{cell::RefCell, process::ExitCode, rc::Rc, sync::Arc};
 
 pub(super) const APP_ID: &str = "io.github.GanDesktop.GdsFiles";
 pub(super) const PICKER_APP_ID: &str = "io.github.GanDesktop.GdsFiles.Picker";
-pub(super) const APP_NAME: &str = "GDS Files";
 
-/// Runs the Files process and translates the outcome into a process exit status.
 pub(crate) fn run() -> ExitCode {
+    #[cfg(feature = "files-e2e")]
+    if std::env::var("GDS_E2E_MODE").as_deref() == Ok("driven") {
+        return crate::pages::workspace::e2e::run();
+    }
     let arguments = cli::Arguments::parse();
     let picking = arguments.is_picker();
     match Bootstrap::init(arguments).and_then(Bootstrap::run_event_loop) {
@@ -33,11 +39,10 @@ pub(crate) fn run() -> ExitCode {
         Err(error) => {
             eprintln!("gds-files: {error:#}");
             if picking {
-                // Distinguish startup failures (exit code 2) from interactive user cancellation
-                // (exit code 1, the default picker outcome).
-                return ExitCode::from(picker::Outcome::Failed);
+                ExitCode::from(picker::Outcome::Failed)
+            } else {
+                ExitCode::FAILURE
             }
-            ExitCode::FAILURE
         }
     }
 }
@@ -47,13 +52,7 @@ struct Bootstrap {
     logs: Option<Store>,
     supervisor: Supervisor,
 }
-
 impl Bootstrap {
-    /// Resolves configuration, tracing, and the Tokio task supervisor before starting GPUI.
-    ///
-    /// # Errors
-    /// Returns an error if configuration loading, tracing installation, or supervisor creation
-    /// fails.
     fn init(arguments: cli::Arguments) -> anyhow::Result<Self> {
         let config = Config::load(arguments)?;
         let logs = logs::init_tracing("warn,gds=debug,gds_files=debug", config.enable_logs)?;
@@ -65,24 +64,6 @@ impl Bootstrap {
             supervisor,
         })
     }
-
-    /// Binds the task supervisor scope, Unix termination signals, and idle window-close handling
-    /// before asynchronous startup I/O begins.
-    fn bind_lifecycle(tasks: Scope, cx: &mut gpui_kit::App) {
-        cx.gds_mut().tasks().init(tasks);
-        #[cfg(unix)]
-        cx.gds_mut()
-            .tasks()
-            .signals(|cx| cx.gds_mut().tasks().request_quit());
-        cx.on_window_closed(|cx, _| cx.gds_mut().tasks().quit_when_idle())
-            .detach();
-    }
-
-    /// Prepares single-instance D-Bus ownership and location storage on the Tokio runtime.
-    ///
-    /// # Errors
-    /// Returns an error if single-instance D-Bus negotiation or delegating to an existing instance
-    /// fails.
     async fn prepare_io(mut config: Config, tasks: Scope) -> anyhow::Result<Option<PreparedIo>> {
         #[cfg(target_os = "linux")]
         let desktop =
@@ -90,12 +71,11 @@ impl Bootstrap {
                 desktop::Acquire::Delegated => return Ok(None),
                 desktop::Acquire::Continue(desktop) => desktop,
             };
-
         let storage = Storage::start(config.state_path.clone(), &tasks);
         let places = if config.mode.needs_initial_window() {
             let (places, ()) = tokio::join!(
                 storage.load(&tasks),
-                config.preferences.appearance.prime_session(),
+                config.preferences.appearance.prime_session()
             );
             Some(places)
         } else {
@@ -110,78 +90,94 @@ impl Bootstrap {
             desktop,
         }))
     }
-
-    /// Runs the GPUI event loop, driving asynchronous I/O preparation and main-thread service
-    /// installation.
-    ///
-    /// # Errors
-    /// Returns an error if single-instance negotiation, UI initialization, or initial window
-    /// creation fails.
     fn run_event_loop(self) -> anyhow::Result<Option<picker::Outcome>> {
         let Self {
             mut config,
             logs,
             supervisor,
         } = self;
-        let picker_outcome = match &mut config.mode {
+        let outcome = match &mut config.mode {
             Mode::Picker { options, .. } => Some(options.bind_outcome()),
             _ => None,
         };
-        // `supervisor` owns the Tokio runtime and must stay alive until the GPUI event loop and
-        // task drain have finished.
+        let app_id = if outcome.is_some() {
+            PICKER_APP_ID
+        } else {
+            APP_ID
+        };
         let tasks = supervisor.scope();
-        let (completed, mut startup) = tokio::sync::oneshot::channel();
-
-        // GPUI constructs `App` inside `run`; running bootstrap as an async task keeps the event
-        // loop responsive while the oneshot channel surfaces startup errors after the loop exits.
-        gpui_kit::application()
-            .with_quit_mode(gpui_kit::QuitMode::Explicit)
-            .with_assets(crate::shared::ui::assets::Assets)
-            .run(move |cx| {
-                cx.spawn(async move |cx| {
-                    cx.update(|cx| Self::bind_lifecycle(tasks.clone(), cx));
-
-                    let io = tasks
-                        .spawn_cancellable_named(
-                            "Start Files services",
-                            Self::prepare_io(config, tasks.clone()),
-                        )
-                        .await;
-
-                    let result = cx.update(move |cx| {
-                        // A SIGINT/SIGTERM during startup cancels `prepare_io`; check shutdown
-                        // state before unwrapping the cancellation error so signal-driven exit
-                        // finishes cleanly.
-                        if cx.gds().tasks().is_shutting_down() {
-                            return Ok(());
-                        }
-                        let Some(prepared) = io?? else {
-                            cx.gds_mut().tasks().request_quit();
+        let startup_error = Rc::new(RefCell::new(None));
+        let error_slot = startup_error.clone();
+        let result = App::new().app_id(app_id).run_shell(move || {
+            let app = Gds::install(tasks.clone(), logs);
+            Self::bind_signals(&tasks);
+            app.tasks()
+                .spawn(
+                    "Start Files services",
+                    Self::prepare_io(config, tasks.clone()),
+                )
+                .then(move |prepared| {
+                    if tasks.token().is_cancelled() {
+                        return;
+                    }
+                    let result = (|| {
+                        let Some(prepared) = prepared?? else {
+                            quit();
                             return Ok(());
                         };
-                        prepared.mount(&tasks, logs, cx)
-                    });
-                    if let Err(error) = &result {
+                        prepared.mount(&tasks)
+                    })();
+                    if let Err(error) = result {
                         tracing::error!(%error, "Cannot start Files");
-                        cx.update(|cx| cx.gds_mut().tasks().request_quit());
+                        *error_slot.borrow_mut() = Some(error);
+                        quit();
                     }
-                    let _ = completed.send(result);
+                });
+        });
+        supervisor.shutdown();
+        result.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if let Some(error) = startup_error.borrow_mut().take() {
+            return Err(error);
+        }
+        Ok(outcome.map(|slot| slot.get()))
+    }
+    fn bind_signals(tasks: &Scope) {
+        #[cfg(unix)]
+        {
+            let sender = ui_channel(|()| quit());
+            let cancel = tasks.token();
+            tasks
+                .spawn_named("Listen for termination signals", async move {
+                    let mut terminate =
+                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+                    let mut interrupt =
+                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+                    enum Event {
+                        Cancelled,
+                        Terminate,
+                    }
+                    let event = tokio::select! {
+                        _ = cancel.cancelled() => Event::Cancelled,
+                        _ = terminate.recv() => Event::Terminate,
+                        _ = interrupt.recv() => Event::Terminate,
+                    };
+                    if matches!(event, Event::Terminate) {
+                        sender.send(());
+                    }
+                    Ok::<_, std::io::Error>(())
                 })
-                .detach();
-            });
-
-        match startup.try_recv() {
-            Ok(Ok(()))
-            | Err(
-                tokio::sync::oneshot::error::TryRecvError::Empty
-                | tokio::sync::oneshot::error::TryRecvError::Closed,
-            ) => Ok(picker_outcome.map(|slot| slot.get())),
-            Ok(Err(error)) => Err(error),
+                .on_complete(tasks, |result| {
+                    if let Err(error) = result
+                        .map_err(|error| error.to_string())
+                        .and_then(|result| result.map_err(|error| error.to_string()))
+                    {
+                        tracing::error!(%error, "cannot listen for termination signals");
+                    }
+                });
         }
     }
 }
 
-/// Asynchronous I/O state prepared on Tokio before installing GPUI services on the main thread.
 struct PreparedIo {
     config: Config,
     storage: Arc<Storage>,
@@ -189,20 +185,8 @@ struct PreparedIo {
     #[cfg(target_os = "linux")]
     desktop: Option<desktop::DesktopIntegration>,
 }
-
 impl PreparedIo {
-    /// Installs GPUI services, opens any initial window, transitions the supervisor to ready, and
-    /// starts D-Bus request forwarding.
-    ///
-    /// # Errors
-    /// Returns an error if UI initialization, initial window creation, or desktop request listener
-    /// registration fails.
-    fn mount(
-        self,
-        tasks: &Scope,
-        logs: Option<Store>,
-        cx: &mut gpui_kit::App,
-    ) -> anyhow::Result<()> {
+    fn mount(self, tasks: &Scope) -> anyhow::Result<()> {
         let Self {
             mut config,
             storage,
@@ -210,30 +194,26 @@ impl PreparedIo {
             #[cfg(target_os = "linux")]
             desktop,
         } = self;
-
-        ui::Initializer::new(cx).run(tasks, config.preferences, logs, &mut config.notices)?;
-        let windows =
-            windows::Host::install(tasks.clone(), config.home, storage, config.notices, cx);
-
-        let keep_alive = config.mode.keep_alive();
+        ui::Initializer::new(Gds::current()).run(tasks, config.preferences, &mut config.notices)?;
+        let windows = windows::Host::new(
+            tasks.clone(),
+            config.home,
+            storage,
+            config.notices,
+            config.mode.keep_alive(),
+        );
         match (config.mode, places) {
-            (Mode::Browser { start }, Some(places)) => {
-                windows.open_initial(places, start, None, cx)?;
-            }
+            (Mode::Browser { start }, Some(places)) => windows.open_initial(places, start, None),
             (Mode::Picker { start, options }, Some(places)) => {
-                windows.open_initial(places, start, Some(options), cx)?;
+                windows.open_initial(places, start, Some(options))
             }
             _ => {}
         }
-
-        // Transition the supervisor to ready and start serving D-Bus commands only after UI
-        // services and any initial window are installed, so idle-quit accounting and incoming
-        // requests never observe a partially initialized application.
-        cx.gds_mut().tasks().ready(keep_alive);
         #[cfg(target_os = "linux")]
         if let Some(desktop) = desktop {
-            desktop.listen(tasks, windows, cx)?;
+            desktop.listen(tasks, windows.clone());
         }
+        on_cleanup(move || drop(windows));
         tracing::info!(
             version = env!("CARGO_PKG_VERSION"),
             build = env!("GDS_BUILD_TAG"),

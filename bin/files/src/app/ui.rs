@@ -1,25 +1,20 @@
-//! GPUI runtime services, appearance fallbacks, and global keybindings for Files.
+//! Shared presentation setup before the first Files window.
 
-use super::{APP_ID, APP_NAME};
-use crate::entities::{
-    location::volumes::VolumesExt as _,
-    preferences::{self, PreferencesExt as _},
+use crate::entities::preferences;
+use crate::shared::i18n;
+use gds::{
+    app::Gds,
+    appearance::{theme, typography},
+    service::task_manager::Scope,
 };
-use crate::shared::{i18n, ui::actions};
-use gds::app::AppExt as _;
-use gds::appearance::{theme, typography};
-use gds::service::task_manager::Scope;
-use gpui_kit::App;
 
-pub(super) struct Initializer<'a> {
-    cx: &'a mut App,
+pub(super) struct Initializer {
+    app: Gds,
 }
-
-impl<'a> Initializer<'a> {
-    pub fn new(cx: &'a mut App) -> Self {
-        Self { cx }
+impl Initializer {
+    pub fn new(app: Gds) -> Self {
+        Self { app }
     }
-
     /// Initializes global UI services, appearance, preferences, and keybindings before opening
     /// windows.
     ///
@@ -30,36 +25,22 @@ impl<'a> Initializer<'a> {
         &mut self,
         tasks: &Scope,
         mut preferences: preferences::Preferences,
-        logs: Option<gds::service::logs::Store>,
         notices: &mut Vec<String>,
     ) -> anyhow::Result<()> {
-        self.cx.gds_mut().init_ui(logs);
-        self.cx
-            .gds_mut()
+        self.app
             .appearance()
             .motion()
             .set_enabled(preferences.animations_enabled.unwrap_or(true));
-        self.cx.gds_mut().appearance().motion().follow_system();
-        self.cx.gds_mut().ui().logs().init(gds::ui::logs::Options {
-            app_id: Some(APP_ID.into()),
-            app_name: APP_NAME.into(),
-            ignored_contexts: &[actions::TERMINAL_TABS_CONTEXT],
-            ..Default::default()
-        });
-        self.cx.set_app_identity(APP_ID, APP_NAME);
-
+        self.app.appearance().motion().follow_system();
         self.install_i18n(preferences.language)?;
-        self.cx.gds_mut().ui().time().apply(preferences.time_format);
+        self.app.ui().time().apply(preferences.time_format);
         self.apply_theme(&mut preferences.appearance, notices)?;
         self.apply_typography(&preferences.font, notices);
-        self.cx
-            .gds_mut()
+        self.app
             .appearance()
             .theme()
-            .init_hot_reload(preferences.appearance.clone());
+            .configure_hot_reload(preferences.appearance.clone());
         self.install_preferences(preferences, tasks)?;
-        self.cx.gds_mut().volumes().initialize(tasks);
-        actions::Command::register(self.cx);
         Ok(())
     }
 
@@ -68,7 +49,7 @@ impl<'a> Initializer<'a> {
     fn install_i18n(&mut self, language: Option<i18n::Language>) -> anyhow::Result<()> {
         let catalog = i18n::prepare(language.unwrap_or_else(i18n::Language::detect))
             .inspect_err(|error| tracing::error!("Cannot load application messages: {error}"))?;
-        self.cx.gds_mut().i18n().install_catalog(catalog);
+        self.app.i18n().install_catalog(catalog);
         Ok(())
     }
 
@@ -79,7 +60,7 @@ impl<'a> Initializer<'a> {
         appearance: &mut theme::Appearance,
         notices: &mut Vec<String>,
     ) -> anyhow::Result<()> {
-        let Err(error) = self.cx.gds_mut().appearance().theme().apply(appearance) else {
+        let Err(error) = self.app.appearance().theme().apply(appearance) else {
             return Ok(());
         };
         // Missing desktop theme integration degrades quietly and updates the active runtime source;
@@ -92,7 +73,7 @@ impl<'a> Initializer<'a> {
             notices.push(error.to_string());
         }
         let fallback = appearance.builtin_fallback();
-        if let Err(error) = self.cx.gds_mut().appearance().theme().apply(&fallback) {
+        if let Err(error) = self.app.appearance().theme().apply(&fallback) {
             tracing::error!("Cannot initialize the built-in theme: {error}");
             return Err(error.into());
         }
@@ -103,7 +84,7 @@ impl<'a> Initializer<'a> {
     }
 
     fn apply_typography(&mut self, font: &typography::Preferences, notices: &mut Vec<String>) {
-        match self.cx.gds_mut().appearance().typography().apply(font) {
+        match self.app.appearance().typography().apply(font) {
             Ok(applied) => {
                 if let Some(unavailable) = applied.unavailable {
                     tracing::error!(
@@ -116,8 +97,7 @@ impl<'a> Initializer<'a> {
                 // An out-of-range stored font size must not block window creation; apply the default
                 // metrics for this session while leaving the stored preference untouched.
                 if let Err(fallback) = self
-                    .cx
-                    .gds_mut()
+                    .app
                     .appearance()
                     .typography()
                     .apply(&typography::Preferences::default())
@@ -135,21 +115,7 @@ impl<'a> Initializer<'a> {
         preferences: preferences::Preferences,
         tasks: &Scope,
     ) -> anyhow::Result<()> {
-        let entity = self
-            .cx
-            .gds_mut()
-            .preferences()
-            .initialize(preferences, tasks)?;
-        self.cx
-            .subscribe(&entity, |_, event: &preferences::SaveFailed, cx| {
-                gds::ui::notifications::Report::new(
-                    gds::ui::notifications::Level::Error,
-                    gds::i18n::t!(@cx, "settings-save-failed", error = event.0.clone()),
-                )
-                .replacing::<preferences::SaveFailed>()
-                .show(cx);
-            })
-            .detach();
+        preferences::Service::install(preferences, tasks)?;
         Ok(())
     }
 }

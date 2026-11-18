@@ -1,84 +1,4 @@
-//! Files commands and their workspace-specific default key bindings.
-
-use ::gpui;
-use gds::ui::Shortcut;
-pub use gds::ui::actions::{Cancel, CloseAllNotifications, CloseNotification, FocusNotifications};
-use gpui_kit::*;
-
-gpui_kit::actions!(
-    gds,
-    [
-        ApplicationMenu,
-        OpenSettings,
-        NewFolder,
-        NewTab,
-        NewWindow,
-        CloseTab,
-        NextTab,
-        PreviousTab,
-        ToggleSidebar,
-        ToggleTerminal,
-        NewTerminal,
-        RenameTerminal,
-        CloseTerminal,
-        NextTerminal,
-        PreviousTerminal,
-        FocusTerminal,
-        ReturnFromTerminal,
-        EditLocation,
-        NavigateBack,
-        NavigateForward,
-        NavigateParent,
-        Refresh,
-        FilterNames,
-        ToggleHidden,
-        OpenSelection,
-        OpenSelectionInNewTabs,
-        CopyFiles,
-        CutFiles,
-        PasteFiles,
-        UndoFileOperation,
-        RedoFileOperation,
-        CopyFilePaths,
-        SelectAllFiles,
-        DeselectAll,
-        SelectionMenu,
-        RenameSelection,
-        ToggleDetails,
-        TrashSelection,
-        DeleteSelectionPermanently,
-        ConfigureColumns,
-        ToggleViewMode,
-        SortFiles,
-        FavoriteCurrentFolder,
-        RestoreSelection,
-        PurgeSelection,
-        EmptyTrash,
-        ClearRecent,
-        MountVolume,
-        UnmountVolume,
-        FocusLocations,
-        FocusVolumes,
-        FocusTabs,
-        FocusContent,
-    ]
-);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
-#[action(namespace = gds, no_json)]
-pub struct SelectTab(pub usize);
-
-pub const WORKSPACE_CONTEXT: &str = "Workspace";
-pub const FILE_TABLE_CONTEXT: &str = "FilesFileTable";
-/// Files owns multi-terminal navigation; it is distinct from PTY input.
-pub const TERMINAL_TABS_CONTEXT: &str = "FilesTerminalTabs";
-/// The whole terminal half, including its header controls.
-pub const TERMINAL_CONTEXT: &str = "FilesTerminal";
-/// Key context of the settings workspace, active while settings replace the
-/// file workspace. Bindings here keep shortcuts from leaking between the two.
-pub const SETTINGS_CONTEXT: &str = "Settings";
-/// Operations on the selected volume or the visible fixed volume page.
-pub const VOLUME_CONTEXT: &str = "Volume";
+//! Files command metadata shared by native dispatch and Help.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
@@ -246,87 +166,7 @@ impl Command {
         }
     }
 
-    pub fn action(self) -> Box<dyn Action> {
-        match self {
-            Self::Menu => Box::new(ApplicationMenu),
-            Self::Settings => Box::new(OpenSettings),
-            Self::Help => Box::new(gds::ui::help::OpenHelp),
-            Self::NewFolder => Box::new(NewFolder),
-            Self::NewTab => Box::new(NewTab),
-            Self::NewWindow => Box::new(NewWindow),
-            Self::CloseTab => Box::new(CloseTab),
-            Self::NextTab => Box::new(NextTab),
-            Self::PreviousTab => Box::new(PreviousTab),
-            Self::Sidebar => Box::new(ToggleSidebar),
-            Self::Terminal => Box::new(ToggleTerminal),
-            Self::EditLocation => Box::new(EditLocation),
-            Self::Back => Box::new(NavigateBack),
-            Self::Forward => Box::new(NavigateForward),
-            Self::Parent => Box::new(NavigateParent),
-            Self::Refresh => Box::new(Refresh),
-            Self::Filter => Box::new(FilterNames),
-            Self::Hidden => Box::new(ToggleHidden),
-            Self::Favorite => Box::new(FavoriteCurrentFolder),
-            Self::Open => Box::new(OpenSelection),
-            Self::OpenInNewTab => Box::new(OpenSelectionInNewTabs),
-            Self::Copy => Box::new(CopyFiles),
-            Self::Cut => Box::new(CutFiles),
-            Self::Paste => Box::new(PasteFiles),
-            Self::Undo => Box::new(UndoFileOperation),
-            Self::Redo => Box::new(RedoFileOperation),
-            Self::CopyPaths => Box::new(CopyFilePaths),
-            Self::SelectAll => Box::new(SelectAllFiles),
-            Self::DeselectAll => Box::new(DeselectAll),
-            Self::ContextMenu => Box::new(SelectionMenu),
-            Self::Rename => Box::new(RenameSelection),
-            Self::Details => Box::new(ToggleDetails),
-            Self::Columns => Box::new(ConfigureColumns),
-            Self::ViewMode => Box::new(ToggleViewMode),
-            Self::Sort => Box::new(SortFiles),
-            Self::Trash => Box::new(TrashSelection),
-            Self::DeletePermanent => Box::new(DeleteSelectionPermanently),
-            Self::RestoreSelection => Box::new(RestoreSelection),
-            Self::PurgeSelection => Box::new(PurgeSelection),
-            Self::EmptyTrash => Box::new(EmptyTrash),
-            Self::ClearRecent => Box::new(ClearRecent),
-            Self::MountVolume => Box::new(MountVolume),
-            Self::UnmountVolume => Box::new(UnmountVolume),
-            Self::FocusLocations => Box::new(FocusLocations),
-            Self::FocusVolumes => Box::new(FocusVolumes),
-            Self::FocusTabs => Box::new(FocusTabs),
-            Self::FocusContent => Box::new(FocusContent),
-            Self::FocusNotifications => Box::new(FocusNotifications),
-            Self::CloseNotification => Box::new(CloseNotification),
-            Self::CloseAllNotifications => Box::new(CloseAllNotifications),
-            Self::Cancel => Box::new(Cancel),
-        }
-    }
-
-    pub fn context(self) -> Option<&'static str> {
-        match self {
-            Self::Settings
-            | Self::Help
-            | Self::Terminal
-            | Self::Sidebar
-            | Self::Cancel
-            | Self::FocusNotifications
-            | Self::CloseNotification
-            | Self::CloseAllNotifications => None,
-            Self::MountVolume | Self::UnmountVolume => Some(VOLUME_CONTEXT),
-            _ => Some(WORKSPACE_CONTEXT),
-        }
-    }
-
-    pub fn binding(self, window: &Window) -> Option<KeyBinding> {
-        let action = self.action();
-        let context = self
-            .context()
-            .map(|context| KeyContext::parse(context).expect("bundled action contexts are valid"))
-            .unwrap_or_default();
-        window.highest_precedence_binding_for_action_in_context(action.as_ref(), context)
-    }
-
-    /// The default keystroke for this command, as registered by [`Self::register`].
+    /// The default keystroke for this command, used by the workspace.
     pub fn default_stroke(self) -> &'static str {
         match self {
             Self::Menu => "alt-m",
@@ -391,7 +231,7 @@ impl Command {
 
     /// Extra strokes that run the same action.
     ///
-    /// [`Self::register`] adds them before [`Self::default_stroke`], so the primary
+    /// The workspace accepts these alongside [`Self::default_stroke`], so the primary
     /// stroke stays the highest-precedence binding that keycaps, tooltips,
     /// Alt hints and the settings page display.
     pub fn compatibility_strokes(self) -> &'static [&'static str] {
@@ -406,191 +246,89 @@ impl Command {
             _ => &[],
         }
     }
-
-    fn key_binding(
-        self,
-        stroke: &'static str,
-        context: Option<&'static str>,
-        cx: &App,
-    ) -> KeyBinding {
-        action_binding(stroke, self.action(), context, cx)
-    }
-
-    pub(crate) fn register(cx: &mut App) {
-        let bindings = bindings(cx);
-        cx.bind_keys(bindings);
-        gds::app::AppExt::gds_mut(cx).ui().register_dialogs();
-    }
 }
 
-/// Every bundled binding, in precedence order: compatibility aliases first,
-/// then primary strokes. The last binding for an action is the one displayed.
-fn bindings(cx: &App) -> Vec<KeyBinding> {
-    let compatibility = Command::ALL.into_iter().flat_map(|command| {
-        command
-            .compatibility_strokes()
-            .iter()
-            .copied()
-            .map(move |stroke| command.key_binding(stroke, command.context(), cx))
-    });
-    let primary = Command::ALL
-        .into_iter()
-        .map(|command| command.key_binding(command.default_stroke(), command.context(), cx));
-    // The same cycle keys navigate settings pages in their own context.
-    let settings = [
-        (Command::NextTab, "ctrl-tab"),
-        (Command::PreviousTab, "ctrl-shift-tab"),
-    ]
-    .into_iter()
-    .map(|(command, stroke)| command.key_binding(stroke, Some(SETTINGS_CONTEXT), cx));
-    compatibility
-        .chain(primary)
-        .chain(settings)
-        .chain(["Settings", "Help"].into_iter().flat_map(|context| {
-            ["alt-left", "ctrl-w"]
-                .into_iter()
-                .map(move |stroke| Command::Cancel.key_binding(stroke, Some(context), cx))
-        }))
-        .chain(ordinal_bindings(cx))
-        .chain(terminal_bindings())
-        .chain(file_table_bindings())
-        // Popup cancellation must win over the workspace's global Escape.
-        // Otherwise it moves focus behind a menu while leaving that menu open.
-        .chain([
-            action_binding(
-                "escape",
-                Box::new(gpui_kit::base::actions::Cancel),
-                Some("PopupMenu"),
-                cx,
-            ),
-            action_binding(
-                "enter",
-                Box::new(gpui_kit::base::actions::Confirm { secondary: false }),
-                Some("PopupMenu"),
-                cx,
-            ),
-        ])
-        .collect()
-}
-
-/// Files owns file selection; remove only the native table actions so raw
-/// navigation reaches Browser and Tab retains Root's focus traversal.
-fn file_table_bindings() -> [KeyBinding; 11] {
-    use gpui_kit::base::actions::{
-        Cancel, SelectDown, SelectFirst, SelectLast, SelectNextColumn, SelectPageDown,
-        SelectPageUp, SelectPrevColumn, SelectUp,
-    };
-    fn unbind(stroke: &'static str, action: impl Action) -> KeyBinding {
-        KeyBinding::new(
-            stroke,
-            Unbind(action.name().into()),
-            Some("(FilesFileTable > DataTable) && !PopupMenu"),
+impl Command {
+    pub fn from_key(event: &anti_webui::prelude::KeyboardEvent) -> Option<Self> {
+        Self::ALL.into_iter().find(|command| {
+            std::iter::once(command.default_stroke())
+                .chain(command.compatibility_strokes().iter().copied())
+                .any(|stroke| Self::matches_stroke(stroke, event))
+        })
+    }
+    fn matches_stroke(stroke: &str, event: &anti_webui::prelude::KeyboardEvent) -> bool {
+        use anti_webui::prelude::{Key, NamedKey};
+        let mut parts = stroke.split('-');
+        let mut ctrl = false;
+        let mut alt = false;
+        let mut shift = false;
+        let Some(key) = parts.find(|part| match *part {
+            "ctrl" => {
+                ctrl = true;
+                false
+            }
+            "alt" => {
+                alt = true;
+                false
+            }
+            "shift" => {
+                shift = true;
+                false
+            }
+            _ => true,
+        }) else {
+            return false;
+        };
+        if ctrl != event.modifiers.ctrl
+            || alt != event.modifiers.alt
+            || shift != event.modifiers.shift
+            || event.modifiers.logo
+        {
+            return false;
+        }
+        match &event.key {
+            Key::Character(character) => character.eq_ignore_ascii_case(key),
+            Key::Unidentified => false,
+            Key::Named(named) => match named {
+                NamedKey::Enter => key == "enter",
+                NamedKey::Escape => key == "escape",
+                NamedKey::Tab => key == "tab",
+                NamedKey::Space => key == "space",
+                NamedKey::ArrowLeft => key == "left",
+                NamedKey::ArrowRight => key == "right",
+                NamedKey::ArrowUp => key == "up",
+                NamedKey::ArrowDown => key == "down",
+                NamedKey::Delete => key == "delete",
+                NamedKey::F(number) => {
+                    key.strip_prefix('f')
+                        .and_then(|number| number.parse::<u8>().ok())
+                        == Some(*number)
+                }
+                _ => false,
+            },
+        }
+    }
+    pub fn needs_content_focus(self) -> bool {
+        matches!(
+            self,
+            Self::Open
+                | Self::OpenInNewTab
+                | Self::Copy
+                | Self::Cut
+                | Self::Paste
+                | Self::CopyPaths
+                | Self::SelectAll
+                | Self::DeselectAll
+                | Self::ContextMenu
+                | Self::Rename
+                | Self::Trash
+                | Self::DeletePermanent
+                | Self::RestoreSelection
+                | Self::PurgeSelection
+                | Self::MountVolume
+                | Self::UnmountVolume
+                | Self::Undo
+                | Self::Redo
         )
     }
-    [
-        unbind("tab", SelectNextColumn),
-        unbind("shift-tab", SelectPrevColumn),
-        unbind("up", SelectUp),
-        unbind("down", SelectDown),
-        unbind("left", SelectPrevColumn),
-        unbind("right", SelectNextColumn),
-        unbind("home", SelectFirst),
-        unbind("end", SelectLast),
-        unbind("pageup", SelectPageUp),
-        unbind("pagedown", SelectPageDown),
-        unbind("escape", Cancel),
-    ]
-}
-
-const ORDINAL_TAB_STROKES: [&str; 9] = [
-    "ctrl-1", "ctrl-2", "ctrl-3", "ctrl-4", "ctrl-5", "ctrl-6", "ctrl-7", "ctrl-8", "ctrl-9",
-];
-
-fn ordinal_bindings(cx: &App) -> Vec<KeyBinding> {
-    let context = Some(WORKSPACE_CONTEXT);
-    ORDINAL_TAB_STROKES
-        .into_iter()
-        .enumerate()
-        .map(|(index, stroke)| action_binding(stroke, Box::new(SelectTab(index)), context, cx))
-        .collect()
-}
-
-/// Terminal capabilities are shared, but their key choices belong to Files.
-fn terminal_bindings() -> Vec<KeyBinding> {
-    use gds::ui::terminal::{
-        Copy, INPUT_CONTEXT, Paste, ScrollBottom, ScrollPageDown, ScrollPageUp, ScrollTop,
-    };
-    let whole_terminal = Some("GdsTerminal || FilesTerminalTabs || FilesTerminal");
-    vec![
-        KeyBinding::new("ctrl-n", NewTerminal, whole_terminal),
-        KeyBinding::new("ctrl-w", CloseTerminal, whole_terminal),
-        KeyBinding::new("f6", ReturnFromTerminal, whole_terminal),
-        KeyBinding::new("ctrl-shift-c", Copy, Some(INPUT_CONTEXT)),
-        KeyBinding::new("ctrl-shift-v", Paste, Some(INPUT_CONTEXT)),
-        KeyBinding::new("shift-pageup", ScrollPageUp, Some(INPUT_CONTEXT)),
-        KeyBinding::new("shift-pagedown", ScrollPageDown, Some(INPUT_CONTEXT)),
-        KeyBinding::new("shift-home", ScrollTop, Some(INPUT_CONTEXT)),
-        KeyBinding::new("shift-end", ScrollBottom, Some(INPUT_CONTEXT)),
-        KeyBinding::new("f2", RenameTerminal, Some(INPUT_CONTEXT)),
-        KeyBinding::new("f2", RenameTerminal, Some(TERMINAL_TABS_CONTEXT)),
-        KeyBinding::new("down", NextTerminal, Some(TERMINAL_TABS_CONTEXT)),
-        KeyBinding::new("up", PreviousTerminal, Some(TERMINAL_TABS_CONTEXT)),
-        KeyBinding::new("enter", FocusTerminal, Some(TERMINAL_TABS_CONTEXT)),
-    ]
-}
-
-fn action_binding(
-    stroke: &'static str,
-    action: Box<dyn Action>,
-    context: Option<&'static str>,
-    cx: &App,
-) -> KeyBinding {
-    // Context predicates see the whole focus ancestry. Both terminal regions
-    // exclude Files bindings; the panel's own tab-bar keys must not become
-    // file-tab operations, and PTY input must keep its control characters.
-    let scoped = if action.partial_eq(&gds::ui::help::OpenHelp)
-        || action.partial_eq(&OpenSettings)
-        // Only the primary terminal toggle is window-wide; PTY input keeps F4.
-        || (action.partial_eq(&ToggleTerminal) && stroke == Command::Terminal.default_stroke())
-        || action.partial_eq(&FocusNotifications)
-        || action.partial_eq(&CloseNotification)
-        || action.partial_eq(&CloseAllNotifications)
-        || context == Some("PopupMenu")
-    {
-        context.map(str::to_owned)
-    } else {
-        Some(match context {
-            Some(context) => {
-                format!("({context}) && !GdsTerminal && !FilesTerminalTabs && !FilesTerminal")
-            }
-            None => "!GdsTerminal && !FilesTerminalTabs && !FilesTerminal".to_owned(),
-        })
-    };
-    let scoped = if action.partial_eq(&UndoFileOperation) || action.partial_eq(&RedoFileOperation) {
-        scoped.map(|context| format!("({context}) && !Input"))
-    } else {
-        scoped
-    };
-    let predicate = scoped.as_deref().map(|value| {
-        KeyBindingContextPredicate::parse(value)
-            .expect("bundled action contexts are valid")
-            .into()
-    });
-    KeyBinding::load(stroke, action, predicate, false, None, cx)
-        .expect("bundled action shortcuts are valid")
-}
-
-impl From<Command> for Shortcut {
-    fn from(command: Command) -> Self {
-        Self::new(command.action(), command.context())
-    }
-}
-
-/// Direct binding for the `position + 1`-th file tab.
-///
-/// The strip is the cycle order, pinned tabs included; rows past the ninth have
-/// no key and therefore no hint.
-pub fn ordinal_shortcut(position: usize) -> Option<Shortcut> {
-    (position < ORDINAL_TAB_STROKES.len())
-        .then(|| Shortcut::new(Box::new(SelectTab(position)), Some(WORKSPACE_CONTEXT)))
 }

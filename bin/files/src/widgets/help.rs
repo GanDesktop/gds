@@ -1,17 +1,12 @@
-use crate::shared::ui::actions::{
-    CloseTerminal, Command, NewTerminal, TERMINAL_TABS_CONTEXT, ordinal_shortcut,
-};
-use gds::ui::Shortcut;
+//! Keyboard reference assembled from the same command metadata as the workspace.
+use crate::shared::ui::actions::Command;
+use anti_webui::prelude::*;
 use gds::{
-    i18n::{t, text},
-    ui::{
-        dialog::DialogCommand,
-        help::{HelpPage, ShortcutHeading, ShortcutRow, ShortcutSection},
-    },
+    i18n,
+    ui::dialog::DialogCommand,
+    ui::help::{HelpPage, ShortcutHeading, ShortcutRow, ShortcutSection},
 };
 use gds_uim::el;
-use gpui_kit::{App, IntoElement, ParentElement, RenderOnce, Window};
-
 const SECTIONS: &[(&str, &[Command])] = &[
     (
         "help-application",
@@ -114,37 +109,33 @@ const SECTIONS: &[(&str, &[Command])] = &[
     ),
 ];
 
-#[derive(Default, IntoElement)]
+#[derive(Default)]
 pub(crate) struct FilesHelp;
-
-impl RenderOnce for FilesHelp {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        el! {
-            .HelpPage::default [
-                ..$(SECTIONS.iter().map(|(title, commands)| el! {
-                    .ShortcutSection::default [
-                        .ShortcutHeading::default [$text(title, cx)],
-                        ..$(commands.iter().map(|command| el! {
-                            ($(text(command.label_id(), cx)), $*command).ShortcutRow::new
+impl IntoView for FilesHelp {
+    fn into_view(self) -> View {
+        el! { .HelpPage::default.[
+            (move () => ${
+                el! { .div.[..SECTIONS.{iter;map:$(|(title, commands)| {
+                    let rows=commands.iter().map(|command| ShortcutRow::new(i18n::text(command.label_id()),command.default_stroke()));
+                    el! { .ShortcutSection::default.[
+                        .ShortcutHeading::default.[(*title).i18n::text.text],
+                        ..rows,
+                        if $(*title=="help-tabs") [$(ShortcutRow::new(i18n::text("help-select-tab"),"Ctrl+1 – Ctrl+9"))],
+                        if $(*title=="help-terminal") [
+                            $(ShortcutRow::new(i18n::text("files-terminal-new"),"Ctrl+N")),
+                            $(ShortcutRow::new(i18n::text("files-terminal-end"),"Ctrl+W")),
+                        ],
+                    ] }
+                })},
+                    .ShortcutSection::default.[
+                        .ShortcutHeading::default.["help-dialogs".i18n::text.text],
+                        ..$(DialogCommand::ALL.into_iter().map(|command| {
+                            ShortcutRow::new(i18n::text(command.label_id()), command.default_stroke())
                         })),
-                        @if (*title == "help-tabs")
-                            ($(t!(@cx, "help-select-tab")), $(ordinal_shortcut(0).expect("first tab binding"))).ShortcutRow::new {
-                                range: $(ordinal_shortcut(8).expect("ninth tab binding"));
-                            },
-                        @end,
-                        @if (*title == "help-terminal")
-                            ($(t!(@cx, "files-terminal-new")), $(Shortcut::new(Box::new(NewTerminal), Some(TERMINAL_TABS_CONTEXT)))).ShortcutRow::new,
-                            ($(t!(@cx, "files-terminal-end")), $(Shortcut::new(Box::new(CloseTerminal), Some(TERMINAL_TABS_CONTEXT)))).ShortcutRow::new,
-                        @end,
-                    ]
-                })),
-                .ShortcutSection::default [
-                    .ShortcutHeading::default [$(t!(@cx, "help-dialogs"))],
-                    ..$(DialogCommand::ALL.into_iter().map(|command| el! {
-                        ($(text(command.label_id(), cx)), $(command.shortcut())).ShortcutRow::new
-                    })),
-                ],
-            ]
-        }
+                    ],
+                ] }
+            }).dyn_view,
+        ] }
+        .into_view()
     }
 }

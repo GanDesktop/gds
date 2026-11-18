@@ -1,7 +1,6 @@
 //! Files owns its application messages; GDS supplies Fluent and base messages.
 
 pub use gds::i18n::{Error, Language, text};
-pub(crate) use gds::t;
 
 /// Build a Fluent catalog combining suite messages with Files translations.
 ///

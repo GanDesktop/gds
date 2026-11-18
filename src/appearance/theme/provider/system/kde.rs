@@ -1,7 +1,7 @@
 //! Read Plasma's effective colors from kdeglobals.
 use std::path::Path;
 
-use gpui_kit::{Hsla, Rgba, rgb};
+use anti_webui::prelude::{Color, rgb};
 use ini::Ini;
 
 use super::super::{Loaded, builtin, color::hex_color};
@@ -21,7 +21,7 @@ pub(super) fn parse(
         ModePreference::Light => Mode::Light,
         ModePreference::Dark => Mode::Dark,
         ModePreference::System => {
-            let background: Rgba = required(&ini, "Colors:Window", "BackgroundNormal")?.into();
+            let background: Color = required(&ini, "Colors:Window", "BackgroundNormal")?;
             // Match Plasma's Settings portal: qGray(windowBackground) < 192.
             // https://invent.kde.org/plasma/xdg-desktop-portal-kde/-/blob/master/src/settings.cpp
             let gray = (background.r * 11.0 + background.g * 16.0 + background.b * 5.0) / 32.0;
@@ -82,7 +82,7 @@ fn parse_kde(ini: &Ini, mode: Mode) -> Result<Palette, Error> {
 
 /// # Errors
 /// Rejects a present named color if it is not valid RGB/ARGB data.
-fn optional(ini: &Ini, section: &str, key: &str) -> Result<Option<Hsla>, Error> {
+fn optional(ini: &Ini, section: &str, key: &str) -> Result<Option<Color>, Error> {
     ini.get_from(Some(section), key)
         .map(|value| named_color(value, &format!("{section}.{key}")))
         .transpose()
@@ -90,14 +90,14 @@ fn optional(ini: &Ini, section: &str, key: &str) -> Result<Option<Hsla>, Error> 
 
 /// # Errors
 /// Rejects a missing required named color or invalid color data.
-fn required(ini: &Ini, section: &str, key: &str) -> Result<Hsla, Error> {
+fn required(ini: &Ini, section: &str, key: &str) -> Result<Color, Error> {
     optional(ini, section, key)?
         .ok_or_else(|| Error::invalid(format!("{section}.{key}"), "required color is missing"))
 }
 
 /// # Errors
 /// Rejects unsupported color syntax, missing channels and values outside u8.
-fn named_color(value: &str, field: &str) -> Result<Hsla, Error> {
+fn named_color(value: &str, field: &str) -> Result<Color, Error> {
     if value.trim().starts_with('#') {
         return hex_color(value, field, true);
     }
@@ -111,7 +111,7 @@ fn named_color(value: &str, field: &str) -> Result<Hsla, Error> {
     }
     let color =
         (u32::from(channels[0]) << 16) | (u32::from(channels[1]) << 8) | u32::from(channels[2]);
-    Ok(rgb(color).into())
+    Ok(rgb(color))
 }
 
 #[cfg(test)]

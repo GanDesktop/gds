@@ -4,4 +4,4 @@ mod icon;
 mod presentation;
 
 pub(crate) use icon::{FileArtwork, FileIcon};
-pub(crate) use presentation::{EntryPresentation, UNKNOWN_VALUE};
+pub(crate) use presentation::EntryPresentation;

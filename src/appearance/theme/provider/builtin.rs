@@ -1,7 +1,7 @@
 //! Embedded TOML palettes, parsed once and independent of runtime files.
 use std::sync::LazyLock;
 
-use gpui_kit::{Hsla, WindowAppearance};
+use anti_webui::prelude::Color;
 use serde::{Deserialize, Serialize};
 
 use super::{Loaded, Mode, ModePreference, Palette, color::hex_color};
@@ -79,7 +79,7 @@ impl Theme {
     }
 }
 
-pub(super) fn load(theme: Theme, preference: ModePreference, platform: WindowAppearance) -> Loaded {
+pub(super) fn load(theme: Theme, preference: ModePreference, platform: Mode) -> Loaded {
     let mode = preference.resolve(platform);
     Loaded {
         palette: theme.palette(mode),
@@ -115,9 +115,9 @@ impl Definition {
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(try_from = "String")]
-struct Color(Hsla);
+struct PaletteColor(Color);
 
-impl TryFrom<String> for Color {
+impl TryFrom<String> for PaletteColor {
     type Error = super::Error;
     fn try_from(value: String) -> Result<Self, Self::Error> {
         hex_color(&value, "builtin color", false).map(Self)
@@ -127,31 +127,31 @@ impl TryFrom<String> for Color {
 #[derive(Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Scheme {
-    content: Color,
-    sidebar: Color,
-    foreground: Color,
-    sidebar_foreground: Color,
-    muted_foreground: Color,
-    surface: Color,
-    surface_foreground: Color,
-    panel: Color,
-    panel_foreground: Color,
-    border: Color,
-    outline: Color,
-    shadow: Color,
-    primary: Color,
-    primary_foreground: Color,
-    selection: Color,
-    selection_foreground: Color,
-    tooltip: Color,
-    tooltip_foreground: Color,
-    link: Color,
-    error: Color,
-    error_foreground: Color,
-    success: Color,
-    success_foreground: Color,
-    warning: Color,
-    warning_foreground: Color,
+    content: PaletteColor,
+    sidebar: PaletteColor,
+    foreground: PaletteColor,
+    sidebar_foreground: PaletteColor,
+    muted_foreground: PaletteColor,
+    surface: PaletteColor,
+    surface_foreground: PaletteColor,
+    panel: PaletteColor,
+    panel_foreground: PaletteColor,
+    border: PaletteColor,
+    outline: PaletteColor,
+    shadow: PaletteColor,
+    primary: PaletteColor,
+    primary_foreground: PaletteColor,
+    selection: PaletteColor,
+    selection_foreground: PaletteColor,
+    tooltip: PaletteColor,
+    tooltip_foreground: PaletteColor,
+    link: PaletteColor,
+    error: PaletteColor,
+    error_foreground: PaletteColor,
+    success: PaletteColor,
+    success_foreground: PaletteColor,
+    warning: PaletteColor,
+    warning_foreground: PaletteColor,
 }
 
 impl Scheme {

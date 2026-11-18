@@ -1,19 +1,19 @@
 //! Terminal roles belong to the appearance snapshot, not the renderer.
-use gpui_kit::{Hsla, rgb};
+use anti_webui::prelude::{Color, rgb};
 
 use super::Mode;
 
 /// Opaque terminal colors; the content material supplies background opacity.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerminalColors {
-    pub foreground: Hsla,
-    pub background: Hsla,
-    pub cursor: Hsla,
-    pub cursor_text: Hsla,
-    pub selection: Hsla,
-    pub selection_text: Hsla,
-    pub normal: [Hsla; 8],
-    pub bright: [Hsla; 8],
+    pub foreground: Color,
+    pub background: Color,
+    pub cursor: Color,
+    pub cursor_text: Color,
+    pub selection: Color,
+    pub selection_text: Color,
+    pub normal: [Color; 8],
+    pub bright: [Color; 8],
 }
 
 impl TerminalColors {
@@ -32,10 +32,10 @@ impl TerminalColors {
             Mode::Light => LIGHT,
             Mode::Dark => DARK,
         }
-        .map(|value| rgb(value).into());
+        .map(rgb);
         let (foreground, background) = match mode {
-            Mode::Light => (rgb(0x202020).into(), rgb(0xffffff).into()),
-            Mode::Dark => (rgb(0xc5c8c6).into(), rgb(0x1d1f21).into()),
+            Mode::Light => (rgb(0x202020), rgb(0xffffff)),
+            Mode::Dark => (rgb(0xc5c8c6), rgb(0x1d1f21)),
         };
         Self {
             foreground,

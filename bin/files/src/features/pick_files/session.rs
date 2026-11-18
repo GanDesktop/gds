@@ -121,10 +121,14 @@ impl SelectionCheck {
                 }
                 continue;
             }
-            match std::fs::metadata(path) {
+            let is_directory = match std::fs::metadata(path) {
                 Ok(metadata)
-                    if (self.options.directory && metadata.is_dir())
-                        || (!self.options.directory && metadata.is_file()) => {}
+                    if ((self.options.directory || self.options.allow_mixed)
+                        && metadata.is_dir())
+                        || (!self.options.directory && metadata.is_file()) =>
+                {
+                    metadata.is_dir()
+                }
                 Ok(_) => {
                     return Err(ValidationFailure::new(if self.options.directory {
                         "picker-not-directory"
@@ -138,8 +142,8 @@ impl SelectionCheck {
                         error.to_string(),
                     ));
                 }
-            }
-            if !self.options.directory
+            };
+            if !is_directory
                 && !self.accepted_in_table.contains(path)
                 && !self.options.matches(self.active_filter, path)
             {
@@ -208,6 +212,9 @@ pub(crate) struct Session {
     pub active_filter: usize,
     pub read_only: bool,
     pub choices: Vec<chooser::Choice>,
+    /// Lossless spelling retained while the filename input still displays this name.
+    pub save_name: Option<std::ffi::OsString>,
+    pub(crate) submitting: bool,
     /// A confirmed selection must only be reported once.
     pub completing: bool,
     outcome: Option<Outcome>,
@@ -220,11 +227,27 @@ impl Session {
             .as_ref()
             .map(|request| request.choices.clone())
             .unwrap_or_default();
+        let save_name = options
+            .portal
+            .as_ref()
+            .and_then(|request| match &request.mode {
+                chooser::Mode::Save { name } => Some(
+                    request
+                        .current_file
+                        .as_ref()
+                        .and_then(|file| Path::new(file).file_name())
+                        .unwrap_or(name)
+                        .to_owned(),
+                ),
+                _ => None,
+            });
         Self {
+            save_name,
             read_only: options.read_only,
             choices,
             options: Arc::new(options),
             active_filter: 0,
+            submitting: false,
             completing: false,
             outcome: None,
         }
@@ -235,10 +258,10 @@ impl Session {
     }
 
     pub(crate) fn accepts_entry(&self, entry: &Entry) -> bool {
-        if self.options.directory {
-            Projection::is_directory(entry)
+        if Projection::is_directory(entry) {
+            self.options.directory || self.options.allow_mixed
         } else {
-            !Projection::is_directory(entry)
+            !self.options.directory
                 && self.options.matches_type(
                     self.active_filter,
                     &entry.path,

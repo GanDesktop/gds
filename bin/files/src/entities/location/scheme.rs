@@ -10,6 +10,10 @@ pub trait Scheme: Sync {
     /// Rejects malformed addresses or URIs that do not belong to this scheme.
     fn parse(&self, input: &str) -> Result<Location, AddressError>;
     fn parent(&self, address: &Location) -> Option<Location>;
+    #[expect(
+        dead_code,
+        reason = "Provider-directed browsing remains available outside the native workspace dispatcher"
+    )]
     fn browse<'a>(&self, _: &'a Location) -> Browse<'a> {
         Browse::Location
     }
@@ -17,6 +21,10 @@ pub trait Scheme: Sync {
 
 /// Navigation chooses a content source; providers implement loading separately.
 /// A virtual tag address cannot accidentally enter a filesystem directory read.
+#[expect(
+    dead_code,
+    reason = "Borrowed provider results preserve the URI scheme API"
+)]
 pub enum Browse<'a> {
     Location,
     Tags(&'a TagAddress),
@@ -84,6 +92,10 @@ pub fn parent(address: &Location) -> Option<Location> {
     provider(address).parent(address)
 }
 
+#[expect(
+    dead_code,
+    reason = "Provider-directed browsing remains part of the URI scheme API"
+)]
 pub fn browse(address: &Location) -> Browse<'_> {
     provider(address).browse(address)
 }

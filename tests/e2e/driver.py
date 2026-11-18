@@ -76,6 +76,7 @@ class Desktop:
             if guest_bin_dir:
                 self.bin = guest_bin_dir
                 self.build = {'kind': 'installed', 'directory': self.bin}
+                apps = ('files', 'images')
             else:
                 if not bundle.is_file():
                     raise Blocked(f'Missing {bundle}; run just e2e-build')
@@ -95,13 +96,14 @@ class Desktop:
                              f'sudo -n cp -an {shlex.quote(parent + "/nix/store/.")} /nix/store/; fi && '
                              f'touch {shlex.quote(parent + "/ready")}'], timeout=180)
                 self.build = json.loads(self.read(parent + '/manifest.json'))
+                apps = self.build['binaries']
                 for app, expected in self.build['binaries'].items():
                     actual = command([*self.ssh, shlex.join(['sha256sum', self.bin + f'/gds-{app}.elf'])]).split()[0]
                     if actual != expected:
                         raise Blocked(f'{app}: deployed binary hash differs from build manifest')
             self.environment['binaries'] = {
                 app: command([*self.ssh, shlex.join(['sha256sum', self.bin + f'/gds-{app}'])]).split()[0]
-                for app in ('files', 'images')
+                for app in apps
             }
             (artifacts / 'environment.json').write_text(json.dumps(self.environment, indent=2))
             (artifacts / 'build.json').write_text(json.dumps(self.build, indent=2))

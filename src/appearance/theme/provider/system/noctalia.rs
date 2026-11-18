@@ -5,8 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anti_webui::prelude::Color;
 use directories::BaseDirs;
-use gpui_kit::Hsla;
 use serde::{Deserialize, Serialize};
 
 use super::super::{Loaded, color::hex_color, read};
@@ -312,7 +312,7 @@ fn terminal_role(
     scheme: &serde_json::Map<String, serde_json::Value>,
     scheme_name: &str,
     role: &str,
-) -> Result<Hsla, Error> {
+) -> Result<Color, Error> {
     let field = format!("terminal.{scheme_name}.{role}");
     let value = scheme
         .get(role)
@@ -332,7 +332,7 @@ fn terminal_ansi(
     scheme: &serde_json::Map<String, serde_json::Value>,
     scheme_name: &str,
     group: &str,
-) -> Result<[Hsla; 8], Error> {
+) -> Result<[Color; 8], Error> {
     let field = format!("terminal.{scheme_name}.{group}");
     let entries = scheme
         .get(group)
@@ -344,7 +344,7 @@ fn terminal_ansi(
                 "expected an array of 8 Noctalia ANSI terminal colors",
             )
         })?;
-    let mut colors = [Hsla::default(); 8];
+    let mut colors = [Color::default(); 8];
     for (index, (slot, entry)) in colors.iter_mut().zip(entries).enumerate() {
         let item_field = format!("{field}[{index}]");
         let value = entry.as_str().ok_or_else(|| {

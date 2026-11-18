@@ -1,97 +1,83 @@
-//! File formats transported by GPUI on the focused window's core Wayland connection.
-use std::{path::PathBuf, sync::Arc};
-
-use gpui_kit::{App, ClipboardAccessError, ClipboardMime, ClipboardMimeOffer, Task};
-
+//! Multi-format snapshots from the focused native Wayland selection.
 use super::{
     Error, Identity, Mode, Snapshot,
     protocol::{Formats, GNOME_FILES, KDE_CUT, MAX_PAYLOAD_BYTES, URI_LIST},
 };
-
+use anti_webui::prelude::*;
+use std::{path::PathBuf, sync::Arc};
 const CLIPBOARD_ID: &str = "application/x-gds-clipboard-id";
 const FILE_TYPES: [&str; 4] = [GNOME_FILES, URI_LIST, KDE_CUT, CLIPBOARD_ID];
-
 pub(super) struct Clipboard;
-
 impl Clipboard {
-    /// # Errors
-    /// Reports unavailable or failed Wayland clipboard writes.
-    pub(super) fn write_uris(uris: Vec<String>, cx: &App) -> Result<(), Error> {
-        let formats = Formats {
-            uri_list: (uris.join("\r\n") + "\r\n").into_bytes(),
-            gnome: ("copy\n".to_owned() + &uris.join("\n")).into_bytes(),
-            kde_cut: b"0".to_vec(),
-        };
-        cx.write_clipboard_mime(Self::entries(formats, &Identity(None)), None)?;
-        Ok(())
+    pub fn offer() -> Task<Result<ClipboardSnapshot, ClipboardError>> {
+        read_clipboard_formats(
+            ClipboardKind::Clipboard,
+            FILE_TYPES.map(str::to_owned).into(),
+            MAX_PAYLOAD_BYTES,
+        )
     }
-
-    /// # Errors
-    /// The task reports Wayland clipboard read or URI decoding failures.
-    pub(super) fn read_uris(cx: &mut App) -> Task<Result<Option<(Mode, Vec<String>)>, Error>> {
-        let read = Self::offer(cx);
-        cx.spawn(async move |_| {
-            let offer = read.await?;
-            offer
-                .as_ref()
-                .map(Self::decode_uris)
-                .transpose()
-                .map(Option::flatten)
-        })
-    }
-
-    /// # Errors
-    /// Reports format encoding or Wayland clipboard publication failures.
-    pub fn write(snapshot: &Snapshot, cx: &App) -> Result<Snapshot, Error> {
-        let formats = Formats::encode(snapshot)?;
-        let mut written = Formats::decode_uris(&formats.uri_list, snapshot.mode)?;
-        written.identity = snapshot.identity.clone();
-        cx.write_clipboard_mime(Self::entries(formats, &written.identity), None)?;
-        Ok(written)
-    }
-
-    fn entries(formats: Formats, identity: &Identity) -> Vec<ClipboardMime> {
+    fn entries(formats: Formats, identity: &Identity) -> Vec<ClipboardData> {
         let mut entries = [
             (URI_LIST, formats.uri_list),
             (GNOME_FILES, formats.gnome),
             (KDE_CUT, formats.kde_cut),
         ]
         .into_iter()
-        .map(|(mime_type, bytes)| ClipboardMime {
-            mime_type: mime_type.into(),
-            bytes,
+        .map(|(mime, bytes)| ClipboardData {
+            mime: mime.into(),
+            bytes: bytes.into(),
         })
         .collect::<Vec<_>>();
         if let Some(identity) = &identity.0 {
-            entries.push(ClipboardMime {
-                mime_type: CLIPBOARD_ID.into(),
-                bytes: identity.as_bytes().to_vec(),
+            entries.push(ClipboardData {
+                mime: CLIPBOARD_ID.into(),
+                bytes: identity.as_bytes().into(),
             });
         }
         entries
     }
-
-    /// # Errors
-    /// The task reports Wayland clipboard read failures.
-    fn offer(cx: &App) -> Task<Result<Option<ClipboardMimeOffer>, ClipboardAccessError>> {
-        // All representations come from one offer; no reconnecting between formats.
-        cx.read_clipboard_mime(FILE_TYPES.map(str::to_owned).into(), MAX_PAYLOAD_BYTES)
+    pub fn write(mut snapshot: Snapshot) -> Task<Result<Snapshot, Error>> {
+        let formats = match Formats::encode(&snapshot) {
+            Ok(formats) => formats,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        snapshot.paths = match Formats::decode_uris(&formats.uri_list, snapshot.mode) {
+            Ok(decoded) => decoded.paths,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        write_clipboard(
+            ClipboardKind::Clipboard,
+            Self::entries(formats, &snapshot.identity),
+        )
+        .map(move |result| result.map(|_| snapshot).map_err(Error::from))
     }
-
-    fn bytes<'a>(offer: &'a ClipboardMimeOffer, mime: &str) -> Option<&'a [u8]> {
+    pub fn write_uris(uris: Vec<String>) -> Task<Result<(), Error>> {
+        let uris = match Formats::parse_uri_list(&uris.join("\n")) {
+            Ok(uris) => uris,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        let formats = Formats {
+            uri_list: (uris.join("\r\n") + "\r\n").into_bytes(),
+            gnome: ("copy\n".to_owned() + &uris.join("\n")).into_bytes(),
+            kde_cut: b"0".to_vec(),
+        };
+        write_clipboard(
+            ClipboardKind::Clipboard,
+            Self::entries(formats, &Identity(None)),
+        )
+        .map(|result| result.map_err(Error::from))
+    }
+    fn bytes<'a>(offer: &'a ClipboardSnapshot, mime: &str) -> Option<&'a [u8]> {
         offer
             .entries
             .iter()
-            .find(|entry| entry.mime_type == mime)
-            .map(|entry| entry.bytes.as_slice())
+            .find(|entry| entry.mime == mime)
+            .map(|entry| entry.bytes.as_ref())
     }
-
-    /// # Errors
-    /// Rejects malformed copy/cut markers or invalid URI lists.
-    fn decode_uris(offer: &ClipboardMimeOffer) -> Result<Option<(Mode, Vec<String>)>, Error> {
+    pub fn decode_uris(offer: &ClipboardSnapshot) -> Result<Option<(Mode, Vec<String>)>, Error> {
         if let Some(bytes) = Self::bytes(offer, GNOME_FILES) {
-            let text =
-                std::str::from_utf8(bytes).map_err(|e| Error::InvalidPayload(e.to_string()))?;
+            let text = std::str::from_utf8(bytes)
+                .map_err(|error| Error::InvalidPayload(error.to_string()))?;
             let (intent, uris) = text
                 .split_once('\n')
                 .ok_or_else(|| Error::InvalidPayload("missing copy intent".into()))?;
@@ -109,13 +95,11 @@ impl Clipboard {
             .map(Formats::kde_mode)
             .transpose()?
             .unwrap_or(Mode::Copy);
-        let text = std::str::from_utf8(bytes).map_err(|e| Error::InvalidPayload(e.to_string()))?;
+        let text =
+            std::str::from_utf8(bytes).map_err(|error| Error::InvalidPayload(error.to_string()))?;
         Ok(Some((mode, Formats::parse_uri_list(text)?)))
     }
-
-    /// # Errors
-    /// Rejects malformed GNOME/KDE file offers or invalid clipboard identities.
-    fn decode(offer: &ClipboardMimeOffer) -> Result<Option<Snapshot>, Error> {
+    pub fn decode(offer: &ClipboardSnapshot) -> Result<Option<Snapshot>, Error> {
         let mut snapshot = if let Some(bytes) = Self::bytes(offer, GNOME_FILES) {
             Formats::decode_gnome(bytes)?
         } else {
@@ -133,56 +117,59 @@ impl Clipboard {
         }
         Ok(Some(snapshot))
     }
-
-    /// # Errors
-    /// The task reports Wayland clipboard read or payload decoding failures.
-    pub fn read(cx: &mut App) -> Task<Result<Option<Snapshot>, Error>> {
-        let read = Self::offer(cx);
-        cx.spawn(async move |_| {
-            let offer = read.await?;
-            offer
-                .as_ref()
-                .map(Self::decode)
-                .transpose()
-                .map(Option::flatten)
-        })
+    #[expect(
+        dead_code,
+        reason = "The atomic local-file clipboard protocol remains independently callable"
+    )]
+    pub fn read() -> Task<Result<Option<Snapshot>, Error>> {
+        Self::offer().map(|result| Self::decode(&result?))
     }
-
-    /// # Errors
-    /// The task reports Wayland clipboard read, encoding or publication failures.
+    pub fn read_uris() -> Task<Result<Option<(Mode, Vec<String>)>, Error>> {
+        Self::offer().map(|result| Self::decode_uris(&result?))
+    }
     pub fn remove_paths(
         expected: Arc<Snapshot>,
         removed: Vec<PathBuf>,
         explicit: bool,
-        cx: &mut App,
     ) -> Task<Result<(), Error>> {
-        let read = Self::offer(cx);
-        cx.spawn(async move |cx| {
-            let Some(offer) = read.await? else {
-                return Ok(());
-            };
-            let Some(current) = Self::decode(&offer)? else {
-                return Ok(());
-            };
-            let remaining = if explicit {
-                expected.excluding(&current, &removed)
-            } else {
-                expected.remaining_after(&current, &removed)
-            };
-            let Some(remaining) = remaining else {
-                return Ok(());
-            };
-            let entries = if remaining.is_empty() {
-                Vec::new()
-            } else {
-                let snapshot = Snapshot::new(expected.mode, remaining)?;
-                Self::entries(Formats::encode(&snapshot)?, &snapshot.identity)
-            };
-            // The offer revision is checked on the UI thread immediately before publication.
-            match cx.update(|cx| cx.write_clipboard_mime(entries, Some(offer.id))) {
-                Ok(()) | Err(ClipboardAccessError::Changed) => Ok(()),
-                Err(error) => Err(error.into()),
+        let (task, done) = Task::pending();
+        Self::offer().then(move |offer| {
+            let prepared = (|| {
+                let offer = offer?;
+                let Some(current) = Self::decode(&offer)? else {
+                    return Ok(None);
+                };
+                let remaining = if explicit {
+                    expected.excluding(&current, &removed)
+                } else {
+                    expected.remaining_after(&current, &removed)
+                };
+                let Some(remaining) = remaining else {
+                    return Ok(None);
+                };
+                let entries = if remaining.is_empty() {
+                    Vec::new()
+                } else {
+                    let snapshot = Snapshot::new(expected.mode, remaining)?;
+                    Self::entries(Formats::encode(&snapshot)?, &snapshot.identity)
+                };
+                Ok::<_, Error>(Some((offer.revision, entries)))
+            })();
+            match prepared {
+                Ok(Some((revision, entries))) => {
+                    write_clipboard_if_unchanged(ClipboardKind::Clipboard, entries, revision).then(
+                        move |result| {
+                            done.complete(match result {
+                                Ok(()) | Err(ClipboardError::Changed) => Ok(()),
+                                Err(error) => Err(error.into()),
+                            })
+                        },
+                    )
+                }
+                Ok(None) => done.complete(Ok(())),
+                Err(error) => done.complete(Err(error)),
             }
-        })
+        });
+        task
     }
 }

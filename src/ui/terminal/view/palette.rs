@@ -1,5 +1,5 @@
 //! Terminal color semantics, shared by painting and OSC color-query replies.
-use crate::{app::AppExt as _, appearance::theme};
+use crate::appearance::theme;
 use alacritty_terminal::{
     term::{
         cell::Flags,
@@ -7,20 +7,21 @@ use alacritty_terminal::{
     },
     vte::ansi::{Color, NamedColor, Rgb},
 };
-use gpui_kit::{App, Hsla, rgb};
+use anti_webui::prelude::{Color as UiColor, rgb};
 
 pub(in crate::ui::terminal) struct Palette {
-    pub background: Hsla,
-    pub foreground: Hsla,
-    pub selection: Hsla,
-    pub selected_text: Hsla,
-    pub cursor_text: Hsla,
+    pub background: UiColor,
+    pub foreground: UiColor,
+    pub selection: UiColor,
+    pub selected_text: UiColor,
+    pub cursor_text: UiColor,
     colors: [Rgb; COUNT],
 }
 
 impl Palette {
-    pub fn new(cx: &App) -> Self {
-        let theme = cx.gds().appearance().theme();
+    pub fn new() -> Self {
+        let context = crate::app::Gds::current();
+        let theme = context.appearance().theme();
         let roles = theme.colors().terminal;
         Self::from_roles(roles, theme.content_background().a)
     }
@@ -66,7 +67,7 @@ impl Palette {
         self.colors
     }
 
-    pub fn resolve(&self, color: Color, overrides: &Colors) -> Hsla {
+    pub fn resolve(&self, color: Color, overrides: &Colors) -> UiColor {
         match color {
             Color::Spec(value) => from_rgb(value),
             Color::Named(index) => {
@@ -78,7 +79,7 @@ impl Palette {
         }
     }
 
-    pub fn foreground(&self, color: Color, flags: Flags, overrides: &Colors) -> Hsla {
+    pub fn foreground(&self, color: Color, flags: Flags, overrides: &Colors) -> UiColor {
         let resolved = self.resolve(color, overrides);
         if flags.contains(Flags::DIM) {
             from_rgb(dim(to_rgb(resolved)))
@@ -87,19 +88,18 @@ impl Palette {
         }
     }
 
-    pub fn background(&self, overrides: &Colors) -> Hsla {
+    pub fn background(&self, overrides: &Colors) -> UiColor {
         let mut background = self.resolve(Color::Named(NamedColor::Background), overrides);
         background.a = self.background.a;
         background
     }
 }
 
-fn opaque(mut color: Hsla) -> Hsla {
+fn opaque(mut color: UiColor) -> UiColor {
     color.a = 1.;
     color
 }
-fn to_rgb(color: Hsla) -> Rgb {
-    let color = color.to_rgb();
+fn to_rgb(color: UiColor) -> Rgb {
     let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
     Rgb {
         r: channel(color.r),
@@ -107,8 +107,8 @@ fn to_rgb(color: Hsla) -> Rgb {
         b: channel(color.b),
     }
 }
-fn from_rgb(color: Rgb) -> Hsla {
-    rgb((u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b)).into()
+fn from_rgb(color: Rgb) -> UiColor {
+    rgb((u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b))
 }
 fn dim(color: Rgb) -> Rgb {
     let channel = |value: u8| (f32::from(value) * 0.66).round() as u8;
@@ -118,5 +118,6 @@ fn dim(color: Rgb) -> Rgb {
         b: channel(color.b),
     }
 }
+
 #[cfg(test)]
 mod tests;

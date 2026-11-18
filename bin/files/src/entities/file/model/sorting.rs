@@ -39,6 +39,10 @@ pub struct Sort {
 impl Sort {
     /// Whether the sort matches the canonical directories-first, ascending-name order
     /// already maintained by [`super::super::directory::DirectorySnapshot`].
+    #[expect(
+        dead_code,
+        reason = "Canonical-order introspection is part of the shared sorting model"
+    )]
     pub const fn is_canonical(self) -> bool {
         matches!(self.key, Key::Name) && matches!(self.direction, Direction::Ascending)
     }
@@ -61,6 +65,10 @@ impl Sort {
     }
 
     /// Whether `entries` already satisfy this ordering without requiring a resort.
+    #[expect(
+        dead_code,
+        reason = "Ordering validation remains available to directory projections"
+    )]
     pub fn is_sorted(&self, entries: &[Entry]) -> bool {
         entries.is_sorted_by(|left, right| self.compare(left, right) != Ordering::Greater)
     }

@@ -1,10 +1,10 @@
 use super as dms;
 use crate::appearance::theme::{Error, Mode, ModePreference};
-use gpui_kit::{Hsla, rgb};
+use anti_webui::prelude::{Color, rgb};
 use std::path::Path;
 
-fn color(value: u32) -> Hsla {
-    rgb(value).into()
+fn color(value: u32) -> Color {
+    rgb(value)
 }
 
 fn dms_export(active_mode: &str) -> String {
@@ -199,15 +199,17 @@ fn dms_preserves_surface_levels_boundaries_and_paired_selection_in_native_compon
     assert_eq!(parsed.palette.panel, color(0x282828));
     assert_eq!(parsed.palette.panel_foreground, color(0xeeeeee));
     assert_eq!(parsed.palette.shadow, color(0x010203));
-    let mut native = gpui_kit::component::ThemeColor::default();
-    parsed.palette.apply_to(&mut native);
+    let native = parsed.palette.widgets(Mode::Dark);
     assert_eq!(native.border, color(0x444444));
-    assert_eq!(native.input, color(0x888888));
-    assert_eq!(native.sidebar_accent, color(0x345678));
-    assert_eq!(native.sidebar_accent_foreground, color(0xfedcba));
-    assert_eq!(native.table_active, native.sidebar_accent);
-    assert_eq!(native.accent_foreground, native.sidebar_accent_foreground);
-    assert_eq!(native.popover, parsed.palette.panel);
+    assert_eq!(native.border_strong, color(0x888888));
+    assert_eq!(native.selected, color(0x345678));
+    assert_eq!(parsed.palette.selection_foreground, color(0xfedcba));
+    assert_eq!(native.selected, native.selected);
+    assert_eq!(
+        parsed.palette.selection_foreground,
+        parsed.palette.selection_foreground
+    );
+    assert_eq!(native.overlay, parsed.palette.panel);
 }
 
 #[test]

@@ -8,7 +8,6 @@ use std::{
 };
 
 use directories::BaseDirs;
-use gpui_kit::SharedString;
 use serde::{Deserialize, Serialize};
 
 use super::{SYSTEM_FAMILY, SYSTEM_MONO_FAMILY};
@@ -25,12 +24,12 @@ const ENV_KEYS: [&str; 6] = [
 ];
 
 pub(super) struct SystemFamilies {
-    pub sans_serif: SharedString,
-    pub monospace: SharedString,
+    pub sans_serif: String,
+    pub monospace: String,
 }
 
 pub(super) struct CustomMatch {
-    pub family: SharedString,
+    pub family: String,
     pub confirmed_monospace: bool,
 }
 
@@ -77,6 +76,10 @@ pub(super) fn system_families() -> &'static SystemFamilies {
     })
 }
 
+pub(super) fn installed_families() -> Vec<String> {
+    fc::installed_families()
+}
+
 pub(super) fn resolve_custom_monospace(requested: &str) -> Option<CustomMatch> {
     fc::resolve_custom_monospace(requested)
 }
@@ -113,8 +116,8 @@ pub(super) fn load_or_query_with(
     }
 
     SystemFamilies {
-        sans_serif: queried.sans_serif.into(),
-        monospace: queried.monospace.into(),
+        sans_serif: queried.sans_serif,
+        monospace: queried.monospace,
     }
 }
 
@@ -137,8 +140,8 @@ fn valid_cached_families(
         .all(|item| stamp_path(&item.path) == item.state)
     {
         Some(SystemFamilies {
-            sans_serif: entry.sans_serif.into(),
-            monospace: entry.monospace.into(),
+            sans_serif: entry.sans_serif,
+            monospace: entry.monospace,
         })
     } else {
         None
@@ -381,6 +384,35 @@ mod fc {
         }
     }
 
+    pub(super) fn installed_families() -> Vec<String> {
+        let _guard = FC_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        let Some(config) = current_config() else {
+            return Vec::new();
+        };
+        let Some(pattern) = Pattern::new() else {
+            return Vec::new();
+        };
+        let Some(mut objects) = ObjectSet::new() else {
+            return Vec::new();
+        };
+        if !objects.add(FC_FAMILY) || !objects.add(FC_FAMILYLANG) {
+            return Vec::new();
+        }
+        // SAFETY: config, pattern and object set remain alive for the call.
+        let Some(fonts) = FontSet::from_raw(unsafe { FcFontList(config, pattern.0, objects.0) })
+        else {
+            return Vec::new();
+        };
+        let mut names: Vec<_> = fonts
+            .patterns()
+            .iter()
+            .filter_map(|face| select_english_or_first_family(*face))
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     pub(super) fn resolve_defaults() -> (Option<String>, Option<String>, Vec<PathBuf>) {
         let _guard = FC_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         let Some(config) = current_config() else {
@@ -417,7 +449,7 @@ mod fc {
             status == FcResultMatch && matches!(spacing, FC_MONO | FC_DUAL | FC_CHARCELL)
         });
         Some(CustomMatch {
-            family: family.into(),
+            family,
             confirmed_monospace,
         })
     }

@@ -182,6 +182,10 @@ impl Batch {
 
 #[derive(Debug)]
 pub struct ItemResult {
+    #[expect(
+        dead_code,
+        reason = "Per-item operation reports preserve source identity"
+    )]
     pub path: PathBuf,
     pub result: Result<(), Error>,
 }
@@ -195,14 +199,6 @@ pub struct Report {
 }
 
 impl Report {
-    pub fn succeeded_paths(&self) -> Vec<PathBuf> {
-        self.items
-            .iter()
-            .filter(|item| item.result.is_ok())
-            .map(|item| item.path.clone())
-            .collect()
-    }
-
     pub fn failed_items(&self) -> impl Iterator<Item = &ItemResult> {
         self.items.iter().filter(|item| item.result.is_err())
     }

@@ -1,5 +1,5 @@
 //! Completion handles keep shutdown rejection distinct from executor failure.
-use super::Closed;
+use super::{Closed, Scope};
 use std::{
     future::Future,
     pin::Pin,
@@ -38,6 +38,29 @@ impl<T> Task<T> {
             abort_on_drop: false,
         }
     }
+    /// Deliver an outcome on the existing executor. Rejected tasks report immediately.
+    /// The original work remains supervised through cleanup; this observer only
+    /// forwards its result and is not part of the scope's shutdown drain.
+    pub fn on_complete(
+        mut self,
+        scope: &Scope,
+        complete: impl FnOnce(Result<T, Error>) + Send + 'static,
+    ) where
+        T: Send + 'static,
+    {
+        if let Some(error) = self.error.take() {
+            complete(Err(error));
+            return;
+        }
+        let Some(runtime) = scope.runtime.as_ref() else {
+            complete(Err(Error::NoExecutor));
+            return;
+        };
+        drop(runtime.spawn(async move {
+            complete(self.await);
+        }));
+    }
+
     /// Use only for disposable work whose future owns all cleanup through RAII.
     pub fn cancel_on_drop(mut self) -> Self {
         self.abort_on_drop = true;

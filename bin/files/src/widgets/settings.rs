@@ -1,3 +1,3 @@
-//! The settings surface embedded in the file workspace.
+//! The native settings surface embedded in the Files workspace.
 mod ui;
-pub(crate) use ui::{Event, View};
+pub(crate) use ui::View;

@@ -1,7 +1,7 @@
 //! Shared Material 3 role mapping for desktop shell exports.
 use std::collections::HashMap;
 
-use gpui_kit::Hsla;
+use anti_webui::prelude::Color;
 
 use super::super::{builtin, color::hex_color};
 use crate::appearance::theme::{Error, Mode, ModePreference, palette::Palette};
@@ -93,7 +93,7 @@ pub(super) fn palette(
 
 /// # Errors
 /// Returns an error when a present role is not a supported RGB color.
-fn optional(colors: &HashMap<String, String>, role: &str) -> Result<Option<Hsla>, Error> {
+fn optional(colors: &HashMap<String, String>, role: &str) -> Result<Option<Color>, Error> {
     colors
         .get(role)
         .map(|value| hex_color(value, role, false))
@@ -102,7 +102,7 @@ fn optional(colors: &HashMap<String, String>, role: &str) -> Result<Option<Hsla>
 
 /// # Errors
 /// Returns an error for a missing role or an invalid RGB color.
-fn required(colors: &HashMap<String, String>, role: &str, provider: &str) -> Result<Hsla, Error> {
+fn required(colors: &HashMap<String, String>, role: &str, provider: &str) -> Result<Color, Error> {
     optional(colors, role)?
         .ok_or_else(|| Error::invalid(role, format!("required {provider} color is missing")))
 }

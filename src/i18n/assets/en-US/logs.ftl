@@ -1,6 +1,7 @@
 logs-title = Debug
 logs-open-error = Cannot open Debug
 logs-search = Search messages and targets…
+logs-search-clear = Clear search
 logs-all = All levels
 logs-level = Filter by level
 logs-target = Filter by tracing target

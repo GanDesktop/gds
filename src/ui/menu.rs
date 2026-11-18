@@ -1,114 +1,245 @@
-//! Shared menu surfaces, command rows and in-window context menu placement.
-
-use gds_uim::el;
-use gpui_kit::{
-    component::menu::{PopupMenu, PopupMenuItem},
+//! Shared menu appearance, driven by the toolkit's native popup and menu state.
+use super::Icon;
+use anti_webui::{
     prelude::*,
-    *,
+    widgets::{MenuChoice, MenuState},
 };
+use gds_uim::el;
+use std::rc::Rc;
 
-use super::{Shortcut, ShortcutBadge};
-use crate::appearance::tokens::SMALL;
+pub use anti_webui::widgets::{MenuOptions, MenuParts, menu_with};
 
-pub const WIDTH: f32 = 320.;
-pub const MAX_WIDTH: f32 = 500.;
-pub const MAX_HEIGHT: f32 = 360.;
-const MIN_WIDTH: f32 = 220.;
-const ROW_MIN_WIDTH: f32 = 260.;
-const SHORTCUT_GAP: f32 = 24.;
-const EDGE_MARGIN: f32 = 8.;
-const SURFACE_BORDER: f32 = 1.;
-const DISABLED_OPACITY: f32 = 0.5;
-
-/// Keep Kit's menu colors, icons, borders and item states across applications.
-pub fn popup(menu: PopupMenu) -> PopupMenu {
-    menu.min_w(px(MIN_WIDTH))
-        .max_w(px(MAX_WIDTH))
-        .max_h(px(MAX_HEIGHT))
-        .scrollable(true)
+#[derive(Clone)]
+pub enum MenuEntry {
+    Item(MenuItem),
+    Separator,
+    Submenu(String, Rc<Vec<MenuEntry>>),
 }
 
-/// Let context menus use the window's height before scrolling. Kit applies the
-/// height limit to the items container, inside the popover's border.
-pub fn popup_in(menu: PopupMenu, window: &Window) -> PopupMenu {
-    let available = window.bounds().size.height - px(2. * (EDGE_MARGIN + SURFACE_BORDER));
-    popup(menu).max_h(available.max(px(0.)))
+#[derive(Clone)]
+pub struct MenuItem {
+    label: String,
+    icon: Option<Icon>,
+    shortcut: Option<String>,
+    checked: Option<Rc<dyn Fn() -> bool>>,
+    disabled: Option<Rc<dyn Fn() -> bool>>,
+    action: Option<Rc<dyn Fn()>>,
 }
 
-/// A command label and its effective shortcut, with one shared spacing rule.
-pub fn row(
-    label: impl Into<SharedString>,
-    shortcut: Option<Shortcut>,
-) -> impl Fn(&mut Window, &mut App) -> AnyElement {
-    row_with_state(label, shortcut, true)
+pub fn menu_item(label: impl Into<String>) -> MenuItem {
+    MenuItem {
+        label: label.into(),
+        icon: None,
+        shortcut: None,
+        checked: None,
+        disabled: None,
+        action: None,
+    }
 }
 
-/// Keep custom shortcut badges and the menu item's interaction state in sync.
-pub fn item(
-    label: impl Into<SharedString>,
-    shortcut: Option<Shortcut>,
-    enabled: bool,
-) -> PopupMenuItem {
-    PopupMenuItem::element(row_with_state(label.into(), shortcut, enabled)).disabled(!enabled)
+pub const fn menu_separator() -> MenuEntry {
+    MenuEntry::Separator
 }
 
-fn row_with_state(
-    label: impl Into<SharedString>,
-    shortcut: Option<Shortcut>,
-    enabled: bool,
-) -> impl Fn(&mut Window, &mut App) -> AnyElement {
-    let label = label.into();
-    move |window, _| {
-        let badge = shortcut
-            .as_ref()
-            .and_then(|shortcut| shortcut.binding(window))
-            .map(|binding| {
-                el! {
-                    .div { # "shortcut"; test_support; flex_shrink_0; } [
-                        $(ShortcutBadge::binding(binding)),
-                    ]
+impl MenuItem {
+    pub fn icon(mut self, icon: Icon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+    pub fn shortcut(mut self, keys: impl Into<String>) -> Self {
+        self.shortcut = Some(keys.into());
+        self
+    }
+    pub fn checked_when(mut self, checked: impl Fn() -> bool + 'static) -> Self {
+        self.checked = Some(Rc::new(checked));
+        self
+    }
+    pub fn disabled_when(mut self, disabled: impl Fn() -> bool + 'static) -> Self {
+        self.disabled = Some(Rc::new(disabled));
+        self
+    }
+    pub fn on_click(mut self, action: impl Fn() + 'static) -> Self {
+        self.action = Some(Rc::new(action));
+        self
+    }
+}
+
+impl From<MenuItem> for MenuEntry {
+    fn from(item: MenuItem) -> Self {
+        Self::Item(item)
+    }
+}
+
+fn frame(state: MenuState, index: usize, disabled: impl Fn() -> bool + 'static) -> Div {
+    el! { .div.{flex; items_center; gap: 8.0_f32; px: 8.0_f32; min_h: 28.0_f32;
+        rounded: 4.0_f32; select_none;
+        dyn_style: move style => ${
+            let colors = theme();
+            if disabled() {
+                style.text_color(colors.text_disabled)
+            } else if state.is_lit(index) {
+                style.bg(colors.hover).text_color(colors.text).cursor(CursorIcon::Pointer)
+            } else {
+                style.text_color(colors.text).cursor(CursorIcon::Pointer)
+            }
+        };
+    } }
+}
+
+fn row(state: MenuState, index: usize, entry: &MenuEntry) -> View {
+    match entry {
+        MenuEntry::Item(item) => {
+            let checked = item.checked.clone();
+            let checked_view = checked.clone();
+            let disabled = item.disabled.clone();
+            let disabled_style = disabled.clone();
+            let action = item.action.clone();
+            let icon = item.icon;
+            let shortcut = item.shortcut.clone();
+            let label = item.label.clone();
+            let choice = MenuChoice::new(move || {
+                if let Some(action) = action.as_ref() {
+                    action();
                 }
+            })
+            .disabled_when(move || disabled.as_ref().is_some_and(|get| get()));
+            let base = frame(state, index, move || {
+                disabled_style.as_ref().is_some_and(|get| get())
             });
-        el! {
-            .div {
-                # $(label.clone());
-                test_support;
-                role: Role::Label;
-                aria_label: $(label.clone());
-                flex;
-                items_center;
-                w_full;
-                min_w: ROW_MIN_WIDTH.px;
-                gap: SHORTCUT_GAP.px;
-                text_size: SMALL;
-                opacity: $(if enabled { 1.0 } else { DISABLED_OPACITY });
-            } [
-                .div { # "label"; test_support; flex_1; min_w_0; truncate } [$(label.clone())],
-                ..badge,
-            ]
+            let contents = el! { base.{
+                access: move a => $(if let Some(checked) = &checked {
+                    a.role(Role::MenuItemCheckbox).checked(checked())
+                } else { a });
+            }.[
+                .div.{flex_none; w: 16.0_f32; access: a => $(a.hidden())}.[
+                    if let Some(checked) = checked_view [
+                        $(move || {
+                            if checked() { Icon::Check.view(16.0_f32).into_view() } else { div().into_view() }
+                        }).dyn_view,
+                    ] else if let Some(icon) = icon [$(icon.view(16.0_f32))],
+                ],
+                label.text.{flex_1; min_w: 0.0_f32; ellipsis; whitespace_nowrap},
+                if let Some(shortcut) = shortcut [
+                    $(shortcut_badge(&shortcut)),
+                ],
+            ] };
+            state.item(index, contents, choice).into_view()
         }
-        .into_any_element()
+        MenuEntry::Separator => el! { .div.{h: 1.0_f32; my: 4.0_f32; mx: 4.0_f32; flex_none;
+            dyn_style: style => $(style.bg(theme().border));
+        } }
+        .into_view(),
+        MenuEntry::Submenu(label, entries) => {
+            let base = frame(state, index, || false);
+            let label = label.clone();
+            let entries = entries.clone();
+            let contents = el! { base.[
+                .div.{w: 16.0_f32; flex_none},
+                label.text.{flex_1; min_w: 0.0_f32; ellipsis; whitespace_nowrap},
+                $(Icon::ChevronRight.view(14.0_f32)),
+            ] };
+            state
+                .submenu(index, contents, move |state| surface(entries, state))
+                .into_view()
+        }
     }
 }
 
-/// Regular windows host context menus in their own overlay, including at edges.
-pub fn overlay(menu: Entity<PopupMenu>, position: Point<Pixels>, window: &Window) -> AnyElement {
-    el! {
-        .anchored [
-            .div {
-                w: $(window.bounds().size.width);
-                h: $(window.bounds().size.height);
-                on_scroll: $(|_, _, cx| cx.stop_propagation());
-            } [
-                .anchored {
-                    position: position;
-                    snap_to_window_with_margin: EDGE_MARGIN.px;
-                    anchor: Anchor::TopLeft;
-                } [menu],
-            ],
-        ].deferred {
-            with_priority: gpui_kit::base::POPUP_PRIORITY
-        }
-    }
-    .into_any_element()
+fn shortcut_badge(shortcut: &str) -> Div {
+    let keys = shortcut.split(if shortcut.contains('+') { '+' } else { '-' }).map(|key| {
+        let label = match key.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => "Ctrl".into(),
+            "shift" => "Shift".into(),
+            "alt" => "Alt".into(),
+            "super" | "logo" => "Super".into(),
+            "enter" => "Enter".into(),
+            "escape" => "Esc".into(),
+            "left" => "←".into(),
+            "right" => "→".into(),
+            "up" => "↑".into(),
+            "down" => "↓".into(),
+            _ => key.to_uppercase(),
+        };
+        el! { .div.{ flex_none; flex; items_center; justify_center; h: 22.0_f32; min_w: 22.0_f32;
+            px: 6.0_f32; rounded: 4.0_f32; border: 1.0_f32;
+            dyn_style: style => ${
+                let colors = theme();
+                style.border_color(colors.border).bg(colors.surface_muted).text_color(colors.text_muted)
+                    .text_size(crate::app::Gds::current().appearance().typography().scaled(12.0_f32))
+            };
+        }.[ label.text ] }
+    });
+    el! { .div.{ flex; flex_none; ml: 16.0_f32; items_center; gap: 4.0_f32 }.[..keys] }
+}
+
+fn surface(entries: Rc<Vec<MenuEntry>>, state: MenuState) -> Box<dyn Fn() -> Div> {
+    let opacity = follow(
+        move || if state.open() { 1.0_f32 } else { 0.0_f32 },
+        Transition::ms(140).ease_out(),
+    );
+    let min_width = if entries
+        .iter()
+        .any(|entry| matches!(entry, MenuEntry::Item(item) if item.shortcut.is_some()))
+    {
+        300.0_f32
+    } else {
+        220.0_f32
+    };
+    Box::new(move || {
+        let rows = entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| row(state, index, entry));
+        el! { .div.{flex; flex_col; min_w: min_width; max_w: 500.0_f32; max_h: 480.0_f32;
+            p: 4.0_f32; rounded: 8.0_f32; border: 1.0_f32; shadow_lg; overflow_y_scroll;
+            dyn_style: move style => ${ let colors = theme();
+                style.bg(colors.overlay).border_color(colors.border).text_color(colors.text)
+                    .opacity(opacity.get().clamp(0.0_f32, 1.0_f32))
+            };
+        }.[..rows] }
+    })
+}
+
+pub fn menu(
+    open: impl Fn() -> bool + 'static,
+    dismiss: impl Fn() + 'static,
+    entries: Vec<MenuEntry>,
+) -> Show {
+    menu_with_options(open, dismiss, MenuOptions::new(), entries)
+}
+
+pub fn menu_with_options(
+    open: impl Fn() -> bool + 'static,
+    dismiss: impl Fn() + 'static,
+    options: MenuOptions,
+    entries: Vec<MenuEntry>,
+) -> Show {
+    menu_with(open, dismiss, options, |state| {
+        surface(Rc::new(entries), state)
+    })
+}
+
+pub fn context_menu(target: Div, entries: Vec<MenuEntry>) -> Div {
+    let at = signal(None::<RectI>);
+    el! { target.{
+        on_pointer_down: move event => ${
+            if event.button == Some(PointerButton::Secondary) {
+                event.stop_propagation();
+                at.set(Some(RectI::new(event.position.x as i32, event.position.y as i32, 1, 1)));
+            }
+        };
+    }.[ $(menu_with_options(move || at.with(Option::is_some), move || at.set(None), MenuOptions::new().at(at), entries)) ] }
+}
+
+pub fn dropdown_button(label: impl IntoTextSource, entries: Vec<MenuEntry>) -> Div {
+    let open = signal(false);
+    el! { label.button.{
+        on_click: move _ => $(open.update(|value| *value = !*value));
+        on_key_down: move event => ${
+            if event.key == Key::Named(NamedKey::ArrowDown) && !open.get_untracked() {
+                event.prevent_default();
+                open.set(true);
+            }
+        };
+    }.[ $(Icon::ChevronDown.view(14.0_f32)), $(menu(move || open.get(), move || open.set(false), entries)) ] }
 }

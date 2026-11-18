@@ -1,126 +1,99 @@
-//! Application-context access to shared services and startup assembly.
-use std::ops::Deref;
+//! Native application services shared by the windows on one UI thread.
+#[cfg(feature = "ui")]
+use anti_webui::prelude::on_cleanup;
+use std::{cell::RefCell, rc::Rc};
 
-use gpui_kit::App;
-
+mod task_manager;
+pub use task_manager::Tasks;
 #[cfg(feature = "appearance")]
 pub mod appearance;
-#[cfg(feature = "i18n")]
-pub mod i18n;
-mod task_manager;
-#[cfg(feature = "ui")]
-pub mod ui;
-
 #[cfg(feature = "appearance")]
 pub use appearance::Appearance;
 #[cfg(feature = "i18n")]
+pub mod i18n;
+#[cfg(feature = "i18n")]
 pub use i18n::I18n;
-pub use task_manager::Tasks;
+#[cfg(feature = "ui")]
+pub mod ui;
 #[cfg(feature = "ui")]
 pub use ui::Ui;
 
-pub trait Context: Deref<Target = App> {
-    type Reborrowed<'a>: Context
-    where
-        Self: 'a;
-
-    fn reborrow(&mut self) -> Self::Reborrowed<'_>;
-}
-
-impl<'cx> Context for &'cx App {
-    type Reborrowed<'a>
-        = &'cx App
-    where
-        Self: 'a;
-
-    fn reborrow(&mut self) -> &'cx App {
-        self
-    }
-}
-
-impl Context for &mut App {
-    type Reborrowed<'a>
-        = &'a mut App
-    where
-        Self: 'a;
-
-    fn reborrow(&mut self) -> &mut App {
-        self
-    }
-}
-
-pub trait AppExt {
-    fn gds(&self) -> Gds<&App>;
-    fn gds_mut(&mut self) -> Gds<&mut App>;
-}
-
-impl AppExt for App {
-    fn gds(&self) -> Gds<&App> {
-        Gds { cx: self }
-    }
-
-    fn gds_mut(&mut self) -> Gds<&mut App> {
-        Gds { cx: self }
-    }
-}
-
-/// A borrowed accessor, with no state or service initialization of its own.
-#[derive(Clone, Copy)]
-pub struct Gds<C> {
-    cx: C,
-}
-
-impl<C> Gds<C> {
-    pub fn into_inner(self) -> C {
-        self.cx
-    }
-}
-
-impl<C: Context> Gds<C> {
-    pub fn reborrow(&mut self) -> Gds<C::Reborrowed<'_>> {
-        Gds {
-            cx: self.cx.reborrow(),
-        }
-    }
-
-    pub fn tasks(&mut self) -> Tasks<C::Reborrowed<'_>> {
-        Tasks {
-            cx: self.cx.reborrow(),
-        }
-    }
-
+struct Services {
+    owner: anti_webui::prelude::Owner,
+    tasks: Tasks,
     #[cfg(feature = "appearance")]
-    pub fn appearance(&mut self) -> Appearance<C::Reborrowed<'_>> {
-        Appearance {
-            cx: self.cx.reborrow(),
-        }
-    }
-
+    appearance: Appearance,
     #[cfg(feature = "i18n")]
-    pub fn i18n(&mut self) -> I18n<C::Reborrowed<'_>> {
-        I18n {
-            cx: self.cx.reborrow(),
-        }
-    }
-
+    i18n: I18n,
     #[cfg(feature = "ui")]
-    pub fn ui(&mut self) -> Ui<C::Reborrowed<'_>> {
-        Ui {
-            cx: self.cx.reborrow(),
-        }
-    }
+    ui: Ui,
 }
 
-impl<C: Deref<Target = App>> Gds<C> {
-    /// Underlying read-only context for application-specific accessor extensions.
-    pub fn app(&self) -> &App {
-        &self.cx
-    }
+thread_local! {
+    static CURRENT: RefCell<Option<Gds>> = const { RefCell::new(None) };
 }
 
-impl Gds<&mut App> {
-    /// Underlying context for application-specific accessor extensions.
-    pub fn app_mut(&mut self) -> &mut App {
-        self.cx
+/// A typed application context. Clones share services; windows own their own UI state.
+#[derive(Clone)]
+pub struct Gds(Rc<Services>);
+
+impl Gds {
+    /// Install inside the application's reactive root, before creating windows.
+    #[cfg(feature = "ui")]
+    pub fn install(
+        scope: crate::service::task_manager::Scope,
+        logs: Option<crate::service::logs::Store>,
+    ) -> Self {
+        let services = Self(Rc::new(Services {
+            owner: anti_webui::prelude::Owner::current()
+                .expect("install GDS inside the application reactive root"),
+            tasks: Tasks::new(scope),
+            appearance: Appearance::new(),
+            i18n: I18n::new(),
+            ui: Ui::new(logs),
+        }));
+        CURRENT.with(|slot| {
+            assert!(
+                slot.borrow().is_none(),
+                "application services must be installed once per UI thread"
+            );
+            *slot.borrow_mut() = Some(services.clone());
+        });
+        let tasks = services.tasks().scope();
+        on_cleanup(move || {
+            tasks.cancel();
+            CURRENT.with(|slot| slot.borrow_mut().take());
+        });
+        services
+    }
+
+    pub fn current() -> Self {
+        CURRENT.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .expect("install GDS services before constructing UI")
+                .clone()
+        })
+    }
+
+    /// Create process-owned subscriptions under the application root rather than a window.
+    pub fn with<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.0.owner.with(f)
+    }
+
+    pub fn tasks(&self) -> &Tasks {
+        &self.0.tasks
+    }
+    #[cfg(feature = "appearance")]
+    pub fn appearance(&self) -> &Appearance {
+        &self.0.appearance
+    }
+    #[cfg(feature = "i18n")]
+    pub fn i18n(&self) -> &I18n {
+        &self.0.i18n
+    }
+    #[cfg(feature = "ui")]
+    pub fn ui(&self) -> &Ui {
+        &self.0.ui
     }
 }

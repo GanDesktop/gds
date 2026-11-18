@@ -1,10 +1,14 @@
 //! Application identity embedded from Cargo metadata at build time.
 
+use crate::ui::icon::SvgAsset;
+use anti_webui::prelude::Svg;
+
 #[derive(Debug)]
 pub struct Application {
     pub binary: &'static str,
     pub name: &'static str,
     pub icon: &'static str,
+    artwork: SvgAsset,
     pub version: &'static str,
     pub build_tag: &'static str,
     pub website: &'static str,
@@ -33,5 +37,12 @@ impl Application {
             .iter()
             .find(|application| application.binary == binary)
             .expect("Cargo binary has registered application metadata")
+    }
+}
+
+impl Application {
+    /// The embedded application mark keeps the surrounding native text color.
+    pub fn artwork(&self) -> Svg {
+        self.artwork.view()
     }
 }

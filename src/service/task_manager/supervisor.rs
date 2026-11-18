@@ -28,6 +28,12 @@ impl Supervisor {
         self.scope.clone()
     }
 
+    /// Cancel and drain application work after the native UI loop has stopped.
+    /// This coordinator runs outside the scope it is waiting for.
+    pub fn shutdown(&self) {
+        self._runtime.block_on(self.scope.shutdown());
+    }
+
     /// Drive bootstrap work before entering the application's main-thread loop.
     ///
     /// # Errors

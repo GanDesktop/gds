@@ -1,37 +1,42 @@
-mod actions;
-mod control;
-mod description;
-mod label;
-
-pub use actions::{SettingActions, SettingReset};
-pub use control::SettingControl;
-pub use description::SettingDescription;
-use gds_uim::el;
-use gpui_kit::component::{ActiveTheme as _, StyledExt as _};
-use gpui_kit::{IntoElement, prelude::*, *};
-pub use label::SettingLabel;
-
+//! Settings row parts keep label, explanation, control, and reset anatomy explicit.
 use crate::ui::container::container_traits;
-
-/// A setting's description and controls, composed as ordinary children.
-#[derive(IntoElement)]
-pub struct SettingRow {
-    base: Div,
-}
-
-impl Default for SettingRow {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex; items_center; justify_between; gap_6; py_4; border_b_1; } },
+use anti_webui::prelude::*;
+use gds_uim::el;
+macro_rules! part {
+    ($name:ident, $base:expr) => {
+        pub struct $name {
+            base: Div,
         }
-    }
+        impl Default for $name {
+            fn default() -> Self {
+                Self { base: $base }
+            }
+        }
+        container_traits!($name);
+    };
 }
+part!(
+    SettingsRow,
+    el! { .div.{ flex; items_center; gap: 24.0_f32; py: 16.0_f32; w_full; border_b:1.0_f32; dyn_style:s=>$(s.border_color(theme().border)) } }
+);
+part!(
+    SettingsLabel,
+    el! { .div.{ flex; flex_col; flex_1; min_w: 0.0_f32; gap: 4.0_f32 } }
+);
+part!(
+    SettingsDescription,
+    el! { .div.{ dyn_style: s => $(s.text_color(theme().text_muted).text_size(crate::app::Gds::current().appearance().typography().scaled(12.0))) } }
+);
+part!(
+    SettingsControl,
+    el! { .div.{ flex; items_center; justify_end; flex_none; w: super::CONTROL_WIDTH; gap: 4.0_f32 } }
+);
+part!(
+    SettingsActions,
+    el! { .div.{ flex; items_center; gap:8.0_f32; flex_none } }
+);
 
-container_traits!(SettingRow);
-
-impl RenderOnce for SettingRow {
-    fn render(mut self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let style = std::mem::take(self.base.style());
-        el! { $(self.base) { border_color: $(cx.theme().border); refine_style: $&style; } }
-    }
-}
+part!(
+    SettingsReset,
+    el! { .div.{ flex; items_center; justify_center; flex_none; size:32.0_f32 } }
+);

@@ -1,7 +1,7 @@
 use super::*;
 
 fn roles() -> theme::TerminalColors {
-    let color = |value| rgb(value).into();
+    let color = |value| rgb(value);
     theme::TerminalColors {
         foreground: color(0xeeeeee),
         background: color(0x111111),
@@ -54,8 +54,8 @@ fn paint_and_query_share_roles_and_standard_indexed_colors() {
 fn explicit_rgb_and_osc_overrides_survive_theme_changes_and_reset() {
     let first = Palette::from_roles(roles(), 0.4);
     let mut changed = roles();
-    changed.normal[1] = rgb(0x778899).into();
-    changed.background = rgb(0xeeeeee).into();
+    changed.normal[1] = rgb(0x778899);
+    changed.background = rgb(0xeeeeee);
     let second = Palette::from_roles(changed, 0.7);
     let explicit = Rgb { r: 1, g: 2, b: 3 };
     let mut overrides = Colors::default();

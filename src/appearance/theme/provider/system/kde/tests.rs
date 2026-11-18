@@ -1,10 +1,10 @@
 use super as kde;
 use crate::appearance::theme::{Mode, ModePreference};
-use gpui_kit::{Hsla, rgb};
+use anti_webui::prelude::{Color, rgb};
 use std::path::Path;
 
-fn color(value: u32) -> Hsla {
-    rgb(value).into()
+fn color(value: u32) -> Color {
+    rgb(value)
 }
 
 #[test]

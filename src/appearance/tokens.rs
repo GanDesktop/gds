@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use gpui_kit::{Rems, WindowBackgroundAppearance};
+use anti_webui::prelude::Color;
 
 pub const TOOLBAR_HEIGHT: f32 = 52.0;
 pub const NOTIFICATION_INSET: f32 = 12.0;
@@ -86,9 +86,9 @@ impl Default for SurfaceOpacity {
 pub const WINDOW_CORNER_RADIUS: f32 = 10.;
 
 /// An alpha-capable window lets per-surface opacity changes apply immediately.
-pub const WINDOW_BACKGROUND: WindowBackgroundAppearance = WindowBackgroundAppearance::Transparent;
+pub const WINDOW_BACKGROUND: Color = Color::TRANSPARENT;
 
-pub const SMALL: Rems = Rems(UI_TEXT_SCALE);
+pub const SMALL: f32 = FONT_SIZE * UI_TEXT_SCALE;
 pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);
 /// Shared density and hierarchy for content lists, separate from navigation rows.
 pub struct DataListStyle;

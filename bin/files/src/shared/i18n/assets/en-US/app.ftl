@@ -202,6 +202,7 @@ filter-count = Showing { $visible } of { $total } items
 selection-count = { $count } selected
 warning-count = { $count } items have incomplete information
 load-failed = Cannot open this location
+load-cancelled = Loading cancelled.
 retry = Retry
 clear-recent = Clear recent locations
 about = About

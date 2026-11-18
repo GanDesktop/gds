@@ -7,15 +7,10 @@
 
 use std::{path::Path, sync::OnceLock};
 
-use directories::UserDirs;
+use anti_webui::prelude::*;
+use directories::{BaseDirs, UserDirs};
+use gds::ui::Icon;
 use gds_uim::{component, el};
-use gpui_kit::IntoElement;
-use gpui_kit::{
-    assets::IconName,
-    component::{ActiveTheme, Icon},
-    prelude::*,
-    *,
-};
 
 use crate::entities::file::directory::{
     ContentCategory, ContentType, Entry, EntryKind, LinkTarget,
@@ -30,8 +25,8 @@ const BADGE_INSET: f32 = -4.;
 /// Icon for one entry: a base icon plus an optional corner badge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FileIcon {
-    base: IconName,
-    badge: Option<IconName>,
+    base: Icon,
+    badge: Option<Icon>,
 }
 
 impl FileIcon {
@@ -41,29 +36,8 @@ impl FileIcon {
             EntryKind::Directory => Self::plain(Self::directory_icon(&entry.path)),
             EntryKind::File => Self::for_content(entry.details.content.as_ref()),
             EntryKind::SymbolicLink => Self::for_link(entry),
-            EntryKind::Other => Self::plain(IconName::File),
-            EntryKind::Unknown => Self::plain(IconName::FileQuestionMark),
-        }
-    }
-
-    /// Icon describing `path` without counting directory children or reading file headers.
-    pub(crate) fn for_path(path: &Path) -> Self {
-        let Ok(metadata) = std::fs::symlink_metadata(path) else {
-            return Self::plain(IconName::FileQuestionMark);
-        };
-        match EntryKind::from(metadata.file_type()) {
-            EntryKind::Directory => Self::plain(Self::directory_icon(path)),
-            EntryKind::File => {
-                let name = path.file_name().unwrap_or(path.as_os_str());
-                let content = ContentType::from_filename(name);
-                Self::for_content(content.as_ref())
-            }
-            EntryKind::SymbolicLink => {
-                let (target, _) = LinkTarget::from_path_base(path);
-                Self::for_link_target(path, &target)
-            }
-            EntryKind::Other => Self::plain(IconName::File),
-            EntryKind::Unknown => Self::plain(IconName::FileQuestionMark),
+            EntryKind::Other => Self::plain(Icon::File),
+            EntryKind::Unknown => Self::plain(Icon::Unknown),
         }
     }
 
@@ -83,59 +57,60 @@ impl FileIcon {
     }
 
     /// Icon tint corresponding to whether the entry resolves to a directory.
-    pub(crate) fn category_color(directory: bool, cx: &App) -> Hsla {
+    pub(crate) fn category_color(directory: bool) -> Color {
         if directory {
-            cx.theme().primary
+            theme().accent
         } else {
-            cx.theme().muted_foreground
+            theme().text_muted
         }
     }
 
-    /// Color follows the entry's category, independently of its chosen glyph.
-    pub(crate) fn color(entry: &Entry, cx: &App) -> Hsla {
-        Self::category_color(Self::is_directory(entry), cx)
-    }
-
-    /// Icon for a drag that carries several entries.
-    pub(crate) fn multiple() -> Self {
-        Self::plain(IconName::Files)
-    }
-
     /// The base icon, before the corner badge.
-    pub(crate) fn base(self) -> IconName {
+    pub(crate) fn base(self) -> Icon {
         self.base
     }
 
-    /// The corner badge, present only when the entry is a symbolic link.
-    pub(crate) fn badge(self) -> Option<IconName> {
-        self.badge
-    }
-
-    fn directory_icon(path: &Path) -> IconName {
+    fn directory_icon(path: &Path) -> Icon {
         static DIRECTORIES: OnceLock<Option<UserDirs>> = OnceLock::new();
         let Some(dirs) = DIRECTORIES.get_or_init(UserDirs::new) else {
-            return IconName::Folder;
+            return Icon::Folder;
         };
         Self::user_directory_icon(path, dirs)
     }
 
-    fn user_directory_icon(path: &Path, dirs: &UserDirs) -> IconName {
+    fn user_directory_icon(path: &Path, dirs: &UserDirs) -> Icon {
         if path == dirs.home_dir() {
-            return IconName::House;
+            return Icon::Home;
         }
+        static USE_DEFAULT_NAMES: OnceLock<bool> = OnceLock::new();
+        let use_default_names = *USE_DEFAULT_NAMES.get_or_init(|| {
+            BaseDirs::new().is_some_and(|base| {
+                base.config_dir()
+                    .join("user-dirs.dirs")
+                    .try_exists()
+                    .is_ok_and(|exists| !exists)
+            })
+        });
+        let relative = path.strip_prefix(dirs.home_dir()).ok();
         [
-            (dirs.desktop_dir(), IconName::Monitor),
-            (dirs.document_dir(), IconName::FileText),
-            (dirs.download_dir(), IconName::FolderDown),
-            (dirs.picture_dir(), IconName::Images),
-            (dirs.audio_dir(), IconName::Music),
-            (dirs.video_dir(), IconName::Video),
-            (dirs.public_dir(), IconName::Users),
-            (dirs.template_dir(), IconName::LayoutTemplate),
+            (dirs.desktop_dir(), "Desktop", Icon::Monitor),
+            (dirs.document_dir(), "Documents", Icon::Document),
+            (dirs.download_dir(), "Downloads", Icon::FolderDown),
+            (dirs.picture_dir(), "Pictures", Icon::Images),
+            (dirs.audio_dir(), "Music", Icon::Audio),
+            (dirs.video_dir(), "Videos", Icon::Video),
+            (dirs.public_dir(), "Public", Icon::Users),
+            (dirs.template_dir(), "Templates", Icon::LayoutTemplate),
         ]
         .into_iter()
-        .find_map(|(directory, icon)| (directory == Some(path)).then_some(icon))
-        .unwrap_or(IconName::Folder)
+        .find_map(|(directory, default_name, icon)| {
+            let matches = directory.map_or_else(
+                || use_default_names && relative == Some(Path::new(default_name)),
+                |directory| path == directory,
+            );
+            matches.then_some(icon)
+        })
+        .unwrap_or(Icon::Folder)
     }
 
     fn for_content(content: Option<&ContentType>) -> Self {
@@ -144,7 +119,7 @@ impl FileIcon {
 
     fn for_link(entry: &Entry) -> Self {
         let Some(target) = entry.details.target.as_ref() else {
-            return Self::plain(IconName::Link);
+            return Self::plain(Icon::Link);
         };
         Self::for_link_target(&entry.path, target)
     }
@@ -152,45 +127,45 @@ impl FileIcon {
     fn for_link_target(path: &Path, target: &LinkTarget) -> Self {
         match target {
             // A dangling link is the only state that shows the broken-chain icon.
-            LinkTarget::Broken => Self::plain(IconName::Unlink),
+            LinkTarget::Broken => Self::plain(Icon::BrokenLink),
             // The target exists as far as the path goes but could not be inspected;
             // that is not the same as a missing target, so keep the link badge.
-            LinkTarget::Unreachable => Self::badged(IconName::FileQuestionMark, IconName::Link),
+            LinkTarget::Unreachable => Self::badged(Icon::Unknown, Icon::Link),
             LinkTarget::Resolved { kind, content } => {
                 let base = match kind {
                     EntryKind::Directory => Self::directory_icon(path),
                     EntryKind::File => {
                         Self::category_icon(content.as_ref().map(|content| content.category))
                     }
-                    EntryKind::Other => IconName::File,
-                    EntryKind::Unknown => IconName::FileQuestionMark,
-                    EntryKind::SymbolicLink => IconName::Link,
+                    EntryKind::Other => Icon::File,
+                    EntryKind::Unknown => Icon::Unknown,
+                    EntryKind::SymbolicLink => Icon::Link,
                 };
-                Self::badged(base, IconName::Link)
+                Self::badged(base, Icon::Link)
             }
         }
     }
 
-    fn category_icon(category: Option<ContentCategory>) -> IconName {
+    fn category_icon(category: Option<ContentCategory>) -> Icon {
         match category {
-            Some(ContentCategory::Text) => IconName::FileText,
-            Some(ContentCategory::Code) => IconName::FileCode,
-            Some(ContentCategory::Document) => IconName::FileType,
-            Some(ContentCategory::Image) => IconName::FileImage,
-            Some(ContentCategory::Audio) => IconName::FileMusic,
-            Some(ContentCategory::Video) => IconName::FileVideoCamera,
-            Some(ContentCategory::Archive) => IconName::FileArchive,
-            Some(ContentCategory::Executable) => IconName::FileTerminal,
-            Some(ContentCategory::Font) => IconName::Type,
-            Some(ContentCategory::Binary) | None => IconName::File,
+            Some(ContentCategory::Text) => Icon::Document,
+            Some(ContentCategory::Code) => Icon::Code,
+            Some(ContentCategory::Document) => Icon::FileType,
+            Some(ContentCategory::Image) => Icon::FileImage,
+            Some(ContentCategory::Audio) => Icon::FileMusic,
+            Some(ContentCategory::Video) => Icon::FileVideo,
+            Some(ContentCategory::Archive) => Icon::Archive,
+            Some(ContentCategory::Executable) => Icon::Executable,
+            Some(ContentCategory::Font) => Icon::Font,
+            Some(ContentCategory::Binary) | None => Icon::File,
         }
     }
 
-    pub(crate) fn plain(base: IconName) -> Self {
+    pub(crate) fn plain(base: Icon) -> Self {
         Self { base, badge: None }
     }
 
-    fn badged(base: IconName, badge: IconName) -> Self {
+    fn badged(base: Icon, badge: Icon) -> Self {
         Self {
             base,
             badge: Some(badge),
@@ -198,41 +173,35 @@ impl FileIcon {
     }
 }
 
-/// The artwork slot used by file rows, tiles and drag previews.
+/// The shared file-row artwork with a distinct symbolic-link badge.
 #[component]
-#[derive(IntoElement)]
 pub(crate) struct FileArtwork {
     #[attr]
     icon: FileIcon,
     #[attr]
-    size: Pixels,
+    size: f32,
     #[attr(option, option_setter = "color_opt")]
-    color: Option<Hsla>,
+    color: Option<Color>,
 }
-
 impl Default for FileArtwork {
     fn default() -> Self {
         Self {
-            icon: FileIcon::plain(IconName::File),
-            size: px(gds::appearance::tokens::ICON_SIZE),
+            icon: FileIcon::plain(Icon::File),
+            size: gds::appearance::tokens::ICON_SIZE,
             color: None,
         }
     }
 }
-
-impl RenderOnce for FileArtwork {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let color = self.color.unwrap_or_else(|| window.text_style().color);
+impl IntoView for FileArtwork {
+    fn into_view(self) -> View {
+        let color = self.color.unwrap_or_else(|| theme().text);
         let badge_size = self.size * BADGE_SIZE_FRACTION;
-        el! {
-            .div { relative; flex_shrink_0; w: $(self.size); h: $(self.size); } [
-                $(self.icon.base()).Icon::new { size: $(self.size); text_color: color; },
-                @if (let Some(badge) = self.icon.badge())
-                    .div { absolute; bottom: BADGE_INSET.px; right: BADGE_INSET.px; flex; } [
-                        badge.Icon::new { size: badge_size; text_color: color; },
-                    ],
-                @end,
-            ]
-        }
+        el! {.div.{relative;flex_none;w:self->size;h:self->size;text_color:color}.[
+            $(self.icon.base().view(self.size)),
+            if let Some(badge)=self->icon->badge [
+                .div.{absolute;bottom:BADGE_INSET;right:BADGE_INSET}.[$(badge.view(badge_size))],
+            ],
+        ]}
+        .into_view()
     }
 }

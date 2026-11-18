@@ -35,7 +35,7 @@ impl From<Outcome> for ExitCode {
     }
 }
 
-/// Write-once handle carrying a picker session's [`Outcome`] across the GPUI event loop.
+/// Write-once handle carrying a picker session's [`Outcome`] across the native event loop.
 #[derive(Clone, Debug, Default)]
 pub struct OutcomeSlot(Arc<OnceLock<Outcome>>);
 
@@ -60,6 +60,8 @@ pub struct Options {
     pub read_only: bool,
     /// Select directories instead of regular files.
     pub directory: bool,
+    /// Accept regular files and directories in the internal upload chooser.
+    pub(crate) allow_mixed: bool,
     /// Allow multiple selections of the requested type.
     pub multiple: bool,
     pub portal: Option<chooser::Request>,
@@ -84,6 +86,7 @@ impl Options {
             filters: Self::normalize_filters(filters),
             read_only,
             directory: false,
+            allow_mixed: false,
             multiple: false,
             portal: None,
             outcome: None,
@@ -123,6 +126,7 @@ impl Options {
             filters,
             read_only: false,
             directory,
+            allow_mixed: false,
             multiple,
             portal: Some(request),
             outcome: None,

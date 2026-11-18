@@ -1,18 +1,15 @@
 //! Shared Linux XDG Settings Portal snapshot and change stream.
-use super::theme::{Mode, provider::system};
-use crate::service::task_manager::{Scope, Task as IoTask};
+use super::theme::Mode;
+
+use anti_webui::prelude::{Color, ui_channel};
 use futures_lite::StreamExt as _;
-use gpui_kit::{App, Global, Rgba, Task};
 use std::{
     collections::HashMap,
     sync::{OnceLock, RwLock},
     time::Duration,
 };
-use tokio::sync::watch;
-use zbus::zvariant::OwnedValue;
 
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;
+use zbus::zvariant::OwnedValue;
 
 const NAMESPACE: &str = "org.freedesktop.appearance";
 const REDUCED_MOTION_KEY: &str = "reduced-motion";
@@ -25,7 +22,7 @@ type Settings = HashMap<String, HashMap<String, OwnedValue>>;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Snapshot {
     pub color_scheme: Option<Mode>,
-    pub accent_color: Option<Rgba>,
+    pub accent_color: Option<Color>,
     pub primed: bool,
 }
 
@@ -90,49 +87,42 @@ pub(crate) async fn prime() {
     }
 }
 
-struct Watch {
-    io: IoTask<()>,
-    _updates: Task<()>,
-}
-impl Global for Watch {}
-impl Drop for Watch {
-    fn drop(&mut self) {
-        self.io.abort();
-    }
-}
-
-pub(super) fn follow(tasks: &Scope, cx: &mut App) {
-    if cx.has_global::<Watch>() {
+thread_local! { static FOLLOWING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+pub(crate) fn follow() {
+    if FOLLOWING.with(|following| following.replace(true)) {
         return;
     }
-    let (sender, mut receiver) = watch::channel(None);
-    let cancel = tasks.token();
-    let io = tasks.spawn_named("Watch appearance portal", async move {
-        let result = tokio::select! {
-            _ = cancel.cancelled() => return,
-            result = listen(sender) => result,
-        };
-        if let Err(error) = result {
-            tracing::warn!(%error, "appearance portal unavailable; keeping the last system preference");
+    anti_webui::prelude::on_cleanup(|| FOLLOWING.with(|following| following.set(false)));
+    let sender = ui_channel(move |update: Update| {
+        let app = crate::app::Gds::current();
+        app.appearance()
+            .motion()
+            .system_changed(update.reduced_motion);
+        if update.appearance_changed {
+            app.appearance().theme().refresh();
         }
     });
-    let updates = cx.spawn(async move |cx| {
-        while receiver.changed().await.is_ok() {
-            let update = *receiver.borrow_and_update();
-            if let Some(update) = update {
-                cx.update(|cx| {
-                    super::motion::system_changed(update.reduced_motion, cx);
-                    if update.appearance_changed && system::is_gnome() {
-                        super::theme::Observer::refresh_if_active(cx);
-                    }
-                });
+    let scope = crate::app::Gds::current()
+        .tasks()
+        .owner_scope("Desktop appearance portal");
+    let cancel = scope.token();
+    scope
+        .spawn_cancellable_named("Watch desktop appearance", async move {
+            let result = tokio::select! {
+                _ = cancel.cancelled() => return,
+                result = listen(sender) => result,
+            };
+            if let Err(error) = result {
+                tracing::debug!(%error, "appearance portal unavailable; retaining last preference");
             }
-        }
-    });
-    cx.set_global(Watch {
-        io,
-        _updates: updates,
-    });
+        })
+        .on_complete(&scope, |result| {
+            if let Err(error) = result
+                && !matches!(error, crate::service::task_manager::Error::Closed(_))
+            {
+                tracing::warn!(%error, "appearance portal watcher failed");
+            }
+        });
 }
 
 async fn portal_proxy(connection: &zbus::Connection) -> zbus::Result<zbus::Proxy<'_>> {
@@ -145,14 +135,14 @@ async fn portal_proxy(connection: &zbus::Connection) -> zbus::Result<zbus::Proxy
     .await
 }
 
-async fn listen(sender: watch::Sender<Option<Update>>) -> zbus::Result<()> {
+async fn listen(sender: anti_webui::prelude::UiSender<Update>) -> zbus::Result<()> {
     let connection = zbus::Connection::session().await?;
     listen_on(connection, sender).await
 }
 
 async fn listen_on(
     connection: zbus::Connection,
-    sender: watch::Sender<Option<Update>>,
+    sender: anti_webui::prelude::UiSender<Update>,
 ) -> zbus::Result<()> {
     let proxy = portal_proxy(&connection).await?;
     // Subscribe first so a change during the initial read is not lost. ReadAll
@@ -178,14 +168,14 @@ async fn listen_on(
 
 async fn publish(
     proxy: &zbus::Proxy<'_>,
-    sender: &watch::Sender<Option<Update>>,
+    sender: &anti_webui::prelude::UiSender<Update>,
 ) -> zbus::Result<()> {
     let state = read(proxy).await?;
     let appearance_changed = update_appearance(state.appearance);
-    sender.send_replace(Some(Update {
+    sender.send(Update {
         reduced_motion: state.reduced_motion,
         appearance_changed,
-    }));
+    });
     Ok(())
 }
 
@@ -228,14 +218,14 @@ fn parse_settings(settings: &Settings) -> State {
     }
 }
 
-fn parse_accent_color(value: &OwnedValue) -> Option<Rgba> {
+fn parse_accent_color(value: &OwnedValue) -> Option<Color> {
     let cloned = value.try_clone().ok()?;
     let (r, g, b) = <(f64, f64, f64)>::try_from(cloned).ok()?;
     if [r, g, b]
         .iter()
         .all(|channel| channel.is_finite() && (0.0..=1.0).contains(channel))
     {
-        Some(Rgba {
+        Some(Color {
             r: r as f32,
             g: g as f32,
             b: b as f32,

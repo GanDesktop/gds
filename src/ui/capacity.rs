@@ -1,104 +1,77 @@
-//! Shared capacity meter: the filled part is occupied or reserved; the
-//! remaining track is available. Callers supply a localized byte summary.
+//! Capacity meter with separate ready, loading, and unavailable states.
 
-use gds_uim::{component, el};
-use gpui_kit::{
-    IntoElement,
-    component::{ActiveTheme, Sizable, progress::Progress},
-    prelude::*,
-    *,
-};
+use anti_webui::prelude::*;
+use gds_uim::el;
 
-const GAP: f32 = 5.;
-const PADDING_BOTTOM: f32 = 6.;
-pub const EXTRA_ROW_HEIGHT: f32 = 32.;
+const BAR_HEIGHT: f32 = 4.0;
+const LABEL_HEIGHT: f32 = 17.0;
+const GAP: f32 = 5.0;
 
-#[component]
-#[derive(IntoElement)]
+#[derive(Clone, Copy)]
+pub enum CapacityStatus {
+    Loading,
+    Unavailable,
+    Used(f32),
+}
+
 pub struct CapacityBar {
-    id: ElementId,
-    #[attr(into)]
-    label: SharedString,
-    fraction: Option<f32>,
-    #[attr]
-    compact: bool,
-    unavailable: bool,
-    embedded: bool,
-    #[attr]
-    selected: bool,
+    label: String,
+    status: CapacityStatus,
+    compact: Binding<bool>,
+    selected: Binding<bool>,
 }
 
 impl CapacityBar {
-    pub fn new(id: impl Into<ElementId>) -> Self {
+    pub const HEIGHT: f32 = BAR_HEIGHT + LABEL_HEIGHT + GAP;
+
+    pub fn new(label: impl Into<String>, status: CapacityStatus) -> Self {
         Self {
-            id: id.into(),
-            label: SharedString::default(),
-            fraction: None,
-            compact: false,
-            unavailable: false,
-            embedded: false,
-            selected: false,
+            label: label.into(),
+            status,
+            compact: Binding::new(|| false, |_| {}),
+            selected: Binding::new(|| false, |_| {}),
         }
     }
 
-    pub fn value(mut self, fraction: f32) -> Self {
-        self.fraction = fraction.is_finite().then(|| fraction.clamp(0., 1.));
+    pub fn compact(mut self, compact: Binding<bool>) -> Self {
+        self.compact = compact;
         self
     }
 
-    pub fn unavailable(mut self) -> Self {
-        self.unavailable = true;
-        self
-    }
-
-    /// Let the containing cell supply spacing around the entire meter/label.
-    pub fn embedded(mut self) -> Self {
-        self.embedded = true;
+    pub fn selected(mut self, selected: Binding<bool>) -> Self {
+        self.selected = selected;
         self
     }
 }
 
-impl RenderOnce for CapacityBar {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let summary = if self.compact {
-            self.fraction.map_or_else(
-                || "—".into(),
-                |used| format!("{:.0}%", (1. - used) * 100.).into(),
-            )
-        } else {
-            self.label.clone()
+impl IntoView for CapacityBar {
+    fn into_view(self) -> View {
+        let label = self.label;
+        let compact = self.compact;
+        let status = self.status;
+        let selected = self.selected;
+        let bar = match status {
+            CapacityStatus::Loading => indeterminate_progress_bar(),
+            CapacityStatus::Used(fraction) => progress_bar(move || fraction),
+            CapacityStatus::Unavailable => div()
+                .rounded(2.0_f32)
+                .dyn_style(|style| style.bg(theme().surface_muted)),
         };
-        let bar = if self.unavailable {
-            el! { .div { w_full; h: 4.0.px; rounded: 2.0.px; bg: $(cx.theme().muted) } }
-                .into_any_element()
-        } else {
-            Progress::new(self.id)
-                .xsmall()
-                .value(self.fraction.unwrap_or_default() * 100.)
-                .loading(self.fraction.is_none())
-                .accessibility_label(self.label.clone())
-                .into_any_element()
-        };
-        el! {
-            .div { w_full; min_w_0; flex; flex_col; gap: GAP.px;
-                @if (!self.embedded) pb: PADDING_BOTTOM.px; @end;
-            } [
-                bar,
-                .div { text_xs; text_color: $(if self.selected { cx.theme().accent_foreground } else { cx.theme().muted_foreground });
-                    @if (self.compact)
-                        flex; justify_center; text_size: 10.0.px;
-                    @else
-                        truncate;
-                    @end;
-                    h: 17.0.px; line_height: 17.0.px;
-                } [
-                    @if (self.compact)
-                        .div { flex_shrink_0; whitespace_nowrap; } [summary],
-                    @else
-                        summary,
-                    @end,
-                ],
-            ]
-        }
+        el! { .div.{flex; flex_col; w_full; min_w: 0.0_f32; gap: GAP}.[
+            bar.{h: BAR_HEIGHT; w_full},
+            (move () => ${
+                if compact.get() {
+                    match status {
+                        CapacityStatus::Used(fraction) => format!("{:.0}%", (1.0 - fraction) * 100.0),
+                        _ => "—".to_owned(),
+                    }
+                } else { label.clone() }
+            }).text.{h: LABEL_HEIGHT; line_height: $(LineHeight::Px(LABEL_HEIGHT)); ellipsis; whitespace_nowrap;
+                dyn_style: move style => $(style
+                    .text_color(if selected.get() {crate::app::Gds::current().appearance().theme().colors().selection_foreground} else {theme().text_muted})
+                    .text_size(if compact.get() {10.0_f32} else {12.0_f32})
+                    .text_align(if compact.get() {TextAlign::Center} else {TextAlign::Start}));
+            },
+        ] }.into_view()
     }
 }

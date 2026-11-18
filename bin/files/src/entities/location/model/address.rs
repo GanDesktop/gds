@@ -102,3 +102,9 @@ impl From<&str> for Location {
         Self::from(Path::new(path))
     }
 }
+
+impl From<PathBuf> for Location {
+    fn from(path: PathBuf) -> Self {
+        Self::Directory(path.into_os_string())
+    }
+}

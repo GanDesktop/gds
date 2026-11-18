@@ -40,14 +40,6 @@ pub(crate) enum Inspection {
     },
 }
 
-impl Inspection {
-    pub(crate) fn into_job(self) -> PasteJob {
-        match self {
-            Self::Ready(job) | Self::Conflict { job, .. } | Self::Failed { job, .. } => job,
-        }
-    }
-}
-
 /// The conflict to ask the user about, with a free name suggested for it.
 pub(crate) struct PasteConflict {
     pub collision: names::Collision,
@@ -60,14 +52,6 @@ pub(crate) enum PassOutcome {
     RetryConflict(PasteJob),
 }
 
-/// Why a paste flow stopped, which decides how partial work is reported.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Ending {
-    Completed,
-    Cancelled,
-    Aborted,
-}
-
 /// Final result of one paste or transfer flow, merged across retried passes.
 pub(crate) struct Summary {
     pub mode: transfer::Mode,
@@ -75,45 +59,14 @@ pub(crate) struct Summary {
     pub undo: Vec<history::Step>,
     pub committed: Vec<PathBuf>,
     pub failures: Vec<String>,
+    #[expect(
+        dead_code,
+        reason = "Partial transfer summaries retain clipboard cleanup errors alongside committed results"
+    )]
     pub clipboard_error: Option<String>,
 }
 
 impl Summary {
-    pub(crate) fn from_report(report: transfer::Report, clipboard_error: Option<String>) -> Self {
-        let undo = history::transfer_steps(&report);
-        let mode = report.mode;
-        let succeeded = report.succeeded_sources();
-        let committed = report.committed_destinations();
-        let failures = report
-            .items
-            .iter()
-            .filter_map(|item| {
-                let Err(error) = &item.result else {
-                    return None;
-                };
-                tracing::warn!(
-                    "File transfer failed for {}: {error}",
-                    item.source.display()
-                );
-                let path = item
-                    .source
-                    .as_os_str()
-                    .to_string_lossy()
-                    .escape_debug()
-                    .to_string();
-                Some(format!("{path}: {error}"))
-            })
-            .collect();
-        Self {
-            mode,
-            succeeded,
-            undo,
-            committed,
-            failures,
-            clipboard_error,
-        }
-    }
-
     pub(crate) fn requires_history_reset(&self) -> bool {
         self.committed.len() > self.undo.len()
     }
@@ -123,18 +76,6 @@ impl Summary {
             history::Kind::Move
         } else {
             history::Kind::Copy
-        }
-    }
-
-    pub(crate) fn affected_paths(&self) -> Vec<PathBuf> {
-        if self.mode == transfer::Mode::Move {
-            self.committed
-                .iter()
-                .chain(self.succeeded.iter())
-                .cloned()
-                .collect()
-        } else {
-            self.committed.clone()
         }
     }
 }
@@ -151,23 +92,6 @@ impl PasteJob {
             committed: Vec::new(),
             failures: Vec::new(),
         }
-    }
-
-    pub(crate) fn take(&mut self) -> Self {
-        let mode = self.mode;
-        std::mem::replace(self, Self::new(PathBuf::new(), mode, Vec::new()))
-    }
-
-    pub(crate) fn involved_paths(&self) -> Vec<PathBuf> {
-        self.pending
-            .iter()
-            .cloned()
-            .chain(std::iter::once(self.destination.clone()))
-            .collect()
-    }
-
-    pub(crate) fn is_untouched(&self) -> bool {
-        self.succeeded.is_empty() && self.failures.is_empty()
     }
 
     /// Detect conflicting targets and suggest a free name for the first one.

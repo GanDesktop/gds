@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use gpui_kit::{App, assets::IconName};
+use gds::ui::Icon;
 
 use super::{Location, scheme::TagAddress};
 use crate::shared::i18n;
@@ -52,14 +52,14 @@ impl Collection {
         }
     }
 
-    pub const fn icon(self) -> IconName {
+    pub const fn icon(self) -> Icon {
         match self {
-            Self::Tags => IconName::Tag,
-            Self::Recent => IconName::Clock,
-            Self::Favorites => IconName::Star,
-            Self::Volumes => IconName::HardDrive,
-            Self::Network => IconName::Network,
-            Self::Trash => IconName::Trash,
+            Self::Tags => Icon::Tag,
+            Self::Recent => Icon::Recent,
+            Self::Favorites => Icon::Star,
+            Self::Volumes => Icon::Drive,
+            Self::Network => Icon::Network,
+            Self::Trash => Icon::Trash,
         }
     }
 }
@@ -95,9 +95,9 @@ impl LocationTarget {
         }
     }
 
-    pub const fn icon(self) -> IconName {
+    pub const fn icon(self) -> Icon {
         match self {
-            Self::Home => IconName::House,
+            Self::Home => Icon::Home,
             Self::Collection(collection) => collection.icon(),
         }
     }
@@ -108,11 +108,11 @@ impl Location {
         Collection::from_location(self)
     }
 
-    pub(crate) fn icon(&self) -> IconName {
+    pub(crate) fn icon(&self) -> Icon {
         match self {
-            Self::Directory(_) => IconName::Folder,
-            Self::Remote(_) => IconName::Network,
-            Self::Volume { .. } => IconName::HardDrive,
+            Self::Directory(_) => Icon::Folder,
+            Self::Remote(_) => Icon::Network,
+            Self::Volume { .. } => Icon::Drive,
             _ => self
                 .collection()
                 .expect("non-path location belongs to a collection")
@@ -120,7 +120,7 @@ impl Location {
         }
     }
 
-    pub(crate) fn label(&self, cx: &App) -> String {
+    pub(crate) fn label(&self) -> String {
         match self {
             Self::Tags(address) if !address.tag().is_empty() => address.label().to_owned(),
             Self::Remote(address) => address.name(),
@@ -134,12 +134,12 @@ impl Location {
                 .unwrap_or(relative)
                 .to_string_lossy()
                 .into_owned(),
-            Self::Volume { .. } => i18n::text(Collection::Volumes.label_id(), cx).to_string(),
+            Self::Volume { .. } => i18n::text(Collection::Volumes.label_id()).to_string(),
             _ => {
                 let collection = self
                     .collection()
                     .expect("non-path location belongs to a collection");
-                i18n::text(collection.label_id(), cx).to_string()
+                i18n::text(collection.label_id()).to_string()
             }
         }
     }

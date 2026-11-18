@@ -1,80 +1,34 @@
-//! Decorative disclosure artwork; the host owns semantics and content lifetime.
-
-use std::time::Duration;
-
+//! Decorative chevron driven by its host's disclosure state.
+use super::Icon;
+use anti_webui::prelude::*;
 use gds_uim::el;
-use gpui_kit::{
-    App, ElementId, IntoElement, Pixels, RenderOnce, Transformation, Window,
-    assets::IconName,
-    base::motion::{self, Transition},
-    component::Icon,
-    div, percentage,
-    prelude::*,
-    px,
-};
 
-const DURATION: Duration = Duration::from_millis(140);
-
-/// A fixed-size chevron, rotating toward the host's actual expanded state.
-/// Put it inside the existing labelled disclosure control, not in another hit target.
-#[derive(IntoElement)]
 pub struct DisclosureIcon {
-    id: ElementId,
-    expanded: bool,
-    size: Pixels,
-}
-
-impl Default for DisclosureIcon {
-    fn default() -> Self {
-        Self {
-            id: "disclosure".into(),
-            expanded: false,
-            size: px(crate::appearance::tokens::SIDEBAR_ICON_SIZE),
-        }
-    }
+    size: f32,
+    progress: Binding<f32>,
 }
 
 impl DisclosureIcon {
-    /// Supply a stable identity for the section, not its position in a filtered list.
-    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
-        self.id = id.into();
-        self
+    pub fn new(progress: Binding<f32>) -> Self {
+        Self {
+            size: crate::appearance::tokens::SIDEBAR_ICON_SIZE,
+            progress,
+        }
     }
 
-    pub fn expanded(mut self, expanded: bool) -> Self {
-        self.expanded = expanded;
-        self
-    }
-
-    pub fn size(mut self, size: Pixels) -> Self {
+    pub fn size(mut self, size: f32) -> Self {
         self.size = size;
         self
     }
-
-    fn progress(&self, window: &mut Window, cx: &mut App) -> f32 {
-        motion::transition(
-            self.id.clone(),
-            if self.expanded { 1.0 } else { 0.0 },
-            Transition::new(DURATION),
-            window,
-            cx,
-        )
-    }
 }
 
-impl RenderOnce for DisclosureIcon {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let progress = self.progress(window, cx);
-        el! {
-            .div { size: $(self.size); flex_shrink_0; } [
-                (IconName::ChevronRight).Icon::new {
-                    size: $(self.size);
-                    transform: $(Transformation::rotate(percentage(progress * 0.25)));
-                },
-            ]
-        }
+impl IntoView for DisclosureIcon {
+    fn into_view(self) -> View {
+        let progress = self.progress;
+        el! { .div.{
+            flex; items_center; justify_center; size: self->size; flex_none;
+            dyn_style: move s => $(s.rotate(90.0 * progress.get()));
+        }.[ $(Icon::ChevronRight.view(self.size)) ] }
+        .into_view()
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

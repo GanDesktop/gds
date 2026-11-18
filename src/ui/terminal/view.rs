@@ -1,441 +1,540 @@
-use super::{
-    Copy, INPUT_CONTEXT, Paste, Preferences, ScrollBottom, ScrollPageDown, ScrollPageUp, ScrollTop,
-    input,
-};
-use crate::service::terminal::Session;
-use crate::{app::AppExt as _, i18n};
+//! Native text and input surfaces over the existing Alacritty terminal service.
+mod grid;
+mod palette;
+use super::Terminal;
+use crate::service::terminal::input;
 use alacritty_terminal::{
     grid::Scroll,
-    index::{Column, Line, Point as GridPoint, Side},
+    index::{Column, Line, Point as GridPoint},
     selection::{Selection, SelectionType},
     term::TermMode,
 };
-use gpui_kit::{prelude::*, *};
-use std::time::Duration;
+use anti_webui::{core::drawing::drawing, prelude::*};
+use gds_uim::el;
+use grid::{Geometry, Painter, Snapshot};
+pub(super) use palette::Palette;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
-mod fonts;
-mod grid;
-mod ime;
-pub(super) mod palette;
-#[cfg(all(test, feature = "gui-tests", unix))]
-mod tests;
-
-const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(600);
-
-pub(super) struct View {
-    pub(super) session: Session,
-    focus: FocusHandle,
-    preferences: Preferences,
-    fonts: Option<fonts::Fonts>,
-    snapshot: grid::Snapshot,
-    geometry: grid::Geometry,
-    preedit: String,
-    preedit_selection: std::ops::Range<usize>,
-    selecting: bool,
-    scroll_remainder: f32,
-    cursor_on: bool,
-    focused: bool,
-    pub(super) error: Option<String>,
-    _updates: Task<()>,
-    _blink: Option<Task<()>>,
-    _focus_subscriptions: Vec<Subscription>,
+#[derive(Clone)]
+struct Surface {
+    terminal: Terminal,
+    on_key: Option<Rc<dyn Fn(&KeyboardEvent) -> bool>>,
+    size: Signal<(f32, f32)>,
+    geometry: Memo<Geometry>,
+    painter: Rc<RefCell<Painter>>,
+    snapshot: Rc<RefCell<Snapshot>>,
+    cursor: Signal<PointF>,
+    focused: Signal<bool>,
+    blink: Signal<bool>,
+    input: Signal<String>,
+    input_ref: NodeRef,
+    selecting: Rc<Cell<bool>>,
+    mouse_button: Rc<Cell<Option<u8>>>,
+    last_pointer: Rc<Cell<PointF>>,
+    scroll_remainder: Rc<Cell<f32>>,
 }
-
-impl View {
-    pub(super) fn new(
-        session: Session,
-        preferences: Preferences,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let focus = cx.focus_handle();
-        let mut updates = session.updates();
-        let task = cx.spawn(async move |view, cx| {
-            loop {
-                if *updates.borrow() {
-                    // Completion may drop between subscribing/observing and polling this loop.
-                    let _ = view.update(cx, |view, cx| {
-                        view.cursor_on = true;
-                        cx.notify();
-                    });
-                    break;
-                }
-                if updates.changed().await.is_err() {
-                    break;
-                }
-                // Coalesce output bursts to one UI invalidation per frame budget.
-                cx.background_executor()
-                    .timer(Duration::from_millis(16))
-                    .await;
-                let stopped = *updates.borrow_and_update();
-                if view
-                    .update(cx, |view, cx| {
-                        view.cursor_on = true;
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-                if stopped {
-                    break;
+impl Terminal {
+    pub fn view(&self) -> impl IntoView {
+        Surface::new(self.clone(), None).into_view()
+    }
+    /// Lets the containing application handle its explicit shortcuts before PTY input.
+    pub fn view_with_key_handler(
+        &self,
+        on_key: impl Fn(&KeyboardEvent) -> bool + 'static,
+    ) -> impl IntoView {
+        Surface::new(self.clone(), Some(Rc::new(on_key))).into_view()
+    }
+}
+impl Surface {
+    fn new(terminal: Terminal, on_key: Option<Rc<dyn Fn(&KeyboardEvent) -> bool>>) -> Self {
+        let input_ref = node_ref();
+        let focused = terminal.0.focused;
+        let preferences = terminal.0.preferences;
+        let font = memo(move || {
+            preferences.with(|prefs| {
+                let style = Style::default()
+                    .font_family(prefs.font_family.as_str())
+                    .text_size(prefs.font_size);
+                Geometry::new(0.0, 0.0, &style, window_scale())
+            })
+        });
+        let size = signal((0.0, 0.0));
+        let geometry = memo(move || {
+            let (width, height) = size.get();
+            font.get().with_size(width, height)
+        });
+        terminal.0.focus.set(Some(input_ref));
+        let pending_focus = terminal.clone();
+        let controller = terminal.clone();
+        on_cleanup(move || {
+            if controller.0.focus.get() == Some(input_ref) {
+                controller.0.focus.set(None);
+                if focused.is_alive() {
+                    focused.set(false);
                 }
             }
         });
-        let subscriptions = vec![
-            cx.on_focus(&focus, window, |view, _, cx| {
-                view.focused = true;
-                view.cursor_on = true;
-                view.sync_blink(cx);
-                if view.mode().contains(TermMode::FOCUS_IN_OUT) {
-                    view.send(b"\x1b[I", cx);
-                }
-                cx.notify();
-            }),
-            cx.on_blur(&focus, window, |view, _, cx| {
-                view.focused = false;
-                view.preedit.clear();
-                view.preedit_selection = 0..0;
-                view.selecting = false;
-                view.sync_blink(cx);
-                if view.mode().contains(TermMode::FOCUS_IN_OUT) {
-                    view.send(b"\x1b[O", cx);
-                }
-                cx.notify();
-            }),
-        ];
-        Self {
-            session,
-            focus,
-            preferences,
-            fonts: None,
-            snapshot: grid::Snapshot::default(),
-            geometry: grid::Geometry::default(),
-            preedit: String::new(),
-            preedit_selection: 0..0,
-            selecting: false,
-            scroll_remainder: 0.,
-            cursor_on: true,
-            focused: false,
-            error: None,
-            _updates: task,
-            _blink: None,
-            _focus_subscriptions: subscriptions,
-        }
-    }
-
-    pub(super) fn focus_handle(&self) -> FocusHandle {
-        self.focus.clone()
-    }
-    pub(super) fn set_preferences(&mut self, preferences: Preferences, cx: &mut Context<Self>) {
-        self.preferences = preferences;
-        self.sync_blink(cx);
-        cx.notify();
-    }
-    fn should_blink(&self, cx: &App) -> bool {
-        self.focused && self.preferences.cursor_blink && !cx.reduce_motion()
-    }
-    fn sync_blink(&mut self, cx: &mut Context<Self>) {
-        if !self.should_blink(cx) {
-            self._blink = None;
-            self.cursor_on = true;
-            return;
-        }
-        if self._blink.is_some() {
-            return;
-        }
-        self._blink = Some(cx.spawn(async move |view, cx| {
-            loop {
-                cx.background_executor().timer(CURSOR_BLINK_INTERVAL).await;
-                let keep_running = view.update(cx, |view, cx| {
-                    if !view.should_blink(cx) {
-                        view._blink = None;
-                        let was_off = !view.cursor_on;
-                        view.cursor_on = true;
-                        if was_off {
-                            cx.notify();
-                        }
-                        return false;
-                    }
-                    view.cursor_on = !view.cursor_on;
-                    cx.notify();
-                    true
-                });
-                if !matches!(keep_running, Ok(true)) {
-                    break;
-                }
+        let surface = Self {
+            terminal,
+            on_key,
+            size,
+            geometry,
+            painter: Rc::default(),
+            snapshot: Rc::default(),
+            cursor: signal(PointF::new(0.0, 0.0)),
+            focused,
+            blink: signal(true),
+            input: signal(String::new()),
+            input_ref,
+            selecting: Rc::new(Cell::new(false)),
+            mouse_button: Rc::new(Cell::new(None)),
+            last_pointer: Rc::new(Cell::new(PointF::new(0.0, 0.0))),
+            scroll_remainder: Rc::new(Cell::new(0.0)),
+        };
+        let blink = surface.blink;
+        let focused = surface.focused;
+        let sender = ui_channel(move |()| {
+            if focused.get_untracked() && preferences.get_untracked().cursor_blink {
+                blink.update(|visible| *visible = !*visible);
+            } else {
+                blink.set_if_changed(true);
             }
-        }));
-    }
-    fn mode(&self) -> TermMode {
-        self.session.with_term(|term| *term.mode())
-    }
-    fn send(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
-        if bytes.is_empty() {
-            return;
-        }
-        if let Err(error) = self.session.write(bytes) {
-            self.error = Some(error.to_string());
-        }
-        self.cursor_on = true;
-        cx.notify();
-    }
-    fn input(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
-        self.session.with_term(|term| {
-            term.scroll_display(Scroll::Bottom);
-            term.selection = None;
         });
-        self.send(bytes, cx);
-    }
-    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.session.with_term(|term| term.selection_to_string()) {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
-        }
-    }
-    fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.paste_text(&text, cx);
-        }
-    }
-    pub(super) fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        let bytes = input::paste_bytes(text, self.mode());
-        self.input(&bytes, cx);
-    }
-    fn scroll_page_up(&mut self, _: &ScrollPageUp, _: &mut Window, cx: &mut Context<Self>) {
-        self.scroll_display(Scroll::PageUp, cx);
-    }
-    fn scroll_page_down(&mut self, _: &ScrollPageDown, _: &mut Window, cx: &mut Context<Self>) {
-        self.scroll_display(Scroll::PageDown, cx);
-    }
-    fn scroll_top(&mut self, _: &ScrollTop, _: &mut Window, cx: &mut Context<Self>) {
-        self.scroll_display(Scroll::Top, cx);
-    }
-    fn scroll_bottom(&mut self, _: &ScrollBottom, _: &mut Window, cx: &mut Context<Self>) {
-        self.scroll_display(Scroll::Bottom, cx);
-    }
-    fn scroll_display(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
-        self.session.with_term(|term| term.scroll_display(scroll));
-        cx.notify();
-    }
-    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.focus.is_focused(window) || !self.preedit.is_empty() {
-            return;
-        }
-        if let Some(bytes) = input::key_bytes(
-            &event.keystroke,
-            self.mode(),
-            self.preferences.alt_sends_escape,
-        ) {
-            self.input(&bytes, cx);
-            cx.stop_propagation();
-        }
-    }
-    fn grid_point(&self, position: Point<Pixels>) -> (GridPoint, Side, usize, usize) {
-        let (column, row, side) = self.geometry.cell_at(position);
-        let point = GridPoint::new(
-            Line(row as i32 - self.snapshot.display_offset as i32),
-            Column(column),
-        );
-        (point, side, column, row)
-    }
-    fn mouse_report(
-        &mut self,
-        position: Point<Pixels>,
-        button: u8,
-        released: bool,
-        modifiers: Modifiers,
-        cx: &mut Context<Self>,
-    ) {
-        let (_, _, column, row) = self.grid_point(position);
-        if let Some(bytes) =
-            input::mouse_bytes(button, column, row, released, modifiers, self.mode())
-        {
-            self.send(&bytes, cx);
-        }
-    }
-    fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus.focus(window, cx);
-        if self.mode().intersects(TermMode::MOUSE_MODE) && !event.modifiers.shift {
-            self.mouse_report(
-                event.position,
-                mouse_button(event.button),
-                false,
-                event.modifiers,
-                cx,
-            );
-        } else if event.button == MouseButton::Left {
-            let (point, side, _, _) = self.grid_point(event.position);
-            let ty = match event.click_count {
-                2 => SelectionType::Semantic,
-                3.. => SelectionType::Lines,
-                _ if event.modifiers.alt => SelectionType::Block,
-                _ => SelectionType::Simple,
-            };
-            self.session
-                .with_term(|term| term.selection = Some(Selection::new(ty, point, side)));
-            self.selecting = true;
-        }
-        cx.stop_propagation();
-        cx.notify();
-    }
-    fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        // A file drag belongs to the host's drop target, not PTY mouse reporting.
-        // Let MouseUp bubble so its on_drop handler receives the payload.
-        if cx.has_active_drag() {
-            return;
-        }
-        if !self.selecting && self.mode().intersects(TermMode::MOUSE_MODE) && !event.modifiers.shift
-        {
-            self.mouse_report(
-                event.position,
-                mouse_button(event.button),
-                true,
-                event.modifiers,
-                cx,
-            );
-        }
-        self.selecting = false;
-        cx.stop_propagation();
-        cx.notify();
-    }
-    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selecting && event.dragging() {
-            let (point, side, _, _) = self.grid_point(event.position);
-            self.session.with_term(|term| {
-                if let Some(selection) = term.selection.as_mut() {
-                    selection.update(point, side);
+        let scope = crate::app::Gds::current()
+            .tasks()
+            .owner_scope("Terminal cursor");
+        scope
+            .spawn_cancellable_named("Blink terminal cursor", async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(600));
+                loop {
+                    interval.tick().await;
+                    sender.send(());
                 }
-                if event.position.y < self.geometry.bounds.top() {
-                    term.scroll_display(Scroll::Delta(1));
-                } else if event.position.y > self.geometry.bounds.bottom() {
-                    term.scroll_display(Scroll::Delta(-1));
+            })
+            .on_complete(&scope, |result: Result<(), _>| {
+                if let Err(error) = result {
+                    tracing::debug!(%error, "terminal cursor stopped");
                 }
             });
-            cx.notify();
-        } else if !event.modifiers.shift {
-            let mode = self.mode();
-            if mode.contains(TermMode::MOUSE_MOTION)
-                || (mode.contains(TermMode::MOUSE_DRAG) && event.pressed_button.is_some())
+        let ready = memo({
+            let terminal = surface.terminal.clone();
+            move || terminal.status() != super::Status::Starting
+        });
+        effect(move || {
+            if ready.get() && pending_focus.0.focus_requested.get() {
+                let terminal = pending_focus.clone();
+                request_frame(move |_| {
+                    if terminal.0.focus.get() == Some(input_ref) && terminal.0.focus_requested.get()
+                    {
+                        input_ref.focus();
+                    }
+                });
+            }
+        });
+        let resized = surface.terminal.clone();
+        let pty_size = memo(move || geometry.get().pty_size());
+        effect(move || {
+            if ready.get()
+                && let Some([columns, rows, cell_width, cell_height]) = pty_size.get()
+                && let Some(session) = resized.0.service.session()
+                && let Err(error) =
+                    session.resize_with_pixels(columns, rows, cell_width, cell_height)
             {
-                self.mouse_report(
-                    event.position,
-                    32 + event.pressed_button.map(mouse_button).unwrap_or(3),
-                    false,
-                    event.modifiers,
-                    cx,
+                resized.0.error.set_if_changed(Some(error.to_string()));
+            }
+        });
+        surface
+    }
+    fn key(&self, event: &KeyboardEvent) {
+        event.stop_propagation();
+        if self.on_key.as_ref().is_some_and(|handler| handler(event)) {
+            event.prevent_default();
+            return;
+        }
+        if event.modifiers.ctrl && event.modifiers.shift && event.key.is_char('c') {
+            if let Some(session) = self.terminal.0.service.session()
+                && let Some(text) = session.with_term(|term| term.selection_to_string())
+            {
+                set_clipboard(ClipboardKind::Clipboard, text);
+            }
+            event.prevent_default();
+            event.stop_propagation();
+            return;
+        }
+        if (event.modifiers.ctrl && event.modifiers.shift && event.key.is_char('v'))
+            || (event.modifiers.shift && matches!(event.key, Key::Named(NamedKey::Insert)))
+        {
+            let terminal = self.terminal.clone();
+            read_clipboard(
+                ClipboardKind::Clipboard,
+                vec![
+                    "text/plain;charset=utf-8".into(),
+                    "UTF8_STRING".into(),
+                    "text/plain".into(),
+                ],
+                4 * 1024 * 1024,
+            )
+            .then(move |result| match result {
+                Ok(offer) => {
+                    if let Some(data) = offer.data {
+                        terminal.paste_text(&String::from_utf8_lossy(&data.bytes));
+                    }
+                }
+                Err(error) => terminal.0.error.set(Some(error.to_string())),
+            });
+            event.prevent_default();
+            event.stop_propagation();
+            return;
+        }
+        if event.modifiers.types_text()
+            && !event.modifiers.logo
+            && matches!(
+                event.key,
+                Key::Character(_) | Key::Named(NamedKey::Space) | Key::Unidentified
+            )
+            && let Some(text) = event.text.as_deref().filter(|text| !text.is_empty())
+        {
+            self.input_bytes(text.as_bytes());
+            event.prevent_default();
+            return;
+        }
+        let Some(session) = self.terminal.0.service.session() else {
+            return;
+        };
+        if event.modifiers.shift
+            && !event.modifiers.ctrl
+            && matches!(
+                event.key,
+                Key::Named(NamedKey::PageUp | NamedKey::PageDown | NamedKey::Home | NamedKey::End)
+            )
+        {
+            session.with_term(|term| {
+                term.scroll_display(match event.key {
+                    Key::Named(NamedKey::PageUp) => Scroll::PageUp,
+                    Key::Named(NamedKey::PageDown) => Scroll::PageDown,
+                    Key::Named(NamedKey::Home) => Scroll::Top,
+                    _ => Scroll::Bottom,
+                })
+            });
+            self.terminal.changed();
+            event.prevent_default();
+            event.stop_propagation();
+            return;
+        }
+        let key = match &event.key {
+            Key::Character(text) => text.to_lowercase(),
+            Key::Named(key) => match key {
+                NamedKey::Enter => "enter".into(),
+                NamedKey::Tab => "tab".into(),
+                NamedKey::Space => "space".into(),
+                NamedKey::Backspace => "backspace".into(),
+                NamedKey::Delete => "delete".into(),
+                NamedKey::Escape => "escape".into(),
+                NamedKey::ArrowLeft => "left".into(),
+                NamedKey::ArrowRight => "right".into(),
+                NamedKey::ArrowUp => "up".into(),
+                NamedKey::ArrowDown => "down".into(),
+                NamedKey::Home => "home".into(),
+                NamedKey::End => "end".into(),
+                NamedKey::PageUp => "pageup".into(),
+                NamedKey::PageDown => "pagedown".into(),
+                NamedKey::Insert => "insert".into(),
+                NamedKey::F(number) => format!("f{number}"),
+                _ => return,
+            },
+            Key::Unidentified => return,
+        };
+        let mode = session.with_term(|term| *term.mode());
+        let bytes = input::key_bytes(
+            &input::Keystroke {
+                key: &key,
+                key_char: event.text.as_deref(),
+                modifiers: Self::modifiers(event.modifiers),
+            },
+            mode,
+            self.terminal.0.preferences.get_untracked().alt_sends_escape,
+        );
+        if let Some(bytes) = bytes {
+            self.input_bytes(&bytes);
+            event.prevent_default();
+        }
+    }
+    fn modifiers(value: Modifiers) -> input::Modifiers {
+        input::Modifiers {
+            shift: value.shift,
+            control: value.ctrl,
+            alt: value.alt,
+            platform: value.logo,
+            function: false,
+        }
+    }
+    fn committed(&self, text: &str) {
+        if !text.is_empty() {
+            self.input_bytes(text.as_bytes());
+            self.input.set(String::new());
+        }
+    }
+    fn input_bytes(&self, bytes: &[u8]) {
+        if let Some(session) = self.terminal.0.service.session()
+            && session.with_term(|term| {
+                let selected = term.selection.take().is_some();
+                let scrolled = term.grid().display_offset() > 0;
+                if scrolled {
+                    term.scroll_display(Scroll::Bottom);
+                }
+                selected || scrolled
+            })
+        {
+            self.terminal.changed();
+        }
+        self.terminal.send(bytes);
+        self.blink.set_if_changed(true);
+    }
+    fn pointer_down(&self, event: &PointerEvent) {
+        self.terminal.focus();
+        self.last_pointer.set(event.local);
+        let Some(session) = self.terminal.0.service.session() else {
+            return;
+        };
+        let (column, row, side) = untrack(|| self.geometry.get()).point(event.local);
+        let mode = session.with_term(|term| *term.mode());
+        let button = match event.button {
+            Some(PointerButton::Primary) => 0,
+            Some(PointerButton::Middle) => 1,
+            Some(PointerButton::Secondary) => 2,
+            _ => 3,
+        };
+        self.mouse_button.set(Some(button));
+        if mode.intersects(TermMode::MOUSE_MODE)
+            && !event.modifiers.shift
+            && let Some(bytes) = input::mouse_bytes(
+                button,
+                column,
+                row,
+                false,
+                Self::modifiers(event.modifiers),
+                mode,
+            )
+        {
+            self.terminal.send(&bytes);
+        } else if event.button == Some(PointerButton::Primary) {
+            session.with_term(|term| {
+                let point = GridPoint::new(
+                    Line(row as i32 - term.grid().display_offset() as i32),
+                    Column(column),
                 );
+                let kind = match event.click_count {
+                    2 => SelectionType::Semantic,
+                    3.. => SelectionType::Lines,
+                    _ if event.modifiers.alt => SelectionType::Block,
+                    _ => SelectionType::Simple,
+                };
+                term.selection = Some(Selection::new(kind, point, side));
+            });
+            self.selecting.set(true);
+            self.terminal.changed();
+        }
+        event.stop_propagation();
+    }
+    fn pointer_up(&self, event: &PointerEvent) {
+        self.release_pointer(event.local, event.modifiers);
+        event.stop_propagation();
+    }
+    fn release_pointer(&self, position: PointF, modifiers: Modifiers) {
+        self.selecting.set(false);
+        let Some(button) = self.mouse_button.take() else {
+            return;
+        };
+        let Some(session) = self.terminal.0.service.session() else {
+            return;
+        };
+        let (column, row, _) = untrack(|| self.geometry.get()).point(position);
+        let mode = session.with_term(|term| *term.mode());
+        if mode.intersects(TermMode::MOUSE_MODE)
+            && !modifiers.shift
+            && let Some(bytes) =
+                input::mouse_bytes(button, column, row, true, Self::modifiers(modifiers), mode)
+        {
+            self.terminal.send(&bytes);
+        }
+    }
+    fn pointer_move(&self, event: &PointerEvent) {
+        self.motion(event.local, event.modifiers);
+    }
+    fn motion(&self, position: PointF, modifiers: Modifiers) {
+        self.last_pointer.set(position);
+        let Some(session) = self.terminal.0.service.session() else {
+            return;
+        };
+        let (column, row, side) = untrack(|| self.geometry.get()).point(position);
+        let mode = session.with_term(|term| *term.mode());
+        if !modifiers.shift
+            && (mode.contains(TermMode::MOUSE_MOTION)
+                || (mode.contains(TermMode::MOUSE_DRAG) && self.mouse_button.get().is_some()))
+        {
+            if let Some(bytes) = input::mouse_bytes(
+                32 + self.mouse_button.get().unwrap_or(3),
+                column,
+                row,
+                false,
+                Self::modifiers(modifiers),
+                mode,
+            ) {
+                self.terminal.send(&bytes);
+            }
+        } else if self.selecting.get() {
+            session.with_term(|term| {
+                let point = GridPoint::new(
+                    Line(row as i32 - term.grid().display_offset() as i32),
+                    Column(column),
+                );
+                if let Some(selection) = &mut term.selection {
+                    selection.update(point, side);
+                }
+            });
+            self.terminal.changed();
+        }
+    }
+    fn grabbed(&self, event: &GrabEvent) {
+        match event.phase {
+            GrabPhase::Start | GrabPhase::Move => self.motion(event.local, event.modifiers),
+            GrabPhase::End | GrabPhase::Cancel => {
+                self.release_pointer(event.local, event.modifiers)
             }
         }
     }
-    fn scroll(&mut self, event: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let delta = match event.delta {
-            ScrollDelta::Lines(lines) => lines.y,
-            ScrollDelta::Pixels(delta) => {
-                f32::from(delta.y) / f32::from(self.geometry.cell.height).max(1.)
-            }
+    fn scroll(&self, event: &ScrollEvent) {
+        let Some(session) = self.terminal.0.service.session() else {
+            return;
         };
-        self.scroll_remainder += delta;
-        let lines = self.scroll_remainder.trunc() as i32;
-        self.scroll_remainder -= lines as f32;
-        let mode = self.mode();
+        let geometry = untrack(|| self.geometry.get());
+        let amount = self.scroll_remainder.get()
+            - event.delta_y / window_scale().as_f32() / geometry.cell_height;
+        let lines = amount.trunc() as i32;
+        self.scroll_remainder.set(amount - lines as f32);
+        event.stop_propagation();
+        if lines == 0 {
+            return;
+        }
+        let mode = session.with_term(|term| *term.mode());
         if mode.intersects(TermMode::MOUSE_MODE) && !event.modifiers.shift {
+            let (column, row, _) = geometry.point(self.last_pointer.get());
             for _ in 0..lines.unsigned_abs().min(100) {
-                self.mouse_report(
-                    event.position,
+                if let Some(bytes) = input::mouse_bytes(
                     if lines > 0 { 64 } else { 65 },
+                    column,
+                    row,
                     false,
-                    event.modifiers,
-                    cx,
-                );
+                    Self::modifiers(event.modifiers),
+                    mode,
+                ) {
+                    self.terminal.send(&bytes);
+                }
             }
         } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL)
             && !event.modifiers.shift
         {
-            let sequence: &[u8] = if lines > 0 { b"\x1bOA" } else { b"\x1bOB" };
             for _ in 0..lines.unsigned_abs().min(100) {
-                self.send(sequence, cx);
+                self.terminal
+                    .send(if lines > 0 { b"\x1bOA" } else { b"\x1bOB" });
             }
         } else {
-            self.session
-                .with_term(|term| term.scroll_display(Scroll::Delta(lines)));
+            session.with_term(|term| term.scroll_display(Scroll::Delta(lines)));
+            self.terminal.changed();
         }
-        cx.stop_propagation();
-        cx.notify();
     }
-}
-
-fn mouse_button(button: MouseButton) -> u8 {
-    match button {
-        MouseButton::Left => 0,
-        MouseButton::Middle => 1,
-        MouseButton::Right => 2,
-        _ => 3,
+    fn input_style(&self, style: Style) -> Style {
+        let position = self.cursor.get();
+        let preferences = self.terminal.0.preferences.get();
+        let geometry = self.geometry.get();
+        style
+            .left(position.x)
+            .top(position.y)
+            .w((geometry.width - position.x).max(geometry.cell_width))
+            .h(geometry.cell_height)
+            .font_family(preferences.font_family.as_str())
+            .text_size(preferences.font_size)
+            .line_height(LineHeight::Px(geometry.cell_height))
+            .text_color(Palette::new().foreground)
     }
-}
-impl Render for View {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_blink(cx);
-        let theme = cx.gds().appearance().theme();
-        let colors = theme.colors();
-        let content_background = theme.content_background();
-        let status = match self.session.status() {
-            crate::service::terminal::ProcessStatus::Running => None,
-            crate::service::terminal::ProcessStatus::Stopping => {
-                Some(i18n::text("gds-terminal-stopping", cx))
-            }
-            crate::service::terminal::ProcessStatus::Failed(error) => {
-                Some(format!("{}: {error}", i18n::text("gds-terminal-io-failed", cx)).into())
-            }
-            crate::service::terminal::ProcessStatus::Exited { code, signal } => {
-                let mut args = fluent_bundle::FluentArgs::new();
-                args.set("code", i64::from(code));
-                args.set("signal", signal.unwrap_or_else(|| "—".into()));
-                Some(i18n::format("gds-terminal-exit-status", Some(&args), cx))
-            }
+    fn focus_changed(&self, focused: bool) {
+        if focused {
+            self.terminal.0.focus_requested.set(false);
+        }
+        self.focused.set_if_changed(focused);
+        self.blink.set_if_changed(true);
+        if let Some(session) = self.terminal.0.service.session()
+            && session.with_term(|term| term.mode().contains(TermMode::FOCUS_IN_OUT))
+        {
+            self.terminal
+                .send(if focused { b"\x1b[I" } else { b"\x1b[O" });
+        }
+    }
+    fn grid(&self) -> View {
+        self.terminal.0.redraw.revision.get();
+        let geometry = self.geometry.get();
+        let preferences = self.terminal.0.preferences.get();
+        let palette = Palette::new();
+        let focused = self.focused.get();
+        let cursor_on = self.blink.get() || !preferences.cursor_blink;
+        let Some(session) = self.terminal.0.service.session() else {
+            return el! { .div.{ size_full; bg:palette->background; pointer_events_none } }
+                .into_view();
         };
-        div()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .key_context(INPUT_CONTEXT)
-            .track_focus(&self.focus)
-            .cursor(CursorStyle::IBeam)
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::paste))
-            .on_action(cx.listener(Self::scroll_page_up))
-            .on_action(cx.listener(Self::scroll_page_down))
-            .on_action(cx.listener(Self::scroll_top))
-            .on_action(cx.listener(Self::scroll_bottom))
-            .on_key_down(cx.listener(Self::key_down))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-            .on_mouse_down(MouseButton::Middle, cx.listener(Self::mouse_down))
-            .on_mouse_down(MouseButton::Right, cx.listener(Self::mouse_down))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
-            .on_mouse_up(MouseButton::Middle, cx.listener(Self::mouse_up))
-            .on_mouse_up(MouseButton::Right, cx.listener(Self::mouse_up))
-            .on_mouse_move(cx.listener(Self::mouse_move))
-            .on_scroll(cx.listener(Self::scroll))
-            .child(grid::Grid { view: cx.entity() })
-            .when_some(self.error.clone(), |this, error| {
-                this.child(
-                    div()
-                        .bg(content_background)
-                        .text_xs()
-                        .text_color(colors.error)
-                        .child(error),
-                )
-            })
-            .when_some(status, |this, status| {
-                this.child(
-                    div()
-                        .bg(content_background)
-                        .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(status),
-                )
-            })
+        let (picture, cursor, background) = {
+            let mut snapshot = self.snapshot.borrow_mut();
+            if !snapshot.refresh(&session) {
+                self.terminal.changed();
+            }
+            let mut painter = self.painter.borrow_mut();
+            painter.font(&preferences.font_family, preferences.font_size);
+            let picture = painter.draw(&snapshot, geometry, &palette, focused, cursor_on);
+            (
+                Arc::new(picture),
+                snapshot.cursor(geometry),
+                snapshot.background(&palette),
+            )
+        };
+        self.cursor.set_if_changed(cursor);
+        el! { picture.drawing.{ size_full; bg:background; text_size:1.0_f32; pointer_events_none } }
+            .into_view()
+    }
+}
+impl IntoView for Surface {
+    fn into_view(self) -> View {
+        let size = self.size;
+        let key = self.clone();
+        let input = self.clone();
+        let down = self.clone();
+        let up = self.clone();
+        let moved = self.clone();
+        let scroll = self.clone();
+        let grid = self.clone();
+        let focus = self.clone();
+        let style = self.clone();
+        let dropped = self.clone();
+        let grabbed = self.clone();
+        el! { .div.{ relative; flex_1; size_full; min_h: 0.0_f32; overflow_hidden; cursor:CursorIcon::Text;
+            on_resized: move (width, height) => size.{set_if_changed: @(width, height)};
+            on_pointer_down: move event => &down.{ pointer_down: event };
+            on_pointer_up: move event => &up.{ pointer_up: event };
+            on_pointer_move: move event => &moved.{ pointer_move: event };
+            on_grab: move event => &grabbed.{ grabbed: event };
+            on_scroll: move event => &scroll.{ scroll: event };
+            on_drop_files: move (paths, _) => $(dropped.terminal.paste_paths(paths));
+        }.[
+            (move () => &grid.{ grid }).dyn_view,
+            .text_input.{ value: self->input; node_ref: self->input_ref; absolute; min_w: 4.0_f32; max_w: 100.0_f32.pct; p: 0.0_f32; border: 0.0_f32;
+                bg: Color::TRANSPARENT; caret_color: Color::TRANSPARENT; pointer_events_none;
+                dyn_style:move s=>&style.{input_style:s};
+                on_key_down: move event => &key.{ key: event };
+                on_input: move text => &input.{committed:text};
+                on_focus_change:move focused=>&focus.{focus_changed:focused};
+            },
+        ] }.into_view()
     }
 }

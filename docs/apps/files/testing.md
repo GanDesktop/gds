@@ -1,26 +1,30 @@
 # Files testing
 
-The primary E2E entry point is `just test-files --vm all`, using the shared
-[desktop VM framework](../../development/vm-e2e.md). Run `just e2e-prepare all`
-and `just e2e-build` first. `just test-images` uses the same framework for Images.
-The VM tests exercise normal binaries through QEMU input and AT-SPI and preserve
-per-case UI and filesystem evidence.
+The AntiWebUI migration uses `just test-files-native` for the existing Files
+workflow and a separate Wayland smoke run. The retained
+[desktop VM framework](../../development/vm-e2e.md) exercises normal binaries
+through QEMU input and AT-SPI; its accessibility-dependent workflows have not
+been migrated in this stage. Images is excluded from the current build targets.
 
-## Supplementary Weston runner
+## Native UI and Wayland runner
 
-Run the earlier native workflow with `just test-files-native`. It builds
+Run the native workflow with `just test-files-native`. It builds
 the opt-in `files-e2e` target, obtains Weston from the repository's locked Nixpkgs,
-and runs Files inside a private headless Wayland session. A working Vulkan or
-OpenGL driver is required; this is a real native window, not GPUI's test platform.
+and runs two complementary phases. A working Vulkan or OpenGL driver is required.
 
-The runner creates a new HOME, all XDG directories, a D-Bus session bus, and a
-compositor for every run. It does not connect to the host system bus. It drives
-the normal application through pointer and keyboard events using GPUI Kit's
-window interaction helpers. Startup, configuration, SQLite storage, filesystem
-operations and rendering use their normal implementations.
-Application and window-root notifications provide readiness signals; frame
-callbacks synchronize input. The process deadline terminates stalled runs and
-does not pace the scenario.
+The runner creates a new HOME, all XDG directories, and private D-Bus sessions.
+It does not connect to the host system bus. The first phase mounts the actual
+Files view in AntiWebUI's `Ui`, sends native pointer, keyboard and IME events,
+and captures the composed view through its GPU renderer. SQLite storage,
+filesystem operations, reactive owners and application services use their
+normal implementations. State predicates and native event deadlines synchronize
+the scenario. This phase does not send input through a Wayland compositor.
+
+The second phase launches the normal application inside a private headless
+Weston session. It waits for startup and a rendered frame, captures both the
+application frame and compositor output, then sends SIGTERM and requires a
+successful shutdown after supervised work drains. It verifies the native
+window and Wayland startup path independently of the driven workflow.
 
 The workflow covers renaming with undo/redo, creating a folder, moving a file to
 Trash and restoring it, observing an external file creation, switching to the
@@ -31,8 +35,11 @@ scenario leaves tags disabled; it does not test Baloo queries.
 Artifacts remain in the printed `target/files-e2e/run-*` directory on both success
 and failure:
 
-- `session.log`, `exit-code.txt` and, only on scenario completion, `passed.txt`;
-- compositor screenshots and semantic element dumps at each checkpoint;
+- `driven.log`, `driven-exit.txt`, UI renderer captures and semantic dumps;
+- `wayland-session.log`, `wayland-app.log`, `wayland-app-exit.txt`, and application
+  and compositor screenshots under `wayland/`;
+- per-phase `driven-passed.txt` / `wayland-passed.txt`, and `passed.txt` only when
+  both phases finish successfully;
 - the isolated HOME containing the resulting files, configuration and database;
 - `manifest.json` containing the command, executable hash, revision and replay
   command, plus `source.diff` and `source.tar.gz` capturing the working sources.

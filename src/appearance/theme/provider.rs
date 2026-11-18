@@ -4,7 +4,6 @@ mod color;
 pub mod custom;
 pub(crate) mod system;
 
-use gpui_kit::WindowAppearance;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 
@@ -33,7 +32,7 @@ pub(super) struct Loaded {
 impl Source {
     /// Offer desktop following only when its palette can actually be loaded.
     /// Call when opening or refreshing settings, not on each render or slider update.
-    pub fn system_available(platform: WindowAppearance) -> bool {
+    pub fn system_available(platform: Mode) -> bool {
         system::load(ModePreference::System, platform).is_ok()
     }
 
@@ -45,17 +44,12 @@ impl Source {
         }
     }
 
-    /// Whether System mode is supplied by the native platform rather than the source.
-    pub(super) fn uses_platform_mode(&self) -> bool {
-        !matches!(self, Self::System) || system::uses_platform_mode()
-    }
-
     /// # Errors
     /// Reports unavailable files or invalid provider data without substituting another source.
     pub(super) fn load(
         &self,
         preference: ModePreference,
-        platform: WindowAppearance,
+        platform: Mode,
         builtin: builtin::Theme,
     ) -> Result<Loaded, Error> {
         match self {

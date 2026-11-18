@@ -1,8 +1,8 @@
-use gpui_kit::{App, SharedString, component::select::SelectItem};
+use crate::app::Gds as App;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::{app::AppExt as _, i18n};
+use crate::i18n;
 
 pub trait Model: Clone + Default + PartialEq + 'static {
     fn fields() -> Vec<Field<Self>>;
@@ -20,12 +20,12 @@ pub trait Choices {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Choice {
     pub value: Value,
-    pub title: SharedString,
-    search_terms: &'static str,
+    pub title: String,
+    pub(super) search_terms: &'static str,
 }
 
 impl Choice {
-    pub fn new(value: Value, title: impl Into<SharedString>) -> Self {
+    pub fn new(value: Value, title: impl Into<String>) -> Self {
         Self {
             value,
             title: title.into(),
@@ -36,22 +36,6 @@ impl Choice {
     pub fn search_terms(mut self, terms: &'static str) -> Self {
         self.search_terms = terms;
         self
-    }
-}
-
-impl SelectItem for Choice {
-    type Value = Value;
-    fn title(&self) -> SharedString {
-        self.title.clone()
-    }
-    fn value(&self) -> &Value {
-        &self.value
-    }
-    fn matches(&self, query: &str) -> bool {
-        let query = query.to_lowercase();
-        self.title.to_lowercase().contains(&query)
-            || self.value.to_string().to_lowercase().contains(&query)
-            || self.search_terms.to_lowercase().contains(&query)
     }
 }
 
@@ -102,12 +86,12 @@ impl Number {
     pub(super) fn value(self, display: f32, cx: &App) -> Result<Value, String> {
         let value = f64::from(display) / self.scale;
         if !value.is_finite() {
-            return Err(i18n::text("form-number-not-finite", cx).to_string());
+            return Err(cx.i18n().text("form-number-not-finite").to_string());
         }
         if matches!(self.integer, Integer::Float) {
             return serde_json::Number::from_f64(value)
                 .map(Value::Number)
-                .ok_or_else(|| i18n::text("form-number-not-finite", cx).to_string());
+                .ok_or_else(|| cx.i18n().text("form-number-not-finite").to_string());
         }
         let rounded = value.round();
         let converted = match self.integer {
@@ -138,17 +122,7 @@ impl Number {
                 fits_unsigned(rounded, usize::MAX as u128).then(|| Value::from(rounded as usize))
             }
         };
-        converted.ok_or_else(|| i18n::text("form-number-out-of-range", cx).to_string())
-    }
-
-    pub(super) fn label(self, display: f32) -> String {
-        let step = self.step * self.scale;
-        let precision = if step >= 1. {
-            0
-        } else {
-            (-step.log10()).ceil().clamp(0., 6.) as usize
-        };
-        format!("{display:.precision$}{}", self.unit)
+        converted.ok_or_else(|| cx.i18n().text("form-number-out-of-range").to_string())
     }
 }
 
@@ -211,7 +185,6 @@ impl<T> Field<T> {
     pub(super) fn choices(&self, model: &T, cx: &App) -> Vec<Choice> {
         let mut choices = match self.kind {
             Kind::Font => cx
-                .gds()
                 .appearance()
                 .typography()
                 .installed_families()
@@ -230,7 +203,7 @@ impl<T> Field<T> {
         if self.nullable {
             choices.insert(
                 0,
-                Choice::new(Value::Null, i18n::text("form-default", cx))
+                Choice::new(Value::Null, cx.i18n().text("form-default"))
                     .search_terms("system default automatic 系统 默认 自动"),
             );
         }
@@ -242,7 +215,10 @@ impl<T> Field<T> {
             if matches!(self.kind, Kind::Font) {
                 let mut arguments = fluent_bundle::FluentArgs::new();
                 arguments.set("family", title);
-                title = i18n::format("form-font-missing", Some(&arguments), cx).to_string();
+                title = cx
+                    .i18n()
+                    .format("form-font-missing", Some(&arguments))
+                    .to_string();
             }
             choices.push(Choice::new(current, title));
         }

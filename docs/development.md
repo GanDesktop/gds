@@ -1,6 +1,6 @@
 # Development & Architecture Guide
 
-GDS builds multiple peer native desktop applications (`gds-files`, `gds-agents`, `gds-nixes`) and a headless portal daemon (`xdg-desktop-portal-gds`) from a single Rust crate. All GUI apps render natively with GPUI (no WebView), targeting **Linux + Wayland** first.
+This experimental branch builds GDS Files with AntiWebUI and the UI-independent `xdg-desktop-portal-gds` from one Rust crate. Files uses the Wayland backend and UIM v2. Agents, Nixes and Images source remains available but their binary targets are excluded until their migration.
 
 ## Repository Layout
 
@@ -34,18 +34,16 @@ Run inside a graphical Wayland terminal. The [justfile](../justfile) automatical
 ```sh
 just dev files                    # Launch GDS Files in debug mode
 just dev files "/path/to/folder"  # Open a specific folder
-just dev agents                   # Launch GDS Agents (or add --compact)
-just dev nixes                    # Launch GDS Nixes
 
-just build [files|agents|portal]  # Incremental debug build
-just release [files|agents|portal]# Optimized release build
+just build [files|portal]        # Incremental debug build
+just release [files|portal]      # Optimized release build
 just check                        # Typecheck workspace and test targets
 just lint                         # Check formatting and workspace Clippy lint gates
 just fmt-check                    # Check Rust formatting (just fmt to format)
 just test                         # Run workspace unit & integration tests
 just e2e-prepare all              # Prepare existing desktop test VMs
-just e2e-build                    # Bundle normal Files/Images builds for VMs
-just test-e2e                     # Run Files + Images desktop workflows
+just e2e-build                    # Bundle normal Files builds for VMs
+just test-e2e                     # Run the retained desktop workflows
 just test-files --vm ubuntu       # Select Files workflows and one guest
 just shell                        # Open an interactive Nix development shell
 ```
@@ -54,7 +52,7 @@ Without `just` installed on the host, invoke `nix develop --impure --expr 'impor
 
 ### Rapid Iteration (`install-dev`)
 
-When iterating on desktop integration or UI, `just install-dev [files|agents]` builds `target/debug` incrementally and installs lightweight user-level launchers (`Files (Dev)`, `Agents (Dev)`) that execute the workspace binary directly with required runtime libraries and helpers (`xdg-terminal-exec`, `ffmpeg`, `terminfo`) while preserving your desktop session's `SHELL`, `WAYLAND_DISPLAY`, and D-Bus environment. Run `just uninstall-dev` to restore any prior release launchers.
+When iterating on desktop integration or UI, `just install-dev files` builds `target/debug` incrementally and installs lightweight user-level launchers (`Files (Dev)`) that execute the workspace binary directly with required runtime libraries and helpers (`xdg-terminal-exec`, `ffmpeg`, `terminfo`) while preserving your desktop session's `SHELL`, `WAYLAND_DISPLAY`, and D-Bus environment. Run `just uninstall-dev` to restore any prior release launchers.
 
 ## Crate Features & Capability Isolation
 
@@ -64,19 +62,19 @@ When iterating on desktop integration or UI, `just install-dev [files|agents]` b
 | --- | --- |
 | `desktop-protocol` | Pure Serde IPC types in `service::desktop::protocol` (shared with `portal`) |
 | `persistence` | Atomic config file writes, file locks, and symlink/conflict protection |
-| `watch` | Filesystem change monitoring, independent of GPUI |
+| `watch` | Filesystem change monitoring, independent of the UI runtime |
 | `desktop` / `file-tags` | OpenURI / AppChooser portals, `FileManager1`, external terminal launch, and optional `user.xdg.tags` xattrs |
 | `storage` | Toasty / SQLite initialization, migrations, and connection supervision |
 | `logs` | Opt-in in-process `tracing` collector (`--enable-logs`) |
-| `task-manager` | `Supervisor`, hierarchical `Scope`s, cancellation, and completion barriers (no GPUI dependency) |
-| `app` | `AppExt` (`cx.gds()` / `cx.gds_mut()`) lifecycle binding on GPUI `App` (no `ui` dependency) |
+| `task-manager` | `Supervisor`, hierarchical `Scope`s, cancellation, and completion barriers (no UI dependency) |
+| `app` | Typed `Gds` services and native owner-bound task completion |
 | `terminal` | Local PTY session worker and `alacritty_terminal` state |
 | `file-inspection` | On-demand image/audio/video/text metadata probing and freedesktop PNG thumbnail cache |
 | `remote` | Native Rust SFTP (`russh-sftp`) and SMB (`smb`) services |
-| `appearance` / `i18n` / `ui` | Theme/font/token engine, Fluent translations, and reusable GPUI components |
-| `files` / `agents` / `nixes` | Full feature bundles for each graphical binary |
-| `portal` | Headless `xdg-desktop-portal-gds` bundle (never pulls in GPUI, SQLite, terminal, or `remote`) |
-| `gui-tests` / `files-e2e` | Headless GPUI test helpers and isolated Weston E2E runner |
+| `appearance` / `i18n` / `ui` | Theme/font/token engine, Fluent translations, and reusable native components |
+| `files` | Native AntiWebUI Files application bundle; Agents, Nixes and Images targets are excluded on this branch |
+| `portal` | Headless `xdg-desktop-portal-gds` bundle (never pulls in AntiWebUI, SQLite, terminal, or `remote`) |
+| `gui-tests` / `files-e2e` | Native test feature gates and the isolated Files driven-renderer/Wayland workflow |
 
 Verify standalone feature boundaries directly with Cargo when changing `Cargo.toml`:
 
@@ -101,7 +99,7 @@ app → pages → widgets → features → entities → shared
 | --- | --- | --- | --- |
 | `app` | CLI, bootstrap, lifecycle, window host, desktop D-Bus | `cli`, `config`, `desktop`, `ui`, `windows` | `cli`, `startup` |
 | `pages` | Top-level window workspaces | `workspace` (browser, picker, settings host) | `workspace` (session workspace, compact popup) |
-| `widgets` | Composable self-contained views | `settings`, `remote_browser`, `help` | `settings`, `history`, `help` |
+| `widgets` | Composable self-contained views | `settings`, `help` | `settings`, `history`, `help` |
 | `features` | User workflows & mutations | `file_operations`, `pick_files`, `connect_server` | `navigation`, `agent_auth`, `delete_session`, `workspace_launch` |
 | `entities` | Domain state, storage & protocol models | `file`, `location`, `preferences` | `agent`, `backend`, `session` |
 | `shared` | Domain-agnostic app utilities | `i18n`, `lib` (clipboard/selection), `ui` | `i18n`, `config`, `api`, `lib`, `ui`, `routes` |
@@ -110,21 +108,21 @@ app → pages → widgets → features → entities → shared
 
 `src/lib.rs` exposes six top-level modules:
 
-1. **`app`**: Provides the single GPUI extension trait `AppExt` (`cx.gds()` and `cx.gds_mut()`), exposing inherent accessors `tasks()`, `appearance()`, `i18n()`, and `ui()`. Application slices attach domain accessors (such as `preferences()`, `volumes()`, `clipboard()` in Files) via local extension traits on `Gds`.
-2. **`appearance`**: Owns `theme` (providers, semantic `Palette`, `Observer` hot-reload), `typography` (Fontconfig aliases and scaling), and layout `tokens`.
-3. **`service`**: Pure Rust / Tokio runtime services (`task_manager`, `desktop`, `remote`, `storage`, `terminal`, `file_inspection`, `logs`, `watch`). **Services never reference `ui` or GPUI types.**
-4. **`ui`**: Reusable anatomical GPUI components (`frame`, `sidebar`, `page`, `forms`, `feedback`, `interaction`, `terminal`, `logs`, `time`, `about`, `picker`, `drag`) and UI-side caches (`ui::file_inspection::Cache` deduplicating metadata and thumbnail requests).
+1. **`app`**: Provides `Gds::current()` and typed `tasks()`, `appearance()`, `i18n()`, and `ui()` accessors. `Gds::with` registers process-owned reactive work under the shell root. Window services and completion callbacks use their native window owner; no compatibility `Context` or `Entity` layer is retained.
+2. **`appearance`**: Owns `theme` (providers, semantic `Palette`, owner-bound hot reload), `typography` (Fontconfig aliases and scaling), and layout `tokens`.
+3. **`service`**: Pure Rust / Tokio runtime services (`task_manager`, `desktop`, `remote`, `storage`, `terminal`, `file_inspection`, `logs`, `watch`). **Services never reference `ui` or AntiWebUI types.**
+4. **`ui`**: Reusable anatomical AntiWebUI components (`frame`, `sidebar`, `page`, `forms`, `feedback`, `interaction`, `terminal`, `logs`, `time`, `about`) and UI-side caches (`ui::file_inspection::Cache` deduplicating metadata and thumbnail requests). Files owns its chooser workflow and uses native drag primitives.
 5. **`persistence`**: Atomic file replacement, lock files, and protection against clobbering read-only or declaratively managed symlinks.
-6. **`i18n`**: Fluent bundle loading and GPUI text helpers.
+6. **`i18n`**: Fluent bundle loading and context-free reactive text helpers.
 
 ### Execution & Shutdown Model
 
-GPUI's foreground/background executors own UI rendering and disposable view tasks. `service::task_manager::Supervisor` owns a dedicated multi-threaded Tokio runtime for all I/O. Services accept `Scope` handles to register cancellable or must-drain tasks; explicit quit closes native windows first, seals task admission, drains tracked cleanup, and only then exits GPUI. See [Task Ownership & Shutdown](development/task-manager.md).
+AntiWebUI owns rendering, signals and native reactive lifetimes. `service::task_manager::Supervisor` owns the multi-threaded Tokio runtime for application I/O. Services accept `Scope`s; `Task::on_complete` forwards results to native owner-bound channels without creating another executor. Closing a window cancels its scope and disposes its UI callbacks. After the native event loop exits, `Supervisor::shutdown` seals admission and drains tracked cleanup before dropping the runtime. Keep app-wide watchers under `Gds::with`, and never publish reactive changes while holding a workspace `RefCell` borrow.
 
 ## UIM, Translations & Shared Feedback
 
 - **Declarative UI (`gds-uim`)**: Construct trees with `el!` and `m!` using the `.Component::default` / `# id_expr` syntax (see [gds-uim grammar](https://github.com/GanDesktop/gds-uim/blob/90f5424edf6ba9c5ffaacc2b11cb5ffe24960519/docs/grammer.md) and [Component Composition](visual-language/composition.md)). Escape into `$(...)` only for field access, method chains, or arithmetic.
-- **Fluent i18n (`gds::i18n::t`)**: Store `.ftl` files under `i18n/assets/{en-US,zh-CN}/`. Use `t!(@cx, "key", count)` for immediate `SharedString` evaluation, or `cx.t!("key")` inside `el!` to borrow `cx` cleanly without consuming `&mut Context<T>`. Desktop `.desktop` files use POSIX locales (`zh_CN`) generated from `assets/<app>/desktop.toml`.
+- **Fluent i18n (`gds::i18n::t`)**: Store `.ftl` files under `i18n/assets/{en-US,zh-CN}/`. Native UI uses `t!("key", name = value)` or context-free `i18n::text` / `i18n::count`; reactive reads follow the installed catalogue. Desktop `.desktop` files use POSIX locales (`zh_CN`) generated from `assets/<app>/desktop.toml`.
 - **Notifications (`gds::ui::notifications`)**: Bind windows with `notifications::bind_window(window, cx)`, then emit `error` / `warning` / `info` / `success`, `Report` (with copyable details), or `Operation` (progress-to-result slot reuse).
 - **Dialogs (`DialogActions`)**: Modal confirmations use `DialogActions::default().primary_label(...).primary_icon(...)` (`Alt+A` / `Enter` confirm, `Alt+C` / `Esc` cancel; `.danger()` for destructive actions).
 - **Diagnostics (`--enable-logs`)**: Disabled by default with zero allocation overhead. Passing `--enable-logs` activates `service::logs` (up to 2,000 entries / ~2 MiB in-memory) and `ui::logs::Viewer` + the Tasks inspector via `Ctrl+Shift+L`. `RUST_LOG` filters stderr/collector verbosity without implicitly enabling the GUI viewer.
@@ -132,7 +130,7 @@ GPUI's foreground/background executors own UI rendering and disposable view task
 
 ## Release & Distribution Pipeline
 
-- **Cargo Release Profile**: `opt-level = 3`, `lto = false`, `codegen-units = 16`, `debug = 0`, `strip = "symbols"`, `incremental = false`, keeping `unwind` panic semantics for GPUI compatibility.
+- **Cargo Release Profile**: `opt-level = 3`, `lto = false`, `codegen-units = 16`, `debug = 0`, `strip = "symbols"`, `incremental = false`, keeping normal `unwind` panic semantics.
 - **Local Container Packaging**: Build native distro packages from the working tree with `just rpm [43|44] [dev|release]`, `just deb [debian|ubuntu] [trixie|noble|resolute] [dev|release]`, and `just arch [dev|release]`.
 - **Automated Tag Releases ([release.yml](../.github/workflows/release.yml))**: Pushing a `v*` tag matching `Cargo.toml` runs a **Draft-First** pipeline:
   1. `prepare` validates version parity, runs installer tests (`python3 -m unittest discover -s scripts/tests -v`), and creates a GitHub Draft Release.

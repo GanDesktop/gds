@@ -1,23 +1,18 @@
-//! Native outlined fields use the content surface, independently of border color.
+//! A labelled field with optional explanatory or validation content.
+mod search_choice;
+pub use search_choice::{SearchOption, search_choice};
 
-mod placeholder;
-pub use placeholder::placeholder;
-
-use crate::app::AppExt as _;
-use gpui_kit::component::{
-    input::{Input, InputState},
-    select::{Select, SelectDelegate, SelectItem, SelectState},
-};
-use gpui_kit::{App, Entity, Styled};
-
-pub fn input(state: &Entity<InputState>, cx: &App) -> Input {
-    Input::new(state).bg(cx.gds().appearance().theme().colors().content)
+use crate::ui::container::container_traits;
+use anti_webui::prelude::*;
+use gds_uim::el;
+pub struct Field {
+    base: Div,
 }
-
-pub fn select<D>(state: &Entity<SelectState<D>>, cx: &App) -> Select<D>
-where
-    D: SelectDelegate + 'static,
-    <D::Item as SelectItem>::Value: PartialEq + Clone,
-{
-    Select::new(state).bg(cx.gds().appearance().theme().colors().content)
+impl Default for Field {
+    fn default() -> Self {
+        Self {
+            base: el! { .div.{ flex; flex_col; gap: 6.0_f32; w_full } },
+        }
+    }
 }
+container_traits!(Field);
