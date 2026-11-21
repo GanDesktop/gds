@@ -1,22 +1,20 @@
-use crate::ui::container::container_traits;
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
+use zgui::prelude::*;
+use zgui::{component, view};
 
-#[derive(IntoElement)]
-pub struct NavItemDetails {
-    base: Div,
-}
-
-impl Default for NavItemDetails {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { w_full; min_w_0; } },
+#[component]
+pub fn NavItemDetails(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_navigation_stylesheets();
+    view! {
+        text(
+            class = "gds-nav-item__details",
+            class = class,
+            {..attrs}
+        ) {
+            {children.into_view_once()}
         }
-    }
-}
-container_traits!(NavItemDetails);
-impl RenderOnce for NavItemDetails {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

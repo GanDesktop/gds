@@ -1,30 +1,23 @@
 mod reset;
 
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
-pub use reset::SettingReset;
+pub use reset::{SettingReset, SettingResetProps};
 
 use super::super::CONTROL_GAP;
-use crate::ui::container::container_traits;
+use zgui::prelude::*;
+use zgui::{component, view};
 
 /// The row's control group, including optional reset actions.
-#[derive(IntoElement)]
-pub struct SettingActions {
-    base: Div,
-}
-
-impl Default for SettingActions {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex; flex_shrink_0; items_center; gap: CONTROL_GAP.px; } },
+#[component]
+pub fn SettingActions(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::super::install_settings_stylesheets();
+    let gap = format!("{CONTROL_GAP}px");
+    view! {
+        row(class = "gds-setting-actions", var:--gds-setting-gap = gap, class = class, {..attrs}) {
+            {children.into_view_once()}
         }
-    }
-}
-
-container_traits!(SettingActions);
-
-impl RenderOnce for SettingActions {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

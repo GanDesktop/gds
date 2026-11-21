@@ -5,14 +5,14 @@ pub struct Location {
     pub label: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub location: Location,
     pub hidden: bool,
 }
 
 /// One page of directories from the host's data source.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Page {
     pub location: Location,
     pub parent: Option<String>,
@@ -21,7 +21,7 @@ pub struct Page {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
     pub path: Option<String>,
     pub cursor: Option<String>,
@@ -41,6 +41,7 @@ pub(super) struct History {
     pub back: Vec<String>,
     pub forward: Vec<String>,
 }
+
 impl History {
     pub fn commit(&mut self, kind: Navigation, previous: Option<&str>, current: &str) {
         let Some(previous) = previous.filter(|path| *path != current) else {

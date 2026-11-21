@@ -1,22 +1,25 @@
-use super::*;
-use gds_uim::el;
-use gpui_kit::IntoElement;
+use zgui::prelude::*;
+use zgui::{component, view};
 
-/// A draggable background. Controls above it claim or stop their mouse presses.
-#[derive(Default, IntoElement)]
-pub struct WindowDragArea;
-
-impl RenderOnce for WindowDragArea {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        crate::ui::window::drag_bar_interactions(
-            el! {
-                .div {
-                    # "toolbar-drag-area"; size_full;
-                }
-            },
-            "toolbar-drag-area-drag-state",
-            window,
-            cx,
-        )
+/// Titlebar region initiating compositor window move/maximize on primary press and native window
+/// menu on secondary press while ignoring presses inside focusable child controls.
+#[component]
+pub fn WindowDragArea(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    #[prop(optional)] children: Option<Children>,
+) -> impl IntoView {
+    super::install_frame_stylesheets();
+    let window = zgui::prelude::try_use_window();
+    let drag_handler = crate::ui::window::drag_pointer_down_handler(window);
+    view! {
+        row(
+            class = "gds-window-drag-area",
+            class = class,
+            on:pointer_down = drag_handler,
+            {..attrs}
+        ) {
+            {children.map(Children::into_view_once)}
+        }
     }
 }

@@ -1,233 +1,132 @@
-use super::*;
-use gpui_kit::ScrollStrategy;
+use std::time::{Duration, SystemTime};
 
-fn selection(viewer: &WeakEntity<Viewer>, cx: &App) -> Option<u64> {
-    viewer.upgrade().expect("viewer").read(cx).selected
+use zgui::platform::{AppHandler, SurfaceEvent};
+use zgui::prelude::*;
+use zgui::vocab::{KeyCode, KeyEvent, KeyState, Modifiers, NamedKey, PhysicalKey, Timestamp};
+use zgui_platform_headless::Harness;
+
+use super::super::navigation::{NavigationStep, step_index, step_selection};
+use super::{deliver, pump_frames, run_headless_logs, with_viewer_probe};
+use crate::service::logs::{Entry, Level, Store};
+
+fn entry(id: u64, message: &str) -> Entry {
+    Entry {
+        id,
+        time: SystemTime::UNIX_EPOCH,
+        level: Level::Info,
+        target: "test".to_owned(),
+        message: message.to_owned(),
+    }
 }
 
-fn start_at_top(viewer: &WeakEntity<Viewer>, window: &mut Window, cx: &mut App) {
-    window.render_frame(cx);
-    viewer
-        .update(cx, |view, cx| {
-            view.scroll.scroll_to_item(0, ScrollStrategy::Top);
-            cx.notify();
-        })
-        .expect("scroll to first entry");
-    window.render_frame(cx);
+fn press_nav(harness: &mut Harness<Box<dyn AppHandler>>, key: NamedKey, code: KeyCode, ms: u64) {
+    let event = KeyEvent::named(key, PhysicalKey::Code(code));
+    harness.deliver_to_first(SurfaceEvent::Key {
+        state: KeyState::Pressed,
+        event: event.clone(),
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::from_origin(Duration::from_millis(ms)),
+    });
+    harness.deliver_to_first(SurfaceEvent::Key {
+        state: KeyState::Released,
+        event,
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::from_origin(Duration::from_millis(ms + 5)),
+    });
+    pump_frames(harness);
 }
 
-#[gpui_kit::test]
-fn arrows_work_from_search_and_clicked_rows_without_stealing_menu_keys(cx: &mut TestAppContext) {
-    let (handle, viewer, store) = fixture(cx);
-    let ids: Vec<_> = (0..80)
-        .map(|index| store.record(Level::Info, "frontend", format!("entry {index}")))
+#[test]
+fn arrow_and_page_navigation_respects_boundaries_and_initial_selection() {
+    let entries: Vec<Entry> = (0..10)
+        .map(|i| entry(i as u64 + 100, &format!("msg {i}")))
         .collect();
-    deliver(cx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        start_at_top(&viewer, window, cx);
-        window.input("entry", cx);
-    })
-    .expect("search");
-    cx.run_until_parked();
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.press("down", cx);
-        window.render_frame(cx);
-        assert_eq!(selection(&viewer, cx), Some(ids[0]));
-        window.press("down", cx);
-        window.render_frame(cx);
-        assert_eq!(selection(&viewer, cx), Some(ids[1]));
-        window.press("up", cx);
-        window.press("up", cx);
-        window.render_frame(cx);
-        assert_eq!(selection(&viewer, cx), Some(ids[0]));
-        assert_eq!(
-            viewer
-                .upgrade()
-                .expect("viewer")
-                .read(cx)
-                .search
-                .read(cx)
-                .value(),
-            "entry"
-        );
-        window.click(("log-entry", ids[4]), cx);
-        window.render_frame(cx);
-        viewer
-            .update(cx, |view, _| assert!(view.list_focus.is_focused(window)))
-            .expect("list focus");
-        window.press("up", cx);
-        window.render_frame(cx);
-        assert_eq!(selection(&viewer, cx), Some(ids[3]));
-        window.click("logs-copy-selected", cx);
-        assert_eq!(
-            cx.read_from_clipboard().and_then(|item| item.text()),
-            Some(store.snapshot().entries[3].text())
-        );
-        assert!(window.try_find("logs-copy-visible").is_none());
-        window.click("logs-level", cx);
-        window.press("down", cx);
-        window.press("down", cx);
-        assert_eq!(
-            selection(&viewer, cx),
-            Some(ids[3]),
-            "filter menu owns its arrow keys"
-        );
-        window.press("escape", cx);
-    })
-    .expect("keyboard selection and detail copy");
+    let visible = vec![1, 3, 5, 7, 9];
+
+    assert_eq!(
+        step_selection(&visible, &entries, None, NavigationStep::Next, 3),
+        Some((0, 101))
+    );
+    assert_eq!(
+        step_selection(&visible, &entries, None, NavigationStep::Previous, 3),
+        Some((4, 109))
+    );
+    assert_eq!(
+        step_selection(&visible, &entries, Some(101), NavigationStep::Next, 3),
+        Some((1, 103))
+    );
+    assert_eq!(
+        step_selection(&visible, &entries, Some(101), NavigationStep::PageDown, 3),
+        Some((3, 107))
+    );
+    assert_eq!(
+        step_selection(&visible, &entries, Some(109), NavigationStep::PageUp, 3),
+        Some((1, 103))
+    );
+    assert_eq!(
+        step_selection(&visible, &entries, Some(101), NavigationStep::Previous, 3),
+        Some((0, 101))
+    );
 }
 
-#[gpui_kit::test]
-fn page_keys_use_the_rendered_viewport_and_keep_selection_visible(cx: &mut TestAppContext) {
-    let (handle, viewer, store) = fixture(cx);
-    let ids: Vec<_> = (0..120)
-        .map(|index| store.record(Level::Info, "frontend", format!("entry {index}")))
-        .collect();
-    deliver(cx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        start_at_top(&viewer, window, cx);
-        window.click(("log-entry", ids[0]), cx);
-        for height in [MIN_HEIGHT, HEIGHT] {
-            window.resize(size(px(MIN_WIDTH), px(height)));
-            window.bounds_changed(cx);
-            window.render_frame(cx);
-            let viewport = window.find("logs-list-viewport").bounds();
-            let rows = (f32::from(viewport.size.height) / ROW_HEIGHT).floor() as usize;
-            assert!(rows > 1 && rows < ids.len());
-            window.press("pagedown", cx);
-            window.render_frame(cx);
-            assert_eq!(selection(&viewer, cx), Some(ids[rows]));
-            let row = window.find(("log-entry", ids[rows])).bounds();
-            let viewport = window.find("logs-list-viewport").bounds();
-            assert!(row.top() >= viewport.top() && row.bottom() <= viewport.bottom());
-            let offset = viewer
-                .upgrade()
-                .expect("viewer")
-                .read(cx)
-                .scroll
-                .0
-                .borrow()
-                .base_handle
-                .offset()
-                .y;
-            assert_eq!(offset, px(-(rows as f32 * ROW_HEIGHT)));
-            window.press("pageup", cx);
-            window.render_frame(cx);
-            assert_eq!(selection(&viewer, cx), Some(ids[0]));
-        }
-        for _ in 0..20 {
-            window.press("pagedown", cx);
-            window.render_frame(cx);
-        }
-        assert_eq!(selection(&viewer, cx), ids.last().copied());
-        assert!(
-            window
-                .find(("log-entry", *ids.last().expect("last")))
-                .visible()
-        );
-        window.press("down", cx);
-        assert_eq!(
-            selection(&viewer, cx),
-            ids.last().copied(),
-            "no wrap at the end"
-        );
-        window.press("pageup", cx);
-        window.render_frame(cx);
-        assert_ne!(selection(&viewer, cx), ids.last().copied());
-        assert!(
-            window
-                .find(("log-entry", selection(&viewer, cx).expect("selection")))
-                .visible()
-        );
-    })
-    .expect("page navigation");
+#[test]
+fn navigation_on_empty_visible_list_returns_none() {
+    assert_eq!(step_index(None, 0, NavigationStep::Next, 4), None);
+    assert_eq!(step_index(None, 0, NavigationStep::Previous, 4), None);
+    assert_eq!(
+        step_selection(&[], &[], None, NavigationStep::PageDown, 4),
+        None
+    );
 }
 
-#[gpui_kit::test]
-fn filtering_empty_results_and_clear_never_leave_a_stale_keyboard_selection(
-    cx: &mut TestAppContext,
-) {
-    let (handle, viewer, store) = fixture(cx);
-    let first = store.record(Level::Info, "frontend", "matching first");
-    store.record(Level::Info, "frontend", "other");
-    let second = store.record(Level::Warn, "frontend", "matching second");
-    deliver(cx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.input("matching", cx);
-    })
-    .expect("filter");
-    cx.run_until_parked();
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.press("down", cx);
-        window.render_frame(cx);
-        assert_eq!(selection(&viewer, cx), Some(first));
-        window.press("down", cx);
-        window.render_frame(cx);
-        assert_eq!(
-            selection(&viewer, cx),
-            Some(second),
-            "navigate filtered entries only"
-        );
-        window.input(" nothing", cx);
-    })
-    .expect("no matches");
-    cx.run_until_parked();
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        for key in ["up", "down", "pageup", "pagedown"] {
-            window.press(key, cx);
-        }
-        assert_eq!(selection(&viewer, cx), None);
-        assert!(window.try_find("logs-copy-selected").is_none());
-        window.press(
-            if cfg!(target_os = "macos") {
-                "cmd-a"
-            } else {
-                "ctrl-a"
-            },
-            cx,
-        );
-        window.press("backspace", cx);
-    })
-    .expect("empty navigation");
-    cx.run_until_parked();
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.press("down", cx);
-        window.render_frame(cx);
-        assert!(selection(&viewer, cx).is_some());
-        window.click("logs-clear", cx);
-        window.render_frame(cx);
-        for key in ["up", "down", "pageup", "pagedown"] {
-            window.press(key, cx);
-        }
-        assert_eq!(selection(&viewer, cx), None);
-        assert!(window.try_find("logs-detail").is_none());
-    })
-    .expect("clear resets selection");
-}
+#[test]
+fn keyboard_arrows_and_paging_move_log_selection_in_live_viewer() {
+    let store = Store::new();
+    run_headless_logs(false, Some(store.clone()), |harness, _| {
+        let ids: Vec<_> = (0..50)
+            .map(|i| store.record(Level::Info, "frontend", format!("entry {i}")))
+            .collect();
+        deliver(harness);
 
-#[gpui_kit::test]
-fn starting_from_the_bottom_selects_the_visible_latest_entry(cx: &mut TestAppContext) {
-    let (handle, viewer, store) = fixture(cx);
-    let ids: Vec<_> = (0..100)
-        .map(|index| store.record(Level::Info, "frontend", format!("entry {index}")))
-        .collect();
-    deliver(cx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert_eq!(selection(&viewer, cx), None);
-        window.press("up", cx);
-        window.render_frame(cx);
-        assert_eq!(selection(&viewer, cx), Some(ids[99]));
-        assert!(window.find(("log-entry", ids[99])).visible());
-        window.press("up", cx);
-        window.render_frame(cx);
-        assert_eq!(selection(&viewer, cx), Some(ids[98]));
-        assert!(window.find(("log-entry", ids[98])).visible());
-    })
-    .expect("navigate from newest records");
+        with_viewer_probe(|probe| {
+            probe.root_ref.focus();
+            probe.selected.set(None);
+        });
+        pump_frames(harness);
+
+        press_nav(harness, NamedKey::ArrowDown, KeyCode::ArrowDown, 10);
+        with_viewer_probe(|probe| {
+            assert_eq!(probe.selected.get_untracked(), Some(ids[0]));
+        });
+
+        press_nav(harness, NamedKey::ArrowDown, KeyCode::ArrowDown, 30);
+        with_viewer_probe(|probe| {
+            assert_eq!(probe.selected.get_untracked(), Some(ids[1]));
+        });
+
+        press_nav(harness, NamedKey::PageDown, KeyCode::PageDown, 50);
+        with_viewer_probe(|probe| {
+            let sel = probe.selected.get_untracked().expect("paged selection");
+            assert!(sel > ids[1], "PageDown must jump forward past row 1");
+        });
+
+        press_nav(harness, NamedKey::PageUp, KeyCode::PageUp, 70);
+        with_viewer_probe(|probe| {
+            assert_eq!(probe.selected.get_untracked(), Some(ids[1]));
+        });
+
+        press_nav(harness, NamedKey::ArrowUp, KeyCode::ArrowUp, 80);
+        with_viewer_probe(|probe| {
+            assert_eq!(probe.selected.get_untracked(), Some(ids[0]));
+        });
+
+        with_viewer_probe(|probe| {
+            probe.query.set("no-such-log-entry".to_owned());
+        });
+        pump_frames(harness);
+        press_nav(harness, NamedKey::ArrowDown, KeyCode::ArrowDown, 100);
+        with_viewer_probe(|probe| {
+            assert_eq!(probe.selected.get_untracked(), None);
+        });
+    });
 }

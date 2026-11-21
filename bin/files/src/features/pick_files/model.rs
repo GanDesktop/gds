@@ -35,7 +35,7 @@ impl From<Outcome> for ExitCode {
     }
 }
 
-/// Write-once handle carrying a picker session's [`Outcome`] across the GPUI event loop.
+/// Write-once handle carrying a picker session's [`Outcome`] across the `zgui` event loop.
 #[derive(Clone, Debug, Default)]
 pub struct OutcomeSlot(Arc<OnceLock<Outcome>>);
 
@@ -60,6 +60,8 @@ pub struct Options {
     pub read_only: bool,
     /// Select directories instead of regular files.
     pub directory: bool,
+    /// Accept regular files and directories in the internal upload chooser.
+    pub(crate) allow_mixed: bool,
     /// Allow multiple selections of the requested type.
     pub multiple: bool,
     pub portal: Option<chooser::Request>,
@@ -84,6 +86,7 @@ impl Options {
             filters: Self::normalize_filters(filters),
             read_only,
             directory: false,
+            allow_mixed: false,
             multiple: false,
             portal: None,
             outcome: None,
@@ -123,6 +126,7 @@ impl Options {
             filters,
             read_only: false,
             directory,
+            allow_mixed: false,
             multiple,
             portal: Some(request),
             outcome: None,
@@ -301,19 +305,13 @@ impl Filter {
         if self.mime_types.is_empty() {
             return false;
         }
-        static MIME: std::sync::LazyLock<xdg_mime::SharedMimeInfo> =
-            std::sync::LazyLock::new(xdg_mime::SharedMimeInfo::new);
-        if let Some(mime) = detected.and_then(|mime| mime.parse().ok()) {
-            return self
-                .mime_types
+        crate::entities::file::directory::matches_mime_filter(
+            name.as_os_str(),
+            detected,
+            self.mime_types
                 .iter()
-                .any(|expected| MIME.mime_type_subclass(&mime, expected));
-        }
-        let mut guess = MIME.guess_mime_type();
-        let guessed = guess.file_name(name.to_string_lossy().as_ref()).guess();
-        self.mime_types
-            .iter()
-            .any(|expected| MIME.mime_type_subclass(guessed.mime_type(), expected))
+                .map(mime_guess::mime::Mime::essence_str),
+        )
     }
 }
 

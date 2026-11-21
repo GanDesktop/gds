@@ -1,16 +1,32 @@
-use std::time::Duration;
+use zgui::reactive::{LocalStorage, Signal, prelude::*};
 
-use gpui_kit::{
-    App, Window,
-    base::motion::{self, Transition, TransitionId},
-};
+use crate::appearance::{motion, tokens};
 
-use super::SideBar;
+/// Application-controlled sidebar state shared across layout, shortcuts, and persistence.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SidebarState {
+    #[default]
+    Expanded,
+    Collapsed,
+}
 
-const DURATION: Duration = Duration::from_millis(160);
+impl SidebarState {
+    #[must_use]
+    pub const fn is_collapsed(self) -> bool {
+        matches!(self, Self::Collapsed)
+    }
 
-/// One host-owned sample shared by every part of the sidebar column.
-/// This is presentation only: selection, section state and scrolling stay with the host.
+    #[must_use]
+    pub const fn from_collapsed(collapsed: bool) -> Self {
+        if collapsed {
+            Self::Collapsed
+        } else {
+            Self::Expanded
+        }
+    }
+}
+
+/// Host-sampled sidebar reveal geometry shared across sidebar sections and navigation items.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SidebarPresentation {
     width: f32,
@@ -20,60 +36,116 @@ pub struct SidebarPresentation {
 impl Default for SidebarPresentation {
     fn default() -> Self {
         Self {
-            width: crate::appearance::tokens::SIDEBAR_WIDTH,
+            width: tokens::SIDEBAR_WIDTH,
             progress: 1.0,
         }
     }
 }
 
 impl SidebarPresentation {
+    #[must_use]
+    pub fn from_state(state: SidebarState) -> Self {
+        Self::from_collapsed(state.is_collapsed())
+    }
+
+    #[must_use]
+    pub fn from_collapsed(collapsed: bool) -> Self {
+        if collapsed {
+            Self {
+                width: tokens::COLLAPSED_SIDEBAR_WIDTH,
+                progress: 0.0,
+            }
+        } else {
+            Self::default()
+        }
+    }
+
+    #[must_use]
+    pub fn from_width(width: f32, expanded: f32, collapsed: f32) -> Self {
+        let lo = collapsed.min(expanded);
+        let hi = expanded.max(collapsed);
+        let width = if width.is_finite() {
+            width.clamp(lo, hi)
+        } else {
+            expanded
+        };
+        let span = expanded - collapsed;
+        let progress = if span.abs() <= f32::EPSILON {
+            1.0
+        } else {
+            ((width - collapsed) / span).clamp(0.0, 1.0)
+        };
+        Self { width, progress }
+    }
+
+    #[must_use]
     pub fn width(self) -> f32 {
         self.width
     }
 
-    /// Zero at the narrow endpoint, one at the expanded endpoint.
+    #[must_use]
     pub fn progress(self) -> f32 {
         self.progress
     }
 
-    /// Interpolate a local horizontal measurement using the column's single clock.
+    #[must_use]
+    pub fn is_collapsed(self) -> bool {
+        self.progress == 0.0
+    }
+
+    #[must_use]
+    pub fn collapsed(self) -> bool {
+        self.is_collapsed()
+    }
+
+    #[must_use]
     pub fn interpolate(self, expanded: f32, collapsed: f32) -> f32 {
         collapsed + (expanded - collapsed) * self.progress
     }
 
-    /// Only text fades; surfaces and main icons retain their original opacity.
+    #[must_use]
     pub fn label_opacity(self) -> f32 {
         self.progress
     }
 
-    /// A clipped or faded trailing control must not retain a hit target.
+    #[must_use]
+    pub fn actions_opacity(self) -> f32 {
+        self.progress
+    }
+
+    #[must_use]
     pub fn actions_visible(self) -> bool {
         self.progress == 1.0
     }
 }
 
-impl SideBar {
-    /// Sample once in the host's render, then pass the value to every column part.
-    /// A stable host-local ID preserves reversal continuity without another clock.
-    pub fn sample(
-        &self,
-        id: impl Into<TransitionId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> SidebarPresentation {
-        let width = motion::transition(
-            id,
-            self.target_width(),
-            Transition::new(DURATION),
-            window,
-            cx,
-        );
-        let span = self.expanded_width - self.collapsed_width;
-        let progress = if span == 0.0 {
-            1.0
-        } else {
-            ((width - self.collapsed_width) / span).clamp(0.0, 1.0)
-        };
-        SidebarPresentation { width, progress }
-    }
+/// Continuously interpolate [`SidebarPresentation`] over `160ms` (`ease-out cubic`) using standard
+/// GDS sidebar widths (`222px` expanded / `58px` collapsed).
+#[must_use]
+pub fn use_sidebar_presentation(
+    state: Signal<SidebarState, LocalStorage>,
+) -> Signal<SidebarPresentation, LocalStorage> {
+    use_sidebar_presentation_widths(
+        state,
+        tokens::SIDEBAR_WIDTH,
+        tokens::COLLAPSED_SIDEBAR_WIDTH,
+    )
+}
+
+/// Continuously interpolate [`SidebarPresentation`] over `160ms` (`ease-out cubic`) between custom
+/// `expanded_width` and `collapsed_width` endpoints.
+#[must_use]
+pub fn use_sidebar_presentation_widths(
+    state: Signal<SidebarState, LocalStorage>,
+    expanded_width: f32,
+    collapsed_width: f32,
+) -> Signal<SidebarPresentation, LocalStorage> {
+    let target = Signal::derive_local(move || match state.get() {
+        SidebarState::Expanded => expanded_width,
+        SidebarState::Collapsed => collapsed_width,
+    });
+    let width = motion::use_transition(target, motion::WORKSPACE_DURATION_MS);
+    Signal::derive_local(move || {
+        SidebarPresentation::from_width(width.get(), expanded_width, collapsed_width)
+    })
 }

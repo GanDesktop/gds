@@ -1,419 +1,568 @@
-use super::{DirectoryPicker, Entry, Loader, Location, Navigation, Page, Request};
-use crate::app::AppExt as _;
-use gpui_kit::{
-    AppContext, Context, Entity, IntoElement, Render, TestAppContext, Window, WindowHandle, div,
-    px, size,
-};
-use gpui_kit::{
-    component::{Root, WindowExt},
-    prelude::*,
-    test::TestWindowExt,
-};
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
-use tokio::sync::oneshot;
+use std::cell::{Cell, RefCell};
+use std::future::Future;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::time::Duration;
 
-struct Pending {
-    request: Request,
-    reply: oneshot::Sender<Result<Page, String>>,
+use zgui::app::app;
+use zgui::platform::{AppHandler, PlatformError, Surface, SurfaceEvent};
+use zgui::prelude::*;
+use zgui::reactive::{Mounted, RwSignal, UnsyncCallback, flush, install};
+use zgui::view;
+use zgui::vocab::{KeyEvent, KeyState, Modifiers, Timestamp};
+use zgui_platform_headless::Harness;
+
+use super::{
+    DirectoryPicker, DirectoryPickerDialogProps, DirectoryPickerView, DirectoryPickerViewProps,
+    Entry, Location, MIN_SCROLLABLE_ROWS, Page, ROW_HEIGHT, Request,
+};
+use crate::appearance::tokens::DataListStyle;
+
+#[derive(Default)]
+struct NullRenderer {
+    target: Option<zgui::render::RenderTarget>,
+    atlas: zgui::atlas::MemorySink,
 }
-struct Fixture {
-    picker: Entity<DirectoryPicker>,
-    window: WindowHandle<Root>,
-    requests: Rc<RefCell<VecDeque<Pending>>>,
-    accepted: Rc<RefCell<Vec<String>>>,
-}
-struct Host;
-impl Render for Host {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
+
+impl zgui::render::Renderer for NullRenderer {
+    fn capabilities(&self) -> zgui::render::RenderCapabilities {
+        zgui::render::RenderCapabilities::MINIMAL
+    }
+
+    fn configure(&mut self, target: zgui::render::RenderTarget) {
+        self.target = Some(target);
+    }
+
+    fn target(&self) -> Option<zgui::render::RenderTarget> {
+        self.target
+    }
+
+    fn draw(
+        &mut self,
+        _scene: &zgui::scene::Scene,
+        _damage: &zgui::bits::DamageSet,
+    ) -> zgui::render::FrameOutcome {
+        zgui::render::FrameOutcome::Presented(zgui::render::FrameStats {
+            vector_passes: 0,
+            draw_calls: 0,
+            damage_px: 0,
+            bytes_uploaded: 0,
+            memory: zgui::render::MemoryReport::ZERO,
+        })
+    }
+
+    fn register_external(
+        &mut self,
+        _texture: zgui::render::ExternalTexture,
+    ) -> zgui::render::TextureHandle {
+        zgui::render::TextureHandle(0)
+    }
+
+    fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
+
+    fn memory(&self) -> zgui::render::MemoryReport {
+        zgui::render::MemoryReport::ZERO
+    }
+
+    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
+        &mut self.atlas
     }
 }
-fn fixture(cx: &mut TestAppContext) -> Fixture {
-    cx.update(|cx| {
-        gpui_kit::init(cx);
-        cx.gds_mut()
-            .i18n()
-            .install(crate::i18n::Language::English)
-            .expect("catalog");
-        cx.gds_mut().ui().register_dialogs();
-    });
-    let requests = Rc::new(RefCell::new(VecDeque::new()));
-    let queued = requests.clone();
-    let loader: Loader = Rc::new(move |request| {
-        let (reply, receive) = oneshot::channel();
-        queued.borrow_mut().push_back(Pending { request, reply });
-        Box::pin(async move { receive.await.expect("source response") })
-    });
-    let accepted = Rc::new(RefCell::new(Vec::new()));
-    let mut picker = None;
-    let window = cx.open_window(size(px(720.), px(640.)), |window, cx| {
-        let view = cx.new(|cx| DirectoryPicker::new(loader, None, window, cx));
-        picker = Some(view);
-        Root::new(cx.new(|_| Host), window, cx)
-    });
-    let picker = picker.expect("picker");
-    let content = picker.clone();
-    let choices = accepted.clone();
-    cx.update_window(window.into(), |_, window, cx| {
-        window.open_alert_dialog(cx, move |dialog, _, cx| {
-            let confirm = content.clone();
-            let cancel = content.clone();
-            let choices = choices.clone();
-            dialog
-                .confirm()
-                .width(px(640.))
-                .title("Choose folder")
-                .footer(
-                    crate::ui::DialogActions::default()
-                        .primary_disabled(content.read(cx).selected_path(cx).is_none()),
-                )
-                .child(content.clone())
-                .on_ok(move |_, _, cx| {
-                    if let Some(path) = confirm.read(cx).selected_path(cx) {
-                        choices.borrow_mut().push(path);
-                        true
-                    } else {
-                        false
-                    }
-                })
-                .on_close(move |_, window, cx| {
-                    cancel.update(cx, |picker, cx| picker.cancel_loading(window, cx))
-                })
-        });
-    })
-    .expect("dialog");
-    Fixture {
-        picker,
-        window,
-        requests,
-        accepted,
-    }
+
+struct PendingReply {
+    send: Option<tokio::sync::oneshot::Sender<Result<Page, String>>>,
 }
-fn page(path: &str, names: &[&str]) -> Page {
+
+fn controlled_loader() -> (super::Loader, Rc<RefCell<Vec<(Request, PendingReply)>>>) {
+    let queue: Rc<RefCell<Vec<(Request, PendingReply)>>> = Rc::new(RefCell::new(Vec::new()));
+    let q_clone = Rc::clone(&queue);
+    let loader: super::Loader = Rc::new(
+        move |req: Request| -> Pin<Box<dyn Future<Output = Result<Page, String>>>> {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            q_clone
+                .borrow_mut()
+                .push((req, PendingReply { send: Some(tx) }));
+            Box::pin(async move {
+                match rx.await {
+                    Ok(res) => res,
+                    Err(_) => Err("cancelled".to_owned()),
+                }
+            })
+        },
+    );
+    (loader, queue)
+}
+
+fn make_page(
+    path: &str,
+    parent: Option<&str>,
+    names: &[(&str, bool)],
+    next_cursor: Option<&str>,
+) -> Page {
     Page {
         location: Location {
-            path: path.into(),
-            label: path.rsplit('/').next().unwrap_or("/").into(),
+            path: path.to_owned(),
+            label: path.rsplit('/').next().unwrap_or(path).to_owned(),
         },
-        parent: Some("/".into()),
-        ancestors: vec![],
+        parent: parent.map(str::to_owned),
+        ancestors: parent
+            .map(|p| {
+                vec![Location {
+                    path: p.to_owned(),
+                    label: "root".to_owned(),
+                }]
+            })
+            .unwrap_or_default(),
         entries: names
             .iter()
-            .map(|name| Entry {
+            .map(|(name, hidden)| Entry {
                 location: Location {
                     path: format!("{path}/{name}"),
-                    label: (*name).into(),
+                    label: (*name).to_owned(),
                 },
-                hidden: name.starts_with('.'),
+                hidden: *hidden,
             })
             .collect(),
-        next_cursor: None,
+        next_cursor: next_cursor.map(str::to_owned),
     }
 }
-fn reply(f: &Fixture, value: Result<Page, String>, cx: &mut TestAppContext) {
-    f.requests
-        .borrow_mut()
-        .pop_front()
-        .expect("request")
-        .reply
-        .send(value)
-        .expect("active request");
-    cx.run_until_parked();
-    cx.update_window(f.window.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.simulate_next_frame(cx);
-    })
-    .expect("frame");
-    cx.run_until_parked();
+
+#[test]
+fn directory_picker_constants_and_types_match_data_list_spec() {
+    let _ = (DirectoryPicker::new, DirectoryPickerView);
+    assert_eq!(ROW_HEIGHT, DataListStyle::ROW_HEIGHT);
+    assert_eq!(ROW_HEIGHT, 40.0);
+    assert_eq!(MIN_SCROLLABLE_ROWS, 20);
 }
 
-#[gpui_kit::test]
-fn navigation_keeps_history_and_cancellation_discards_in_flight_results(cx: &mut TestAppContext) {
-    let f = fixture(cx);
-    reply(&f, Ok(page("/home", &["one", "two"])), cx);
-    cx.update_window(f.window.into(), |_, window, cx| {
-        f.picker.update(cx, |p, cx| {
-            p.navigate(Some("/slow".into()), Navigation::Visit, window, cx)
+#[test]
+fn navigation_history_label_filter_and_acceptance_guards_work_end_to_end() {
+    install().ok();
+    let scope = Mounted::new();
+    scope.with(|| {
+        let (loader, pending) = controlled_loader();
+        let picker = DirectoryPicker::with_path(loader, "/remote");
+        flush();
+
+        assert!(picker.is_loading().get_untracked());
+        assert_eq!(
+            picker
+                .pending_request()
+                .get_untracked()
+                .and_then(|r| r.path)
+                .as_deref(),
+            Some("/remote")
+        );
+        // Pending load must never be accepted.
+        assert_eq!(picker.selected_path(), None);
+
+        let (_, mut reply) = pending.borrow_mut().remove(0);
+        reply
+            .send
+            .take()
+            .expect("sender")
+            .send(Ok(make_page(
+                "/remote",
+                Some("/"),
+                &[
+                    ("Documents", false),
+                    ("Downloads", false),
+                    (".config", true),
+                ],
+                None,
+            )))
+            .ok();
+        flush();
+
+        assert!(!picker.is_loading().get_untracked());
+        assert_eq!(picker.current_path().as_deref(), Some("/remote"));
+        assert_eq!(picker.selected_path().as_deref(), Some("/remote"));
+        assert_eq!(picker.rows().get_untracked().len(), 2);
+
+        // Filtering matches strictly against `location.label`, never parent segments in `location.path`.
+        picker.set_filter("remote");
+        assert_eq!(
+            picker.rows().get_untracked().len(),
+            0,
+            "parent path segment must not match child labels"
+        );
+
+        picker.toggle_hidden();
+        picker.set_filter("conf");
+        assert_eq!(picker.rows().get_untracked().len(), 1);
+        picker.select_row(0);
+        assert_eq!(picker.selected_path().as_deref(), Some("/remote/.config"));
+
+        // Unsubmitted location editing disables acceptance until applied or cancelled.
+        picker.begin_edit_location();
+        assert_eq!(picker.selected_path(), None);
+        picker.cancel_edit_location();
+        assert_eq!(picker.selected_path().as_deref(), Some("/remote/.config"));
+
+        // Navigating to a failing path disables acceptance; refresh retries the failed target.
+        picker.navigate("/remote/Documents");
+        flush();
+        assert_eq!(picker.selected_path(), None);
+        let (_, mut fail_reply) = pending.borrow_mut().remove(0);
+        fail_reply
+            .send
+            .take()
+            .expect("sender")
+            .send(Err("permission denied".to_owned()))
+            .ok();
+        flush();
+        assert_eq!(picker.selected_path(), None);
+        assert_eq!(
+            picker.error().get_untracked().as_deref(),
+            Some("permission denied")
+        );
+
+        picker.refresh();
+        flush();
+        let (retry_req, mut ok_reply) = pending.borrow_mut().remove(0);
+        assert_eq!(retry_req.path.as_deref(), Some("/remote/Documents"));
+        ok_reply
+            .send
+            .take()
+            .expect("sender")
+            .send(Ok(make_page(
+                "/remote/Documents",
+                Some("/remote"),
+                &[],
+                None,
+            )))
+            .ok();
+        flush();
+
+        assert!(picker.can_go_back().get_untracked());
+        assert!(!picker.can_go_forward().get_untracked());
+        assert_eq!(picker.selected_path().as_deref(), Some("/remote/Documents"));
+
+        picker.back();
+        flush();
+        let (req, mut reply_back) = pending.borrow_mut().remove(0);
+        assert_eq!(req.path.as_deref(), Some("/remote"));
+        reply_back
+            .send
+            .take()
+            .expect("sender")
+            .send(Ok(make_page(
+                "/remote",
+                Some("/"),
+                &[("Documents", false)],
+                None,
+            )))
+            .ok();
+        flush();
+
+        assert!(!picker.can_go_back().get_untracked());
+        assert!(picker.can_go_forward().get_untracked());
+    });
+    scope.unmount();
+}
+
+#[test]
+fn stale_async_load_is_cancelled_when_user_navigates_away() {
+    install().ok();
+    let scope = Mounted::new();
+    scope.with(|| {
+        let (loader, pending) = controlled_loader();
+        let picker = DirectoryPicker::with_path(loader, "/slow");
+        flush();
+
+        let (_, mut slow_reply) = pending.borrow_mut().remove(0);
+        picker.navigate("/fast");
+        flush();
+
+        assert!(slow_reply.send.take().expect("sender").is_closed());
+        let (req, mut fast_reply) = pending.borrow_mut().remove(0);
+        assert_eq!(req.path.as_deref(), Some("/fast"));
+        fast_reply
+            .send
+            .take()
+            .expect("sender")
+            .send(Ok(make_page("/fast", Some("/"), &[("Work", false)], None)))
+            .ok();
+        flush();
+
+        assert_eq!(picker.current_path().as_deref(), Some("/fast"));
+    });
+    scope.unmount();
+}
+
+#[test]
+fn pagination_prefetches_while_below_min_scrollable_rows_and_stops_at_threshold() {
+    install().ok();
+    let scope = Mounted::new();
+    scope.with(|| {
+        let calls = Rc::new(Cell::new(0));
+        let calls_ref = Rc::clone(&calls);
+        let loader: super::Loader = Rc::new(move |req: Request| {
+            let count = calls_ref.get() + 1;
+            calls_ref.set(count);
+            Box::pin(async move {
+                match req.cursor.as_deref() {
+                    None => {
+                        let initial: Vec<(String, bool)> =
+                            (0..8).map(|i| (format!("a-{i:02}"), false)).collect();
+                        let refs: Vec<(&str, bool)> =
+                            initial.iter().map(|(s, h)| (s.as_str(), *h)).collect();
+                        Ok(make_page("/root", None, &refs, Some("c2")))
+                    }
+                    Some("c2") => {
+                        let extra: Vec<(String, bool)> =
+                            (0..15).map(|i| (format!("b-{i:02}"), false)).collect();
+                        let refs: Vec<(&str, bool)> =
+                            extra.iter().map(|(s, h)| (s.as_str(), *h)).collect();
+                        Ok(make_page("/root", None, &refs, Some("c3")))
+                    }
+                    _ => Ok(make_page("/root", None, &[("c-00", false)], None)),
+                }
+            })
         });
-        assert!(f.picker.read(cx).selected_path(cx).is_none());
-        f.picker.update(cx, |p, cx| {
-            p.navigate(Some("/new".into()), Navigation::Visit, window, cx)
-        });
-    })
-    .unwrap();
-    cx.run_until_parked();
-    let stale = f.requests.borrow_mut().pop_front().unwrap();
-    assert!(stale.reply.send(Ok(page("/slow", &[]))).is_err());
-    reply(&f, Ok(page("/new", &[])), cx);
-    cx.update_window(f.window.into(), |_, window, cx| {
-        assert_eq!(f.picker.read(cx).history.back, ["/home"]);
-        f.picker.update(cx, |p, cx| p.back(window, cx));
-    })
-    .unwrap();
-    assert_eq!(
-        f.requests.borrow().front().unwrap().request.path.as_deref(),
-        Some("/home")
-    );
-    reply(&f, Err("permission denied".into()), cx);
-    cx.update_window(f.window.into(), |_, window, cx| {
+
+        let picker = DirectoryPicker::with_path(loader, "/root");
+        for _ in 0..8 {
+            flush();
+        }
+
+        assert_eq!(picker.rows().get_untracked().len(), 23);
+        assert!(picker.rows().get_untracked().len() >= MIN_SCROLLABLE_ROWS);
         assert_eq!(
-            f.picker.read(cx).page.as_ref().unwrap().location.path,
-            "/new"
-        );
-        assert_eq!(f.picker.read(cx).history.back, ["/home"]);
-        assert!(f.picker.read(cx).selected_path(cx).is_none());
-        f.picker.update(cx, |p, cx| p.refresh(window, cx));
-    })
-    .unwrap();
-    reply(&f, Ok(page("/home", &["one"])), cx);
-    cx.update(|cx| {
-        assert!(f.picker.read(cx).history.back.is_empty());
-        assert_eq!(f.picker.read(cx).history.forward, ["/new"]);
-    });
-}
-
-#[gpui_kit::test]
-fn keyboard_selection_enters_a_folder_and_decision_footer_stays_available(cx: &mut TestAppContext) {
-    let f = fixture(cx);
-    reply(&f, Ok(page("/home", &["one", "two", ".hidden"])), cx);
-    cx.update_window(f.window.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert_eq!(f.picker.read(cx).table.read(cx).delegate().rows.len(), 2);
-        window.press("down", cx);
-        window.render_frame(cx);
-        assert_eq!(
-            f.picker.read(cx).selected_path(cx).as_deref(),
-            Some("/home/one")
-        );
-        assert!(window.find("dialog-confirm").visible());
-        assert!(window.find("dialog-cancel").visible());
-        window.press("enter", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert!(
-        f.accepted.borrow().is_empty(),
-        "Enter on the list navigates, not accepts"
-    );
-    assert_eq!(
-        f.requests.borrow().front().unwrap().request.path.as_deref(),
-        Some("/home/one")
-    );
-    reply(&f, Ok(page("/home/one", &[])), cx);
-    cx.update_window(f.window.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.press("ctrl-l", cx);
-        window.render_frame(cx);
-        window.press("ctrl-a", cx);
-        window.input("/typed", cx);
-        window.press("enter", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert!(f.accepted.borrow().is_empty());
-    assert_eq!(
-        f.requests.borrow().front().unwrap().request.path.as_deref(),
-        Some("/typed")
-    );
-    reply(&f, Ok(page("/typed", &[])), cx);
-    cx.update_window(f.window.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.click("dialog-confirm", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert_eq!(*f.accepted.borrow(), ["/typed"]);
-}
-
-#[gpui_kit::test]
-fn pagination_filtering_and_hidden_folders_preserve_source_paths(cx: &mut TestAppContext) {
-    let f = fixture(cx);
-    let mut first = page("/remote", &["visible", ".secret"]);
-    first.next_cursor = Some("next".into());
-    reply(&f, Ok(first), cx);
-    assert_eq!(
-        f.requests
-            .borrow()
-            .front()
-            .unwrap()
-            .request
-            .cursor
-            .as_deref(),
-        Some("next")
-    );
-    reply(&f, Ok(page("/remote", &["later"])), cx);
-    cx.update_window(f.window.into(), |_, window, cx| {
-        f.picker.update(cx, |p, cx| p.toggle_hidden(window, cx));
-        assert_eq!(f.picker.read(cx).table.read(cx).delegate().rows.len(), 3);
-        window.press("ctrl-f", cx);
-        window.render_frame(cx);
-        window.input("later", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(f.window.into(), |_, window, cx| {
-        let p = f.picker.read(cx);
-        assert_eq!(p.table.read(cx).delegate().rows.len(), 1);
-        p.table
-            .clone()
-            .update(cx, |table, cx| table.set_selected_row(0, cx));
-        assert_eq!(
-            f.picker.read(cx).selected_path(cx).as_deref(),
-            Some("/remote/later")
-        );
-        window.render_frame(cx);
-        window.press("escape", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert!(f.accepted.borrow().is_empty());
-}
-
-fn prefixed_names(prefix: &str, count: usize) -> Vec<String> {
-    (0..count).map(|i| format!("{prefix}-{i:02}")).collect()
-}
-
-#[gpui_kit::test]
-fn filter_stops_prefetching_once_enough_matching_rows_are_loaded(cx: &mut TestAppContext) {
-    let threshold = super::view::MIN_SCROLLABLE_ROWS;
-
-    // When filtering already yields >= MIN_SCROLLABLE_ROWS rows, no extra page is fetched.
-    let f = fixture(cx);
-    let mut names = prefixed_names("match", threshold);
-    names.extend(prefixed_names("other", 4));
-    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let mut first = page("/remote", &refs);
-    first.next_cursor = Some("page-2".into());
-    reply(&f, Ok(first), cx);
-    assert!(f.requests.borrow().is_empty());
-
-    cx.update_window(f.window.into(), |_, window, cx| {
-        window.press("ctrl-f", cx);
-        window.render_frame(cx);
-        window.input("match", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update(|cx| {
-        assert_eq!(
-            f.picker.read(cx).table.read(cx).delegate().rows.len(),
-            threshold
+            calls.get(),
+            2,
+            "prefetch must stop once >= MIN_SCROLLABLE_ROWS (20) rows are loaded without draining page 3"
         );
     });
-    assert!(
-        f.requests.borrow().is_empty(),
-        "non-empty filter must not drain later pages when threshold rows already match"
-    );
-
-    // When filtering drops visible rows below threshold, prefetch fetches only until threshold is met.
-    let f2 = fixture(cx);
-    let mut page1_names = prefixed_names("rare", 5);
-    page1_names.extend(prefixed_names("common", threshold));
-    let page1_refs: Vec<&str> = page1_names.iter().map(String::as_str).collect();
-    let mut page1 = page("/remote", &page1_refs);
-    page1.next_cursor = Some("page-2".into());
-    reply(&f2, Ok(page1), cx);
-    assert!(f2.requests.borrow().is_empty());
-
-    cx.update_window(f2.window.into(), |_, window, cx| {
-        window.press("ctrl-f", cx);
-        window.render_frame(cx);
-        window.input("rare", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update(|cx| {
-        assert_eq!(f2.picker.read(cx).table.read(cx).delegate().rows.len(), 5);
-    });
-    assert_eq!(
-        f2.requests
-            .borrow()
-            .front()
-            .unwrap()
-            .request
-            .cursor
-            .as_deref(),
-        Some("page-2")
-    );
-
-    let page2_names = prefixed_names("rare-next", threshold);
-    let page2_refs: Vec<&str> = page2_names.iter().map(String::as_str).collect();
-    let mut page2 = page("/remote", &page2_refs);
-    page2.next_cursor = Some("page-3".into());
-    reply(&f2, Ok(page2), cx);
-    cx.update_window(f2.window.into(), |_, _, cx| {
-        assert_eq!(
-            f2.picker.read(cx).table.read(cx).delegate().rows.len(),
-            5 + threshold
-        );
-    })
-    .unwrap();
-    assert!(
-        f2.requests.borrow().is_empty(),
-        "applying page 2 with non-empty filter must stop once >= MIN_SCROLLABLE_ROWS rows match"
-    );
+    scope.unmount();
 }
 
-#[gpui_kit::test]
-fn toggle_hidden_only_prefetches_when_visible_rows_drop_below_threshold(cx: &mut TestAppContext) {
-    let threshold = super::view::MIN_SCROLLABLE_ROWS;
+#[test]
+fn directory_picker_dialog_handles_alt_a_confirm_and_alt_c_cancel() {
+    let selected_out: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let cancelled = Rc::new(Cell::new(0usize));
+    let open_slot: Rc<RefCell<Option<RwSignal<bool, zgui::reactive::LocalStorage>>>> =
+        Rc::new(RefCell::new(None));
+    let picker_slot: Rc<RefCell<Option<DirectoryPicker>>> = Rc::new(RefCell::new(None));
 
-    // Toggling hidden when visible rows already meet threshold does not fetch another page.
-    let f = fixture(cx);
-    let mut names = prefixed_names("dir", threshold);
-    names.extend(prefixed_names(".hid", 4));
-    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let mut first = page("/remote", &refs);
-    first.next_cursor = Some("page-2".into());
-    reply(&f, Ok(first), cx);
-    assert!(f.requests.borrow().is_empty());
+    let sel_for_view = Rc::clone(&selected_out);
+    let cancel_for_view = Rc::clone(&cancelled);
+    let open_for_view = Rc::clone(&open_slot);
+    let picker_for_view = Rc::clone(&picker_slot);
 
-    cx.update_window(f.window.into(), |_, window, cx| {
-        f.picker.update(cx, |p, cx| p.toggle_hidden(window, cx));
-        assert_eq!(
-            f.picker.read(cx).table.read(cx).delegate().rows.len(),
-            threshold + 4
-        );
-        assert!(f.requests.borrow().is_empty());
+    let handler = app()
+        .with_title("picker-dialog-test")
+        .with_application_id("dev.gds.PickerDialogTest")
+        .with_size(800.0, 640.0)
+        .with_stylesheet(":root { display: flex; width: 100%; height: 100%; }")
+        .with_renderer(Box::new(
+            move |_surface: &std::sync::Arc<dyn Surface>, target: zgui::render::RenderTarget| {
+                let mut renderer = NullRenderer::default();
+                zgui::render::Renderer::configure(&mut renderer, target);
+                Ok::<_, zgui::Error>(Box::new(renderer) as Box<dyn zgui::render::Renderer>)
+            },
+        ))
+        .into_handler(move || {
+            let loader: super::Loader = Rc::new(|req: Request| {
+                let path = req.path.unwrap_or_else(|| "/srv".to_owned());
+                Box::pin(async move {
+                    Ok(make_page(
+                        &path,
+                        Some("/"),
+                        &[("projects", false), (".secret", true)],
+                        None,
+                    ))
+                })
+            });
+            let picker = DirectoryPicker::with_path(loader, "/srv");
+            let open = RwSignal::new_local(true);
+            *open_for_view.borrow_mut() = Some(open);
+            *picker_for_view.borrow_mut() = Some(picker.clone());
 
-        f.picker.update(cx, |p, cx| p.toggle_hidden(window, cx));
-        assert_eq!(
-            f.picker.read(cx).table.read(cx).delegate().rows.len(),
-            threshold
-        );
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert!(f.requests.borrow().is_empty());
+            let sel = Rc::clone(&sel_for_view);
+            let can = Rc::clone(&cancel_for_view);
+            view! {
+                DirectoryPickerDialog(
+                    open = open,
+                    picker = picker,
+                    on_select = UnsyncCallback::new(move |loc: Location| {
+                        sel.borrow_mut().push(loc.path);
+                    }),
+                    on_cancel = UnsyncCallback::new(move |()| {
+                        can.set(can.get() + 1);
+                    }),
+                )
+            }
+        })
+        .expect("build headless directory picker dialog test");
 
-    // Toggling hidden off when visible rows drop below threshold triggers load_more.
-    let f2 = fixture(cx);
-    cx.update_window(f2.window.into(), |_, window, cx| {
-        f2.picker.update(cx, |p, cx| p.toggle_hidden(window, cx));
-    })
-    .unwrap();
-    let mut mostly_hidden = prefixed_names("dir", 5);
-    mostly_hidden.extend(prefixed_names(".hid", threshold));
-    let refs2: Vec<&str> = mostly_hidden.iter().map(String::as_str).collect();
-    let mut page1 = page("/remote", &refs2);
-    page1.next_cursor = Some("page-2".into());
-    reply(&f2, Ok(page1), cx);
-    assert!(f2.requests.borrow().is_empty());
+    handler
+        .drive(|app| -> Result<(), PlatformError> {
+            let mut harness: Harness<Box<dyn AppHandler>> = Harness::new(app);
+            for _ in 0..6 {
+                harness.pump();
+            }
+            harness.deliver_to_first(SurfaceEvent::Focused(true));
+            harness.pump();
 
-    cx.update_window(f2.window.into(), |_, window, cx| {
-        f2.picker.update(cx, |p, cx| p.toggle_hidden(window, cx));
-        assert_eq!(f2.picker.read(cx).table.read(cx).delegate().rows.len(), 5);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert_eq!(
-        f2.requests
-            .borrow()
-            .front()
-            .unwrap()
-            .request
-            .cursor
-            .as_deref(),
-        Some("page-2")
-    );
+            let open = open_slot.borrow().expect("open signal");
+            let picker = picker_slot.borrow().clone().expect("picker instance");
+            picker.select_row(0);
+            harness.pump();
+
+            // Alt+A confirms `/srv/projects`.
+            let alt_a = KeyEvent::character("a");
+            harness.deliver_to_first(SurfaceEvent::Key {
+                state: KeyState::Pressed,
+                event: alt_a.clone(),
+                modifiers: Modifiers::ALT,
+                timestamp: Timestamp::from_origin(Duration::from_millis(10)),
+            });
+            harness.deliver_to_first(SurfaceEvent::Key {
+                state: KeyState::Released,
+                event: alt_a,
+                modifiers: Modifiers::ALT,
+                timestamp: Timestamp::from_origin(Duration::from_millis(15)),
+            });
+            for _ in 0..4 {
+                harness.pump();
+            }
+            assert!(!open.get_untracked());
+            assert_eq!(*selected_out.borrow(), vec!["/srv/projects".to_owned()]);
+
+            // Re-open and cancel via Alt+C.
+            open.set(true);
+            for _ in 0..4 {
+                harness.pump();
+            }
+            let alt_c = KeyEvent::character("c");
+            harness.deliver_to_first(SurfaceEvent::Key {
+                state: KeyState::Pressed,
+                event: alt_c.clone(),
+                modifiers: Modifiers::ALT,
+                timestamp: Timestamp::from_origin(Duration::from_millis(30)),
+            });
+            harness.deliver_to_first(SurfaceEvent::Key {
+                state: KeyState::Released,
+                event: alt_c,
+                modifiers: Modifiers::ALT,
+                timestamp: Timestamp::from_origin(Duration::from_millis(35)),
+            });
+            for _ in 0..4 {
+                harness.pump();
+            }
+            assert!(!open.get_untracked());
+            assert_eq!(cancelled.get(), 1);
+
+            harness.shut_down();
+            Ok(())
+        })
+        .expect("drive headless directory picker dialog test");
+}
+
+#[test]
+fn directory_picker_row_pill_measures_thirty_six_px_inside_forty_px_virtual_slot() {
+    use std::collections::{HashMap, HashSet};
+    use zgui::geom::{DevicePx, Size};
+    use zgui::vocab::Role;
+
+    let handler = app()
+        .with_title("picker-row-height-test")
+        .with_application_id("dev.gds.PickerRowHeightTest")
+        .with_size(640.0, 480.0)
+        .with_stylesheet(":root { display: flex; width: 100%; height: 100%; }")
+        .with_renderer(Box::new(
+            move |_surface: &std::sync::Arc<dyn Surface>, target: zgui::render::RenderTarget| {
+                let mut renderer = NullRenderer::default();
+                zgui::render::Renderer::configure(&mut renderer, target);
+                Ok::<_, zgui::Error>(Box::new(renderer) as Box<dyn zgui::render::Renderer>)
+            },
+        ))
+        .into_handler(move || {
+            let loader: super::Loader = Rc::new(|req: Request| {
+                let path = req.path.unwrap_or_else(|| "/srv".to_owned());
+                Box::pin(async move {
+                    Ok(make_page(
+                        &path,
+                        Some("/"),
+                        &[("assets", false), ("backups", false)],
+                        None,
+                    ))
+                })
+            });
+            let picker = DirectoryPicker::with_path(loader, "/srv");
+            picker.select_row(0);
+            view! {
+                DirectoryPickerView(picker = picker)
+            }
+        })
+        .expect("build headless directory picker row height test");
+
+    handler
+        .drive(|app| -> Result<(), PlatformError> {
+            let mut harness: Harness<Box<dyn AppHandler>> = Harness::new(app);
+            if let Some(offscreen) = harness.platform().offscreens().first() {
+                offscreen.set_a11y_listener(true);
+            }
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(640.0),
+                DevicePx(480.0),
+            )));
+            harness.settle(12);
+
+            let offscreen = harness
+                .platform()
+                .offscreens()
+                .first()
+                .cloned()
+                .expect("primary offscreen");
+            let mut nodes = HashMap::new();
+            let mut root = None;
+            for update in offscreen.a11y_log() {
+                if let Some(tree) = update.tree {
+                    root = Some(tree.root);
+                }
+                for (id, node) in update.nodes {
+                    nodes.insert(id, node);
+                }
+            }
+            let root_id = root.expect("accessibility root");
+            let mut stack = vec![root_id];
+            let mut seen = HashSet::new();
+            let mut slot_heights = Vec::new();
+            let mut pill_heights = Vec::new();
+            while let Some(id) = stack.pop() {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let Some(node) = nodes.get(&id) else {
+                    continue;
+                };
+                if node.role() == Role::ListItem
+                    && let Some(rect) = node.bounds()
+                {
+                    let h = rect.y1 - rect.y0;
+                    if node.label() == Some("assets") {
+                        pill_heights.push(h);
+                    } else if node.label().is_none() {
+                        slot_heights.push(h);
+                    }
+                }
+                for &child in node.children().iter().rev() {
+                    stack.push(child);
+                }
+            }
+            assert!(
+                slot_heights.iter().any(|h| (*h - 40.0).abs() < 0.5),
+                "expected 40px VirtualList row slot, got {slot_heights:?}"
+            );
+            assert!(
+                pill_heights.iter().any(|h| (*h - 36.0).abs() < 0.5),
+                "expected 36px .gds-picker-row selection pill height, got {pill_heights:?}"
+            );
+
+            harness.shut_down();
+            Ok(())
+        })
+        .expect("drive headless directory picker row height test");
 }

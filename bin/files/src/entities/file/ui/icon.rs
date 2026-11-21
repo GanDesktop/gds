@@ -7,25 +7,12 @@
 
 use std::{path::Path, sync::OnceLock};
 
-use directories::UserDirs;
-use gds_uim::{component, el};
-use gpui_kit::IntoElement;
-use gpui_kit::{
-    assets::IconName,
-    component::{ActiveTheme, Icon},
-    prelude::*,
-    *,
-};
+use directories::{BaseDirs, UserDirs};
+use gds::ui::IconName;
 
 use crate::entities::file::directory::{
     ContentCategory, ContentType, Entry, EntryKind, LinkTarget,
 };
-
-/// Size of the corner badge relative to the base icon.
-const BADGE_SIZE_FRACTION: f32 = 0.55;
-/// The badge sits on the icon's bottom-right corner, just outside it, so the
-/// target glyph stays readable.
-const BADGE_INSET: f32 = -4.;
 
 /// Icon for one entry: a base icon plus an optional corner badge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,27 +33,6 @@ impl FileIcon {
         }
     }
 
-    /// Icon describing `path` without counting directory children or reading file headers.
-    pub(crate) fn for_path(path: &Path) -> Self {
-        let Ok(metadata) = std::fs::symlink_metadata(path) else {
-            return Self::plain(IconName::FileQuestionMark);
-        };
-        match EntryKind::from(metadata.file_type()) {
-            EntryKind::Directory => Self::plain(Self::directory_icon(path)),
-            EntryKind::File => {
-                let name = path.file_name().unwrap_or(path.as_os_str());
-                let content = ContentType::from_filename(name);
-                Self::for_content(content.as_ref())
-            }
-            EntryKind::SymbolicLink => {
-                let (target, _) = LinkTarget::from_path_base(path);
-                Self::for_link_target(path, &target)
-            }
-            EntryKind::Other => Self::plain(IconName::File),
-            EntryKind::Unknown => Self::plain(IconName::FileQuestionMark),
-        }
-    }
-
     /// Whether `entry` displays with directory styling (directories and resolved directory links).
     pub(crate) fn is_directory(entry: &Entry) -> bool {
         entry.kind == EntryKind::Directory
@@ -80,20 +46,6 @@ impl FileIcon {
                         }
                     )
                 }))
-    }
-
-    /// Icon tint corresponding to whether the entry resolves to a directory.
-    pub(crate) fn category_color(directory: bool, cx: &App) -> Hsla {
-        if directory {
-            cx.theme().primary
-        } else {
-            cx.theme().muted_foreground
-        }
-    }
-
-    /// Color follows the entry's category, independently of its chosen glyph.
-    pub(crate) fn color(entry: &Entry, cx: &App) -> Hsla {
-        Self::category_color(Self::is_directory(entry), cx)
     }
 
     /// Icon for a drag that carries several entries.
@@ -123,18 +75,34 @@ impl FileIcon {
         if path == dirs.home_dir() {
             return IconName::House;
         }
+        static USE_DEFAULT_NAMES: OnceLock<bool> = OnceLock::new();
+        let use_default_names = *USE_DEFAULT_NAMES.get_or_init(|| {
+            BaseDirs::new().is_some_and(|base| {
+                base.config_dir()
+                    .join("user-dirs.dirs")
+                    .try_exists()
+                    .is_ok_and(|exists| !exists)
+            })
+        });
+        let relative = path.strip_prefix(dirs.home_dir()).ok();
         [
-            (dirs.desktop_dir(), IconName::Monitor),
-            (dirs.document_dir(), IconName::FileText),
-            (dirs.download_dir(), IconName::FolderDown),
-            (dirs.picture_dir(), IconName::Images),
-            (dirs.audio_dir(), IconName::Music),
-            (dirs.video_dir(), IconName::Video),
-            (dirs.public_dir(), IconName::Users),
-            (dirs.template_dir(), IconName::LayoutTemplate),
+            (dirs.desktop_dir(), "Desktop", IconName::Monitor),
+            (dirs.document_dir(), "Documents", IconName::FileText),
+            (dirs.download_dir(), "Downloads", IconName::FolderDown),
+            (dirs.picture_dir(), "Pictures", IconName::Images),
+            (dirs.audio_dir(), "Music", IconName::Music),
+            (dirs.video_dir(), "Videos", IconName::Video),
+            (dirs.public_dir(), "Public", IconName::Users),
+            (dirs.template_dir(), "Templates", IconName::LayoutTemplate),
         ]
         .into_iter()
-        .find_map(|(directory, icon)| (directory == Some(path)).then_some(icon))
+        .find_map(|(directory, default_name, icon)| {
+            let matches = directory.map_or_else(
+                || use_default_names && relative == Some(Path::new(default_name)),
+                |directory| path == directory,
+            );
+            matches.then_some(icon)
+        })
         .unwrap_or(IconName::Folder)
     }
 
@@ -194,45 +162,6 @@ impl FileIcon {
         Self {
             base,
             badge: Some(badge),
-        }
-    }
-}
-
-/// The artwork slot used by file rows, tiles and drag previews.
-#[component]
-#[derive(IntoElement)]
-pub(crate) struct FileArtwork {
-    #[attr]
-    icon: FileIcon,
-    #[attr]
-    size: Pixels,
-    #[attr(option, option_setter = "color_opt")]
-    color: Option<Hsla>,
-}
-
-impl Default for FileArtwork {
-    fn default() -> Self {
-        Self {
-            icon: FileIcon::plain(IconName::File),
-            size: px(gds::appearance::tokens::ICON_SIZE),
-            color: None,
-        }
-    }
-}
-
-impl RenderOnce for FileArtwork {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let color = self.color.unwrap_or_else(|| window.text_style().color);
-        let badge_size = self.size * BADGE_SIZE_FRACTION;
-        el! {
-            .div { relative; flex_shrink_0; w: $(self.size); h: $(self.size); } [
-                $(self.icon.base()).Icon::new { size: $(self.size); text_color: color; },
-                @if (let Some(badge) = self.icon.badge())
-                    .div { absolute; bottom: BADGE_INSET.px; right: BADGE_INSET.px; flex; } [
-                        badge.Icon::new { size: badge_size; text_color: color; },
-                    ],
-                @end,
-            ]
         }
     }
 }

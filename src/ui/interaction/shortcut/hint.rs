@@ -1,109 +1,97 @@
-use super::*;
-use crate::appearance::tokens::SMALL;
-use gds_uim::el;
-use gpui_kit::IntoElement;
-use gpui_kit::component::ActiveTheme as _;
+use zgui::prelude::*;
+use zgui::reactive::LocalStorage;
+use zgui::{component, css, view};
+use zgui_ui::{TooltipContentProps, TooltipProps, TooltipTriggerProps};
 
-const HINT_GAP: f32 = 16.;
+use super::{Shortcut, ShortcutBadgeProps};
+use crate::appearance::tokens::TOOLTIP_DELAY;
+use crate::ui::actions::Command;
+use crate::ui::feedback::tooltip::{TooltipTextProps, install_tooltip_stylesheet};
 
-#[derive(Clone, IntoElement)]
-pub struct ShortcutHint {
-    label: SharedString,
-    badge: Option<ShortcutBadge>,
-}
-
-impl ShortcutHint {
-    pub fn label(&self) -> &str {
-        self.label.as_ref()
-    }
-    pub fn plain(label: impl Into<SharedString>) -> Self {
-        Self::command(label.into(), None)
-    }
-    pub fn new(label: impl Into<SharedString>, shortcut: impl Into<Shortcut>) -> Self {
-        Self::shortcut(label.into(), shortcut.into())
+pub(crate) const SHEET: &str = css!(
+    r#"
+    .zui-tooltip .gds-shortcut-hint,
+    .gds-shortcut-hint {
+        display: inline-flex;
+        flex-direction: row;
+        align-items: center;
+        min-width: 0;
+        gap: 16px;
+        font-size: var(--gds-font-size-small, 14px);
+        color: var(--gds-panel-foreground);
     }
 
-    pub fn binding(label: impl Into<SharedString>, binding: KeyBinding) -> Self {
-        Self {
-            label: label.into(),
-            badge: Some(ShortcutBadge::binding(binding)),
-        }
+    .gds-shortcut-hint__label {
+        min-width: 0;
+        flex: 1 1 auto;
     }
 
-    /// Mouse gestures have no keyboard action binding, but share the same keycaps.
-    pub fn gesture(
-        label: impl Into<SharedString>,
-        keys: impl IntoIterator<Item = SharedString>,
-    ) -> Self {
-        Self {
-            label: label.into(),
-            badge: Some(ShortcutBadge::gesture(keys)),
-        }
+    .gds-shortcut-hint__keys {
+        display: inline-flex;
+        align-items: center;
+        flex-shrink: 0;
     }
+    "#
+);
 
-    pub(in crate::ui) fn command(label: SharedString, command: Option<Shortcut>) -> Self {
-        Self {
-            label,
-            badge: command.map(ShortcutBadge::bound),
-        }
-    }
-
-    pub(in crate::ui) fn shortcut(label: SharedString, shortcut: Shortcut) -> Self {
-        Self {
-            label,
-            badge: Some(ShortcutBadge::bound(shortcut)),
-        }
-    }
-
-    pub fn builder(self) -> impl Fn(&mut Window, &mut App) -> AnyView {
-        move |window, cx| {
-            let hint = self.clone();
-            crate::ui::tooltip::element(
-                "command-tooltip",
-                hint.label.clone(),
-                move |_, _| hint.clone().into_any_element(),
-                window,
-                cx,
-            )
-        }
+pub(crate) fn install_shortcut_hint_stylesheet() {
+    if zgui::view::current_host().is_some() {
+        install_tooltip_stylesheet();
+        zgui::view::install_stylesheet("gds-ui-shortcut-hint", SHEET);
     }
 }
 
-impl RenderOnce for ShortcutHint {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let badge = self.badge.filter(|badge| !badge.labels(window).is_empty());
-        el! {
-            .div {
-                flex; items_center; min_w_0; gap: HINT_GAP.px;
-                text_size: SMALL; text_color: $(cx.theme().popover_foreground);
-            } [
-                .div { min_w_0; flex_1 } [$(self.label)],
-                ..$(badge.map(|badge| el! { .div { flex_shrink_0 } [badge] })),
-            ]
+/// Tooltip wrapper displaying an action label on the left (`14px`, `--gds-panel-foreground`)
+/// paired with its `22px` [`ShortcutBadge`] on the right (`gap: 16px`).
+#[component]
+pub fn ShortcutHint(
+    #[prop(into)] label: Signal<String, LocalStorage>,
+    #[prop(optional)] shortcut: Option<Shortcut>,
+    #[prop(into, default = Signal::stored_local(true))] shortcut_enabled: Signal<
+        bool,
+        LocalStorage,
+    >,
+    children: Children,
+) -> impl IntoView {
+    install_shortcut_hint_stylesheet();
+    view! {
+        Tooltip(delay = TOOLTIP_DELAY) {
+            TooltipTrigger {{children.into_view_once()}}
+            TooltipContent(class = "gds-tooltip-content", arrow = false) {
+                row(class = "gds-shortcut-hint") {
+                    box(class = "gds-shortcut-hint__label") {
+                        TooltipText(text = label)
+                    }
+                    {{
+                        let shortcut = shortcut.clone();
+                        move || {
+                            shortcut
+                                .as_ref()
+                                .filter(|_| shortcut_enabled.get())
+                                .map(|key| {
+                                    view! {
+                                        box(class = "gds-shortcut-hint__keys") {
+                                            ShortcutBadge(shortcut = key.clone())
+                                        }
+                                    }
+                                    .into_view()
+                                })
+                        }
+                    }}
+                }
+            }
         }
     }
 }
 
-/// A tooltip holding a control's short label and the key that runs it.
-///
-/// The badge reads the highest-precedence binding like every other presentation
-/// of a command, so a control whose `Command` it names cannot show another key
-/// than the one a press runs.
-pub fn command_tooltip(
-    label: impl Into<SharedString>,
-    command: impl Into<Shortcut>,
-) -> impl Fn(&mut Window, &mut App) -> AnyView {
-    ShortcutHint::command(label.into(), Some(command.into())).builder()
+/// Format a localized label with a command's default shortcut.
+#[must_use]
+pub fn command_tooltip(label: &str, command: Command) -> String {
+    command.default_stroke().hint(label)
 }
 
-/// A tooltip holding a control's short label and an already-resolved binding.
-///
-/// It serves controls whose key is not one of the workspace [`Command`]s, such
-/// as the picker's own decisions, while keeping the same presentation as every
-/// other keyed control.
-pub fn shortcut_tooltip(
-    label: impl Into<SharedString>,
-    shortcut: Shortcut,
-) -> impl Fn(&mut Window, &mut App) -> AnyView {
-    ShortcutHint::shortcut(label.into(), shortcut).builder()
+/// Format a localized label with an explicit shortcut.
+#[must_use]
+pub fn shortcut_tooltip(label: &str, shortcut: &Shortcut) -> String {
+    shortcut.hint(label)
 }

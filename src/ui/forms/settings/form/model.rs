@@ -1,31 +1,37 @@
-use gpui_kit::{App, SharedString, component::select::SelectItem};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::{app::AppExt as _, i18n};
+use crate::{app::Gds, i18n};
 
+/// Metadata and validation contract implemented by `#[derive(ConfigEditor)]` structs.
 pub trait Model: Clone + Default + PartialEq + 'static {
     fn fields() -> Vec<Field<Self>>;
+
+    /// Validate the current configuration values.
+    ///
     /// # Errors
-    /// Returns a validation message when the current configuration values are invalid.
+    /// Returns a human-readable validation message when the current values are invalid.
     fn validate(&self) -> Result<(), String> {
         Ok(())
     }
 }
 
+/// Option catalog implemented by `#[derive(ConfigEditor)]` enums.
 pub trait Choices {
-    fn choices(cx: &App) -> Vec<Choice>;
+    fn choices() -> Vec<Choice>;
 }
 
+/// One selectable option in a dropdown or searchable choice field.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Choice {
     pub value: Value,
-    pub title: SharedString,
+    pub title: String,
     search_terms: &'static str,
 }
 
 impl Choice {
-    pub fn new(value: Value, title: impl Into<SharedString>) -> Self {
+    #[must_use]
+    pub fn new(value: Value, title: impl Into<String>) -> Self {
         Self {
             value,
             title: title.into(),
@@ -33,21 +39,19 @@ impl Choice {
         }
     }
 
+    #[must_use]
     pub fn search_terms(mut self, terms: &'static str) -> Self {
         self.search_terms = terms;
         self
     }
-}
 
-impl SelectItem for Choice {
-    type Value = Value;
-    fn title(&self) -> SharedString {
-        self.title.clone()
+    #[must_use]
+    pub const fn terms(&self) -> &'static str {
+        self.search_terms
     }
-    fn value(&self) -> &Value {
-        &self.value
-    }
-    fn matches(&self, query: &str) -> bool {
+
+    #[must_use]
+    pub fn matches(&self, query: &str) -> bool {
         let query = query.to_lowercase();
         self.title.to_lowercase().contains(&query)
             || self.value.to_string().to_lowercase().contains(&query)
@@ -81,7 +85,8 @@ pub struct Number {
 }
 
 impl Number {
-    pub(super) fn range(self) -> super::super::NumberRange {
+    #[must_use]
+    pub fn range(self) -> super::super::NumberRange {
         assert!(
             self.min.is_finite()
                 && self.max.is_finite()
@@ -99,15 +104,25 @@ impl Number {
         }
     }
 
-    pub(super) fn value(self, display: f32, cx: &App) -> Result<Value, String> {
-        let value = f64::from(display) / self.scale;
+    /// Convert a scaled slider display value back into the field's JSON value.
+    ///
+    /// # Errors
+    /// Returns an error if the scaled value is not finite or exceeds the target numeric bounds.
+    pub fn value(self, display: f64) -> Result<Value, String> {
+        let value = display / self.scale;
         if !value.is_finite() {
-            return Err(i18n::text("form-number-not-finite", cx).to_string());
+            return Err(Gds::current()
+                .i18n()
+                .text_untracked("form-number-not-finite"));
         }
         if matches!(self.integer, Integer::Float) {
             return serde_json::Number::from_f64(value)
                 .map(Value::Number)
-                .ok_or_else(|| i18n::text("form-number-not-finite", cx).to_string());
+                .ok_or_else(|| {
+                    Gds::current()
+                        .i18n()
+                        .text_untracked("form-number-not-finite")
+                });
         }
         let rounded = value.round();
         let converted = match self.integer {
@@ -138,10 +153,15 @@ impl Number {
                 fits_unsigned(rounded, usize::MAX as u128).then(|| Value::from(rounded as usize))
             }
         };
-        converted.ok_or_else(|| i18n::text("form-number-out-of-range", cx).to_string())
+        converted.ok_or_else(|| {
+            Gds::current()
+                .i18n()
+                .text_untracked("form-number-out-of-range")
+        })
     }
 
-    pub(super) fn label(self, display: f32) -> String {
+    #[must_use]
+    pub fn label(self, display: f64) -> String {
         let step = self.step * self.scale;
         let precision = if step >= 1. {
             0
@@ -160,7 +180,7 @@ pub enum Kind {
     StringList,
     Font,
     Language,
-    Choice(fn(&App) -> Vec<Choice>),
+    Choice(fn() -> Vec<Choice>),
 }
 
 /// Only annotated fields are editable; callbacks preserve every other field.
@@ -208,10 +228,10 @@ impl<T> Field<T> {
             })
     }
 
-    pub(super) fn choices(&self, model: &T, cx: &App) -> Vec<Choice> {
+    pub(super) fn choices(&self, model: &T) -> Vec<Choice> {
+        let gds = Gds::current();
         let mut choices = match self.kind {
-            Kind::Font => cx
-                .gds()
+            Kind::Font => gds
                 .appearance()
                 .typography()
                 .installed_families()
@@ -224,13 +244,13 @@ impl<T> Field<T> {
                 Choice::new(encode(&i18n::Language::English), "English")
                     .search_terms("en en-US 英语 英文"),
             ],
-            Kind::Choice(catalog) => catalog(cx),
+            Kind::Choice(catalog) => catalog(),
             _ => Vec::new(),
         };
         if self.nullable {
             choices.insert(
                 0,
-                Choice::new(Value::Null, i18n::text("form-default", cx))
+                Choice::new(Value::Null, gds.i18n().text("form-default"))
                     .search_terms("system default automatic 系统 默认 自动"),
             );
         }
@@ -242,7 +262,7 @@ impl<T> Field<T> {
             if matches!(self.kind, Kind::Font) {
                 let mut arguments = fluent_bundle::FluentArgs::new();
                 arguments.set("family", title);
-                title = i18n::format("form-font-missing", Some(&arguments), cx).to_string();
+                title = gds.i18n().format("form-font-missing", Some(&arguments));
             }
             choices.push(Choice::new(current, title));
         }
@@ -267,10 +287,15 @@ fn fits_unsigned(rounded: f64, max: u128) -> bool {
 }
 
 #[doc(hidden)]
+#[must_use]
 pub fn encode<T: Serialize>(value: &T) -> Value {
     serde_json::to_value(value).expect("editable configuration fields must serialize as values")
 }
 
+/// Decode a JSON configuration field value back into `T`.
+///
+/// # Errors
+/// Returns a serialization error string when `value` cannot deserialize as `T`.
 #[doc(hidden)]
 pub fn decode<T: DeserializeOwned>(value: Value) -> Result<T, String> {
     serde_json::from_value(value).map_err(|error| error.to_string())

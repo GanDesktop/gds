@@ -6,12 +6,15 @@ use super::{Error, Identity, Mode, Snapshot};
 pub(super) const URI_LIST: &str = "text/uri-list";
 pub(super) const GNOME_FILES: &str = "x-special/gnome-copied-files";
 pub(super) const KDE_CUT: &str = "application/x-kde-cutselection";
+pub(super) const CLIPBOARD_ID: &str = "application/x-gds-clipboard-id";
+pub(super) const TEXT_PLAIN_UTF8: &str = "text/plain;charset=utf-8";
 pub(super) const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 
 pub(super) struct Formats {
     pub uri_list: Vec<u8>,
     pub gnome: Vec<u8>,
     pub kde_cut: Vec<u8>,
+    pub plain_text: Vec<u8>,
 }
 
 impl Formats {
@@ -36,7 +39,8 @@ impl Formats {
             Mode::Copy => b"0".to_vec(),
             Mode::Cut => b"1".to_vec(),
         };
-        if [&uri_list, &gnome]
+        let plain_text = Self::encode_plain_paths(&snapshot.paths, &uri_list);
+        if [&uri_list, &gnome, &plain_text]
             .iter()
             .any(|bytes| bytes.len() > MAX_PAYLOAD_BYTES)
         {
@@ -46,7 +50,45 @@ impl Formats {
             uri_list,
             gnome,
             kde_cut,
+            plain_text,
         })
+    }
+
+    /// # Errors
+    /// Reports oversized remote URI lists.
+    pub fn from_remote_uris(checked: &[String]) -> Result<Self, Error> {
+        let uri_list = (checked.join("\r\n") + "\r\n").into_bytes();
+        let gnome = ("copy\n".to_owned() + &checked.join("\n")).into_bytes();
+        let kde_cut = b"0".to_vec();
+        let plain_text = checked.join("\n").into_bytes();
+        if [&uri_list, &gnome, &plain_text]
+            .iter()
+            .any(|bytes| bytes.len() > MAX_PAYLOAD_BYTES)
+        {
+            return Err(Error::TooLarge);
+        }
+        Ok(Self {
+            uri_list,
+            gnome,
+            kde_cut,
+            plain_text,
+        })
+    }
+
+    fn encode_plain_paths(paths: &[PathBuf], uri_list: &[u8]) -> Vec<u8> {
+        if let Some(utf8_paths) = paths
+            .iter()
+            .map(|path| path.to_str())
+            .collect::<Option<Vec<_>>>()
+        {
+            return utf8_paths.join("\n").into_bytes();
+        }
+        std::str::from_utf8(uri_list)
+            .expect("URL serialization produces UTF-8")
+            .lines()
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into_bytes()
     }
 
     /// # Errors

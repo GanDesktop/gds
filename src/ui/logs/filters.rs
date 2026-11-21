@@ -1,100 +1,81 @@
-use super::*;
-use gpui_kit::component::{
-    Sizable,
-    button::ButtonVariants,
-    menu::{DropdownMenu, PopupMenuItem},
-};
+//! Filtering state and target extraction for the diagnostic log viewer.
 
-impl Viewer {
-    pub(super) fn level_filter(&self, cx: &mut Context<Self>) -> AnyElement {
-        let selected = self.level;
-        let owner = cx.entity().downgrade();
-        crate::ui::button::Button::new("logs-level")
-            .small()
-            .h(px(crate::appearance::tokens::ICON_BUTTON_SIZE))
-            .ghost()
-            .w(gpui_kit::rems(7.5))
-            .flex_shrink_0()
-            .label(selected.map_or_else(|| t!(@cx, "logs-all"), |level| level.as_str().into()))
-            .icon(IconName::ChevronDown)
-            .accessibility_label(t!(@cx, "logs-level"))
-            .dropdown_menu(move |menu, _, cx| {
-                let mut menu = crate::ui::menu::popup(menu);
-                for level in [
-                    None,
-                    Some(Level::Trace),
-                    Some(Level::Debug),
-                    Some(Level::Info),
-                    Some(Level::Warn),
-                    Some(Level::Error),
-                ] {
-                    let owner = owner.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(
-                            level
-                                .map_or_else(|| t!(@cx, "logs-all"), |level| level.as_str().into()),
-                        )
-                        .checked(selected == level)
-                        .on_click(move |_, _, cx| {
-                            let _ = owner.update(cx, |this, cx| {
-                                this.level = level;
-                                this.filter();
-                                cx.notify();
-                            });
-                        }),
-                    );
-                }
-                menu
-            })
-            .into_any_element()
+use std::collections::BTreeSet;
+
+use crate::service::logs::{Entry, Level};
+
+pub(crate) const ALL_KEY: &str = "__all__";
+
+/// Active log filtering parameters applied to the retained store snapshot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FilterState {
+    pub level: Option<Level>,
+    pub target: Option<String>,
+    pub query: String,
+}
+
+impl FilterState {
+    #[must_use]
+    pub fn matches(&self, entry: &Entry) -> bool {
+        let level_ok = self.level.is_none_or(|level| level == entry.level);
+        if !level_ok {
+            return false;
+        }
+        let target_ok = self
+            .target
+            .as_deref()
+            .is_none_or(|target| target == entry.target);
+        if !target_ok {
+            return false;
+        }
+        if self.query.is_empty() {
+            return true;
+        }
+        let needle = self.query.to_lowercase();
+        entry.message.to_lowercase().contains(&needle)
+            || entry.target.to_lowercase().contains(&needle)
     }
 
-    pub(super) fn target_filter(&self, cx: &mut Context<Self>) -> AnyElement {
-        let selected = self.target.clone();
-        let mut targets: std::collections::BTreeSet<_> = self
-            .snapshot
-            .entries
+    #[must_use]
+    pub fn visible_indices(&self, entries: &[Entry]) -> Vec<usize> {
+        entries
             .iter()
-            .map(|entry| entry.target.clone())
-            .collect();
-        // Keep an active filter discoverable even after its last entry is evicted.
-        targets.extend(selected.iter().cloned());
-        let owner = cx.entity().downgrade();
-        let label = selected
-            .clone()
-            .unwrap_or_else(|| t!(@cx, "logs-all-targets").to_string());
-        crate::ui::button::Button::new("logs-target")
-            .small()
-            .h(px(crate::appearance::tokens::ICON_BUTTON_SIZE))
-            .ghost()
-            .w(gpui_kit::rems(11.))
-            .flex_shrink_0()
-            .tooltip(label.clone())
-            .accessibility_label(t!(@cx, "logs-target"))
-            .child(div().flex_1().min_w_0().truncate().child(label))
-            .icon(IconName::ChevronDown)
-            .dropdown_menu(move |menu, _, cx| {
-                let mut menu = crate::ui::menu::popup(menu);
-                for target in std::iter::once(None).chain(targets.iter().cloned().map(Some)) {
-                    let owner = owner.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(
-                            target
-                                .clone()
-                                .unwrap_or_else(|| t!(@cx, "logs-all-targets").to_string()),
-                        )
-                        .checked(selected == target)
-                        .on_click(move |_, _, cx| {
-                            let _ = owner.update(cx, |this, cx| {
-                                this.target = target.clone();
-                                this.filter();
-                                cx.notify();
-                            });
-                        }),
-                    );
-                }
-                menu
-            })
-            .into_any_element()
+            .enumerate()
+            .filter_map(|(index, entry)| self.matches(entry).then_some(index))
+            .collect()
+    }
+}
+
+#[must_use]
+pub(crate) fn targets(entries: &[Entry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| entry.target.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+#[must_use]
+pub(crate) const fn level_to_key(level: Option<Level>) -> &'static str {
+    match level {
+        None => ALL_KEY,
+        Some(Level::Trace) => "TRACE",
+        Some(Level::Debug) => "DEBUG",
+        Some(Level::Info) => "INFO",
+        Some(Level::Warn) => "WARN",
+        Some(Level::Error) => "ERROR",
+    }
+}
+
+#[must_use]
+pub(crate) fn key_to_level(key: &str) -> Option<Level> {
+    match key {
+        "TRACE" => Some(Level::Trace),
+        "DEBUG" => Some(Level::Debug),
+        "INFO" => Some(Level::Info),
+        "WARN" => Some(Level::Warn),
+        "ERROR" => Some(Level::Error),
+        _ => None,
     }
 }

@@ -348,10 +348,10 @@ fn expand(input: DeriveInput) -> syn::Result<Tokens> {
                     )
                 })?;
                 let variant = &variant.ident;
-                choices.push(quote!(#api::Choice::new(#api::encode(&Self::#variant), #root::i18n::text(#label, cx))));
+                choices.push(quote!(#api::Choice::new(#api::encode(&Self::#variant), #root::app::Gds::current().i18n().text(#label))));
             }
             Ok(quote! { impl #api::Choices for #name {
-                fn choices(cx: &#root::ui::settings::form::App) -> Vec<#api::Choice> { vec![#(#choices),*] }
+                fn choices() -> Vec<#api::Choice> { vec![#(#choices),*] }
             } })
         }
         Data::Union(data) => Err(syn::Error::new(

@@ -30,7 +30,7 @@ Transfers stream into exclusive temporary entries, close them, and publish witho
 
 | Module | Responsibility |
 | --- | --- |
-| [`src/service/remote.rs`](../../../src/service/remote.rs) | GPUI-independent SFTP/SMB clients, streams, and SSH `known_hosts` verification |
+| [`src/service/remote.rs`](../../../src/service/remote.rs) | UI-independent SFTP/SMB clients, streams, and SSH `known_hosts` verification |
 | [`bin/files/src/entities/location.rs`](../../../bin/files/src/entities/location.rs) | Remote URI identity, history, favorites, and SQLite view settings |
 | [`bin/files/src/features/connect_server.rs`](../../../bin/files/src/features/connect_server.rs) | Step-by-step connection/auth dialogs, host-key prompts, and session reuse |
 | [`bin/files/src/features/file_operations/remote.rs`](../../../bin/files/src/features/file_operations/remote.rs) | Recursive transfers, deletion, progress, and temporary-file cleanup |

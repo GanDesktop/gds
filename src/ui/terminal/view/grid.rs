@@ -1,306 +1,432 @@
-//! A device-pixel character grid with separate material, cell, glyph and cursor passes.
+//! Device-pixel terminal cell grid rendered via `zgui::custom::CustomElement`.
 //!
-//! The emulator owns columns. Shaping batches rows, then maps the shaped clusters
-//! back to those columns so fallback fonts and combining marks cannot move a prompt.
-use super::{View, fonts::Fonts, palette::Palette};
-use alacritty_terminal::{
-    index::{Point as GridPoint, Side},
-    term::{
-        cell::{Cell, Flags},
-        color::Colors as TerminalColors,
-    },
-    vte::ansi::{Color, CursorShape, NamedColor},
-};
-use gpui_kit::{prelude::*, *};
+//! The emulator owns columns and rows. Shaping batches contiguous styled spans
+//! per row, then anchors every shaped cluster back to its exact grid column so
+//! fallback fonts and combining diacritics never shift neighboring cells.
+
+use std::cell::Cell as StdCell;
+use std::rc::Rc;
+
+use alacritty_terminal::index::{Line, Point as GridPoint, Side};
+use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::color::Colors as TerminalColors;
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+use zgui::app::Shaper;
+use zgui::canvas::zgui_color::Color as ZguiColor;
+use zgui::custom::{CustomElement, CustomLayoutCx, CustomMeasured, PaintSlot, ScenePainter, Space};
+use zgui::geom::{Device, DevicePx, Point, Rect, Size};
 
-// Share the host's content-row baseline; do not add an independent grid gutter.
-const INSET_X: f32 = crate::appearance::tokens::TERMINAL_CONTENT_INSET;
-const INSET_Y: f32 = 4.;
+use super::fonts::TerminalFonts;
+use super::ime::PreeditState;
+use super::palette::Palette;
+use crate::appearance::tokens::TERMINAL_CONTENT_INSET;
+use crate::service::terminal::Session;
+use crate::ui::terminal::Preferences;
+
+const INSET_X_CSS: f32 = TERMINAL_CONTENT_INSET;
+const INSET_Y_CSS: f32 = 4.0;
+const LINE_HEIGHT_MULTIPLIER: f32 = 1.2;
 
 #[derive(Clone)]
-struct GridCell {
+struct SnapshotCell {
     point: GridPoint,
     cell: Cell,
     selected: bool,
 }
 
 #[derive(Clone, Default)]
-pub(super) struct Snapshot {
-    cells: Vec<GridCell>,
-    pub display_offset: usize,
-    pub(super) cursor: Option<(GridPoint, CursorShape)>,
+struct Snapshot {
+    cells: Vec<SnapshotCell>,
+    display_offset: usize,
+    cursor: Option<(GridPoint, CursorShape)>,
     colors: TerminalColors,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct Geometry {
-    /// Actual grid, excluding the terminal's content padding.
-    pub bounds: Bounds<Pixels>,
-    pub cell: Size<Pixels>,
+#[derive(Clone, Copy, Debug)]
+pub(in crate::ui::terminal) struct GridGeometry {
+    pub origin_x: f32,
+    pub origin_y: f32,
+    pub cell_width: f32,
+    pub cell_height: f32,
     pub columns: usize,
-    rows: usize,
+    pub rows: usize,
+    pub scale: f32,
+    pub bounds_width: f32,
+    pub bounds_height: f32,
+    pub display_offset: usize,
 }
-impl Default for Geometry {
+
+impl Default for GridGeometry {
     fn default() -> Self {
         Self {
-            bounds: Bounds::default(),
-            cell: size(px(8.), px(18.)),
+            origin_x: INSET_X_CSS,
+            origin_y: INSET_Y_CSS,
+            cell_width: 8.0,
+            cell_height: 18.0,
             columns: 80,
             rows: 24,
+            scale: 1.0,
+            bounds_width: 664.0,
+            bounds_height: 440.0,
+            display_offset: 0,
         }
     }
 }
-impl Geometry {
-    fn new(bounds: Bounds<Pixels>, cell: Size<Pixels>, scale: f32) -> Self {
-        let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
-        let origin = point(
-            snap(bounds.left() + px(INSET_X)),
-            snap(bounds.top() + px(INSET_Y)),
-        );
-        let width = (bounds.right() - origin.x - px(INSET_X)).max(px(0.));
-        let height = (bounds.bottom() - origin.y - px(INSET_Y)).max(px(0.));
-        let columns = (f32::from(width) / f32::from(cell.width)).floor().max(2.) as usize;
-        let rows = (f32::from(height) / f32::from(cell.height)).floor().max(1.) as usize;
-        let columns = columns.min(u16::MAX as usize);
-        let rows = rows.min(u16::MAX as usize);
+
+impl GridGeometry {
+    fn from_bounds(
+        bounds_width: f32,
+        bounds_height: f32,
+        fonts: &TerminalFonts,
+        scale: f32,
+        display_offset: usize,
+    ) -> Self {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        let inset_x = (INSET_X_CSS * scale).round();
+        let inset_y = (INSET_Y_CSS * scale).round();
+        let avail_w = (bounds_width - 2.0 * inset_x).max(0.0);
+        let avail_h = (bounds_height - 2.0 * inset_y).max(0.0);
+        let columns = ((avail_w / fonts.cell_width).floor() as usize).clamp(2, u16::MAX as usize);
+        let rows = ((avail_h / fonts.cell_height).floor() as usize).clamp(1, u16::MAX as usize);
         Self {
-            bounds: Bounds::new(
-                origin,
-                size(cell.width * columns as f32, cell.height * rows as f32),
-            ),
-            cell,
+            origin_x: inset_x,
+            origin_y: inset_y,
+            cell_width: fonts.cell_width,
+            cell_height: fonts.cell_height,
             columns,
             rows,
+            scale,
+            bounds_width,
+            bounds_height,
+            display_offset,
         }
     }
-    pub fn cell_at(&self, position: Point<Pixels>) -> (usize, usize, Side) {
-        let x = f32::from(position.x - self.bounds.left()) / f32::from(self.cell.width);
-        let y = f32::from(position.y - self.bounds.top()) / f32::from(self.cell.height);
-        (
-            (x.floor().max(0.) as usize).min(self.columns.saturating_sub(1)),
-            (y.floor().max(0.) as usize).min(self.rows.saturating_sub(1)),
-            if x.fract() < 0.5 {
-                Side::Left
-            } else {
-                Side::Right
-            },
-        )
+
+    pub fn cell_at(&self, local_dev_x: f32, local_dev_y: f32) -> (usize, usize, Side) {
+        let x = (local_dev_x - self.origin_x) / self.cell_width.max(1.0);
+        let y = (local_dev_y - self.origin_y) / self.cell_height.max(1.0);
+        let col = (x.floor().max(0.0) as usize).min(self.columns.saturating_sub(1));
+        let row = (y.floor().max(0.0) as usize).min(self.rows.saturating_sub(1));
+        let side = if x.fract() < 0.5 {
+            Side::Left
+        } else {
+            Side::Right
+        };
+        (col, row, side)
     }
-    fn cell_bounds(&self, column: usize, row: usize, width: usize) -> Bounds<Pixels> {
-        Bounds::new(
-            self.bounds.origin
-                + point(
-                    self.cell.width * column as f32,
-                    self.cell.height * row as f32,
-                ),
-            size(self.cell.width * width as f32, self.cell.height),
-        )
-    }
+
     pub fn composition_column(&self, cursor_column: usize, text: &str) -> usize {
         cursor_column.min(self.columns.saturating_sub(text.width().min(self.columns)))
     }
 }
 
-pub(super) struct Grid {
-    pub view: Entity<View>,
-}
-struct Glyph {
-    font: FontId,
-    id: GlyphId,
-    position: Point<Pixels>,
-    color: Hsla,
-    emoji: bool,
-}
-struct Underline {
-    origin: Point<Pixels>,
-    width: Pixels,
-    style: UnderlineStyle,
-}
-struct Cluster {
-    start: usize,
+#[derive(Clone, Copy)]
+struct ClusterSpan {
     end: usize,
     column: usize,
-    color: Hsla,
 }
-#[derive(Default)]
-struct Row {
+
+struct StyledSpan {
     text: String,
-    runs: Vec<TextRun>,
-    clusters: Vec<Cluster>,
+    trailing_spaces: usize,
+    fg: ZguiColor,
+    bold: bool,
+    italic: bool,
+    clusters: Vec<ClusterSpan>,
 }
-impl Row {
-    fn push(&mut self, column: usize, text: &str, font: Font, color: Hsla) {
-        let start = self.text.len();
-        self.text.push_str(text);
-        let end = self.text.len();
-        if let Some(run) = self.runs.last_mut()
-            && run.font == font
-            && run.color == color
-        {
-            run.len += end - start;
-        } else {
-            self.runs.push(TextRun {
-                len: end - start,
-                font,
-                color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            });
+
+impl StyledSpan {
+    fn new(fg: ZguiColor, bold: bool, italic: bool) -> Self {
+        Self {
+            text: String::new(),
+            trailing_spaces: 0,
+            fg,
+            bold,
+            italic,
+            clusters: Vec::new(),
         }
-        self.clusters.push(Cluster {
-            start,
-            end,
-            column,
-            color,
-        });
     }
-    fn shape(
-        self,
-        origin: Point<Pixels>,
-        fonts: &Fonts,
-        glyphs: &mut Vec<Glyph>,
-        text_system: &WindowTextSystem,
-    ) {
-        if self.text.is_empty() {
+
+    fn matches(&self, fg: ZguiColor, bold: bool, italic: bool) -> bool {
+        self.fg == fg && self.bold == bold && self.italic == italic
+    }
+
+    fn push_cell(&mut self, column: usize, value: &str, is_plain_space: bool) {
+        if is_plain_space {
+            if self.text.is_empty() {
+                return;
+            }
+            self.trailing_spaces += 1;
+            self.text.push(' ');
+            let end = self.text.len();
+            self.clusters.push(ClusterSpan { end, column });
             return;
         }
-        let line = text_system.shape_line(self.text.into(), fonts.size, &self.runs, None);
-        let cluster_for = |index| {
-            self.clusters
-                .partition_point(|c| c.end <= index)
-                .min(self.clusters.len() - 1)
-        };
-        // Preserve each shaped cluster's internal offsets, including combining
-        // glyphs, but never its proportional advance into the following cell.
-        let mut anchors = vec![None::<Pixels>; self.clusters.len()];
-        for run in &line.runs {
-            for glyph in &run.glyphs {
-                let index = cluster_for(glyph.index);
-                if glyph.index == self.clusters[index].start {
-                    anchors[index] =
-                        Some(anchors[index].map_or(glyph.position.x, |x| x.min(glyph.position.x)));
-                }
-            }
-        }
-        for run in &line.runs {
-            for glyph in &run.glyphs {
-                let index = cluster_for(glyph.index);
-                let cluster = &self.clusters[index];
-                let anchor = anchors[index].unwrap_or(glyph.position.x);
-                glyphs.push(Glyph {
-                    font: run.font_id,
-                    id: glyph.id,
-                    position: origin
-                        + point(
-                            fonts.cell.width * cluster.column as f32 + glyph.position.x - anchor,
-                            fonts.baseline + glyph.position.y,
-                        ),
-                    color: cluster.color,
-                    emoji: glyph.is_emoji,
-                });
-            }
+        self.trailing_spaces = 0;
+        self.text.push_str(value);
+        let end = self.text.len();
+        self.clusters.push(ClusterSpan { end, column });
+    }
+
+    fn trim_trailing_spaces(&mut self) {
+        if self.trailing_spaces > 0 {
+            let keep = self.clusters.len().saturating_sub(self.trailing_spaces);
+            self.clusters.truncate(keep);
+            let byte_len = self.clusters.last().map_or(0, |cluster| cluster.end);
+            self.text.truncate(byte_len);
+            self.trailing_spaces = 0;
         }
     }
 }
 
-pub(super) struct Painted {
-    background: Hsla,
-    backgrounds: Vec<(Bounds<Pixels>, Hsla)>,
-    glyphs: Vec<Glyph>,
-    underlines: Vec<Underline>,
-    decorations: Vec<PaintQuad>,
-    cursor: Vec<PaintQuad>,
-    font_size: Pixels,
+fn push_background(
+    runs: &mut Vec<(Rect<DevicePx, Device>, ZguiColor)>,
+    rect: Rect<DevicePx, Device>,
+    color: ZguiColor,
+) {
+    if let Some((prev_rect, prev_color)) = runs.last_mut()
+        && *prev_color == color
+        && (prev_rect.origin.y.0 - rect.origin.y.0).abs() <= 0.01
+        && (prev_rect.size.height.0 - rect.size.height.0).abs() <= 0.01
+        && ((prev_rect.origin.x.0 + prev_rect.size.width.0) - rect.origin.x.0).abs() <= 0.5
+    {
+        prev_rect.size.width = DevicePx(prev_rect.size.width.0 + rect.size.width.0);
+    } else {
+        runs.push((rect, color));
+    }
 }
-impl Painted {
-    fn background(&mut self, bounds: Bounds<Pixels>, color: Hsla) {
-        // Merge adjacent equal backgrounds. The default background never enters
-        // this list: it is painted once for the whole terminal surface.
-        if let Some((previous, previous_color)) = self.backgrounds.last_mut()
-            && *previous_color == color
-            && previous.top() == bounds.top()
-            && previous.right() == bounds.left()
-            && previous.size.height == bounds.size.height
+
+fn shape_and_paint_span(
+    span: &StyledSpan,
+    origin: Point<DevicePx, Device>,
+    cell_width: f32,
+    fonts: &TerminalFonts,
+    shaper: &mut Shaper,
+    painter: &mut ScenePainter<'_>,
+) {
+    if span.text.is_empty() || span.clusters.is_empty() {
+        return;
+    }
+    let request = fonts.line_request(span.bold, span.italic);
+    let mut shaped = shaper.shape_line(&span.text, &request);
+    for run in &mut shaped {
+        let mut anchors = vec![None::<f32>; span.clusters.len()];
+        for (&cluster_byte, glyph) in run.clusters.iter().zip(&run.glyphs) {
+            let idx = span
+                .clusters
+                .partition_point(|cluster| cluster.end <= cluster_byte as usize)
+                .min(span.clusters.len() - 1);
+            if anchors[idx].is_none() {
+                anchors[idx] = Some(glyph.x);
+            }
+        }
+        for (&cluster_byte, glyph) in run.clusters.iter().zip(&mut run.glyphs) {
+            let idx = span
+                .clusters
+                .partition_point(|cluster| cluster.end <= cluster_byte as usize)
+                .min(span.clusters.len() - 1);
+            let anchor = anchors[idx].unwrap_or(glyph.x);
+            let target_x = span.clusters[idx].column as f32 * cell_width;
+            glyph.x = target_x + (glyph.x - anchor);
+        }
+        let paint_run = run.as_run(PaintSlot(0));
+        painter.glyphs(&paint_run, origin, span.fg);
+    }
+}
+
+pub(super) struct TerminalGrid {
+    pub session: Option<Session>,
+    pub palette: Palette,
+    pub paint_surface: bool,
+    shaper: Shaper,
+    fonts: TerminalFonts,
+    pub preferences: Preferences,
+    pub focused: bool,
+    pub cursor_on: bool,
+    pub reduce_motion: bool,
+    pub preedit: PreeditState,
+    snapshot: Snapshot,
+    geometry: GridGeometry,
+    geometry_out: Rc<StdCell<GridGeometry>>,
+    last_pty_size: Option<(u16, u16, u16, u16)>,
+}
+
+impl TerminalGrid {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "TerminalGrid captures explicit initial state from TerminalView"
+    )]
+    pub fn new(
+        session: Option<Session>,
+        palette: Palette,
+        paint_surface: bool,
+        shaper: Shaper,
+        preferences: Preferences,
+        focused: bool,
+        reduce_motion: bool,
+        geometry_out: Rc<StdCell<GridGeometry>>,
+    ) -> Self {
+        let fonts = TerminalFonts::resolve(
+            &preferences.font_family,
+            preferences.font_size,
+            LINE_HEIGHT_MULTIPLIER,
+            1.0,
+            &shaper,
+        );
+        let initial_geometry = GridGeometry {
+            cell_width: fonts.cell_width,
+            cell_height: fonts.cell_height,
+            ..GridGeometry::default()
+        };
+        geometry_out.set(initial_geometry);
+        Self {
+            session,
+            palette,
+            paint_surface,
+            shaper,
+            fonts,
+            preferences,
+            focused,
+            cursor_on: true,
+            reduce_motion,
+            preedit: PreeditState::default(),
+            snapshot: Snapshot::default(),
+            geometry: initial_geometry,
+            geometry_out,
+            last_pty_size: None,
+        }
+    }
+
+    pub(in crate::ui::terminal) fn should_paint_surface(&self) -> bool {
+        self.paint_surface || self.snapshot.colors[NamedColor::Background].is_some()
+    }
+
+    pub fn sync_pty_size(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let inset_x = (INSET_X_CSS * self.geometry.scale).round();
+        let inset_y = (INSET_Y_CSS * self.geometry.scale).round();
+        if self.geometry.bounds_width <= inset_x * 2.0
+            || self.geometry.bounds_height <= inset_y * 2.0
         {
-            previous.size.width += bounds.size.width;
-        } else {
-            self.backgrounds.push((bounds, color));
+            return;
+        }
+        let next = (
+            self.geometry.columns.min(u16::MAX as usize) as u16,
+            self.geometry.rows.min(u16::MAX as usize) as u16,
+            self.fonts
+                .cell_width
+                .round()
+                .clamp(1.0, f32::from(u16::MAX)) as u16,
+            self.fonts
+                .cell_height
+                .round()
+                .clamp(1.0, f32::from(u16::MAX)) as u16,
+        );
+        if self.last_pty_size != Some(next)
+            && session
+                .resize_with_pixels(next.0, next.1, next.2, next.3)
+                .is_ok()
+        {
+            self.last_pty_size = Some(next);
+        }
+    }
+
+    fn ensure_fonts(&mut self, scale: f32) {
+        if !self.fonts.matches(
+            &self.preferences.font_family,
+            self.preferences.font_size,
+            LINE_HEIGHT_MULTIPLIER,
+            scale,
+        ) {
+            self.fonts = TerminalFonts::resolve(
+                &self.preferences.font_family,
+                self.preferences.font_size,
+                LINE_HEIGHT_MULTIPLIER,
+                scale,
+                &self.shaper,
+            );
         }
     }
 }
-impl Element for Grid {
-    type RequestLayoutState = ();
-    type PrepaintState = Painted;
-    fn id(&self) -> Option<ElementId> {
-        None
+
+impl CustomElement for TerminalGrid {
+    fn layout(&mut self, cx: &mut CustomLayoutCx<'_>) -> CustomMeasured {
+        self.ensure_fonts(cx.scale);
+        let inset_x = (INSET_X_CSS * cx.scale).round();
+        let inset_y = (INSET_Y_CSS * cx.scale).round();
+        let intrinsic_w =
+            (self.geometry.columns.max(80) as f32 * self.fonts.cell_width + 2.0 * inset_x).ceil();
+        let intrinsic_h =
+            (self.geometry.rows.max(24) as f32 * self.fonts.cell_height + 2.0 * inset_y).ceil();
+
+        let width = cx
+            .known_width
+            .or(match cx.available.0 {
+                Space::Definite(value) => Some(value),
+                Space::MinContent | Space::MaxContent => None,
+            })
+            .unwrap_or(intrinsic_w)
+            .max(0.0);
+        let height = cx
+            .known_height
+            .or(match cx.available.1 {
+                Space::Definite(value) => Some(value),
+                Space::MinContent | Space::MaxContent => None,
+            })
+            .unwrap_or(intrinsic_h)
+            .max(0.0);
+
+        if cx.final_pass {
+            self.geometry = GridGeometry::from_bounds(
+                width,
+                height,
+                &self.fonts,
+                cx.scale,
+                self.snapshot.display_offset,
+            );
+            self.geometry_out.set(self.geometry);
+            self.sync_pty_size();
+        }
+
+        CustomMeasured {
+            width,
+            height,
+            first_baseline: None,
+            last_baseline: None,
+        }
     }
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
-    }
-    fn request_layout(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, ()) {
-        let mut style = Style::default();
-        style.size.width = relative(1.).into();
-        style.size.height = relative(1.).into();
-        style.flex_grow = 1.;
-        style.flex_shrink = 1.;
-        style.min_size.height = px(0.).into();
-        (window.request_layout(style, [], cx), ())
-    }
-    fn prepaint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Painted {
-        let palette = Palette::new(cx);
-        let scale = window.scale_factor();
-        self.view.update(cx, |view, cx| {
-            if !view.fonts.as_ref().is_some_and(|fonts| {
-                fonts.matches(
-                    &view.preferences.font_family,
-                    view.preferences.font_size,
-                    scale,
-                )
-            }) {
-                view.fonts = Some(Fonts::resolve(
-                    &view.preferences.font_family,
-                    view.preferences.font_size,
-                    scale,
-                    window.text_system(),
-                ));
-            }
-            let fonts = view.fonts.as_ref().expect("terminal font resolved");
-            let geometry = Geometry::new(bounds, fonts.cell, scale);
-            if bounds.size.width > px(INSET_X * 2.)
-                && bounds.size.height > px(INSET_Y * 2.)
-                && (
-                    view.geometry.columns,
-                    view.geometry.rows,
-                    view.geometry.cell,
-                ) != (geometry.columns, geometry.rows, geometry.cell)
-                && let Err(error) = view.session.resize_with_pixels(
-                    geometry.columns as u16,
-                    geometry.rows as u16,
-                    (f32::from(fonts.cell.width) * scale).round() as u16,
-                    (f32::from(fonts.cell.height) * scale).round() as u16,
-                )
-            {
-                view.error = Some(error.to_string());
-            }
-            view.geometry = geometry;
-            if let Some(snapshot) = view.session.try_with_term(|term| {
+
+    fn paint(&mut self, painter: &mut ScenePainter<'_>) {
+        let size = painter.size();
+        let scale = painter.scale();
+        self.ensure_fonts(scale);
+        if (size.width.0 - self.geometry.bounds_width).abs() > 0.5
+            || (size.height.0 - self.geometry.bounds_height).abs() > 0.5
+            || (self.fonts.cell_width - self.geometry.cell_width).abs() > f32::EPSILON
+            || (self.fonts.cell_height - self.geometry.cell_height).abs() > f32::EPSILON
+        {
+            self.geometry = GridGeometry::from_bounds(
+                size.width.0,
+                size.height.0,
+                &self.fonts,
+                scale,
+                self.snapshot.display_offset,
+            );
+            self.geometry_out.set(self.geometry);
+            self.sync_pty_size();
+        }
+
+        let palette = self.palette;
+        if let Some(session) = &self.session
+            && let Some(snapshot) = session.try_with_term(|term| {
                 let content = term.renderable_content();
                 Snapshot {
                     display_offset: content.display_offset,
@@ -308,7 +434,7 @@ impl Element for Grid {
                     colors: *content.colors,
                     cells: content
                         .display_iter
-                        .map(|indexed| GridCell {
+                        .map(|indexed| SnapshotCell {
                             point: indexed.point,
                             selected: content.selection.is_some_and(|selection| {
                                 selection.contains_cell(
@@ -321,293 +447,386 @@ impl Element for Grid {
                         })
                         .collect(),
                 }
-            }) {
-                view.snapshot = snapshot;
+            })
+        {
+            self.snapshot = snapshot;
+            self.geometry.display_offset = self.snapshot.display_offset;
+            self.geometry_out.set(self.geometry);
+        }
+
+        if self.should_paint_surface() {
+            let surface_bg = palette.background(&self.snapshot.colors);
+            painter.fill(
+                Rect::new(Point::new(DevicePx(0.0), DevicePx(0.0)), size),
+                0.0,
+                surface_bg,
+            );
+        }
+
+        let visible_cursor = self
+            .snapshot
+            .cursor
+            .filter(|(_, shape)| *shape != CursorShape::Hidden)
+            .filter(|_| {
+                !self.focused
+                    || self.cursor_on
+                    || !self.preferences.cursor_blink
+                    || self.reduce_motion
+            })
+            .filter(|_| self.preedit.is_empty());
+
+        let composition = (!self.preedit.is_empty())
+            .then(|| {
+                self.snapshot.cursor.map(|(point, _)| {
+                    let row = point.line.0 + self.snapshot.display_offset as i32;
+                    let col = self
+                        .geometry
+                        .composition_column(point.column.0, &self.preedit.text);
+                    (row, col, col + self.preedit.text.width().max(1))
+                })
+            })
+            .flatten();
+
+        let mut background_runs: Vec<(Rect<DevicePx, Device>, ZguiColor)> = Vec::new();
+        let mut decorations: Vec<(Rect<DevicePx, Device>, ZguiColor)> = Vec::new();
+        let mut cursor_fills: Vec<(Rect<DevicePx, Device>, ZguiColor)> = Vec::new();
+        let mut cursor_strokes: Vec<(Rect<DevicePx, Device>, f32, ZguiColor)> = Vec::new();
+        let mut row_spans: Vec<Vec<StyledSpan>> =
+            (0..self.geometry.rows).map(|_| Vec::new()).collect();
+
+        let cursor_color = palette.resolve(Color::Named(NamedColor::Cursor), &self.snapshot.colors);
+        let pixel = 1.0_f32.max(scale.round());
+
+        for item in &self.snapshot.cells {
+            let row_signed = item.point.line.0 + self.snapshot.display_offset as i32;
+            let column = item.point.column.0;
+            if row_signed < 0
+                || row_signed as usize >= self.geometry.rows
+                || column >= self.geometry.columns
+            {
+                continue;
             }
-            let snapshot = &view.snapshot;
-            let background = palette.background(&snapshot.colors);
-            let mut painted = Painted {
-                background,
-                backgrounds: Vec::new(),
-                glyphs: Vec::new(),
-                underlines: Vec::new(),
-                decorations: Vec::new(),
-                cursor: Vec::new(),
-                font_size: fonts.size,
+            let row = row_signed as usize;
+            let flags = item.cell.flags;
+            if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                continue;
+            }
+            let cell_cols = if flags.contains(Flags::WIDE_CHAR) {
+                2
+            } else {
+                1
             };
-            let cursor = snapshot
-                .cursor
-                .filter(|(_, shape)| *shape != CursorShape::Hidden)
-                .filter(|_| {
-                    !view.focused
-                        || view.cursor_on
-                        || !view.preferences.cursor_blink
-                        || cx.reduce_motion()
-                })
-                .filter(|_| view.preedit.is_empty());
-            let composition = (!view.preedit.is_empty())
-                .then(|| {
-                    snapshot.cursor.map(|(point, _)| {
-                        let row = point.line.0 + snapshot.display_offset as i32;
-                        let column = geometry.composition_column(point.column.0, &view.preedit);
-                        (row, column, column + view.preedit.width().max(1))
-                    })
-                })
-                .flatten();
-            let mut rows: Vec<Row> = (0..geometry.rows).map(|_| Row::default()).collect();
-            for item in &snapshot.cells {
-                let row = item.point.line.0 + snapshot.display_offset as i32;
-                let column = item.point.column.0;
-                if row < 0 || row as usize >= geometry.rows || column >= geometry.columns {
-                    continue;
-                }
-                let flags = item.cell.flags;
-                if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
-                    continue;
-                }
-                let width = if flags.contains(Flags::WIDE_CHAR) {
-                    2
-                } else {
-                    1
-                };
-                let cell_bounds = geometry.cell_bounds(column, row as usize, width);
-                let mut fg = palette.foreground(item.cell.fg, flags, &snapshot.colors);
-                let mut bg = palette.resolve(item.cell.bg, &snapshot.colors);
-                let mut explicit_background = item.cell.bg != Color::Named(NamedColor::Background);
-                if flags.contains(Flags::INVERSE) {
-                    std::mem::swap(&mut fg, &mut bg);
-                    explicit_background = true;
-                }
-                if item.selected {
-                    fg = palette.selected_text;
-                    bg = palette.selection;
-                    explicit_background = true;
-                }
-                let at_cursor = cursor.filter(|(point, _)| *point == item.point);
-                let cursor_color =
-                    palette.resolve(Color::Named(NamedColor::Cursor), &snapshot.colors);
-                if view.focused && at_cursor.is_some_and(|(_, shape)| shape == CursorShape::Block) {
-                    bg = cursor_color;
-                    fg = palette.cursor_text;
-                    explicit_background = true;
-                }
-                let obscured = composition.is_some_and(|(r, start, end)| {
-                    row == r && column < end && column + width > start
-                });
-                if explicit_background && !obscured {
-                    painted.background(cell_bounds, bg);
-                }
-                if let Some((_, shape)) = at_cursor {
-                    let pixel = px(1. / scale);
-                    if !view.focused || shape == CursorShape::HollowBlock {
-                        painted
-                            .cursor
-                            .push(outline(cell_bounds, cursor_color, BorderStyle::Solid));
-                    } else if shape == CursorShape::Beam {
-                        painted.cursor.push(fill(
-                            Bounds::new(
-                                cell_bounds.origin,
-                                size(pixel.max(px(1.)), cell_bounds.size.height),
+            let cell_x = self.geometry.origin_x + column as f32 * self.geometry.cell_width;
+            let cell_y = self.geometry.origin_y + row as f32 * self.geometry.cell_height;
+            let cell_w = cell_cols as f32 * self.geometry.cell_width;
+            let cell_rect = Rect::new(
+                Point::new(DevicePx(cell_x), DevicePx(cell_y)),
+                Size::new(DevicePx(cell_w), DevicePx(self.geometry.cell_height)),
+            );
+
+            let mut fg = palette.foreground(item.cell.fg, flags, &self.snapshot.colors);
+            let mut bg = palette.resolve(item.cell.bg, &self.snapshot.colors);
+            let mut explicit_bg = item.cell.bg != Color::Named(NamedColor::Background);
+            if flags.contains(Flags::INVERSE) {
+                std::mem::swap(&mut fg, &mut bg);
+                explicit_bg = true;
+            }
+            if item.selected {
+                fg = palette.selected_text;
+                bg = palette.selection;
+                explicit_bg = true;
+            }
+
+            let at_cursor = visible_cursor.filter(|(point, _)| *point == item.point);
+            if self.focused && at_cursor.is_some_and(|(_, shape)| shape == CursorShape::Block) {
+                bg = cursor_color;
+                fg = palette.cursor_text;
+                explicit_bg = true;
+            }
+
+            let obscured = composition.is_some_and(|(comp_row, start, end)| {
+                row_signed == comp_row && column < end && column + cell_cols > start
+            });
+            if explicit_bg && !obscured {
+                push_background(&mut background_runs, cell_rect, bg);
+            }
+
+            if let Some((_, shape)) = at_cursor {
+                if !self.focused || shape == CursorShape::HollowBlock {
+                    cursor_strokes.push((cell_rect, pixel, cursor_color));
+                } else if shape == CursorShape::Beam {
+                    let beam_w = (1.5 * scale).round().max(1.0);
+                    cursor_fills.push((
+                        Rect::new(
+                            cell_rect.origin,
+                            Size::new(DevicePx(beam_w), cell_rect.size.height),
+                        ),
+                        cursor_color,
+                    ));
+                } else if shape == CursorShape::Underline {
+                    let ul_h = (2.0 * scale).round().max(1.0);
+                    cursor_fills.push((
+                        Rect::new(
+                            Point::new(
+                                cell_rect.origin.x,
+                                DevicePx(cell_rect.origin.y.0 + cell_rect.size.height.0 - ul_h),
                             ),
-                            cursor_color,
-                        ));
-                    } else if shape == CursorShape::Underline {
-                        painted.cursor.push(fill(
-                            Bounds::new(
-                                point(cell_bounds.left(), cell_bounds.bottom() - pixel),
-                                size(cell_bounds.size.width, pixel),
-                            ),
-                            cursor_color,
-                        ));
-                    }
-                }
-                let hidden = flags.contains(Flags::HIDDEN) || obscured;
-                let base = if hidden || item.cell.c == '\t' {
-                    ' '
-                } else {
-                    item.cell.c
-                };
-                let mut buf = [0u8; 4];
-                let mut combined = String::new();
-                let value: &str = if !hidden
-                    && let Some(combining) = item.cell.zerowidth()
-                    && !combining.is_empty()
-                {
-                    combined.push(base);
-                    combined.extend(combining);
-                    combined.as_str()
-                } else {
-                    base.encode_utf8(&mut buf)
-                };
-                let mut font = fonts.font.clone();
-                if flags.contains(Flags::BOLD) {
-                    font.weight = FontWeight::BOLD;
-                }
-                if flags.contains(Flags::ITALIC) {
-                    font.style = FontStyle::Italic;
-                }
-                rows[row as usize].push(column, value, font, fg);
-                if !hidden {
-                    let underline_color = item
-                        .cell
-                        .underline_color()
-                        .map(|c| palette.foreground(c, flags, &snapshot.colors))
-                        .unwrap_or(fg);
-                    let thickness =
-                        px((view.preferences.font_size / 14. * scale).round().max(1.) / scale);
-                    let y = cell_bounds.top()
-                        + fonts.baseline
-                        + ((fonts.cell.height - fonts.baseline) / 2.).max(thickness);
-                    if flags.intersects(Flags::ALL_UNDERLINES) {
-                        painted.underlines.push(Underline {
-                            origin: point(cell_bounds.left(), y),
-                            width: cell_bounds.size.width,
-                            style: UnderlineStyle {
-                                color: Some(underline_color),
-                                thickness,
-                                wavy: flags.contains(Flags::UNDERCURL),
-                            },
-                        });
-                        if flags.contains(Flags::DOUBLE_UNDERLINE) {
-                            painted.decorations.push(fill(
-                                Bounds::new(
-                                    point(cell_bounds.left(), y - thickness * 2.),
-                                    size(cell_bounds.size.width, thickness),
-                                ),
-                                underline_color,
-                            ));
-                        }
-                    }
-                    if flags.contains(Flags::STRIKEOUT) {
-                        painted.decorations.push(fill(
-                            Bounds::new(
-                                point(
-                                    cell_bounds.left(),
-                                    cell_bounds.top() + fonts.baseline * 0.65,
-                                ),
-                                size(cell_bounds.size.width, thickness),
-                            ),
-                            fg,
-                        ));
-                    }
+                            Size::new(cell_rect.size.width, DevicePx(ul_h)),
+                        ),
+                        cursor_color,
+                    ));
                 }
             }
-            for (row, content) in rows.into_iter().enumerate() {
-                content.shape(
-                    geometry.cell_bounds(0, row, 1).origin,
-                    fonts,
-                    &mut painted.glyphs,
-                    window.text_system(),
+
+            let hidden = flags.contains(Flags::HIDDEN) || obscured;
+            let base = if hidden || item.cell.c == '\t' {
+                ' '
+            } else {
+                item.cell.c
+            };
+            let mut utf8_buf = [0_u8; 4];
+            let mut combined = String::new();
+            let (value, is_plain_space): (&str, bool) = if !hidden
+                && let Some(combining) = item.cell.zerowidth()
+                && !combining.is_empty()
+            {
+                combined.push(base);
+                combined.extend(combining);
+                (combined.as_str(), false)
+            } else {
+                (base.encode_utf8(&mut utf8_buf), base == ' ')
+            };
+
+            let bold = flags.contains(Flags::BOLD);
+            let italic = flags.contains(Flags::ITALIC);
+            let spans = &mut row_spans[row];
+            let start_new = match spans.last() {
+                Some(last) => {
+                    !last.matches(fg, bold, italic) || (is_plain_space && last.trailing_spaces >= 3)
+                }
+                None => true,
+            };
+            if start_new {
+                if !is_plain_space {
+                    let mut span = StyledSpan::new(fg, bold, italic);
+                    span.push_cell(column, value, false);
+                    spans.push(span);
+                }
+            } else if let Some(last) = spans.last_mut() {
+                last.push_cell(column, value, is_plain_space);
+            }
+
+            if !hidden {
+                let underline_color = item.cell.underline_color().map_or(fg, |color| {
+                    palette.foreground(color, flags, &self.snapshot.colors)
+                });
+                let thickness = self.fonts.underline_thickness;
+                let ul_y = cell_y + self.fonts.underline_y;
+
+                if flags.contains(Flags::UNDERCURL) {
+                    let step = (2.0 * scale).round().max(1.0);
+                    let mut x = cell_x;
+                    let mut up = false;
+                    while x < cell_x + cell_w {
+                        let seg_w = step.min(cell_x + cell_w - x);
+                        let dy = if up { -step * 0.5 } else { step * 0.5 };
+                        decorations.push((
+                            Rect::new(
+                                Point::new(DevicePx(x), DevicePx((ul_y + dy).max(cell_y))),
+                                Size::new(DevicePx(seg_w), DevicePx(thickness)),
+                            ),
+                            underline_color,
+                        ));
+                        x += step;
+                        up = !up;
+                    }
+                } else if flags.intersects(Flags::DOTTED_UNDERLINE | Flags::DASHED_UNDERLINE) {
+                    let dash = if flags.contains(Flags::DOTTED_UNDERLINE) {
+                        (2.0 * scale).round().max(1.0)
+                    } else {
+                        (4.0 * scale).round().max(2.0)
+                    };
+                    let mut x = cell_x;
+                    while x < cell_x + cell_w {
+                        let seg_w = dash.min(cell_x + cell_w - x);
+                        decorations.push((
+                            Rect::new(
+                                Point::new(DevicePx(x), DevicePx(ul_y)),
+                                Size::new(DevicePx(seg_w), DevicePx(thickness)),
+                            ),
+                            underline_color,
+                        ));
+                        x += dash * 2.0;
+                    }
+                } else if flags.intersects(Flags::ALL_UNDERLINES) {
+                    decorations.push((
+                        Rect::new(
+                            Point::new(DevicePx(cell_x), DevicePx(ul_y)),
+                            Size::new(DevicePx(cell_w), DevicePx(thickness)),
+                        ),
+                        underline_color,
+                    ));
+                    if flags.contains(Flags::DOUBLE_UNDERLINE) {
+                        let upper_y = (ul_y - thickness * 2.0).max(cell_y);
+                        decorations.push((
+                            Rect::new(
+                                Point::new(DevicePx(cell_x), DevicePx(upper_y)),
+                                Size::new(DevicePx(cell_w), DevicePx(thickness)),
+                            ),
+                            underline_color,
+                        ));
+                    }
+                }
+
+                if flags.contains(Flags::STRIKEOUT) {
+                    decorations.push((
+                        Rect::new(
+                            Point::new(DevicePx(cell_x), DevicePx(cell_y + self.fonts.strikeout_y)),
+                            Size::new(DevicePx(cell_w), DevicePx(self.fonts.strikeout_thickness)),
+                        ),
+                        fg,
+                    ));
+                }
+            }
+        }
+
+        for (rect, color) in background_runs {
+            painter.fill(rect, 0.0, color);
+        }
+
+        for (row_idx, spans) in row_spans.iter_mut().enumerate() {
+            let line_origin = Point::new(
+                DevicePx(self.geometry.origin_x),
+                DevicePx(
+                    self.geometry.origin_y
+                        + row_idx as f32 * self.geometry.cell_height
+                        + self.fonts.line_offset_y,
+                ),
+            );
+            for span in spans {
+                span.trim_trailing_spaces();
+                shape_and_paint_span(
+                    span,
+                    line_origin,
+                    self.geometry.cell_width,
+                    &self.fonts,
+                    &mut self.shaper,
+                    painter,
                 );
             }
-            if let Some((row, column, _)) = composition
-                && row >= 0
-                && (row as usize) < geometry.rows
-            {
-                let mut content = Row::default();
-                let mut width = 0;
-                let selected =
-                    super::ime::byte_range(&view.preedit, view.preedit_selection.clone());
-                for (offset, grapheme) in view.preedit.grapheme_indices(true) {
-                    let count = grapheme.width().max(1);
-                    if column + width + count > geometry.columns {
-                        break;
-                    }
-                    let marked = offset < selected.end && offset + grapheme.len() > selected.start;
-                    if marked {
-                        painted.background(
-                            geometry.cell_bounds(column + width, row as usize, count),
-                            palette.selection,
-                        );
-                    }
-                    content.push(
-                        width,
-                        grapheme,
-                        fonts.font.clone(),
-                        if marked {
-                            palette.selected_text
-                        } else {
-                            palette.foreground
-                        },
-                    );
-                    width += count;
+        }
+
+        for (rect, color) in decorations {
+            painter.fill(rect, 0.0, color);
+        }
+        for (rect, color) in cursor_fills {
+            painter.fill(rect, 0.0, color);
+        }
+        for (rect, width, color) in cursor_strokes {
+            painter.stroke(rect, 0.0, width, color);
+        }
+
+        if let Some((comp_row_signed, comp_col, _)) = composition
+            && comp_row_signed >= 0
+            && (comp_row_signed as usize) < self.geometry.rows
+        {
+            let comp_row = comp_row_signed as usize;
+            let row_top = self.geometry.origin_y + comp_row as f32 * self.geometry.cell_height;
+            let selected = &self.preedit.cursor;
+            let mut width_cols = 0_usize;
+            let mut normal_span = StyledSpan::new(palette.foreground, false, false);
+            let mut selected_span = StyledSpan::new(palette.selected_text, false, false);
+
+            for (offset, grapheme) in self.preedit.text.grapheme_indices(true) {
+                let cols = grapheme.width().max(1);
+                if comp_col + width_cols + cols > self.geometry.columns {
+                    break;
                 }
-                let caret = view.preedit[..selected.end].width().min(width);
-                let caret_bounds = geometry.cell_bounds(column + caret, row as usize, 1);
-                painted.cursor.push(fill(
-                    Bounds::new(
-                        caret_bounds.origin,
-                        size(px(1. / scale), caret_bounds.size.height),
+                let cell_x = self.geometry.origin_x
+                    + (comp_col + width_cols) as f32 * self.geometry.cell_width;
+                let cell_w = cols as f32 * self.geometry.cell_width;
+                let cell_rect = Rect::new(
+                    Point::new(DevicePx(cell_x), DevicePx(row_top)),
+                    Size::new(DevicePx(cell_w), DevicePx(self.geometry.cell_height)),
+                );
+                let marked = offset < selected.end && offset + grapheme.len() > selected.start;
+                if marked {
+                    painter.fill(cell_rect, 0.0, palette.selection);
+                    selected_span.push_cell(width_cols, grapheme, false);
+                } else {
+                    normal_span.push_cell(width_cols, grapheme, false);
+                }
+                width_cols += cols;
+            }
+
+            if width_cols > 0 {
+                let comp_x = self.geometry.origin_x + comp_col as f32 * self.geometry.cell_width;
+                let line_origin = Point::new(
+                    DevicePx(comp_x),
+                    DevicePx(row_top + self.fonts.line_offset_y),
+                );
+                shape_and_paint_span(
+                    &normal_span,
+                    line_origin,
+                    self.geometry.cell_width,
+                    &self.fonts,
+                    &mut self.shaper,
+                    painter,
+                );
+                shape_and_paint_span(
+                    &selected_span,
+                    line_origin,
+                    self.geometry.cell_width,
+                    &self.fonts,
+                    &mut self.shaper,
+                    painter,
+                );
+
+                let caret_offset = self.preedit.text[..selected.end].width().min(width_cols);
+                let caret_x = comp_x + caret_offset as f32 * self.geometry.cell_width;
+                let caret_w = (1.5 * scale).round().max(1.0);
+                painter.fill(
+                    Rect::new(
+                        Point::new(DevicePx(caret_x), DevicePx(row_top)),
+                        Size::new(DevicePx(caret_w), DevicePx(self.geometry.cell_height)),
                     ),
+                    0.0,
                     palette.foreground,
-                ));
-                let bounds = geometry.cell_bounds(column, row as usize, width);
-                content.shape(
-                    bounds.origin,
-                    fonts,
-                    &mut painted.glyphs,
-                    window.text_system(),
                 );
-                painted.underlines.push(Underline {
-                    origin: point(bounds.left(), bounds.bottom() - px(1. / scale)),
-                    width: bounds.size.width,
-                    style: UnderlineStyle {
-                        color: Some(palette.foreground),
-                        thickness: px(1. / scale),
-                        wavy: false,
-                    },
-                });
+
+                let ul_h = pixel;
+                painter.fill(
+                    Rect::new(
+                        Point::new(
+                            DevicePx(comp_x),
+                            DevicePx(row_top + self.geometry.cell_height - ul_h),
+                        ),
+                        Size::new(
+                            DevicePx(width_cols as f32 * self.geometry.cell_width),
+                            DevicePx(ul_h),
+                        ),
+                    ),
+                    0.0,
+                    palette.foreground,
+                );
             }
-            painted
-        })
+        }
     }
-    fn paint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _: &mut (),
-        painted: &mut Painted,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let focus = self.view.read(cx).focus.clone();
-        window.handle_input(
-            &focus,
-            ElementInputHandler::new(bounds, self.view.clone()),
-            cx,
-        );
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            window.paint_quad(fill(bounds, painted.background));
-            for (bounds, color) in &painted.backgrounds {
-                window.paint_quad(fill(*bounds, *color));
-            }
-            for glyph in &painted.glyphs {
-                let result = if glyph.emoji {
-                    window.paint_emoji(glyph.position, glyph.font, glyph.id, painted.font_size)
-                } else {
-                    window.paint_glyph(
-                        glyph.position,
-                        glyph.font,
-                        glyph.id,
-                        painted.font_size,
-                        glyph.color,
-                    )
-                };
-                if let Err(error) = result {
-                    tracing::warn!(%error, "terminal glyph paint failed");
-                }
-            }
-            for line in &painted.underlines {
-                window.paint_underline(line.origin, line.width, &line.style);
-            }
-            for quad in painted
-                .decorations
-                .drain(..)
-                .chain(painted.cursor.drain(..))
-            {
-                window.paint_quad(quad);
-            }
-        });
-    }
+}
+
+/// Convert `Line` + visible display offset to grid point cleanly.
+pub(super) fn grid_point(
+    geometry: GridGeometry,
+    display_offset: usize,
+    local_dev_x: f32,
+    local_dev_y: f32,
+) -> (GridPoint, Side, usize, usize) {
+    let (column, row, side) = geometry.cell_at(local_dev_x, local_dev_y);
+    let line = row as i32 - display_offset as i32;
+    (
+        GridPoint::new(Line(line), alacritty_terminal::index::Column(column)),
+        side,
+        column,
+        row,
+    )
 }

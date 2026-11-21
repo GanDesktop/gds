@@ -13,7 +13,6 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const DEFAULT_BUFFER_SIZE: usize = 128 * 1024;
-const STAGING_ATTEMPTS: usize = 64;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CopyOptions {
@@ -136,23 +135,104 @@ impl Work {
         format!("{prefix}{nanos:016x}-{seq:04x}-{nonce:016x}")
     }
 
-    /// Create an exclusive local staging directory asynchronously without blocking Tokio workers.
+    /// Create an exclusive local staging directory on the blocking pool, owned by a
+    /// `TempDir` guard so cancellation, future drops, or rejected commit workers still clean up.
     ///
     /// # Errors
-    /// Reports directory creation failures.
-    async fn create_local_staging(directory: &Path) -> Result<PathBuf, Error> {
-        for _ in 0..STAGING_ATTEMPTS {
-            let candidate = directory.join(Self::staging_name(".gds-download-"));
-            match tokio::fs::create_dir(&candidate).await {
-                Ok(()) => return Ok(candidate),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(Error::Io(error)),
-            }
+    /// Reports task scheduling or directory creation failures.
+    async fn create_local_staging(&self, directory: &Path) -> Result<tempfile::TempDir, Error> {
+        let directory = directory.to_path_buf();
+        self.tasks
+            .spawn_blocking_named("Create download staging directory", move || {
+                tempfile::Builder::new()
+                    .prefix(".gds-download-")
+                    .tempdir_in(&directory)
+                    .map_err(Error::Io)
+            })
+            .await?
+    }
+
+    /// Explicitly close a local staging directory off the async runtime, surfacing cleanup errors
+    /// alongside `operation`. If the task scope rejects the worker during shutdown, dropping the
+    /// closure still triggers `TempDir::drop`.
+    async fn close_local_staging(&self, staging_dir: tempfile::TempDir, operation: Error) -> Error {
+        let path = staging_dir.path().to_path_buf();
+        match self
+            .tasks
+            .spawn_blocking_named("Clean up download staging directory", move || {
+                staging_dir.close()
+            })
+            .await
+        {
+            Ok(Ok(())) | Err(_) => operation,
+            Ok(Err(cleanup)) => Error::LocalStagingCleanup {
+                path,
+                operation: Box::new(operation),
+                cleanup,
+            },
         }
-        Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "could not allocate unique download staging directory",
-        )))
+    }
+
+    /// Commit a staged local payload into `directory` and explicitly close `staging_dir`.
+    ///
+    /// # Errors
+    /// Reports transfer, commit worker scheduling, or staging cleanup failures.
+    async fn commit_local_staging(
+        &self,
+        staging_dir: tempfile::TempDir,
+        staged_path: PathBuf,
+        directory: &Path,
+    ) -> Result<Vec<super::super::history::Step>, Error> {
+        let batch = match super::super::transfer::Batch::new(super::super::transfer::Request {
+            paths: vec![staged_path],
+            destination: directory.to_path_buf(),
+            mode: super::super::transfer::Mode::Move,
+        }) {
+            Ok(batch) => batch,
+            Err(error) => {
+                return Err(self
+                    .close_local_staging(staging_dir, Error::from(error))
+                    .await);
+            }
+        };
+        self.tasks
+            .spawn_blocking_named(
+                "Commit downloaded files",
+                move || -> Result<Vec<super::super::history::Step>, Error> {
+                    let result = batch.execute();
+                    let mut undo = Vec::new();
+                    let mut transfer_error = None;
+                    for item in result.items {
+                        match item.result {
+                            Ok(()) => {
+                                if let Some(expected) = item.committed_snapshot {
+                                    undo.push(super::super::history::Step::trash(
+                                        item.destination,
+                                        expected,
+                                    ));
+                                }
+                            }
+                            Err(error) => {
+                                transfer_error = Some(Error::Transfer(error));
+                                break;
+                            }
+                        }
+                    }
+                    let staging_path = staging_dir.path().to_path_buf();
+                    let cleanup = staging_dir.close();
+                    match (transfer_error, cleanup) {
+                        (None, Ok(())) => Ok(undo),
+                        (None, Err(cleanup)) => Err(Error::Io(cleanup)),
+                        (Some(operation), Ok(())) => Err(operation),
+                        (Some(operation), Err(cleanup)) => Err(Error::LocalStagingCleanup {
+                            path: staging_path,
+                            operation: Box::new(operation),
+                            cleanup,
+                        }),
+                    }
+                },
+            )
+            .await?
     }
 
     /// # Errors
@@ -204,65 +284,18 @@ impl Work {
         {
             return Err(Error::Unsupported("copying a directory into itself"));
         }
-        let staging_dir = Self::create_local_staging(directory).await?;
-        let staged_path = staging_dir.join(name);
+        let staging_dir = self.create_local_staging(directory).await?;
+        let staged_path = staging_dir.path().join(name);
         let staged = Resource::Local(staged_path.clone());
         let copy_result = match self.copy_tree(source, &staged, Reservation::New).await {
             Ok(()) if self.cancel.is_cancelled() => Err(Error::Cancelled),
             other => other,
         };
         if let Err(operation) = copy_result {
-            if let Err(cleanup) = tokio::fs::remove_dir_all(&staging_dir).await {
-                return Err(Error::LocalStagingCleanup {
-                    path: staging_dir,
-                    operation: Box::new(operation),
-                    cleanup,
-                });
-            }
-            return Err(operation);
+            return Err(self.close_local_staging(staging_dir, operation).await);
         }
-        let batch = super::super::transfer::Batch::new(super::super::transfer::Request {
-            paths: vec![staged_path],
-            destination: directory.to_path_buf(),
-            mode: super::super::transfer::Mode::Move,
-        })?;
-        self.tasks
-            .spawn_blocking_named(
-                "Commit downloaded files",
-                move || -> Result<Vec<super::super::history::Step>, Error> {
-                    let result = batch.execute();
-                    let mut undo = Vec::new();
-                    let mut transfer_error = None;
-                    for item in result.items {
-                        match item.result {
-                            Ok(()) => {
-                                if let Some(expected) = item.committed_snapshot {
-                                    undo.push(super::super::history::Step::trash(
-                                        item.destination,
-                                        expected,
-                                    ));
-                                }
-                            }
-                            Err(error) => {
-                                transfer_error = Some(Error::Transfer(error));
-                                break;
-                            }
-                        }
-                    }
-                    let cleanup = std::fs::remove_dir_all(&staging_dir);
-                    match (transfer_error, cleanup) {
-                        (None, Ok(())) => Ok(undo),
-                        (None, Err(cleanup)) => Err(Error::Io(cleanup)),
-                        (Some(operation), Ok(())) => Err(operation),
-                        (Some(operation), Err(cleanup)) => Err(Error::LocalStagingCleanup {
-                            path: staging_dir,
-                            operation: Box::new(operation),
-                            cleanup,
-                        }),
-                    }
-                },
-            )
-            .await?
+        self.commit_local_staging(staging_dir, staged_path, directory)
+            .await
     }
 
     /// # Errors
@@ -398,5 +431,147 @@ impl Work {
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gds::service::task_manager::{Scope, Supervisor};
+
+    fn staging_entries(dir: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .expect("read destination directory")
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                path.file_name()?
+                    .to_string_lossy()
+                    .starts_with(".gds-download-")
+                    .then_some(path)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn nested_download_commits_and_cleans_staging_directory() {
+        let supervisor = Supervisor::new(false).expect("test runtime");
+        let scope = supervisor.scope();
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let dst_root = tempfile::tempdir().expect("destination tempdir");
+
+        let nested = src_root.path().join("bundle/sub");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+        std::fs::write(nested.join("notes.txt"), b"hello nested").expect("write nested file");
+
+        let (tx, _rx) = watch::channel(Progress::default());
+        let report = scope
+            .block_on(copy(
+                scope.clone(),
+                vec![Resource::Local(src_root.path().join("bundle"))],
+                Resource::Local(dst_root.path().to_path_buf()),
+                CopyOptions::default(),
+                CancellationToken::new(),
+                tx,
+            ))
+            .expect("run download");
+
+        assert!(report.failures.is_empty());
+        assert!(!report.cancelled);
+        assert_eq!(report.completed.len(), 1);
+        assert_eq!(report.undo.len(), 1);
+        assert_eq!(
+            std::fs::read(dst_root.path().join("bundle/sub/notes.txt")).expect("read committed"),
+            b"hello nested"
+        );
+        assert!(staging_entries(dst_root.path()).is_empty());
+    }
+
+    #[test]
+    fn destination_collision_and_cancellation_leave_no_staging_directories() {
+        let supervisor = Supervisor::new(false).expect("test runtime");
+        let scope = supervisor.scope();
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let dst_root = tempfile::tempdir().expect("destination tempdir");
+
+        let src_file = src_root.path().join("report.txt");
+        let dst_file = dst_root.path().join("report.txt");
+        std::fs::write(&src_file, b"incoming").expect("write source");
+        std::fs::write(&dst_file, b"existing").expect("write existing destination");
+
+        let (tx, _rx) = watch::channel(Progress::default());
+        let collision_report = scope
+            .block_on(copy(
+                scope.clone(),
+                vec![Resource::Local(src_file.clone())],
+                Resource::Local(dst_root.path().to_path_buf()),
+                CopyOptions::default(),
+                CancellationToken::new(),
+                tx,
+            ))
+            .expect("run colliding download");
+        assert_eq!(collision_report.failures.len(), 1);
+        assert_eq!(
+            std::fs::read(&dst_file).expect("read existing"),
+            b"existing"
+        );
+        assert!(staging_entries(dst_root.path()).is_empty());
+
+        // Pre-cancelled download must abort before commit and clean up its staging directory.
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let (tx, _rx) = watch::channel(Progress::default());
+        let mut work = Work {
+            tasks: scope.clone(),
+            cancel,
+            updates: tx,
+            progress: Progress::default(),
+            buffer: vec![0; 4096],
+        };
+        let err = scope
+            .block_on(work.download_to_local(
+                &Resource::Local(src_file),
+                dst_root.path(),
+                "fresh.txt",
+            ))
+            .expect("drive cancelled download")
+            .expect_err("cancelled download must fail");
+        assert!(matches!(err, Error::Cancelled));
+        assert!(!dst_root.path().join("fresh.txt").exists());
+        assert!(staging_entries(dst_root.path()).is_empty());
+    }
+
+    #[test]
+    fn rejected_commit_worker_drops_tempdir_and_cleans_staged_payload() {
+        let supervisor = Supervisor::new(false).expect("test runtime");
+        let active_scope = supervisor.scope();
+        let dst_root = tempfile::tempdir().expect("destination tempdir");
+
+        let staging = tempfile::Builder::new()
+            .prefix(".gds-download-")
+            .tempdir_in(dst_root.path())
+            .expect("create staging tempdir");
+        let staged_path = staging.path().join("payload.bin");
+        std::fs::write(&staged_path, b"staged bytes").expect("write staged payload");
+        let staging_path = staging.path().to_path_buf();
+        assert!(staging_path.exists());
+
+        // A default Scope has no executor, so `spawn_blocking_named` rejects the commit closure
+        // without running it. Because `TempDir` is moved into the closure, dropping it removes
+        // the staging directory automatically.
+        let (tx, _rx) = watch::channel(Progress::default());
+        let work = Work {
+            tasks: Scope::default(),
+            cancel: CancellationToken::new(),
+            updates: tx,
+            progress: Progress::default(),
+            buffer: vec![0; 4096],
+        };
+        let err = active_scope
+            .block_on(work.commit_local_staging(staging, staged_path, dst_root.path()))
+            .expect("drive commit")
+            .expect_err("rejected commit worker must report task error");
+        assert!(matches!(err, Error::Task(_)));
+        assert!(!staging_path.exists());
+        assert!(staging_entries(dst_root.path()).is_empty());
     }
 }

@@ -1,126 +1,244 @@
-//! Application-context access to shared services and startup assembly.
-use std::ops::Deref;
+//! Native application services shared across windows on one UI thread.
+use std::{cell::RefCell, rc::Rc, sync::OnceLock};
+use zgui::reactive::{Owner, on_cleanup_local, provide_local_context, use_local_context};
 
-use gpui_kit::App;
-
+mod task_manager;
+pub use task_manager::Tasks;
 #[cfg(feature = "appearance")]
 pub mod appearance;
-#[cfg(feature = "i18n")]
-pub mod i18n;
-mod task_manager;
-#[cfg(feature = "ui")]
-pub mod ui;
-
 #[cfg(feature = "appearance")]
 pub use appearance::Appearance;
 #[cfg(feature = "i18n")]
+pub mod i18n;
+#[cfg(feature = "i18n")]
 pub use i18n::I18n;
-pub use task_manager::Tasks;
+#[cfg(feature = "ui")]
+pub mod ui;
 #[cfg(feature = "ui")]
 pub use ui::Ui;
 
-pub trait Context: Deref<Target = App> {
-    type Reborrowed<'a>: Context
-    where
-        Self: 'a;
+static PROCESS_EXECUTOR: OnceLock<Option<zgui::tokio::Installed>> = OnceLock::new();
 
-    fn reborrow(&mut self) -> Self::Reborrowed<'_>;
+struct Services {
+    owner: Owner,
+    tasks: Tasks,
+    #[cfg(feature = "appearance")]
+    appearance: Appearance,
+    #[cfg(feature = "i18n")]
+    i18n: I18n,
+    #[cfg(feature = "ui")]
+    ui: Ui,
 }
 
-impl<'cx> Context for &'cx App {
-    type Reborrowed<'a>
-        = &'cx App
-    where
-        Self: 'a;
-
-    fn reborrow(&mut self) -> &'cx App {
-        self
-    }
+thread_local! {
+    static CURRENT: RefCell<Option<Gds>> = const { RefCell::new(None) };
 }
 
-impl Context for &mut App {
-    type Reborrowed<'a>
-        = &'a mut App
-    where
-        Self: 'a;
+/// Shared application services context. Clones point to the same UI-thread registry.
+#[derive(Clone)]
+pub struct Gds(Rc<Services>);
 
-    fn reborrow(&mut self) -> &mut App {
-        self
-    }
-}
-
-pub trait AppExt {
-    fn gds(&self) -> Gds<&App>;
-    fn gds_mut(&mut self) -> Gds<&mut App>;
-}
-
-impl AppExt for App {
-    fn gds(&self) -> Gds<&App> {
-        Gds { cx: self }
+impl Gds {
+    /// Install application services inside the active `zgui` reactive root before opening windows.
+    ///
+    /// Ensures a process-wide `zgui-tokio` background executor is active, enters `scope`'s Tokio
+    /// runtime (when present) on the current UI thread, and exposes `Gds` both as a reactive local
+    /// context and on the current UI thread.
+    pub fn install(scope: crate::service::task_manager::Scope) -> Self {
+        #[cfg(feature = "ui")]
+        return Self::install_inner(scope, None, false);
+        #[cfg(not(feature = "ui"))]
+        return Self::install_inner(scope, false);
     }
 
-    fn gds_mut(&mut self) -> Gds<&mut App> {
-        Gds { cx: self }
+    /// Install application services for a process-lived [`Supervisor`](crate::service::task_manager::Supervisor).
+    ///
+    /// Reuses `scope`'s Tokio runtime directly as `zgui`'s process-wide background executor when
+    /// initializing for the first time in the process.
+    pub fn install_process(scope: crate::service::task_manager::Scope) -> Self {
+        #[cfg(feature = "ui")]
+        return Self::install_inner(scope, None, true);
+        #[cfg(not(feature = "ui"))]
+        return Self::install_inner(scope, true);
     }
-}
 
-/// A borrowed accessor, with no state or service initialization of its own.
-#[derive(Clone, Copy)]
-pub struct Gds<C> {
-    cx: C,
-}
-
-impl<C> Gds<C> {
-    pub fn into_inner(self) -> C {
-        self.cx
+    /// Install application services together with an optional UI log collector.
+    #[cfg(feature = "ui")]
+    pub fn install_with_logs(
+        scope: crate::service::task_manager::Scope,
+        logs: Option<crate::service::logs::Store>,
+    ) -> Self {
+        Self::install_inner(scope, logs, false)
     }
-}
 
-impl<C: Context> Gds<C> {
-    pub fn reborrow(&mut self) -> Gds<C::Reborrowed<'_>> {
-        Gds {
-            cx: self.cx.reborrow(),
+    /// Install application services and an optional UI log collector for a process-lived
+    /// [`Supervisor`](crate::service::task_manager::Supervisor).
+    #[cfg(feature = "ui")]
+    pub fn install_process_with_logs(
+        scope: crate::service::task_manager::Scope,
+        logs: Option<crate::service::logs::Store>,
+    ) -> Self {
+        Self::install_inner(scope, logs, true)
+    }
+
+    fn install_inner(
+        scope: crate::service::task_manager::Scope,
+        #[cfg(feature = "ui")] logs: Option<crate::service::logs::Store>,
+        process_lifetime: bool,
+    ) -> Self {
+        let owner = Owner::current().expect("install GDS inside the application reactive root");
+        let _ = PROCESS_EXECUTOR.get_or_init(|| {
+            let result = if process_lifetime && let Some(handle) = scope.runtime_handle() {
+                zgui::tokio::install_handle(handle.clone())
+            } else {
+                zgui::tokio::install()
+            };
+            match result {
+                Ok(installed) => Some(installed),
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        "background executor already active; retaining existing spawner"
+                    );
+                    None
+                }
+            }
+        });
+        if let Some(handle) = scope.runtime_handle() {
+            zgui::tokio::enter_here(handle.clone());
         }
+        let tasks_scope = scope.clone();
+        let services = Self(Rc::new(Services {
+            owner: owner.clone(),
+            tasks: Tasks::new(scope, owner),
+            #[cfg(feature = "appearance")]
+            appearance: Appearance::new(),
+            #[cfg(feature = "i18n")]
+            i18n: I18n::new(),
+            #[cfg(feature = "ui")]
+            ui: Ui::new(logs),
+        }));
+        CURRENT.with(|slot| {
+            assert!(
+                slot.borrow().is_none(),
+                "application services must be installed once per UI thread"
+            );
+            *slot.borrow_mut() = Some(services.clone());
+        });
+        provide_local_context(services.clone());
+        on_cleanup_local(move || {
+            tasks_scope.cancel();
+            CURRENT.with(|slot| {
+                slot.borrow_mut().take();
+            });
+        });
+        services
     }
 
-    pub fn tasks(&mut self) -> Tasks<C::Reborrowed<'_>> {
-        Tasks {
-            cx: self.cx.reborrow(),
+    /// Look up the installed [`Gds`] context on the current UI thread, if active.
+    pub fn try_current() -> Option<Self> {
+        if zgui::reactive::is_ui_thread()
+            && let Some(services) = use_local_context::<Self>()
+        {
+            return Some(services);
         }
+        CURRENT.with(|slot| slot.borrow().clone())
+    }
+
+    /// Return the installed [`Gds`] context for the current UI thread.
+    pub fn current() -> Self {
+        Self::try_current().expect("install GDS services before accessing Gds::current()")
+    }
+
+    /// Run `f` under the application-wide reactive owner rather than a single window owner.
+    pub fn with<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.0.owner.with(f)
+    }
+
+    pub fn tasks(&self) -> &Tasks {
+        &self.0.tasks
     }
 
     #[cfg(feature = "appearance")]
-    pub fn appearance(&mut self) -> Appearance<C::Reborrowed<'_>> {
-        Appearance {
-            cx: self.cx.reborrow(),
-        }
+    pub fn appearance(&self) -> &Appearance {
+        &self.0.appearance
     }
 
     #[cfg(feature = "i18n")]
-    pub fn i18n(&mut self) -> I18n<C::Reborrowed<'_>> {
-        I18n {
-            cx: self.cx.reborrow(),
-        }
+    pub fn i18n(&self) -> &I18n {
+        &self.0.i18n
     }
 
     #[cfg(feature = "ui")]
-    pub fn ui(&mut self) -> Ui<C::Reborrowed<'_>> {
-        Ui {
-            cx: self.cx.reborrow(),
+    pub fn ui(&self) -> &Ui {
+        &self.0.ui
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Gds;
+    use crate::service::task_manager::Supervisor;
+    use std::{sync::Arc, time::Duration};
+    use zgui::reactive::{
+        Mounted, RwSignal, TestWaker, background, blocking, flush, install, prelude::*,
+        set_frame_waker, spawn_local,
+    };
+
+    fn pump(waker: &TestWaker, settled: impl Fn() -> bool) {
+        for _ in 0..2_000 {
+            flush();
+            if settled() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+            let _ = waker.take();
         }
+        panic!("reactive background tasks did not complete within budget");
     }
-}
 
-impl<C: Deref<Target = App>> Gds<C> {
-    /// Underlying read-only context for application-specific accessor extensions.
-    pub fn app(&self) -> &App {
-        &self.cx
-    }
-}
+    #[test]
+    fn background_and_blocking_survive_ephemeral_supervisor_shutdown() {
+        install().expect("install reactive runtime");
+        let waker = Arc::new(TestWaker::default());
+        set_frame_waker(waker.clone());
 
-impl Gds<&mut App> {
-    /// Underlying context for application-specific accessor extensions.
-    pub fn app_mut(&mut self) -> &mut App {
-        self.cx
+        let first_supervisor = Supervisor::new(false).expect("start first I/O supervisor");
+        let first_root = Mounted::new();
+        let primed = first_root.with(|| {
+            let _gds = Gds::install(first_supervisor.scope());
+            let primed = RwSignal::new(false);
+            let _task = spawn_local(async move {
+                assert_eq!(blocking(|| 1_u32).await, 1);
+                primed.set(true);
+            });
+            primed
+        });
+        pump(&waker, || primed.get_untracked());
+        first_root.unmount();
+        first_supervisor.shutdown();
+
+        let second_supervisor = Supervisor::new(false).expect("start second I/O supervisor");
+        let second_root = Mounted::new();
+        let outcome = second_root.with(|| {
+            let _gds = Gds::install(second_supervisor.scope());
+            let outcome = RwSignal::new(None);
+            let _task = spawn_local(async move {
+                let blocked = blocking(|| 42).await;
+                let async_bg = background(async {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    7
+                })
+                .await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                outcome.set(Some((blocked, async_bg)));
+            });
+            outcome
+        });
+        pump(&waker, || outcome.get_untracked().is_some());
+        assert_eq!(outcome.get_untracked(), Some((42, 7)));
+
+        second_root.unmount();
+        second_supervisor.shutdown();
     }
 }

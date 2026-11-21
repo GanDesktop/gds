@@ -5,7 +5,7 @@ English | [简体中文](docs/i18n/zh-CN/README.md)
 
 # <img src="../../assets/files/icon-desktop.svg" alt="GDS Files icon" width="32" height="32" align="middle"> GDS Files
 
-GDS Files is a native file manager built with GPUI, focused on making file browsing on Wayland beautiful and easy.
+GDS Files is a native file manager built with zgui, focused on making file browsing on Wayland beautiful and easy.
 
 ![Overview](docs/assets/overview.png)
 

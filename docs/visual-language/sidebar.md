@@ -13,22 +13,25 @@ SideBar (default: 222 px expanded / 58 px collapsed)
 └─ SideBarFooter          (fixed height, outside scroll viewport)
 ```
 
-Instantiate containers with `Default::default()` in `el!`, supplying a stable `.id(...)` (or `.track_scroll(...)`) on scrollable regions. For independently scrolling groups (such as Files' draggable Tabs / Volumes split), set `overflow_hidden` on `SideBarContent` and `flex_1` + `min_h_0` + `overflow_y_scroll` on each `SideBarSectionContent`.
+Compose containers inside `zgui::view!`. For independently scrolling groups (such as Files' draggable Tabs / Volumes split), pass `scrollable = false` on `SideBarContent` and `flex: 1 1 0%; min-height: 0; overflow-y: auto` on each `SideBarSectionContent`.
 
 ## Continuous Width Presentation
 
-Workspace hosts sample the animated sidebar presentation **once per render** before constructing column children:
+Workspace hosts derive one animated `Signal<SidebarPresentation, LocalStorage>` and share it across column children:
 
 ```rust,ignore
-let sidebar = SideBar::default().state(state);
-let presentation = sidebar.sample("workspace-sidebar", window, cx);
-let frame = Frame::default().sidebar_width(presentation.width());
-let sidebar = sidebar.presentation(presentation);
+let presentation = use_sidebar_presentation(sidebar_state);
+let sidebar_width = Signal::derive_local(move || presentation.get().width());
+view! {
+    Frame(sidebar_width = sidebar_width) {
+        SideBar(presentation = presentation) { /* ... */ }
+    }
+}
 ```
 
-Pass the same `SidebarPresentation` to headers, `NavItem::presentation(...)`, footers, dividers, and the Files terminal tab column:
+Pass the same `SidebarPresentation` signal to headers, `NavItem(presentation = ...)`, footers, dividers, and the Files terminal tab column:
 
-- **Timing**: Uses GPUI Kit's target-value transition at **`160 ms`, `ease-out cubic`** (no spring overshoot). Retargeting mid-flight reverses smoothly from the current width; reduced motion snaps immediately; settled states request zero frames. Static sidebars (e.g., Settings) may use `.state(state)` without sampling motion.
+- **Timing**: Uses `gds::appearance::motion::use_transition` at **`160 ms`, `ease-out cubic`** (no spring overshoot). Retargeting mid-flight reverses smoothly from the current width; reduced motion snaps immediately; settled states request zero frames. Static sidebars (e.g., Settings) may pass `state = ...` directly without sampling motion.
 - **Single tree**: Keep one element tree, stable IDs, and one set of scroll handles across widths—never swap between separate "expanded" and "rail" trees or animate surface alpha.
 - **Hit-target gating**: Trailing row actions are interactive only when fully expanded (`presentation.actions_visible()`). Opacity alone must never hide an active click target.
 

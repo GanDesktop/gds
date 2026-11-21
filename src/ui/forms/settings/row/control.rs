@@ -1,27 +1,19 @@
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
-
 use super::super::CONTROL_WIDTH;
-use crate::ui::container::container_traits;
+use zgui::prelude::*;
+use zgui::{component, view};
 
 /// The shared control column, keeping controls aligned between rows.
-#[derive(IntoElement)]
-pub struct SettingControl {
-    base: Div,
-}
-
-impl Default for SettingControl {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { w: CONTROL_WIDTH.px; flex; flex_shrink_0; items_center; justify_end; } },
+#[component]
+pub fn SettingControl(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::super::install_settings_stylesheets();
+    let width = format!("{CONTROL_WIDTH}px");
+    view! {
+        box(class = "gds-setting-control", var:--gds-setting-control-width = width, class = class, {..attrs}) {
+            {children.into_view_once()}
         }
-    }
-}
-
-container_traits!(SettingControl);
-
-impl RenderOnce for SettingControl {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

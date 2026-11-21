@@ -2,32 +2,23 @@ mod content;
 mod header;
 mod title;
 
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
+pub use content::{SideBarSectionContent, SideBarSectionContentProps};
+pub use header::{SideBarSectionHeader, SideBarSectionHeaderProps};
+pub use title::{SideBarSectionTitle, SideBarSectionTitleProps};
 
-use super::super::container::container_traits;
-pub use content::SideBarSectionContent;
-pub use header::SideBarSectionHeader;
-pub use title::SideBarSectionTitle;
+use zgui::prelude::*;
+use zgui::{component, view};
 
-/// A content group, usually composed from a section header and section content.
-#[derive(IntoElement)]
-pub struct SideBarSection {
-    base: Div,
-}
-
-impl Default for SideBarSection {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex; flex_col; flex_shrink_0; w_full; min_w_0; } },
+#[component]
+pub fn SideBarSection(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_sidebar_stylesheets();
+    view! {
+        column(class = "gds-sidebar__section", class = class, {..attrs}) {
+            {children.into_view_once()}
         }
-    }
-}
-
-container_traits!(SideBarSection);
-
-impl RenderOnce for SideBarSection {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

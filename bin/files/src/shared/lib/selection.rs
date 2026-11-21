@@ -139,6 +139,7 @@ impl<T> Selection<T> {
         matches!(self.repr, Repr::Empty)
     }
 
+    #[cfg(test)]
     pub(crate) fn is_range(&self) -> bool {
         matches!(self.repr, Repr::Range { .. })
     }
@@ -156,10 +157,12 @@ impl<T> Selection<T> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn first(&self) -> Option<&T> {
         self.as_slice().first()
     }
 
+    #[cfg(test)]
     pub(crate) fn last(&self) -> Option<&T> {
         self.as_slice().last()
     }
@@ -225,6 +228,13 @@ impl<T> Selection<T> {
 
     /// Detach any shared [`SelectionBacking`] by materializing a range selection into its own
     /// compact representation (`Empty`, `Single`, or `Set`).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Compaction semantics are retained and covered by the selection tests"
+        )
+    )]
     pub(crate) fn compact(&mut self)
     where
         T: Clone + Eq + Hash,
@@ -240,6 +250,13 @@ impl<T> Selection<T> {
         self.repr = Self::repr_from_unique_slice(&backing.items[*start..=*end]);
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Compaction semantics are retained and covered by the selection tests"
+        )
+    )]
     fn repr_from_unique_slice(slice: &[T]) -> Repr<T>
     where
         T: Clone + Eq + Hash,

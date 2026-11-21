@@ -143,13 +143,19 @@ mod metadata {
                 }
                 Err(error) => return Err(error.into()),
             };
-            if tag == "unknown" {
-                return Ok(tag);
-            }
-            if tag.len() < 7 || !tag.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                return Err("GDS_BUILD_TAG must be a Git commit hash".into());
-            }
-            Ok(tag.chars().take(9).collect())
+            let base = if tag == "unknown" {
+                tag
+            } else {
+                if tag.len() < 7 || !tag.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err("GDS_BUILD_TAG must be a Git commit hash".into());
+                }
+                tag.chars().take(9).collect()
+            };
+            Ok(match env::var("PROFILE").ok().as_deref() {
+                Some("release") => base,
+                Some(profile) if !profile.is_empty() => format!("{base}-{profile}"),
+                _ => format!("{base}-debug"),
+            })
         }
     }
 }

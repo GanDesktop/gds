@@ -6,10 +6,9 @@ mod material;
 mod noctalia;
 
 use directories::BaseDirs;
-use gpui_kit::WindowAppearance;
 use std::path::{Path, PathBuf};
 
-use super::{Error, Loaded, ModePreference, read};
+use super::{Error, Loaded, Mode, ModePreference, read};
 
 const DEFAULT_WAYLAND_DISPLAY: &str = "wayland-0";
 
@@ -205,10 +204,7 @@ pub(super) fn source_paths() -> Vec<PathBuf> {
 /// # Errors
 /// Reports missing user directories, inactive desktop shells, unreadable files,
 /// or invalid desktop palettes.
-pub(super) fn load(
-    preference: ModePreference,
-    platform: WindowAppearance,
-) -> Result<Loaded, Error> {
+pub(super) fn load(preference: ModePreference, platform: Mode) -> Result<Loaded, Error> {
     let dirs = BaseDirs::new().ok_or(Error::NoUserDirectories)?;
     let desktop = Desktop::current(&dirs).ok_or(Error::UnsupportedDesktop)?;
     match desktop {

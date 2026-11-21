@@ -15,14 +15,6 @@ pub(crate) enum Intent {
     Add,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Authentication {
-    Agent,
-    Password,
-    Key,
-    Guest,
-}
-
 pub(super) struct Request {
     pub address: Address,
     pub credentials: Credentials,

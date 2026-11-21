@@ -77,7 +77,7 @@ The module installs only the GDS backend and configures only FileChooser. Manage
 
 Requests carry titles, button labels/mnemonics, initial locations, filters, choices, external parent handles and modality through stdin JSON. Unix paths preserve raw bytes. Results use local `file://` URIs, including non-UTF-8 names. Remote files must be downloaded first. See [picker protocol](picker.md).
 
-The GPUI platform patches support Wayland xdg-foreign-v2 parent relationships and xdg-dialog hints, plus X11 WM_TRANSIENT_FOR and modal hints. Modality defaults to true. If a parent is absent, invalid or unsupported, the picker remains usable independently and reports why the relationship could not be established. Desktop adoption of these hints depends on the session.
+The `zgui` platform backends support Wayland `xdg-foreign-v2` parent relationships and `xdg-dialog-v1` hints, plus X11 `WM_TRANSIENT_FOR` and modal hints. Modality defaults to true. If a parent is absent, invalid or unsupported, the picker remains usable independently and reports why the relationship could not be established. Desktop adoption of these hints depends on the session.
 
 Only applications using the desktop Portal follow this routing; applications drawing their own chooser retain it. Existing system or user Portal preferences may override module defaults. `services.gds-portal.desktops` selects additional desktop-specific configurations; the common configuration is always included. Other interfaces such as screen capture keep their configured providers.
 

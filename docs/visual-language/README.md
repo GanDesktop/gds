@@ -7,6 +7,7 @@ GDS applications share a single visual and interaction grammar implemented in `s
 ## 1. Design Principles
 
 - **Native, calm, and content-first**: Favor crisp hierarchy and compact density over marketing whitespace, nested card stacks, or decorative gradients.
+- **No Shock (fixed spatial anchors)**: Recurring structural elements keep invariant coordinates across selection, content, and state changes (e.g., `SettingReset` reserves fixed horizontal space when empty; the Files details pane pins a constant `168 px` preview stage and fixed 2-line `44 px` title slot above an independently scrollable metadata body regardless of media presence, filename length, or multi-selection).
 - **Icons speak first, backed by clear tooltips**: Common toolbar and row actions use semantic icons with concise hover/focus tooltips (`ShortcutHint`) and accessible names. Keep visible text for user-identifiable data (filenames, paths, errors, selected values).
 - **Suite-first components**: Implement shared patterns in `src/ui/` and style them exclusively through semantic tokens rather than app-private color keys or ad-hoc alpha tweaks.
 
@@ -39,7 +40,7 @@ Shared layout and typography constants live in [`src/appearance/tokens.rs`](../.
 
 - **Initial & minimum sizes** ([`src/ui/window.rs`](../../src/ui/window.rs)): Workspaces open at `960 × 640` logical pixels (capped at 85% of the primary display work area) with a `520 × 360` minimum size.
 - **Responsive Files layout**: Below ~`1080 px` width, Files switches to a compact layout—collapsing the sidebar, disabling the details panel, hiding back/forward/parent buttons, and folding secondary page actions into a header ellipsis menu while keeping the top-left Application Menu (`Alt+M` / `F10`), page title, and search accessible. Widening restores saved sidebar and details preferences.
-- **Application Menu (`Button::application_menu`)**: Shows the `24 px` app icon at rest and swaps to a centered `16 px` `Menu` icon while hovered (`group_hover`). Secondary pages (Settings, Help, Session Management) replace this top-left slot with an `ArrowLeft` back button.
+- **Application Menu (`ApplicationMenuButton`)**: Shows the `24 px` app icon at rest and swaps to a centered `16 px` `Menu` icon while pointer-hovered (`:hover`). Secondary pages (Settings, Help, Session Management) replace this top-left slot with an `ArrowLeft` back button.
 - **Window Controls (`WindowControls`)**: Placed in a fixed right-hand toolbar slot (`ui::window::window_options()`). Hidden automatically in Niri sessions and when server-side decorations are negotiated; minimize/maximize buttons respect compositor capabilities. Between the menu button and sidebar toggle lies a dedicated empty window-drag region (omitted when collapsed below `8 px`).
 
 ## 4. State Expression
@@ -57,7 +58,7 @@ Target contrast is at least `4.5:1` for body text and `3:1` for essential UI con
 
 ## 5. Semantic Icon Vocabulary
 
-Operational icons come from GPUI Kit's stroke icon set mapped by semantic role (never raw SVG paths in app views):
+Operational icons come from `zgui-ui-icons`'s Lucide stroke icon set mapped by semantic role (`gds::ui::IconName`, never raw SVG paths in app views):
 
 | Semantic Role | Icon | Usage Contract |
 | --- | --- | --- |
@@ -85,7 +86,7 @@ In GDS Agents, ACP input controls map protocol semantics—not translated labels
 
 - [Themes & Materials](theme.md) — palette sources, role mapping, custom TOML themes, and hot-reload
 - [Shortcuts & Focus Scopes](shortcuts.md) — keybindings, `ShortcutBadge`, modifier keytips, and scope routing
-- [Component Composition](composition.md) — UIM anatomy (`ContentPage`, `SettingRow`, `DragCard`, `DialogActions`, `DirectoryPicker`, `About`)
+- [Component Composition](composition.md) — `zgui::view!` component anatomy (`ContentPage`, `SettingRow`, `DragCard`, `DialogActions`, `DirectoryPicker`, `About`)
 - [Sidebar Anatomy](sidebar.md) — `SideBar` structure, continuous width transitions, and spatial stability
 - [Focus Presentation](focus.md) — 1 px keyboard contour and scroll clipping
 - [Motion](motion.md) — reduced-motion policy and `140 ms` / `160 ms` transitions

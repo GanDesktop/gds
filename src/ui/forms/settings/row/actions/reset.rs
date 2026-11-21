@@ -1,27 +1,19 @@
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
-
 use super::super::super::RESET_WIDTH;
-use crate::ui::container::container_traits;
+use zgui::prelude::*;
+use zgui::{component, view};
 
 /// Reserves the reset target's space even when no action is shown.
-#[derive(IntoElement)]
-pub struct SettingReset {
-    base: Div,
-}
-
-impl Default for SettingReset {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { w: RESET_WIDTH.px; h: RESET_WIDTH.px; flex; flex_shrink_0; items_center; justify_center; } },
+#[component]
+pub fn SettingReset(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    #[prop(optional)] children: Option<Children>,
+) -> impl IntoView {
+    super::super::super::install_settings_stylesheets();
+    let size = format!("{RESET_WIDTH}px");
+    view! {
+        box(class = "gds-setting-reset", var:--gds-setting-reset-size = size, class = class, {..attrs}) {
+            {children.map(Children::into_view_once)}
         }
-    }
-}
-
-container_traits!(SettingReset);
-
-impl RenderOnce for SettingReset {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

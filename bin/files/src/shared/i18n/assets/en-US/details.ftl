@@ -1,4 +1,5 @@
 details-format = Format
+details-mime = MIME type
 details-created = Created
 details-target = Target
 details-dimensions = Dimensions
@@ -15,6 +16,8 @@ details-line-endings = Line endings
 details-folders = Folders
 details-files = Files
 details-links = Links
+details-items = Items
+details-calculating = Calculating…
 details-mixed = Mixed
 details-yes = Yes
 details-no = No

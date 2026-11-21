@@ -213,30 +213,67 @@ pub enum ContentCategory {
     Binary,
 }
 
-/// Broad category plus the concrete format name for one piece of content.
+/// How a [`ContentType`] classification was produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectionSource {
+    /// Matched from filename rules (`mime.cache` / `globs2`).
+    Filename,
+    /// Matched from generated GitHub Linguist source-code rules.
+    Linguist,
+    /// Matched from file header magic signatures.
+    Magic,
+    /// Inferred from the text-vs-binary byte heuristic (`text/plain` or `application/octet-stream`).
+    Heuristic,
+}
+
+/// Broad category plus MIME/language identity for one piece of content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentType {
     pub category: ContentCategory,
-    /// Format name shown verbatim by the interface, e.g. `PNG`, `Rust`, `MPEG-4`.
-    /// `None` when only the broad category is known.
-    pub format: Option<Arc<str>>,
-    /// MIME type, used as the fallback label when no friendly name is known.
+    /// Unambiguous source language name from Linguist C0 fallback (e.g. `Zig`, `Nix`, `Dockerfile`).
+    pub code_language: Option<Arc<str>>,
+    /// Canonical MIME type when recognized or inferred.
     pub mime: Option<Arc<str>>,
+    /// Origin of this classification (used to retain unknown extensions on heuristic fallbacks).
+    pub source: DetectionSource,
+    /// Whether this content can be previewed as plain text (excludes binary Documents like `.ots`/`.pdf`).
+    pub text_previewable: bool,
 }
 
 impl ContentType {
-    pub(super) fn new(category: ContentCategory, format: Option<&str>, mime: Option<&str>) -> Self {
+    pub(super) fn from_mime(
+        category: ContentCategory,
+        mime: Arc<str>,
+        source: DetectionSource,
+        text_previewable: bool,
+    ) -> Self {
         Self {
             category,
-            format: format.map(Arc::from),
-            mime: mime.map(Arc::from),
+            code_language: None,
+            mime: Some(mime),
+            source,
+            text_previewable,
         }
     }
 
-    /// Format name for the details column; the MIME type is the fallback when no
-    /// friendly name is known.
-    pub fn label(&self) -> Option<&str> {
-        self.format.as_deref().or(self.mime.as_deref())
+    pub(super) fn from_linguist(language: &'static str) -> Self {
+        Self {
+            category: ContentCategory::Code,
+            code_language: Some(Arc::from(language)),
+            mime: None,
+            source: DetectionSource::Linguist,
+            text_previewable: true,
+        }
+    }
+
+    pub(super) fn from_linguist_data(language: &'static str) -> Self {
+        Self {
+            category: ContentCategory::Text,
+            code_language: Some(Arc::from(language)),
+            mime: None,
+            source: DetectionSource::Linguist,
+            text_previewable: true,
+        }
     }
 }
 

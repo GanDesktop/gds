@@ -37,7 +37,7 @@ check() {
 }
 
 package_gds-files() {
-    pkgdesc='Native GPUI file manager with embedded terminals'
+    pkgdesc='Native zgui file manager with embedded terminals'
     depends=(libgcc glibc wayland libxkbcommon libxkbcommon-x11 fontconfig
              freetype2 libxcb libglvnd vulkan-icd-loader xdg-desktop-portal
              shared-mime-info hicolor-icon-theme)

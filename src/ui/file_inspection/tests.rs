@@ -1,375 +1,210 @@
-use super::{Cache, Request, Source, State};
-use crate::service::file_inspection::Kind;
-use gds::app::AppExt as _;
-use gpui_kit::{AppContext, TestAppContext};
-use std::sync::Arc;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
-#[gpui_kit::test]
-fn cached_images_are_shared_and_replacing_a_file_requests_a_new_preview(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
-    cx.executor().allow_parking();
-    let directory = tempfile::tempdir().expect("thumbnail directory");
-    let path = directory.path().join("photo.png");
-    image::RgbImage::from_pixel(8, 4, image::Rgb([10, 20, 30]))
-        .save(&path)
-        .expect("image fixture");
-    let source = Source {
-        path: path.clone(),
+use image::{ImageBuffer, Rgba};
+use tempfile::TempDir;
+use zgui::reactive::{Mounted, flush, install};
+
+use super::{Cache, DEFAULT_CACHE_ENTRIES, DEFAULT_CACHE_MIB, DEFAULT_WORKERS, Options, State};
+use crate::service::file_inspection::{Kind, Request, Source};
+
+fn write_test_png(dir: &Path, name: &str, color: [u8; 4], size: u32) -> Source {
+    let path = dir.join(name);
+    let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(size, size, |_, _| Rgba(color));
+    img.save(&path).expect("write PNG fixture");
+    let len = std::fs::metadata(&path).expect("stat PNG fixture").len();
+    Source {
+        path,
         kind: Kind::Image,
-        size: Some(1),
+        size: Some(len),
         modified: None,
-    };
-    let cache = cx.update(|cx| cx.new(|_| Cache::default()));
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            let _ = cache.request(source.clone(), Request::Thumbnail, cx);
-            let _ = cache.request(source.clone(), Request::Thumbnail, cx);
-        })
-    });
-    cx.run_until_parked();
-    let original = cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            let State::Ready(first) = cache
-                .request(source.clone(), Request::Thumbnail, cx)
-                .thumbnail
-            else {
-                panic!("thumbnail must finish");
-            };
-            let State::Ready(second) = cache
-                .request(source.clone(), Request::Thumbnail, cx)
-                .thumbnail
-            else {
-                panic!("cached thumbnail must stay ready");
-            };
-            assert!(Arc::ptr_eq(&first, &second));
-            assert_eq!(
-                &first.as_bytes(0).expect("decoded pixels")[..4],
-                &[30, 20, 10, 255]
-            );
-            assert_eq!(
-                cache.bytes,
-                first.as_bytes(0).expect("decoded pixels").len()
-            );
-            assert!(cache.bytes > std::fs::metadata(&path).expect("source size").len() as usize);
-            first
-        })
-    });
-    image::RgbImage::from_pixel(16, 8, image::Rgb([120, 80, 40]))
-        .save(&path)
-        .expect("replacement image");
-    let replacement = Source {
-        size: Some(2),
-        ..source
-    };
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            assert!(matches!(
-                cache
-                    .request(replacement.clone(), Request::Thumbnail, cx)
-                    .thumbnail,
-                State::Loading
-            ))
-        })
-    });
-    cx.run_until_parked();
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            let State::Ready(current) =
-                cache.request(replacement, Request::Thumbnail, cx).thumbnail
-            else {
-                panic!("replacement preview must finish");
-            };
-            assert!(!Arc::ptr_eq(&original, &current));
-        })
-    });
-}
-
-#[gpui_kit::test]
-fn paging_keeps_previous_previews_ready(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
-    cx.executor().allow_parking();
-    let directory = tempfile::tempdir().expect("thumbnail directory");
-    let pages: Vec<Vec<Source>> = (0..3)
-        .map(|page| {
-            (0..16)
-                .map(|index| {
-                    let path = directory.path().join(format!("{page}-{index}.png"));
-                    image::RgbImage::from_pixel(8, 4, image::Rgb([page, index, 30]))
-                        .save(&path)
-                        .expect("image fixture");
-                    Source {
-                        path,
-                        kind: Kind::Image,
-                        size: Some(1),
-                        modified: None,
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    let cache = cx.update(|cx| cx.new(|_| Cache::default()));
-    let mut images = Vec::new();
-    for page in &pages {
-        cx.update(|cx| {
-            cache.update(cx, |cache, cx| {
-                for source in page {
-                    let _ = cache.request(source.clone(), Request::Thumbnail, cx);
-                }
-            })
-        });
-        cx.run_until_parked();
-        images.push(cx.update(|cx| {
-            cache.update(cx, |cache, cx| {
-                page.iter()
-                    .map(|source| {
-                        let State::Ready(image) = cache
-                            .request(source.clone(), Request::Thumbnail, cx)
-                            .thumbnail
-                        else {
-                            panic!("page must finish loading");
-                        };
-                        image
-                    })
-                    .collect::<Vec<_>>()
-            })
-        }));
-    }
-    for (page, images) in pages.iter().zip(&images).rev() {
-        cx.update(|cx| {
-            cache.update(cx, |cache, cx| {
-                for (source, original) in page.iter().zip(images) {
-                    let State::Ready(current) = cache
-                        .request(source.clone(), Request::Thumbnail, cx)
-                        .thumbnail
-                    else {
-                        panic!("returning to a page must be immediately ready");
-                    };
-                    assert!(Arc::ptr_eq(original, &current));
-                }
-                assert!(cache.pending.is_empty());
-                assert_eq!(cache.running, 0);
-            })
-        });
     }
 }
 
-#[gpui_kit::test]
-fn metadata_requested_during_thumbnail_loading_is_completed_and_reused(cx: &mut TestAppContext) {
-    use crate::service::file_inspection::{FileFacts, Metadata};
-    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
-    cx.executor().allow_parking();
-    let directory = tempfile::tempdir().expect("inspection directory");
-    let path = directory.path().join("photo.png");
-    image::RgbImage::new(20, 10)
-        .save(&path)
-        .expect("image fixture");
-    let source = Source {
-        path,
-        kind: Kind::Image,
-        size: None,
-        modified: None,
-    };
-    let cache = cx.update(|cx| cx.new(|_| Cache::default()));
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            let first = cache.request(source.clone(), Request::Thumbnail, cx);
-            assert!(matches!(first.metadata, State::NotRequested));
-            assert!(matches!(first.thumbnail, State::Loading));
-            let both = cache.request(source.clone(), Request::Both, cx);
-            assert!(matches!(both.metadata, State::Loading));
-        })
-    });
-    cx.run_until_parked();
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            let both = cache.request(source.clone(), Request::Both, cx);
-            let State::Ready(metadata) = both.metadata else {
-                panic!("metadata must complete");
-            };
-            let Metadata::File(FileFacts::Image(facts)) = metadata.as_ref() else {
-                panic!("image metadata");
-            };
-            assert_eq!(facts.size.expect("dimensions").width, 20);
-            assert!(matches!(both.thumbnail, State::Ready(_)));
-            let State::Ready(reused) = cache.request(source, Request::Metadata, cx).metadata else {
-                panic!("cached metadata");
-            };
-            assert!(Arc::ptr_eq(&metadata, &reused));
-            assert_eq!(cache.running, 0);
-            assert!(cache.pending.is_empty());
-        })
-    });
-}
-
-#[gpui_kit::test]
-fn thumbnail_failure_keeps_readable_metadata(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
-    cx.executor().allow_parking();
-    let directory = tempfile::tempdir().expect("inspection directory");
-    let path = directory.path().join("truncated.png");
-    image::RgbImage::new(20, 10)
-        .save(&path)
-        .expect("image fixture");
-    let bytes = std::fs::read(&path).expect("PNG bytes");
-    std::fs::write(&path, &bytes[..33]).expect("keep signature and IHDR, truncate pixels");
-    let source = Source {
-        path,
-        kind: Kind::Image,
-        size: None,
-        modified: None,
-    };
-    let cache = cx.update(|cx| cx.new(|_| Cache::default()));
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            cache.request(source.clone(), Request::Both, cx);
-        })
-    });
-    cx.run_until_parked();
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            let snapshot = cache.request(source, Request::Both, cx);
-            assert!(matches!(snapshot.metadata, State::Ready(_)));
-            assert!(matches!(snapshot.thumbnail, State::Failed(_)));
-        })
-    });
+fn drive_until(mut predicate: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !predicate() {
+        assert!(
+            Instant::now() < deadline,
+            "async inspection worker timed out"
+        );
+        flush();
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }
 
 #[test]
-fn pending_queue_pops_most_recently_prioritized_item_first() {
-    let mut cache = Cache::default();
-    let make = |name: &str| Source {
-        path: std::path::PathBuf::from(name),
-        kind: Kind::Image,
-        size: Some(1),
-        modified: None,
-    };
-    let a = make("a.png");
-    let b = make("b.png");
-    let c = make("c.png");
-    cache.enqueue_pending(a.clone());
-    cache.enqueue_pending(b.clone());
-    cache.enqueue_pending(c.clone());
-    // Re-prioritizing `a` moves it to the back without inserting a duplicate.
-    cache.enqueue_pending(a.clone());
-    assert_eq!(cache.next_pending(), Some(a));
-    assert_eq!(cache.next_pending(), Some(c));
-    assert_eq!(cache.next_pending(), Some(b));
-    assert_eq!(cache.next_pending(), None);
+fn inspection_defaults_match_specification() {
+    let options = Options::default();
+    assert_eq!(options.capacity, DEFAULT_CACHE_ENTRIES);
+    assert_eq!(options.byte_budget, DEFAULT_CACHE_MIB * 1024 * 1024);
+    assert_eq!(options.workers, DEFAULT_WORKERS);
+    let cache = Cache::default();
+    assert_eq!(cache.options(), options);
 }
 
-#[gpui_kit::test]
-fn re_requested_pending_items_move_to_the_front_of_lifo_priority(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
-    cx.executor().allow_parking();
-    let directory = tempfile::tempdir().expect("priority directory");
-    let sources: Vec<Source> = (0..5)
-        .map(|index| {
-            let path = directory.path().join(format!("{index}.png"));
-            image::RgbImage::from_pixel(4, 4, image::Rgb([index, 20, 30]))
-                .save(&path)
-                .expect("image fixture");
-            Source {
-                path,
-                kind: Kind::Image,
-                size: Some(1),
-                modified: None,
-            }
-        })
-        .collect();
-    let cache = cx.update(|cx| cx.new(|_| Cache::default()));
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            for source in &sources {
-                cache.request(source.clone(), Request::Thumbnail, cx);
-            }
-            assert_eq!(cache.running, super::DEFAULT_WORKERS);
-            assert_eq!(
-                cache.pending,
-                std::collections::VecDeque::from(sources[super::DEFAULT_WORKERS..].to_vec())
-            );
-            // Re-requesting an already-pending item promotes it to the back (next popped).
-            cache.request(
-                sources[super::DEFAULT_WORKERS].clone(),
-                Request::Thumbnail,
-                cx,
-            );
-            let mut expected = sources[(super::DEFAULT_WORKERS + 1)..].to_vec();
-            expected.push(sources[super::DEFAULT_WORKERS].clone());
-            assert_eq!(cache.pending, std::collections::VecDeque::from(expected));
-        })
+#[test]
+fn async_worker_decodes_png_thumbnail_and_metadata_for_real_image() {
+    install().ok();
+    let dir = TempDir::new().expect("tempdir");
+    let source = write_test_png(dir.path(), "sample.png", [24, 144, 220, 255], 32);
+
+    let scope = Mounted::new();
+    scope.with(|| {
+        let cache = Cache::new(Options::default());
+        let initial = cache.snapshot(&source, Request::Both);
+        assert!(matches!(initial.thumbnail, State::Loading));
+        assert!(matches!(initial.metadata, State::Loading));
+
+        drive_until(|| {
+            matches!(
+                cache.peek(&source),
+                Some(ref snap)
+                    if matches!(snap.thumbnail, State::Ready(_))
+                        && matches!(snap.metadata, State::Ready(_))
+            )
+        });
+
+        let ready = cache.peek(&source).expect("cached snapshot");
+        match ready.thumbnail {
+            State::Ready(bytes) => assert!(bytes.url().starts_with("zgui-bytes:")),
+            _ => panic!("expected Ready thumbnail ImageBytes"),
+        }
+        assert!(cache.byte_usage() > 0);
+        assert_eq!(cache.running_count(), 0);
+        assert_eq!(cache.pending_count(), 0);
     });
-    cx.run_until_parked();
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            for source in &sources {
-                assert!(matches!(
-                    cache
-                        .request(source.clone(), Request::Thumbnail, cx)
-                        .thumbnail,
-                    State::Ready(_)
-                ));
-            }
-            assert!(cache.pending.is_empty());
-            assert_eq!(cache.running, 0);
-        })
-    });
+    scope.unmount();
 }
 
-#[gpui_kit::test]
-fn set_options_trims_cached_entries_to_lowered_capacity(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
-    cx.executor().allow_parking();
-    let directory = tempfile::tempdir().expect("trim directory");
-    let sources: Vec<Source> = (0..4)
-        .map(|index| {
-            let path = directory.path().join(format!("item-{index}.png"));
-            image::RgbImage::from_pixel(4, 4, image::Rgb([index, 40, 80]))
-                .save(&path)
-                .expect("image fixture");
-            Source {
-                path,
-                kind: Kind::Image,
-                size: Some(1),
-                modified: None,
-            }
-        })
-        .collect();
-    let cache = cx.update(|cx| cx.new(|_| Cache::default()));
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            for source in &sources {
-                cache.request(source.clone(), Request::Thumbnail, cx);
-            }
-        })
+#[test]
+fn lru_eviction_and_byte_budget_drop_oldest_entries() {
+    install().ok();
+    let dir = TempDir::new().expect("tempdir");
+    let src_a = write_test_png(dir.path(), "a.png", [200, 10, 10, 255], 32);
+    let src_b = write_test_png(dir.path(), "b.png", [10, 200, 10, 255], 32);
+    let src_c = write_test_png(dir.path(), "c.png", [10, 10, 200, 255], 32);
+
+    let scope = Mounted::new();
+    scope.with(|| {
+        let opts = Options {
+            capacity: 2,
+            workers: 1,
+            ..Options::default()
+        };
+        let cache = Cache::new(opts);
+
+        for src in [&src_a, &src_b, &src_c] {
+            let _ = cache.snapshot(src, Request::Thumbnail);
+            drive_until(|| {
+                matches!(
+                    cache.peek(src),
+                    Some(ref snap) if matches!(snap.thumbnail, State::Ready(_))
+                )
+            });
+        }
+
+        assert_eq!(cache.entry_count(), 2);
+        assert!(
+            cache.peek(&src_a).is_none(),
+            "oldest entry should be evicted"
+        );
+        assert!(cache.peek(&src_b).is_some());
+        assert!(cache.peek(&src_c).is_some());
+
+        let total_for_two = cache.byte_usage();
+        cache.set_options(Options {
+            capacity: 16,
+            byte_budget: total_for_two.saturating_sub(1),
+            workers: 1,
+            ..Options::default()
+        });
+        assert_eq!(cache.entry_count(), 1);
+        assert!(cache.peek(&src_b).is_none());
+        assert!(cache.peek(&src_c).is_some());
     });
-    cx.run_until_parked();
-    cx.update(|cx| {
-        cache.update(cx, |cache, cx| {
-            assert_eq!(cache.entries.len(), 4);
-            cache.set_options(
-                super::Options {
-                    capacity: 2,
-                    ..super::Options::default()
-                },
-                cx,
-            );
-            assert_eq!(cache.entries.len(), 2);
-            assert!(cache.get(&sources[0]).is_none());
-            assert!(cache.get(&sources[1]).is_none());
-            assert!(matches!(
-                cache
-                    .get(&sources[2])
-                    .expect("newer entry retained")
-                    .thumbnail,
-                State::Ready(_)
-            ));
-            assert!(matches!(
-                cache
-                    .get(&sources[3])
-                    .expect("newest entry retained")
-                    .thumbnail,
-                State::Ready(_)
-            ));
-        })
+    scope.unmount();
+}
+
+#[test]
+fn scoped_cache_runs_through_task_manager_supervisor() {
+    install().ok();
+    let supervisor =
+        crate::service::task_manager::Supervisor::new(false).expect("start supervisor");
+    let dir = TempDir::new().expect("tempdir");
+    let source = write_test_png(dir.path(), "scoped.png", [40, 180, 120, 255], 32);
+
+    let scope = Mounted::new();
+    scope.with(|| {
+        let cache = Cache::with_scope(supervisor.scope(), Options::default());
+        let initial = cache.snapshot(&source, Request::Thumbnail);
+        assert!(matches!(initial.thumbnail, State::Loading));
+
+        drive_until(|| {
+            matches!(
+                cache.peek(&source),
+                Some(ref snap) if matches!(snap.thumbnail, State::Ready(_))
+            )
+        });
     });
+    scope.unmount();
+    supervisor.shutdown();
+}
+
+#[test]
+fn oversized_source_reports_too_large_state_and_clear_resets() {
+    install().ok();
+    let dir = TempDir::new().expect("tempdir");
+    let source = write_test_png(dir.path(), "large.png", [90, 90, 90, 255], 32);
+
+    let scope = Mounted::new();
+    scope.with(|| {
+        let mut opts = Options::default();
+        opts.inspection.max_thumbnail_source_bytes = 8;
+        let cache = Cache::new(opts);
+        let _ = cache.snapshot(&source, Request::Thumbnail);
+
+        drive_until(|| {
+            matches!(
+                cache.peek(&source),
+                Some(ref snap) if matches!(snap.thumbnail, State::TooLarge)
+            )
+        });
+
+        cache.clear();
+        assert_eq!(cache.entry_count(), 0);
+        assert_eq!(cache.byte_usage(), 0);
+    });
+    scope.unmount();
+}
+
+#[test]
+fn concurrent_request_upgrade_completes_both_metadata_and_thumbnail() {
+    install().ok();
+    let dir = TempDir::new().expect("tempdir");
+    let source = write_test_png(dir.path(), "upgrade.png", [64, 128, 255, 255], 32);
+
+    let scope = Mounted::new();
+    scope.with(|| {
+        let cache = Cache::new(Options {
+            workers: 1,
+            ..Options::default()
+        });
+        let first = cache.request(&source, Request::Metadata);
+        assert!(matches!(first.metadata, State::Loading));
+        assert!(matches!(first.thumbnail, State::NotRequested));
+
+        let second = cache.request(&source, Request::Thumbnail);
+        assert!(matches!(second.thumbnail, State::Loading));
+
+        drive_until(|| {
+            matches!(
+                cache.peek(&source),
+                Some(ref snap)
+                    if matches!(snap.metadata, State::Ready(_))
+                        && matches!(snap.thumbnail, State::Ready(_))
+            )
+        });
+    });
+    scope.unmount();
 }

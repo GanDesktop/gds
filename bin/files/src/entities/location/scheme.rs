@@ -19,7 +19,7 @@ pub trait Scheme: Sync {
 /// A virtual tag address cannot accidentally enter a filesystem directory read.
 pub enum Browse<'a> {
     Location,
-    Tags(&'a TagAddress),
+    Tags,
     Remote(&'a gds::service::remote::Address),
 }
 
@@ -224,7 +224,7 @@ impl Scheme for RemoteScheme {
 impl Scheme for TagsScheme {
     fn browse<'a>(&self, address: &'a Location) -> Browse<'a> {
         match address {
-            Location::Tags(tag) => Browse::Tags(tag),
+            Location::Tags(_) => Browse::Tags,
             _ => Browse::Location,
         }
     }

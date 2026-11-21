@@ -112,15 +112,6 @@ impl Default for Layout {
 }
 
 impl Layout {
-    /// Build a normalized layout from the given column order.
-    pub fn new(columns: impl IntoIterator<Item = Column>) -> Self {
-        let mut layout = Self {
-            columns: columns.into_iter().collect(),
-        };
-        layout.normalize();
-        layout
-    }
-
     /// Visible columns in display order.
     pub fn columns(&self) -> &[Column] {
         &self.columns

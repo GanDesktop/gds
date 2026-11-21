@@ -26,7 +26,7 @@ pkgbase = gds-files
 	sha256sums = ca0ab5e770d362a35891f9bff57af020082a47fec21e8521f21a406cc3b77e90
 
 pkgname = gds-files
-	pkgdesc = Native GPUI file manager with embedded terminals
+	pkgdesc = Native zgui file manager with embedded terminals
 	depends = libgcc
 	depends = glibc
 	depends = wayland

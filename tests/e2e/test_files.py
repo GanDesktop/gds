@@ -139,6 +139,7 @@ def test_F09_trash_restore_and_permanent_delete(case):
     case.key('shift+delete')
     case.expect('Cancel', 'button')
     case.key('escape')
+    case.expect('Cancel', 'button', present=False)
     case.expect_file('disposable.txt', 'recoverable payload')
     case.key('shift+delete')
     case.expect('Cancel', 'button')

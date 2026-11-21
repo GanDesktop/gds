@@ -1,26 +1,16 @@
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
+use zgui::prelude::*;
+use zgui::{component, view};
 
-use super::super::container::container_traits;
-
-/// A column below the scrolling content that keeps its natural height.
-#[derive(IntoElement)]
-pub struct SideBarFooter {
-    base: Div,
-}
-
-impl Default for SideBarFooter {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex; flex_col; flex_shrink_0; w_full; min_w_0; } },
+#[component]
+pub fn SideBarFooter(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_sidebar_stylesheets();
+    view! {
+        column(class = "gds-sidebar__footer", class = class, {..attrs}) {
+            {children.into_view_once()}
         }
-    }
-}
-
-container_traits!(SideBarFooter);
-
-impl RenderOnce for SideBarFooter {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

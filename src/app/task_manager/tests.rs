@@ -1,94 +1,76 @@
-use gds::app::AppExt as _;
-use gpui_kit::{AppContext, Empty, TestAppContext, px, size};
-use std::future::Future as _;
+use crate::app::Gds;
+use crate::service::task_manager::{Scope, Supervisor};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Arc, atomic::AtomicBool},
+    time::Duration,
+};
+use zgui::reactive::{Mounted, TestWaker, flush, install, set_frame_waker};
 
-#[gpui_kit::test]
-fn windows_disappear_before_services_finish(cx: &mut TestAppContext) {
-    let window = cx.open_window(size(px(100.), px(100.)), |_, _| Empty);
-    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
-    let root = cx.update(|cx| cx.gds().tasks().scope());
-    assert!(!root.inspection_enabled());
-    cx.update(|cx| assert!(cx.gds().tasks().inspector().is_none()));
-    let owner = root.child();
-    let (release, receiver) = tokio::sync::oneshot::channel();
-    let cancel = owner.token();
-    let work = owner
-        .track(async move {
-            cancel.cancelled().await;
-            receiver.await.unwrap();
-        })
-        .unwrap();
-    cx.update(|cx| cx.background_executor().spawn(work).detach());
-    cx.update(|cx| cx.gds_mut().tasks().request_quit());
-    assert!(cx.update_window(window.into(), |_, _, _| ()).is_err());
-    assert!(root.token().is_cancelled());
-    let mut drain = Box::pin(root.shutdown());
-    use std::task::{Context, Poll, Waker};
-    assert_eq!(
-        drain.as_mut().poll(&mut Context::from_waker(Waker::noop())),
-        Poll::Pending
-    );
-    release.send(()).unwrap();
-    cx.run_until_parked();
-    assert_eq!(
-        drain.as_mut().poll(&mut Context::from_waker(Waker::noop())),
-        Poll::Ready(())
-    );
+#[test]
+fn inspector_disabled_unless_requested_and_quit_cancels_scope() {
+    let supervisor = Supervisor::new(false).expect("start I/O supervisor");
+    install().expect("install reactive runtime");
+    let root = Mounted::new();
+    root.with(|| {
+        let gds = Gds::install(supervisor.scope());
+        assert!(gds.tasks().inspector().is_none());
+        assert!(!gds.tasks().is_shutting_down());
+        gds.tasks().request_quit();
+        assert!(gds.tasks().is_shutting_down());
+        assert!(gds.tasks().scope().register().is_err());
+    });
+    root.unmount();
+    supervisor.shutdown();
 }
 
-#[gpui_kit::test]
-fn another_window_keeps_the_application_scope_open(cx: &mut TestAppContext) {
-    let first = cx.open_window(size(px(100.), px(100.)), |_, _| Empty);
-    let _second = cx.open_window(size(px(100.), px(100.)), |_, _| Empty);
-    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
-    let root = cx.update(|cx| cx.gds().tasks().scope());
-    cx.update_window(first.into(), |_, window, _| window.remove_window())
-        .unwrap();
-    cx.update(|cx| cx.gds_mut().tasks().quit_when_idle());
-    assert!(!root.token().is_cancelled());
-    assert!(root.register().is_ok());
+#[test]
+fn owner_scope_cancels_subtree_when_child_owner_unmounts() {
+    install().expect("install reactive runtime");
+    let root = Mounted::new();
+    root.with(|| {
+        let gds = Gds::install(Scope::default());
+        let child = Mounted::new();
+        let child_scope = child.with(|| gds.tasks().owner_scope("child-view"));
+        assert!(!child_scope.token().is_cancelled());
+        assert!(!gds.tasks().is_shutting_down());
+        child.unmount();
+        assert!(child_scope.token().is_cancelled());
+        assert!(!gds.tasks().is_shutting_down());
+    });
+    root.unmount();
 }
 
-#[gpui_kit::test]
-fn debug_collects_from_startup_without_opening_the_panel(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.gds_mut().tasks().init_test(true));
-    let root = cx.update(|cx| cx.gds().tasks().scope());
-    assert!(root.inspection_enabled());
-    let _completion = root.register().unwrap();
-    cx.update(|cx| {
-        assert_eq!(
-            cx.gds().tasks().inspector().unwrap().snapshot().tasks.len(),
-            1
+#[test]
+fn spawn_ui_delivers_supervisor_work_onto_ui_thread() {
+    let supervisor = Supervisor::new(true).expect("start inspected I/O supervisor");
+    install().expect("install reactive runtime");
+    set_frame_waker(Arc::new(TestWaker::default()));
+    let root = Mounted::new();
+    let seen = Rc::new(RefCell::new(None));
+    let completed = Arc::new(AtomicBool::new(false));
+    root.with(|| {
+        let gds = Gds::install(supervisor.scope());
+        assert!(gds.tasks().inspector().is_some());
+        let seen = Rc::clone(&seen);
+        let completed = Arc::clone(&completed);
+        drop(
+            gds.tasks()
+                .spawn_ui("compute-answer", async { 21 * 2 }, move |result| {
+                    *seen.borrow_mut() = Some(result.expect("task completed"));
+                    completed.store(true, std::sync::atomic::Ordering::Release);
+                }),
         );
-        assert!(!cx.gds().ui().logs().is_enabled());
     });
-    cx.update(|cx| assert!(cx.windows().is_empty()));
-}
-
-#[gpui_kit::test]
-fn startup_and_headless_service_do_not_quit_without_windows(cx: &mut TestAppContext) {
-    let root = gds::service::task_manager::Scope::default();
-    cx.update(|cx| {
-        cx.gds_mut().tasks().init(root.clone());
-        cx.gds_mut().tasks().quit_when_idle();
-        assert!(!root.token().is_cancelled());
-        cx.gds_mut().tasks().ready(true);
-        cx.gds_mut().tasks().quit_when_idle();
-        assert!(!root.token().is_cancelled());
-        cx.gds_mut().tasks().request_quit();
-        assert!(root.token().is_cancelled());
-    });
-}
-
-#[gpui_kit::test]
-fn closing_during_startup_cannot_reenter_running(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        cx.gds_mut()
-            .tasks()
-            .init(gds::service::task_manager::Scope::default());
-        cx.gds_mut().tasks().request_quit();
-        cx.gds_mut().tasks().ready(true);
-        assert!(cx.gds().tasks().is_shutting_down());
-        assert!(cx.gds().tasks().scope().register().is_err());
-    });
+    for _ in 0..100 {
+        flush();
+        if completed.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(*seen.borrow(), Some(42));
+    root.unmount();
+    supervisor.shutdown();
 }

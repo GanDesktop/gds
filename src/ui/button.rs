@@ -1,318 +1,343 @@
-//! Shared buttons, fixed action-icon sizing and control cursor policy.
+//! Shared GDS buttons wrapping `zgui-ui::Button` with `36px` / `32x32px` sizing, `1px` `:focus-visible`
+//! contours, `ShortcutHint` tooltips, and `140ms` inline / corner hold-to-reveal keytips.
 
 mod icon;
 mod menu;
-#[cfg(all(test, feature = "gui-tests"))]
+#[cfg(test)]
 mod tests;
-pub use icon::IconButton;
 
-use std::rc::Rc;
+pub use icon::{IconButton, IconButtonProps};
+pub use menu::{ApplicationMenuButton, ApplicationMenuButtonProps};
+pub use zgui_ui::{ButtonSize, ButtonVariant};
 
-use crate::app::AppExt as _;
-use gpui_kit::{
-    AnyElement, App, ClickEvent, CursorStyle, ElementId, InteractiveElement, Interactivity,
-    IntoElement, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement,
-    StyleRefinement, Styled, Window,
-    assets::IconName,
-    component::{
-        Disableable, FocusableExt, Icon, Selectable, Sizable, Size,
-        button::{Button as ComponentButton, ButtonCustomVariant, ButtonVariant, ButtonVariants},
-        spinner::Spinner,
-    },
-    px,
+use zgui::prelude::*;
+use zgui::reactive::{LocalStorage, Signal};
+use zgui::view::{AttrName, current_host};
+use zgui::vocab::Toggled;
+use zgui::{component, css, view};
+use zgui_ui::{
+    ButtonProps as ZuiButtonProps, SpinnerProps, TooltipContentProps, TooltipProps,
+    TooltipTriggerProps,
 };
 
-#[derive(IntoElement)]
-pub struct Button {
-    id: ElementId,
-    inner: ComponentButton,
-    disabled: bool,
-    loading: bool,
-    control_icon: Option<IconName>,
-    children: Vec<AnyElement>,
-    variant: ButtonVariant,
-    tooltip: Option<Rc<dyn Fn(&mut Window, &mut App) -> gpui_kit::AnyView>>,
-    shortcut: Option<super::Shortcut>,
-    label: Option<SharedString>,
-    explicit_name: bool,
+use crate::app::Gds;
+use crate::appearance::tokens::ICON_SIZE;
+use crate::ui::actions::Command;
+use crate::ui::icon::{IconName, IconProps};
+use crate::ui::keytips::KeytipSuffixProps;
+use crate::ui::shortcut::install_shortcut_hint_stylesheet;
+use crate::ui::tooltip::{TOOLTIP_DELAY, TooltipTextProps};
+use crate::ui::{Shortcut, ShortcutBadgeProps};
+
+const SHEET: &str = css!(
+    r#"
+    .zui-button.gds-button,
+    .zui-button.gds-icon-button {
+        --zui-button-ring: 0 0 transparent;
+        box-shadow: none;
+        outline: none;
+        font-family: var(--gds-font-sans);
+    }
+
+    .zui-button.gds-button:not([data-size="xs"]):not([data-size="sm"]):not([data-size="lg"]):not([data-size^="icon"]) {
+        height: 36px;
+        gap: 8px;
+        font-size: var(--gds-font-size-small, 14px);
+    }
+
+    .zui-button.gds-button[data-size="sm"] {
+        gap: 6px;
+    }
+
+    .zui-button.gds-button[data-size="xs"] {
+        gap: 4px;
+    }
+
+    .zui-button.gds-icon-button:not([data-size="icon-xs"]):not([data-size="icon-sm"]):not([data-size="icon-lg"]) {
+        width: var(--gds-icon-button-size, 32px);
+        height: var(--gds-icon-button-size, 32px);
+        padding: 0;
+        flex-shrink: 0;
+    }
+
+    .zui-button.gds-button:not(:disabled):not([data-loading="true"]),
+    .zui-button.gds-icon-button:not(:disabled):not([data-loading="true"]) {
+        cursor: pointer;
+    }
+
+    .zui-button.gds-button:disabled,
+    .zui-button.gds-button[data-loading="true"],
+    .zui-button.gds-icon-button:disabled,
+    .zui-button.gds-icon-button[data-loading="true"] {
+        cursor: default;
+    }
+
+    .zui-button.gds-button[data-variant="outline"]:not([data-toggled="true"]):not([data-active="true"]),
+    .zui-button.gds-icon-button[data-variant="outline"]:not([data-toggled="true"]):not([data-active="true"]) {
+        background-color: var(--gds-control);
+        color: var(--gds-control-foreground);
+        border-color: var(--gds-control-border);
+    }
+
+    .zui-button.gds-button[data-variant="outline"]:not([data-toggled="true"]):not([data-active="true"]):hover,
+    .zui-button.gds-icon-button[data-variant="outline"]:not([data-toggled="true"]):not([data-active="true"]):hover {
+        background-color: var(--gds-control-hover);
+        color: var(--gds-control-foreground);
+        border-color: var(--gds-control-border);
+    }
+
+    .zui-button.gds-button[data-variant="outline"]:not([data-toggled="true"]):not([data-active="true"]):active,
+    .zui-button.gds-icon-button[data-variant="outline"]:not([data-toggled="true"]):not([data-active="true"]):active {
+        background-color: var(--gds-control-pressed);
+        color: var(--gds-control-foreground);
+        border-color: var(--gds-control-border);
+    }
+
+    .zui-button.gds-button[data-variant="ghost"]:not([data-toggled="true"]):not([data-active="true"]):hover,
+    .zui-button.gds-icon-button[data-variant="ghost"]:not([data-toggled="true"]):not([data-active="true"]):hover {
+        background-color: var(--gds-hover);
+        color: inherit;
+    }
+
+    .zui-button.gds-button[data-variant="ghost"]:not([data-toggled="true"]):not([data-active="true"]):active,
+    .zui-button.gds-icon-button[data-variant="ghost"]:not([data-toggled="true"]):not([data-active="true"]):active {
+        background-color: var(--gds-pressed);
+        color: inherit;
+    }
+
+    .zui-button.gds-button[data-toggled="true"],
+    .zui-button.gds-button[data-active="true"],
+    .zui-button.gds-icon-button[data-toggled="true"],
+    .zui-button.gds-icon-button[data-active="true"] {
+        background-color: var(--gds-selection);
+        color: var(--gds-selection-foreground);
+        border-color: transparent;
+    }
+
+    .zui-button.gds-button:focus-visible,
+    .zui-button.gds-icon-button:focus-visible {
+        --zui-button-ring: 0 0 transparent;
+        box-shadow: none;
+        outline: 1px solid var(--gds-primary);
+        outline-offset: -1px;
+    }
+
+    .zui-button.gds-button[data-variant="default"]:focus-visible,
+    .zui-button.gds-button[data-variant="destructive"]:focus-visible,
+    .zui-button.gds-icon-button[data-variant="default"]:focus-visible,
+    .zui-button.gds-icon-button[data-variant="destructive"]:focus-visible {
+        outline-color: var(--gds-primary-foreground);
+    }
+
+    .zui-button.gds-button > .gds-keytip-suffix {
+        margin-left: -8px;
+    }
+
+    .zui-button.gds-button[data-size="sm"] > .gds-keytip-suffix {
+        margin-left: -6px;
+    }
+
+    .zui-button.gds-button[data-size="xs"] > .gds-keytip-suffix {
+        margin-left: -4px;
+    }
+
+    /* Application menu swaps brand mark -> Menu icon strictly on pointer :hover, never :focus-visible. */
+    .zui-button.gds-app-menu-button:focus-visible:not(:hover) .gds-app-menu-button__brand {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    .zui-button.gds-app-menu-button:focus-visible:not(:hover) .gds-app-menu-button__glyph {
+        opacity: 0;
+        transform: scale(0.85);
+    }
+
+    .zui-button.gds-app-menu-button:hover .gds-app-menu-button__brand {
+        opacity: 0;
+        transform: scale(0.88);
+    }
+
+    .zui-button.gds-app-menu-button:hover .gds-app-menu-button__glyph {
+        opacity: 1;
+        transform: scale(1);
+    }
+    "#
+);
+
+pub(super) fn install_button_stylesheets() {
+    crate::ui::styles::install_ui_stylesheets();
+    if current_host().is_some() {
+        zgui::view::install_stylesheet("gds-ui-button", SHEET);
+    }
 }
 
-impl Button {
-    pub fn new(id: impl Into<ElementId>) -> Self {
-        let id = id.into();
-        Self {
-            inner: ComponentButton::new(id.clone())
-                .text_size(crate::appearance::tokens::SMALL)
-                .line_height(gpui_kit::relative(1.)),
-            disabled: false,
-            loading: false,
-            control_icon: None,
-            children: Vec::new(),
-            variant: ButtonVariant::Default,
-            tooltip: None,
-            id,
-            shortcut: None,
-            label: None,
-            explicit_name: false,
-        }
-    }
+pub(super) fn command_fallback_label(command: Command) -> Signal<String, LocalStorage> {
+    Signal::derive_local(move || {
+        Gds::try_current().map_or_else(
+            || match command {
+                Command::FocusNotifications => "Focus notifications".to_owned(),
+                Command::CloseNotification => "Close current notification".to_owned(),
+                Command::CloseAllNotifications => "Close all notifications".to_owned(),
+                Command::Cancel => "Close".to_owned(),
+            },
+            |gds| gds.i18n().text(command.label_id()),
+        )
+    })
+}
 
-    /// The shared toolbar control: a 32px target with a 16px action icon.
-    pub fn icon_button(id: impl Into<ElementId>) -> Self {
-        Self::new(id)
-            .ghost()
-            .small()
-            .w(px(crate::appearance::tokens::ICON_BUTTON_SIZE))
-            .h(px(crate::appearance::tokens::ICON_BUTTON_SIZE))
-            .p_0()
-            .flex_shrink_0()
-    }
-
-    /// Render an action icon at the suite size, independently of button density.
-    pub fn control_icon(mut self, icon: IconName) -> Self {
-        self.control_icon = Some(icon);
-        self
-    }
-
-    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
-        self.label = Some(label.into());
-        self
-    }
-
-    pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
-        self.inner = self.inner.icon(icon.into());
-        self
-    }
-
-    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
-        self.explicit_name = true;
-        self.inner = self.inner.accessibility_label(label);
-        self
-    }
-
-    pub fn tooltip(self, tooltip: impl Into<SharedString>) -> Self {
-        let label = tooltip.into();
-        self.hoverable_tooltip(move |window, cx| super::tooltip::view(label.clone(), window, cx))
-    }
-
-    /// Register this control with the same held-modifier layer as `IconButton`.
-    pub fn shortcut(mut self, shortcut: impl Into<super::Shortcut>) -> Self {
-        self.shortcut = Some(shortcut.into());
-        self
-    }
-
-    /// One action supplies both its hover keycaps and held-modifier hint.
-    pub fn tooltip_with_shortcut(
-        self,
-        label: impl Into<SharedString>,
-        shortcut: impl Into<super::Shortcut>,
-    ) -> Self {
-        let shortcut = shortcut.into();
-        self.shortcut(shortcut.clone())
-            .hoverable_tooltip(super::ShortcutHint::new(label, shortcut).builder())
-    }
-
-    pub fn tooltip_with_action(
-        self,
-        tooltip: impl Into<SharedString>,
-        action: &dyn gpui_kit::Action,
-        context: Option<&str>,
-    ) -> Self {
-        let label = tooltip.into();
-        let action = action.boxed_clone();
-        let context = context
-            .map(|context| {
-                gpui_kit::KeyContext::parse(context).expect("bundled action contexts are valid")
-            })
-            .unwrap_or_default();
-        self.hoverable_tooltip(move |window, cx| {
-            let hint = match window
-                .highest_precedence_binding_for_action_in_context(&*action, context.clone())
-            {
-                Some(binding) => super::ShortcutHint::binding(label.clone(), binding),
-                None => super::ShortcutHint::plain(label.clone()),
-            };
-            hint.builder()(window, cx)
+pub(super) fn apply_toggled(attrs: Attrs, toggled: Option<Signal<bool, LocalStorage>>) -> Attrs {
+    let Some(toggled) = toggled else {
+        return attrs;
+    };
+    attrs
+        .attribute(AttrName::new("data-toggled"), move || {
+            toggled.get().then(|| "true".to_owned())
         })
-    }
-
-    pub fn compact(mut self) -> Self {
-        self.inner = self.inner.compact();
-        self
-    }
-
-    pub fn dropdown_caret(mut self, show: bool) -> Self {
-        self.inner = self.inner.dropdown_caret(show);
-        self
-    }
-
-    pub fn toggled(mut self, toggled: bool) -> Self {
-        self.inner = self.inner.toggled(toggled);
-        self
-    }
-
-    pub fn hoverable_tooltip(
-        mut self,
-        tooltip: impl Fn(&mut Window, &mut App) -> gpui_kit::AnyView + 'static,
-    ) -> Self {
-        self.tooltip = Some(Rc::new(tooltip));
-        self
-    }
-
-    pub fn loading(mut self, loading: bool) -> Self {
-        self.loading = loading;
-        self
-    }
-
-    pub fn on_click(
-        mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.inner = self.inner.on_click(handler);
-        self
-    }
-
-    fn into_component(mut self, window: &mut Window, cx: &mut App) -> ComponentButton {
-        if let Some(tooltip) = self.tooltip.take() {
-            self.inner
-                .interactivity()
-                .hoverable_tooltip(move |window, cx| tooltip(window, cx));
-        }
-        let shortcut = self
-            .shortcut
-            .take()
-            .filter(|_| !self.disabled && !self.loading);
-        if let Some(label) = self.label.take() {
-            if let Some(shortcut) = shortcut {
-                use gds_uim::el;
-                use gpui_kit::div;
-                if !self.explicit_name {
-                    self.inner = self.inner.accessibility_label(label.clone());
-                }
-                let hint = super::keytips::suffix_anchor(window, cx, self.id, shortcut);
-                self.inner = self.inner.child(el! {
-                    .div { flex; items_center; min_w_0; } [
-                        .div { min_w_0; whitespace_nowrap; text_ellipsis; } [label],
-                        hint,
-                    ]
-                });
+        .a11y_from(A11yBinding::unspecified().toggled(move || {
+            if toggled.get() {
+                Toggled::True
             } else {
-                self.inner = self.inner.label(label);
+                Toggled::False
             }
-        } else if let Some(shortcut) = shortcut {
-            self.inner = self
-                .inner
-                .relative()
-                .child(super::keytips::anchor(window, cx, self.id, shortcut));
+        }))
+}
+
+pub(super) fn button_attrs(
+    base: Attrs,
+    toggled: Option<Signal<bool, LocalStorage>>,
+    loading: Signal<bool, LocalStorage>,
+    active: Signal<bool, LocalStorage>,
+    shortcut: Option<&Shortcut>,
+) -> Attrs {
+    let mut attrs = apply_toggled(base, toggled)
+        .attribute(AttrName::new("data-loading"), move || {
+            loading.get().then(|| "true".to_owned())
+        })
+        .attribute(AttrName::new("data-active"), move || {
+            active.get().then(|| "true".to_owned())
+        })
+        .a11y_from(A11yBinding::unspecified().busy(move || loading.get()));
+    if let Some(key) = shortcut {
+        let hint = zgui::vocab::SharedString::from(key.display_tokens().join("+"));
+        attrs = attrs.a11y_from(A11yBinding::unspecified().keyboard_shortcut(hint));
+    }
+    attrs
+}
+
+pub(super) fn wrap_tooltip(
+    core: AnyView,
+    label: Option<Signal<String, LocalStorage>>,
+    shortcut: Option<Shortcut>,
+    shortcut_enabled: Signal<bool, LocalStorage>,
+) -> AnyView {
+    if label.is_none() && shortcut.is_none() {
+        return core;
+    }
+    install_shortcut_hint_stylesheet();
+    AnyView::new(view! {
+        Tooltip(delay = TOOLTIP_DELAY) {
+            TooltipTrigger {{core}}
+            TooltipContent(class = "gds-tooltip-content", arrow = false) {
+                row(class = "gds-shortcut-hint") {
+                    {label.map(|text| {
+                        view! {
+                            box(class = "gds-shortcut-hint__label") {
+                                TooltipText(text = text)
+                            }
+                        }
+                        .into_view()
+                    })}
+                    {{
+                        let shortcut = shortcut.clone();
+                        move || {
+                            shortcut
+                                .as_ref()
+                                .filter(|_| shortcut_enabled.get())
+                                .map(|key| {
+                                    view! {
+                                        box(class = "gds-shortcut-hint__keys") {
+                                            ShortcutBadge(shortcut = key.clone())
+                                        }
+                                    }
+                                    .into_view()
+                                })
+                        }
+                    }}
+                }
+            }
         }
-        if self.variant == ButtonVariant::Ghost {
-            let colors = cx.gds().appearance().theme().colors();
-            let selected = self.inner.is_selected();
-            let variant = ButtonCustomVariant::new(cx)
-                .foreground(if selected {
-                    colors.selection_foreground
+    })
+}
+
+/// Standard `36px` GDS button wrapping `zgui_ui::Button` with optional leading icon, loading
+/// spinner, `ShortcutHint` tooltip, and `140ms` width-animated inline keytip suffix.
+#[allow(clippy::too_many_arguments)]
+#[component]
+pub fn Button(
+    #[prop(default = ButtonVariant::Default)] variant: ButtonVariant,
+    #[prop(default = ButtonSize::Md)] size: ButtonSize,
+    #[prop(optional)] icon: Option<IconName>,
+    #[prop(into, default = Signal::stored_local(false))] disabled: Signal<bool, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(false))] loading: Signal<bool, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(false))] active: Signal<bool, LocalStorage>,
+    #[prop(into, optional)] toggled: Option<Signal<bool, LocalStorage>>,
+    #[prop(into, optional)] tooltip: Option<Signal<String, LocalStorage>>,
+    #[prop(optional)] command: Option<Command>,
+    #[prop(optional)] shortcut: Option<Shortcut>,
+    #[prop(into, default = Signal::stored_local(true))] shortcut_enabled: Signal<
+        bool,
+        LocalStorage,
+    >,
+    #[prop(optional)] node_ref: Option<NodeRef>,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    install_button_stylesheets();
+    let resolved_ref = node_ref.unwrap_or_default();
+    let effective_disabled = Signal::derive_local(move || disabled.get() || loading.get());
+    let effective_shortcut = shortcut.or_else(|| command.map(Shortcut::command));
+    let can_advertise =
+        Signal::derive_local(move || shortcut_enabled.get() && !effective_disabled.get());
+
+    let advertised_a11y = effective_shortcut
+        .as_ref()
+        .filter(|_| shortcut_enabled.get_untracked());
+    let own = button_attrs(Attrs::new(), toggled, loading, active, advertised_a11y);
+    let tip_signal = tooltip.or_else(|| command.map(command_fallback_label));
+    let inline_shortcut = effective_shortcut.clone();
+
+    let core = AnyView::new(view! {
+        ZuiButton(
+            variant = variant,
+            size = size,
+            disabled = effective_disabled,
+            node_ref = Some(resolved_ref),
+            class = "gds-button",
+            class = class,
+            {..own},
+            {..attrs}
+        ) {
+            {move || {
+                if loading.get() {
+                    Some(AnyView::new(view! { Spinner() }))
                 } else {
-                    colors.foreground
-                })
-                .hover(colors.hover())
-                .active(if selected {
-                    colors.selection
-                } else {
-                    colors.pressed()
-                });
-            self.inner = self.inner.custom(variant);
+                    icon.map(|name| AnyView::new(view! { Icon(name = name, size = ICON_SIZE) }))
+                }
+            }}
+            {children.into_view_once()}
+            {inline_shortcut.map(|key| {
+                view! {
+                    KeytipSuffix(shortcut = key, enabled = can_advertise)
+                }
+                .into_view()
+            })}
         }
-        if let Some(icon) = self.control_icon {
-            // Kit resizes icons supplied through `.icon()` to the button's
-            // density. A content icon retains the shared action-icon size.
-            let artwork = if self.loading {
-                Spinner::new()
-                    .with_size(px(crate::appearance::tokens::ICON_SIZE))
-                    .into_any_element()
-            } else {
-                Icon::new(icon)
-                    .size(px(crate::appearance::tokens::ICON_SIZE))
-                    .into_any_element()
-            };
-            self.inner = self.inner.child(artwork);
-        }
-        self.inner.extend(self.children);
-        // Explicit styles (e.g. passive status icons) win only while enabled.
-        let cursor = if self.disabled || self.loading {
-            CursorStyle::Arrow
-        } else {
-            self.inner
-                .style()
-                .mouse_cursor
-                .unwrap_or(CursorStyle::PointingHand)
-        };
-        self.inner
-            .disabled(self.disabled)
-            .loading(self.loading)
-            // Pointer reuse must not leave a previous keyboard cursor behind.
-            // Kit retains the focus handle; only its decoration follows modality.
-            .focus_ring(window.last_input_was_keyboard())
-            .cursor(cursor)
-    }
-}
+    });
 
-impl Disableable for Button {
-    fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
-}
-
-impl Selectable for Button {
-    fn selected(mut self, selected: bool) -> Self {
-        self.inner = self.inner.selected(selected);
-        self
-    }
-
-    fn is_selected(&self) -> bool {
-        self.inner.is_selected()
-    }
-}
-
-impl Sizable for Button {
-    fn with_size(mut self, size: impl Into<Size>) -> Self {
-        self.inner = self.inner.with_size(size);
-        self
-    }
-}
-
-impl ButtonVariants for Button {
-    fn with_variant(mut self, variant: ButtonVariant) -> Self {
-        self.variant = variant;
-        self.inner = self.inner.with_variant(variant);
-        self
-    }
-}
-
-impl Styled for Button {
-    fn style(&mut self) -> &mut StyleRefinement {
-        self.inner.style()
-    }
-}
-
-impl ParentElement for Button {
-    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
-        self.children.extend(elements);
-    }
-}
-
-impl InteractiveElement for Button {
-    fn interactivity(&mut self) -> &mut Interactivity {
-        self.inner.interactivity()
-    }
-}
-
-impl StatefulInteractiveElement for Button {}
-
-impl gpui_kit::component::menu::DropdownMenu for Button {}
-
-impl RenderOnce for Button {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        self.into_component(window, cx).render(window, cx)
+    if tip_signal.is_some() {
+        wrap_tooltip(core, tip_signal, effective_shortcut, can_advertise)
+    } else {
+        core
     }
 }

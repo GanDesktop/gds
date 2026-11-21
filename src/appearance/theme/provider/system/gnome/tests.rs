@@ -1,7 +1,7 @@
 use super::*;
 
-fn hex(value: u32) -> Hsla {
-    rgb(value).into()
+fn hex(value: u32) -> Color {
+    rgb(value)
 }
 
 #[test]
@@ -9,13 +9,8 @@ fn adwaita_light_and_dark_defaults_resolve_without_python_or_files() {
     let dir = tempfile::tempdir().expect("isolated config directory");
     let portal = PortalSnapshot::default();
 
-    let light = resolve(
-        ModePreference::System,
-        WindowAppearance::Light,
-        portal,
-        dir.path(),
-    )
-    .expect("default Adwaita light palette");
+    let light = resolve(ModePreference::System, Mode::Light, portal, dir.path())
+        .expect("default Adwaita light palette");
     assert_eq!(light.mode, Mode::Light);
     assert_eq!(light.palette.content, hex(0xffffff));
     assert_eq!(light.palette.sidebar, hex(0xebebeb));
@@ -23,13 +18,8 @@ fn adwaita_light_and_dark_defaults_resolve_without_python_or_files() {
     assert_eq!(light.palette.primary_foreground, hex(0xffffff));
     assert_eq!(light.palette.terminal.selection, light.palette.selection);
 
-    let dark = resolve(
-        ModePreference::System,
-        WindowAppearance::Dark,
-        portal,
-        dir.path(),
-    )
-    .expect("default Adwaita dark palette");
+    let dark = resolve(ModePreference::System, Mode::Dark, portal, dir.path())
+        .expect("default Adwaita dark palette");
     assert_eq!(dark.mode, Mode::Dark);
     assert_eq!(dark.palette.content, hex(0x1e1e1e));
     assert_eq!(dark.palette.sidebar, hex(0x303030));
@@ -41,18 +31,13 @@ fn portal_color_scheme_and_accent_color_drive_primary_and_contrast() {
     let dir = tempfile::tempdir().expect("isolated config directory");
     let bright_accent = PortalSnapshot {
         color_scheme: Some(Mode::Dark),
-        accent_color: Some(Rgba {
-            r: 0.95,
-            g: 0.85,
-            b: 0.25,
-            a: 1.0,
-        }),
+        accent_color: Some(Color::srgb(0.95, 0.85, 0.25, 1.0)),
         primed: true,
     };
 
     let loaded = resolve(
         ModePreference::System,
-        WindowAppearance::Light,
+        Mode::Light,
         bright_accent,
         dir.path(),
     )
@@ -60,17 +45,12 @@ fn portal_color_scheme_and_accent_color_drive_primary_and_contrast() {
     assert_eq!(loaded.mode, Mode::Dark);
     assert_eq!(
         loaded.palette.primary,
-        Hsla::from(bright_accent.accent_color.expect("accent color"))
+        bright_accent.accent_color.expect("accent color")
     );
     assert_eq!(loaded.palette.primary_foreground, hex(0x1e1e1e));
 
-    let explicit_light = resolve(
-        ModePreference::Light,
-        WindowAppearance::Dark,
-        bright_accent,
-        dir.path(),
-    )
-    .expect("explicit Light overrides Portal color-scheme");
+    let explicit_light = resolve(ModePreference::Light, Mode::Dark, bright_accent, dir.path())
+        .expect("explicit Light overrides Portal color-scheme");
     assert_eq!(explicit_light.mode, Mode::Light);
     assert_eq!(explicit_light.palette.content, hex(0xffffff));
 }
@@ -88,7 +68,7 @@ fn settings_ini_dark_preference_applies_when_portal_scheme_is_unset() {
 
     let loaded = resolve(
         ModePreference::System,
-        WindowAppearance::Light,
+        Mode::Light,
         PortalSnapshot::default(),
         dir.path(),
     )
@@ -132,7 +112,7 @@ fn gtk3_and_gtk4_css_define_color_overrides_resolve_with_gtk4_precedence() {
 
     let loaded = resolve(
         ModePreference::System,
-        WindowAppearance::Light,
+        Mode::Light,
         PortalSnapshot::default(),
         dir.path(),
     )
@@ -142,26 +122,51 @@ fn gtk3_and_gtk4_css_define_color_overrides_resolve_with_gtk4_precedence() {
     assert_eq!(loaded.palette.content, hex(0x102030));
     assert_eq!(
         loaded.palette.surface,
-        Rgba {
-            r: 16.0 / 255.0,
-            g: 24.0 / 255.0,
-            b: 32.0 / 255.0,
-            a: 1.0
-        }
-        .into()
+        Color::srgb(16.0 / 255.0, 24.0 / 255.0, 32.0 / 255.0, 1.0)
     );
     assert_eq!(
         loaded.palette.sidebar,
-        Rgba {
-            r: 12.0 / 255.0,
-            g: 18.0 / 255.0,
-            b: 24.0 / 255.0,
-            a: 1.0
-        }
-        .into()
+        Color::srgb(12.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0)
     );
     assert_eq!(loaded.palette.primary, hex(0x112233));
     assert_eq!(loaded.palette.selection, hex(0x112233));
     assert_eq!(loaded.palette.foreground, hex(0xf5f5f5));
     assert_eq!(loaded.palette.tooltip, loaded.palette.panel);
+}
+
+#[test]
+fn gtk_css_supports_standard_css_color_literals_and_nested_alpha_bounds() {
+    let mut colors = HashMap::new();
+    let mut overridden = HashSet::new();
+    let mut too_deep = String::from("white");
+    for _ in 0..MAX_COLOR_DEPTH {
+        too_deep = format!("alpha({too_deep}, 1)");
+    }
+    let css = format!(
+        r#"
+        @define-color named rebeccapurple;
+        @define-color short_alpha #0f08;
+        @define-color legacy_rgba rgba(32, 64, 96, .5);
+        @define-color clear transparent;
+        @define-color nested alpha(alpha(@named, 0.5), 50%);
+        @define-color too_deep {too_deep};
+        "#
+    );
+    parse_gtk_css(&css, &mut colors, &mut overridden);
+
+    assert_eq!(colors.get("named").copied(), Some(hex(0x663399)));
+    assert_eq!(
+        colors.get("short_alpha").copied(),
+        Some(Color::srgb(0.0, 1.0, 0.0, 0x88 as f32 / 255.0))
+    );
+    assert_eq!(
+        colors.get("legacy_rgba").copied(),
+        Some(Color::srgb(32.0 / 255.0, 64.0 / 255.0, 96.0 / 255.0, 0.5))
+    );
+    assert_eq!(colors.get("clear").copied(), Some(Color::TRANSPARENT));
+    assert_eq!(
+        colors.get("nested").copied(),
+        Some(hex(0x663399).with_alpha(0.25))
+    );
+    assert!(!colors.contains_key("too_deep"));
 }

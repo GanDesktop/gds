@@ -1,26 +1,46 @@
-use gpui_kit::{
-    App, Context, Div, Empty, IntoElement, Render, Stateful, Styled as _, Window,
-    base::{Root, RootPlugin},
-    transparent_black,
-};
+//! Window translucency and surface material roles.
+use std::fmt::Write as _;
+use zgui::canvas::zgui_color::Color;
 
-/// Window transparency belongs to the root surface, not the theme's background role.
-pub(crate) struct Material;
+use super::provider::color::color_css;
+
+/// Resolved surface materials separating window translucency from opaque control backgrounds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Material {
+    pub content: Color,
+    pub sidebar: Color,
+    pub content_opacity: f32,
+    pub sidebar_opacity: f32,
+}
 
 impl Material {
-    pub(crate) fn install(cx: &mut App) {
-        Root::register_plugin::<Self>(cx, |_, _| Self);
+    /// Background color for the primary content surface with configured alpha applied.
+    pub fn content_background(self) -> Color {
+        self.content.with_alpha(self.content_opacity)
     }
-}
 
-impl RootPlugin for Material {
-    fn style(&self, surface: &mut Stateful<Div>, _: &mut Window, _: &mut App) {
-        surface.style().background = Some(transparent_black().into());
+    /// Background color for the sidebar and toolbar chrome with configured alpha applied.
+    pub fn sidebar_background(self) -> Color {
+        self.sidebar.with_alpha(self.sidebar_opacity)
     }
-}
 
-impl Render for Material {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        Empty
+    /// Whether either surface asks the compositor for alpha translucency.
+    pub fn is_translucent(self) -> bool {
+        self.content_opacity < 1.0 || self.sidebar_opacity < 1.0
+    }
+
+    pub(crate) fn write_css_declarations(self, out: &mut String) {
+        let _ = writeln!(
+            out,
+            "    --gds-content-bg: {};",
+            color_css(self.content_background())
+        );
+        let _ = writeln!(out, "    --gds-content-opacity: {};", self.content_opacity);
+        let _ = writeln!(
+            out,
+            "    --gds-sidebar-bg: {};",
+            color_css(self.sidebar_background())
+        );
+        let _ = writeln!(out, "    --gds-sidebar-opacity: {};", self.sidebar_opacity);
     }
 }

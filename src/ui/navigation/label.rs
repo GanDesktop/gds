@@ -1,22 +1,20 @@
-use crate::ui::container::container_traits;
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
+use zgui::prelude::*;
+use zgui::{component, view};
 
-#[derive(IntoElement)]
-pub struct NavItemLabel {
-    base: Div,
-}
-
-impl Default for NavItemLabel {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { min_w_0; text_ellipsis; } },
+#[component]
+pub fn NavItemLabel(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_navigation_stylesheets();
+    view! {
+        text(
+            class = "gds-nav-item__label",
+            class = class,
+            {..attrs}
+        ) {
+            {children.into_view_once()}
         }
-    }
-}
-container_traits!(NavItemLabel);
-impl RenderOnce for NavItemLabel {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

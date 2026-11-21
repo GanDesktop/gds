@@ -36,13 +36,14 @@ Every browsable target has a canonical URI and participates in per-tab back/forw
 - **FreeDesktop Trash 1.0**: Supports home (`$XDG_DATA_HOME/Trash`) and per-volume (`.Trash-$uid` / `.Trash/$uid`) trash directories, preserving raw Unix path bytes, rejecting `..` traversal, and requiring destructive confirmation for `Shift+Delete` and Empty Trash.
 - **Opening files & archives**: Regular files open via the XDG OpenURI / AppChooser portals; executable scripts and `.desktop` files require explicit chooser confirmation. Archive files (`.zip`, `.7z`, `.tar`, `.tar.gz`) open in external archive managers.
 - **`org.freedesktop.FileManager1`**: Exports `ShowFolders`, `ShowItems`, and `ShowItemProperties` (`gds-files --dbus-service`), grouping revealed items into tabs and forwarding Wayland/X11 startup activation tokens without stealing an already owned bus name.
-- **Wayland & X11 clipboard**: Uses Wayland `wl_data_device` URI lists with GNOME/KDE copy-cut markers (conditional offer revisions prevent clearing newer clipboard contents after a cut completes; X11 file-clipboard metadata is currently scoped within the GDS process).
+- **Wayland & X11 clipboard**: Uses `zgui`'s multi-MIME `Clipboards::{read_mime, write_mime}` (`text/uri-list`, `x-special/gnome-copied-files`, `application/x-kde-cutselection`, `application/x-gds-clipboard-id`, `text/plain;charset=utf-8`) with offer revision CAS (`ClipboardError::Changed`) so cut completion never clears newer clipboard contents, backed by an in-process `Snapshot` fallback when unfocused (`ClipboardError::NotFocused`).
 
 ## Subsystem References
 
 - [File Picker CLI & Portal Protocol](picker.md)
 - [SFTP & SMB Network Locations](network.md)
 - [Volumes & Sidebar](devices-and-sidebar.md)
+- [Sidebar expansion frame times on GPUI-fast and zgui](sidebar-frame-times.md)
 - [File Tags & URI Schemes](tags.md)
 - [Desktop VM E2E & Unit Testing](testing.md)
 - [Files Roadmap (Built-in Archives, Remote Move & Search)](../../roadmap/files.md)

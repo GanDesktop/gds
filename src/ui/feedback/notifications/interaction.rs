@@ -1,149 +1,126 @@
-//! Keyboard interaction stays with the shared notification host.
+use zgui::prelude::*;
+use zgui::runtime::try_use_clipboard;
 
-use super::*;
-use crate::ui::actions::Cancel;
-use gpui_kit::{KeyDownEvent, prelude::*};
+use super::NotificationQueue;
 
-pub fn is_focused(window: &Window, cx: &App) -> bool {
-    overlay_for(window, cx).is_some_and(|view| view.read(cx).focus.contains_focused(window, cx))
+/// Toggles keyboard focus into or out of the notification stack (`Alt+N`, `shortcuts.md` §1):
+/// focuses the newest/selected notification when unfocused, and restores the prior focus target
+/// when pressed again while focused.
+pub fn focus() {
+    focus_in(NotificationQueue::active());
 }
 
-pub fn focus(window: &mut Window, cx: &mut App) {
-    if let Some(view) = overlay_for(window, cx) {
-        view.update(cx, |view, cx| view.focus_current(window, cx));
+pub(crate) fn focus_in(queue: NotificationQueue) {
+    if queue.focused().get_untracked() {
+        queue.clear_focus(true);
+        return;
+    }
+    let items = queue.items().get_untracked();
+    if items.is_empty() {
+        return;
+    }
+    queue.capture_previous_focus();
+    let target_id = queue
+        .selected_id()
+        .get_untracked()
+        .filter(|id| items.iter().any(|item| item.id == *id))
+        .unwrap_or(items[0].id);
+    queue.focus_notification(target_id);
+}
+
+/// Dismisses the currently focused notification, or the newest notification when unfocused (`Alt+X`).
+pub fn close_current() {
+    close_current_in(NotificationQueue::active());
+}
+
+pub(crate) fn close_current_in(queue: NotificationQueue) {
+    let items = queue.items().get_untracked();
+    let target = if queue.focused().get_untracked() {
+        queue
+            .selected_id()
+            .get_untracked()
+            .filter(|id| items.iter().any(|item| item.id == *id))
+            .or_else(|| items.first().map(|item| item.id))
+    } else {
+        items.first().map(|item| item.id)
+    };
+    if let Some(id) = target {
+        queue.dismiss(id);
     }
 }
 
-pub fn close_current(window: &mut Window, cx: &mut App) {
-    if let Some(view) = overlay_for(window, cx) {
-        view.update(cx, |view, cx| view.close_current(window, cx));
+/// Dismisses every active notification and restores any captured prior window focus (`Alt+Shift+X`).
+pub fn close_all() {
+    close_all_in(NotificationQueue::active());
+}
+
+pub(crate) fn close_all_in(queue: NotificationQueue) {
+    queue.dismiss_all();
+}
+
+/// Returns `true` when keyboard focus currently sits inside the notification stack.
+#[must_use]
+pub fn is_focused() -> bool {
+    NotificationQueue::active()
+        .focused()
+        .try_get_untracked()
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+pub(crate) fn select_next() {
+    select_next_in(NotificationQueue::active());
+}
+
+pub(crate) fn select_next_in(queue: NotificationQueue) {
+    move_selection(queue, 1);
+}
+
+pub(crate) fn select_prev_in(queue: NotificationQueue) {
+    move_selection(queue, -1);
+}
+
+pub(crate) fn select_first_in(queue: NotificationQueue) {
+    if let Some(first) = queue.items().get_untracked().first() {
+        queue.focus_notification(first.id);
     }
 }
 
-pub fn close_all(window: &mut Window, cx: &mut App) {
-    if let Some(view) = overlay_for(window, cx) {
-        view.update(cx, |view, cx| view.close_all(window, cx));
+pub(crate) fn select_last_in(queue: NotificationQueue) {
+    if let Some(last) = queue.items().get_untracked().last() {
+        queue.focus_notification(last.id);
     }
 }
 
-impl Overlay {
-    pub(super) fn available(&self, cx: &App) -> Vec<Entity<Notification>> {
-        self.list
-            .read(cx)
-            .notifications()
-            .into_iter()
-            .filter(|note| !self.closing.contains(&note.entity_id()))
-            .collect()
+pub(crate) fn copy_selected_in(queue: NotificationQueue) {
+    let items = queue.items().get_untracked();
+    let target = queue
+        .selected_id()
+        .get_untracked()
+        .and_then(|id| items.iter().find(|item| item.id == id))
+        .or_else(|| items.first());
+    if let Some(entry) = target
+        && let Some(clipboard) = try_use_clipboard()
+    {
+        clipboard.set_text(ClipboardKind::Standard, entry.report.copy_text());
     }
+}
 
-    fn restore_focus(&mut self, window: &mut Window, cx: &mut App) {
-        if self.focus.contains_focused(window, cx)
-            && let Some(focus) = self.return_focus.take()
-        {
-            focus.focus(window, cx);
-        }
+fn move_selection(queue: NotificationQueue, delta: isize) {
+    let items = queue.items().get_untracked();
+    if items.is_empty() {
+        return;
     }
-
-    pub fn focus_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.focus.contains_focused(window, cx) {
-            self.restore_focus(window, cx);
-        } else {
-            let notes = self.available(cx);
-            let Some(note) = notes.last() else {
-                return;
-            };
-            self.selected_index = notes.len() - 1;
-            self.selected = Some(note.entity_id());
-            self.return_focus = window.focused(cx);
-            self.focus.focus(window, cx);
-            self.scroll.scroll_to_item(self.selected_index);
-        }
-        cx.notify();
-    }
-
-    pub(super) fn sync_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mounted = self.list.read(cx).notifications();
-        self.closing
-            .retain(|id| mounted.iter().any(|note| note.entity_id() == *id));
-        let notes = self.available(cx);
-        if notes.is_empty() {
-            self.selected = None;
-            self.restore_focus(window, cx);
-        } else if let Some(index) = notes
-            .iter()
-            .position(|note| Some(note.entity_id()) == self.selected)
-        {
-            self.selected_index = index;
-        } else {
-            self.selected_index = self.selected_index.min(notes.len() - 1);
-            self.selected = Some(notes[self.selected_index].entity_id());
-        }
-    }
-
-    pub fn close_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let notes = self.available(cx);
-        let current = if self.focus.contains_focused(window, cx) {
-            notes
-                .iter()
-                .find(|note| Some(note.entity_id()) == self.selected)
-                .or(notes.last())
-        } else {
-            notes.last()
-        };
-        let Some(note) = current else {
-            return;
-        };
-        self.closing.insert(note.entity_id());
-        note.update(cx, |note, cx| note.dismiss(window, cx));
-        self.sync_selection(window, cx);
-        self.scroll.scroll_to_item(self.selected_index);
-        cx.notify();
-    }
-
-    pub fn close_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.closing
-            .extend(self.available(cx).iter().map(|note| note.entity_id()));
-        self.restore_focus(window, cx);
-        self.selected = None;
-        self.list.update(cx, |list, cx| list.clear(window, cx));
-        cx.notify();
-    }
-
-    pub(super) fn on_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if event.keystroke.modifiers.modified() {
-            return;
-        }
-        let notes = self.available(cx);
-        if notes.is_empty() {
-            return;
-        }
-        let current = notes
-            .iter()
-            .position(|note| Some(note.entity_id()) == self.selected)
-            .unwrap_or(notes.len() - 1);
-        let next = match event.keystroke.key.as_str() {
-            "up" => current.saturating_sub(1),
-            "down" => (current + 1).min(notes.len() - 1),
-            "home" => 0,
-            "end" => notes.len() - 1,
-            _ => return,
-        };
-        self.selected_index = next;
-        self.selected = Some(notes[next].entity_id());
-        self.scroll.scroll_to_item(next);
-        cx.stop_propagation();
-        window.prevent_default();
-        cx.notify();
-    }
-
-    pub(super) fn on_cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
-        self.restore_focus(window, cx);
-        cx.stop_propagation();
-        cx.notify();
-    }
+    let current_index = queue
+        .selected_id()
+        .get_untracked()
+        .and_then(|id| items.iter().position(|item| item.id == id))
+        .unwrap_or(0);
+    let len = items.len();
+    let next_index = if delta >= 0 {
+        (current_index + 1).min(len - 1)
+    } else {
+        current_index.saturating_sub(1)
+    };
+    queue.focus_notification(items[next_index].id);
 }

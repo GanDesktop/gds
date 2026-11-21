@@ -4,9 +4,8 @@ mod editor;
 mod model;
 
 pub use editor::{Changed, Editor};
-pub use gpui_kit::App;
 pub use model::{Choice, Choices, Field, Integer, Kind, Model, Number, decode, encode};
 pub use serde_json::Value;
 
-#[cfg(all(test, feature = "gui-tests"))]
+#[cfg(test)]
 mod tests;

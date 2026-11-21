@@ -1,27 +1,16 @@
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
+use zgui::prelude::*;
+use zgui::{component, view};
 
-use super::super::super::container::container_traits;
-use super::super::ACTION_GAP;
-
-/// Actions that keep their own commands, tooltips and shortcuts.
-#[derive(IntoElement)]
-pub struct PageActions {
-    base: Div,
-}
-
-impl Default for PageActions {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex; items_center; flex_shrink_0; gap: ACTION_GAP.px; } },
+#[component]
+pub fn PageActions(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::super::install_page_stylesheets();
+    view! {
+        row(class = "gds-page-actions", class = class, {..attrs}) {
+            {children.into_view_once()}
         }
-    }
-}
-
-container_traits!(PageActions);
-
-impl RenderOnce for PageActions {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

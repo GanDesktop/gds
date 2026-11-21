@@ -2,7 +2,7 @@
 let
   inherit (pkgs.callPackage ./rust.nix { }) toolchain;
   libraries = with pkgs; [
-    wayland libxkbcommon fontconfig freetype libGL vulkan-loader libxcb sqlite alsa-lib
+    wayland libxkbcommon libx11 libxcursor libxi libxrandr fontconfig freetype libGL vulkan-loader libxcb sqlite alsa-lib
   ];
   runtimePrograms = with pkgs; [ ffmpeg-headless xdg-terminal-exec ];
   libraryPath = "/run/opengl-driver/lib:${pkgs.lib.makeLibraryPath libraries}";

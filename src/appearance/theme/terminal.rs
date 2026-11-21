@@ -1,19 +1,23 @@
 //! Terminal roles belong to the appearance snapshot, not the renderer.
-use gpui_kit::{Hsla, rgb};
+use std::fmt::Write as _;
+use zgui::canvas::zgui_color::Color;
 
-use super::Mode;
+use super::{
+    Mode,
+    provider::color::{color_css, rgb},
+};
 
 /// Opaque terminal colors; the content material supplies background opacity.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerminalColors {
-    pub foreground: Hsla,
-    pub background: Hsla,
-    pub cursor: Hsla,
-    pub cursor_text: Hsla,
-    pub selection: Hsla,
-    pub selection_text: Hsla,
-    pub normal: [Hsla; 8],
-    pub bright: [Hsla; 8],
+    pub foreground: Color,
+    pub background: Color,
+    pub cursor: Color,
+    pub cursor_text: Color,
+    pub selection: Color,
+    pub selection_text: Color,
+    pub normal: [Color; 8],
+    pub bright: [Color; 8],
 }
 
 impl TerminalColors {
@@ -32,10 +36,10 @@ impl TerminalColors {
             Mode::Light => LIGHT,
             Mode::Dark => DARK,
         }
-        .map(|value| rgb(value).into());
+        .map(rgb);
         let (foreground, background) = match mode {
-            Mode::Light => (rgb(0x202020).into(), rgb(0xffffff).into()),
-            Mode::Dark => (rgb(0xc5c8c6).into(), rgb(0x1d1f21).into()),
+            Mode::Light => (rgb(0x202020), rgb(0xffffff)),
+            Mode::Dark => (rgb(0xc5c8c6), rgb(0x1d1f21)),
         };
         Self {
             foreground,
@@ -46,6 +50,30 @@ impl TerminalColors {
             selection_text: background,
             normal: std::array::from_fn(|i| ansi[i]),
             bright: std::array::from_fn(|i| ansi[i + 8]),
+        }
+    }
+
+    pub(crate) fn write_css_declarations(&self, out: &mut String) {
+        let _ = writeln!(out, "    --gds-term-fg: {};", color_css(self.foreground));
+        let _ = writeln!(out, "    --gds-term-bg: {};", color_css(self.background));
+        let _ = writeln!(out, "    --gds-term-cursor: {};", color_css(self.cursor));
+        let _ = writeln!(
+            out,
+            "    --gds-term-cursor-text: {};",
+            color_css(self.cursor_text)
+        );
+        let _ = writeln!(
+            out,
+            "    --gds-term-selection: {};",
+            color_css(self.selection)
+        );
+        let _ = writeln!(
+            out,
+            "    --gds-term-selection-text: {};",
+            color_css(self.selection_text)
+        );
+        for (i, color) in self.normal.iter().chain(self.bright.iter()).enumerate() {
+            let _ = writeln!(out, "    --gds-term-ansi-{i}: {};", color_css(*color));
         }
     }
 }

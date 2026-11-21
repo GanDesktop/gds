@@ -1,163 +1,394 @@
-//! Application-context access to theme, typography and motion preferences.
-use std::ops::Deref;
-
-use super::Context;
+//! Reactive theme, typography, motion, and Stylo CSS custom property generation.
 use crate::appearance::{motion, theme, typography};
-use gpui_kit::{App, Entity, Hsla, Pixels, Window};
+use std::{cell::RefCell, rc::Rc};
+use zgui::canvas::zgui_color::Color;
+use zgui::reactive::{
+    LocalStorage, Mounted, Owner, ReadSignal, RenderEffect, RwSignal, on_cleanup_local, prelude::*,
+};
+use zgui::view::{HostHandle, Stylesheet, current_host};
+use zgui_ui_tokens::{ColorScheme, Theme as TokensTheme};
 
-#[derive(Clone, Copy)]
-pub struct Appearance<C> {
-    pub(super) cx: C,
+struct WindowSheet {
+    host: HostHandle,
+    refs: usize,
+    scope: Mounted,
+    sheet: Stylesheet,
 }
 
-impl<C: Context> Appearance<C> {
-    pub fn theme(&mut self) -> Theme<C::Reborrowed<'_>> {
-        Theme {
-            cx: self.cx.reborrow(),
+#[derive(Clone)]
+pub struct Appearance {
+    owner: Owner,
+    sheets: Rc<RefCell<Vec<WindowSheet>>>,
+    theme: Theme,
+    typography: Typography,
+    motion: Motion,
+}
+
+impl Appearance {
+    pub(super) fn new() -> Self {
+        let owner = Owner::current().unwrap_or_default();
+        Self {
+            owner,
+            sheets: Rc::new(RefCell::new(Vec::new())),
+            theme: Theme::new(),
+            typography: Typography::new(),
+            motion: Motion::new(),
         }
     }
 
-    pub fn typography(&mut self) -> Typography<C::Reborrowed<'_>> {
-        Typography {
-            cx: self.cx.reborrow(),
+    pub fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    pub fn typography(&self) -> &Typography {
+        &self.typography
+    }
+
+    pub fn motion(&self) -> &Motion {
+        &self.motion
+    }
+
+    /// Active `zgui-ui-tokens` scheme matching the currently resolved theme mode.
+    pub fn color_scheme(&self) -> ColorScheme {
+        self.theme.mode().color_scheme()
+    }
+
+    /// Reactively construct a `zgui-ui-tokens::Theme` synchronized with palette, typography,
+    /// corner radius, and motion policy.
+    pub fn tokens_theme(&self) -> TokensTheme {
+        let policy = self.motion.policy.get();
+        self.typography.current.with(|typo| {
+            self.theme
+                .prepared
+                .with(|prepared| prepared.tokens_theme(typo, policy))
+        })
+    }
+
+    /// Reactively generate the `:root` Stylo CSS sheet containing all `--gds-*` custom properties.
+    pub fn gds_stylesheet_css(&self) -> String {
+        let policy = self.motion.policy.get();
+        self.typography.current.with(|typo| {
+            self.theme
+                .prepared
+                .with(|prepared| prepared.gds_stylesheet_css(typo, policy))
+        })
+    }
+
+    /// Reactively generate the combined `:root` Stylo CSS sheet for `--zui-*` and `--gds-*`.
+    pub fn full_stylesheet_css(&self) -> String {
+        let policy = self.motion.policy.get();
+        self.typography.current.with(|typo| {
+            self.theme
+                .prepared
+                .with(|prepared| prepared.full_stylesheet_css(typo, policy))
+        })
+    }
+
+    /// Construct the combined `:root` Stylo CSS sheet without subscribing a reactive observer.
+    pub fn full_stylesheet_css_untracked(&self) -> String {
+        let policy = self.motion.policy.get_untracked();
+        self.typography.current.with_untracked(|typo| {
+            self.theme
+                .prepared
+                .with_untracked(|prepared| prepared.full_stylesheet_css(typo, policy))
+        })
+    }
+
+    /// Install and reactively update `"gds-appearance"` inside the current `zgui` window scope.
+    ///
+    /// Reference-counted per window [`HostHandle`] with the reactive update effect anchored under
+    /// the application's root [`Owner`], so mounting a replacement [`crate::ui::Frame`] before an
+    /// outgoing `Frame` unmounts never removes `--gds-*` / `--zui-*` tokens from the active window.
+    /// Returns `true` when a window document host is active, or `false` in headless contexts.
+    pub fn install_window_sheet(&self) -> bool {
+        let Some(host) = current_host() else {
+            return false;
+        };
+        let already_installed = {
+            let mut entries = self.sheets.borrow_mut();
+            if let Some(entry) = entries.iter_mut().find(|entry| entry.host.ptr_eq(&host)) {
+                entry.refs += 1;
+                true
+            } else {
+                false
+            }
+        };
+        if !already_installed {
+            let initial_css = self.full_stylesheet_css_untracked();
+            let Some(sheet) = Stylesheet::install(theme::APPEARANCE_SHEET, &initial_css) else {
+                return false;
+            };
+            let appearance = self.clone();
+            let host_for_effect = host.clone();
+            let scope = self.owner.with(Mounted::new);
+            scope.with(|| {
+                let effect = RenderEffect::new(move |previous: Option<()>| {
+                    let css = appearance.full_stylesheet_css();
+                    if previous.is_some() {
+                        host_for_effect.install_stylesheet(theme::APPEARANCE_SHEET, &css);
+                    }
+                });
+                on_cleanup_local(move || drop(effect));
+            });
+            self.sheets.borrow_mut().push(WindowSheet {
+                host: host.clone(),
+                refs: 1,
+                scope,
+                sheet,
+            });
+        }
+        let sheets = Rc::clone(&self.sheets);
+        let host_for_cleanup = host;
+        on_cleanup_local(move || {
+            let removed = {
+                let mut entries = sheets.borrow_mut();
+                if let Some(pos) = entries
+                    .iter()
+                    .position(|entry| entry.host.ptr_eq(&host_for_cleanup))
+                {
+                    entries[pos].refs -= 1;
+                    if entries[pos].refs == 0 {
+                        Some(entries.swap_remove(pos))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(entry) = removed {
+                entry.scope.unmount();
+                drop(entry.sheet);
+            }
+        });
+        true
+    }
+}
+
+#[derive(Clone)]
+pub struct Theme {
+    prepared: RwSignal<theme::Prepared, LocalStorage>,
+    reload: Rc<RefCell<Option<theme::HotReload>>>,
+}
+
+impl Theme {
+    fn new() -> Self {
+        let initial = theme::Appearance {
+            source: theme::Source::Builtin,
+            ..Default::default()
+        }
+        .prepare(Self::platform_mode())
+        .expect("embedded theme is valid");
+        Self {
+            prepared: RwSignal::new_local(initial),
+            reload: Rc::new(RefCell::new(None)),
         }
     }
 
-    pub fn motion(&mut self) -> Motion<C::Reborrowed<'_>> {
-        Motion {
-            cx: self.cx.reborrow(),
+    pub fn platform_mode() -> theme::Mode {
+        #[cfg(target_os = "linux")]
+        if let Some(mode) = crate::appearance::portal::snapshot().color_scheme {
+            return mode;
         }
+        theme::Mode::Dark
     }
-}
 
-impl Appearance<&mut App> {
-    /// Initialize Kit with the system fonts before it probes default typography.
-    pub fn init(&mut self) {
-        crate::appearance::init(self.cx);
+    pub fn prepared(&self) -> ReadSignal<theme::Prepared, LocalStorage> {
+        self.prepared.read_only()
     }
-}
 
-#[derive(Clone, Copy)]
-pub struct Theme<C> {
-    cx: C,
-}
+    pub fn mode(&self) -> theme::Mode {
+        self.prepared.with(theme::Prepared::mode)
+    }
 
-impl<C: Deref<Target = App>> Theme<C> {
-    /// Read the same snapshot used to populate GPUI Kit's theme.
+    pub fn mode_untracked(&self) -> theme::Mode {
+        self.prepared.with_untracked(theme::Prepared::mode)
+    }
+
     pub fn colors(&self) -> theme::Colors {
-        theme::Colors::current(&self.cx)
+        self.prepared.with(theme::Prepared::colors)
     }
 
-    /// Background for the application-owned content surface, not text or controls.
-    pub fn content_background(&self) -> Hsla {
-        theme::content_background(&self.cx)
+    pub fn material(&self) -> theme::Material {
+        self.prepared.with(theme::Prepared::material)
     }
 
-    /// Background for the application-owned sidebar and toolbar surfaces.
-    pub fn sidebar_background(&self) -> Hsla {
-        theme::sidebar_background(&self.cx)
+    pub fn content_background(&self) -> Color {
+        self.material().content_background()
     }
-}
 
-impl Theme<&mut App> {
-    /// Read the selected source and apply one fully parsed palette to GPUI Kit.
-    ///
+    pub fn sidebar_background(&self) -> Color {
+        self.material().sidebar_background()
+    }
+
+    pub fn rounded_corners(&self) -> bool {
+        self.prepared.with(|p| p.appearance().rounded_corners)
+    }
+
     /// # Errors
-    /// Returns an error for invalid opacity, unavailable source files, inactive
-    /// desktop shells, or unsupported/malformed palette data.
-    pub fn apply(
-        &mut self,
-        appearance: &theme::Appearance,
-    ) -> Result<theme::Applied, theme::Error> {
-        theme::apply(appearance, self.cx)
+    /// Propagates source read and palette validation errors without changing the installed theme.
+    pub fn apply(&self, appearance: &theme::Appearance) -> Result<theme::Applied, theme::Error> {
+        self.install(appearance.prepare(Self::platform_mode())?)
     }
 
-    /// Install the prepared palette without reading source files again.
-    ///
     /// # Errors
-    /// Reports invalid surface opacity; the previous palette remains installed.
-    pub fn install(&mut self, prepared: theme::Prepared) -> Result<theme::Applied, theme::Error> {
-        prepared.install(self.cx)
+    /// Reports invalid surface opacity, retaining the current appearance.
+    pub fn install(&self, prepared: theme::Prepared) -> Result<theme::Applied, theme::Error> {
+        theme::validate_opacity("content_opacity", prepared.appearance().content_opacity)?;
+        theme::validate_opacity("sidebar_opacity", prepared.appearance().sidebar_opacity)?;
+        let applied = prepared.applied();
+        if self.prepared.with_untracked(|current| *current != prepared) {
+            self.prepared.set(prepared);
+        }
+        Ok(applied)
     }
 
-    /// Update only the existing surface opacity, without reloading a palette.
-    ///
     /// # Errors
-    /// Returns an error for non-finite/out-of-range alpha or when no appearance has
-    /// been applied yet.
-    pub fn update_opacity(&mut self, content: f32, sidebar: f32) -> Result<(), theme::Error> {
-        theme::update_opacity(content, sidebar, self.cx)
+    /// Rejects non-finite opacity and values outside 0..=1.
+    pub fn update_opacity(&self, content: f32, sidebar: f32) -> Result<(), theme::Error> {
+        theme::validate_opacity("content_opacity", content)?;
+        theme::validate_opacity("sidebar_opacity", sidebar)?;
+        self.prepared.update(|p| {
+            p.appearance.content_opacity = content;
+            p.appearance.sidebar_opacity = sidebar;
+        });
+        Ok(())
     }
 
-    /// Update client-side window corners without reloading the palette.
-    pub fn update_window_corners(&mut self, rounded: bool) {
-        theme::update_window_corners(rounded, self.cx);
+    pub fn update_window_corners(&self, rounded: bool) {
+        self.prepared
+            .update(|p| p.appearance.rounded_corners = rounded);
     }
 
-    /// Install the application's palette watcher before creating its windows.
-    pub fn init_hot_reload(&mut self, appearance: theme::Appearance) -> Entity<theme::HotReload> {
-        theme::HotReload::initialize(appearance, self.cx)
+    pub fn configure_hot_reload(&self, appearance: theme::Appearance) {
+        let mut reload = self.reload.borrow_mut();
+        match reload.as_ref() {
+            Some(reload) => reload.configure(appearance),
+            None => {
+                *reload = Some(super::Gds::current().with(|| theme::HotReload::new(appearance)));
+            }
+        }
     }
 
-    pub fn configure_hot_reload(&mut self, appearance: theme::Appearance) {
-        theme::HotReload::get(self.cx)
-            .update(self.cx, |reload, cx| reload.configure(appearance, cx));
+    pub fn refresh(&self) {
+        if let Some(reload) = self.reload.borrow().as_ref() {
+            reload.refresh();
+        }
     }
 
-    pub fn observer(&mut self) -> Entity<theme::Observer> {
-        theme::Observer::shared(self.cx)
-    }
-
-    /// Register one window without transferring ownership of the process watcher to it.
-    pub fn attach_observer(&mut self, window: &mut Window) {
-        theme::Observer::attach(window, self.cx);
+    pub(crate) fn refresh_for_portal(&self) {
+        if let Some(reload) = self.reload.borrow().as_ref() {
+            reload.refresh_for_portal();
+        }
     }
 }
 
 #[derive(Clone, Copy)]
-pub struct Typography<C> {
-    cx: C,
+pub struct Typography {
+    current: RwSignal<typography::Resolved, LocalStorage>,
 }
 
-impl<C: Deref<Target = App>> Typography<C> {
-    /// Installed font family names reported by the platform text system.
+impl Typography {
+    fn new() -> Self {
+        Self {
+            current: RwSignal::new_local(
+                typography::Preferences::default()
+                    .resolve()
+                    .expect("default typography is valid"),
+            ),
+        }
+    }
+
+    pub fn resolved(&self) -> ReadSignal<typography::Resolved, LocalStorage> {
+        self.current.read_only()
+    }
+
+    pub fn family(&self) -> String {
+        self.current.with(|value| value.family.clone())
+    }
+
+    pub fn mono_family(&self) -> String {
+        self.current.with(|value| value.mono_family.clone())
+    }
+
+    pub fn size(&self) -> f32 {
+        self.current.with(|value| value.size)
+    }
+
+    pub fn size_untracked(&self) -> f32 {
+        self.current.with_untracked(|value| value.size)
+    }
+
+    pub fn scaled(&self, base: f32) -> f32 {
+        base * self.size() / typography::DEFAULT_SIZE
+    }
+
+    pub fn scaled_untracked(&self, base: f32) -> f32 {
+        base * self.size_untracked() / typography::DEFAULT_SIZE
+    }
+
     pub fn installed_families(&self) -> Vec<String> {
-        typography::installed_families(&self.cx)
+        typography::installed_families()
     }
 
-    /// Scale an explicit pixel text size by the shared font size preference.
-    pub fn scaled(&self, base_px: f32) -> Pixels {
-        typography::scaled(base_px, &self.cx)
-    }
-}
-
-impl Typography<&mut App> {
-    /// Apply the shared font preference to the theme.
-    ///
     /// # Errors
-    /// Rejects non-finite sizes outside [`typography::MIN_SIZE`]..=[`typography::MAX_SIZE`].
+    /// Rejects unsupported text sizes, retaining the last applied typography.
     pub fn apply(
-        &mut self,
+        &self,
         preferences: &typography::Preferences,
     ) -> Result<typography::Applied, typography::Error> {
-        typography::install(preferences, self.cx)
+        let resolved = preferences.resolve()?;
+        let applied = typography::Applied {
+            family: resolved.family.clone(),
+            unavailable: resolved.unavailable.clone(),
+        };
+        if self.current.with_untracked(|current| *current != resolved) {
+            self.current.set(resolved);
+        }
+        Ok(applied)
     }
 }
 
 #[derive(Clone, Copy)]
-pub struct Motion<C> {
-    cx: C,
+pub struct Motion {
+    policy: RwSignal<motion::Policy, LocalStorage>,
+    following: RwSignal<bool, LocalStorage>,
 }
 
-impl Motion<&mut App> {
-    /// Enable decoration following the system preference, or force it to be static.
-    pub fn set_enabled(&mut self, enabled: bool) {
-        motion::set_animations_enabled(enabled, self.cx);
+impl Motion {
+    fn new() -> Self {
+        Self {
+            policy: RwSignal::new_local(motion::Policy::default()),
+            following: RwSignal::new_local(false),
+        }
     }
 
-    /// Follow the Settings Portal using the application's existing Tokio runtime.
-    pub fn follow_system(&mut self) {
-        let tasks = super::Tasks { cx: &*self.cx }.scope();
-        motion::follow_system(&tasks, self.cx);
+    pub fn enabled(&self) -> bool {
+        self.policy.with(|policy| !policy.reduced())
+    }
+
+    pub fn reduced(&self) -> bool {
+        self.policy.with(|policy| policy.reduced())
+    }
+
+    pub fn reduced_untracked(&self) -> bool {
+        self.policy.with_untracked(|policy| policy.reduced())
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        self.policy.update(|policy| policy.enabled = enabled);
+    }
+
+    pub fn follow_system(&self) {
+        if self.following.get_untracked() {
+            return;
+        }
+        self.following.set(true);
+        #[cfg(target_os = "linux")]
+        super::Gds::current().with(crate::appearance::portal::follow);
+    }
+
+    pub(crate) fn system_changed(&self, reduced: bool) {
+        self.policy.update(|policy| policy.system_reduced = reduced);
     }
 }

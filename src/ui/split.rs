@@ -2,159 +2,227 @@
 
 mod handle;
 mod state;
-
-use gds_uim::{component, el};
-use gpui_kit::component::StyledExt as _;
-use gpui_kit::{
-    AnyElement, App, DispatchPhase, DragMoveEvent, Entity, IntoElement, MouseButton,
-    MouseMoveEvent, MouseUpEvent, RenderOnce, SharedString, StyleRefinement, Styled, Window,
-    actions, canvas, div, prelude::*, px,
-};
-
-use handle::{Resize, SplitHandle};
-pub use state::{State, constrained_height};
-
 #[cfg(test)]
 mod tests;
 
+pub use handle::{SplitHandle, SplitHandleProps};
+pub use state::{Options, State, constrained_height};
+
+use zgui::prelude::*;
+use zgui::reactive::{LocalStorage, UnsyncCallback};
+use zgui::{component, css, view};
+
 pub const DIVIDER_HEIGHT: f32 = 9.;
-const KEY_STEP: f32 = 12.;
-const KEY_CONTEXT: &str = "GdsVerticalSplit";
-actions!(gds_split, [MoveUp, MoveDown]);
+pub const KEY_STEP: f32 = 12.;
 
-#[derive(Clone, Copy)]
-pub struct Changed(pub f32);
+const SPLIT_SHEET: &str = "gds-ui-split";
 
-/// The application supplies persistent split state; panes and labels are composable content.
-#[component(gpui = gpui_kit)]
-#[derive(IntoElement)]
-pub struct VerticalSplit {
-    state: Entity<State>,
-    #[attr(any_element)]
-    top: AnyElement,
-    #[attr(any_element)]
-    bottom: AnyElement,
-    #[attr(into)]
-    label: SharedString,
-    #[attr(any_element, option)]
-    divider_background: Option<AnyElement>,
-    /// Host-sampled reveal progress; resizing keeps the stored expanded height.
-    #[attr]
-    bottom_progress: f32,
-    #[attr]
-    collapsed_bottom_height: f32,
-    /// Expand the bottom pane over the top without changing its preferred split.
-    #[attr]
-    bottom_maximized_progress: f32,
-    style: StyleRefinement,
+const SPLIT_CSS: &str = css!(
+    ".gds-split {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+        min-width: 0px;
+        min-height: 0px;
+        overflow: hidden;
+    }
+    .gds-split__leading {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0px;
+        min-width: 0px;
+        min-height: 0px;
+        overflow: hidden;
+    }
+    .gds-split__trailing {
+        display: flex;
+        flex-direction: column;
+        flex: 0 0 auto;
+        height: var(--gds-split-size, 220px);
+        min-width: 0px;
+        min-height: 0px;
+        overflow: hidden;
+    }
+    .gds-split__handle-slot {
+        position: relative;
+        z-index: 10;
+        width: 100%;
+        height: 1px;
+        flex-shrink: 0;
+    }
+    .gds-split__trigger.gds-split__trigger {
+        position: absolute;
+        inset: 0px;
+        display: block;
+        width: 100%;
+        height: 1px;
+    }
+    .gds-split__divider-bg {
+        position: absolute;
+        inset: 0px;
+        pointer-events: none;
+    }
+    .gds-split__passive-line {
+        position: absolute;
+        left: 0px;
+        right: 0px;
+        top: 0px;
+        height: 1px;
+        background-color: var(--gds-border);
+        pointer-events: none;
+    }
+    .gds-split__handle {
+        position: absolute;
+        left: 0px;
+        right: 0px;
+        top: -4px;
+        height: 9px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: transparent;
+        cursor: ns-resize;
+    }
+    .gds-split__line {
+        position: absolute;
+        left: 0px;
+        right: 0px;
+        top: 4px;
+        height: 1px;
+        background-color: var(--gds-border);
+        transition: background-color var(--gds-motion-fast, 100ms) var(--gds-motion-ease-out, cubic-bezier(0, 0, 0.2, 1));
+    }
+    .gds-split__handle:hover .gds-split__line,
+    .gds-split__handle[data-dragging=\"true\"] .gds-split__line {
+        background-color: var(--gds-primary);
+    }
+    .gds-split__handle:focus-visible {
+        outline: none;
+    }
+    .gds-split__handle:focus-visible .gds-split__line {
+        outline: 1px solid var(--gds-primary);
+        outline-offset: 0px;
+        background-color: var(--gds-primary);
+    }"
+);
+
+pub(super) fn install_split_stylesheets() {
+    crate::ui::styles::install_ui_stylesheets();
+    zgui::view::install_stylesheet(SPLIT_SHEET, SPLIT_CSS);
 }
 
-impl VerticalSplit {
-    pub fn new(state: Entity<State>) -> Self {
-        Self {
-            state,
-            top: div().into_any_element(),
-            bottom: div().into_any_element(),
-            label: SharedString::default(),
-            divider_background: None,
-            bottom_progress: 1.,
-            collapsed_bottom_height: 0.,
-            bottom_maximized_progress: 0.,
-            style: StyleRefinement::default(),
+#[derive(Clone)]
+pub(super) struct SplitContext {
+    pub(super) container: NodeRef,
+    pub(super) label: Option<String>,
+    pub(super) on_commit: Option<UnsyncCallback<f32>>,
+}
+
+/// Vertical split pane hosting leading/trailing views separated by a draggable handle, supporting
+/// continuous `160ms` `bottom_progress` reveal, `collapsed_bottom_height`, `bottom_maximized_progress`,
+/// and custom `divider_background` column continuations.
+#[allow(clippy::too_many_arguments)]
+#[component]
+pub fn VerticalSplit(
+    state: State,
+    #[prop(optional)] on_commit: Option<UnsyncCallback<f32>>,
+    #[prop(into, optional)] label: Option<String>,
+    #[prop(optional)] divider_background: Option<ChildrenFn>,
+    #[prop(into, optional)] bottom_progress: Option<Signal<f32, LocalStorage>>,
+    #[prop(default = 0.0)] collapsed_bottom_height: f32,
+    #[prop(into, optional)] bottom_maximized_progress: Option<Signal<f32, LocalStorage>>,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    leading: ChildrenFn,
+    trailing: ChildrenFn,
+) -> impl IntoView {
+    install_split_stylesheets();
+    let container = NodeRef::new();
+    provide_local_context(SplitContext {
+        container,
+        label,
+        on_commit,
+    });
+
+    let collapsed = state.collapsed();
+    let width = state.width();
+    let progress = Signal::derive_local(move || match bottom_progress {
+        Some(sig) => sig.get().clamp(0.0, 1.0),
+        None => {
+            if collapsed.get() {
+                0.0
+            } else {
+                1.0
+            }
         }
-    }
-}
+    });
+    let maximized = Signal::derive_local(move || {
+        bottom_maximized_progress.map_or(0.0, |sig| sig.get().clamp(0.0, 1.0))
+    });
+    let resizable = Signal::derive_local(move || {
+        progress.get() >= 1.0 - 1e-4 && maximized.get() <= 1e-4 && !collapsed.get()
+    });
+    let show_divider =
+        Signal::derive_local(move || progress.get() > 1e-4 && maximized.get() < 1.0 - 1e-4);
 
-impl Styled for VerticalSplit {
-    fn style(&mut self) -> &mut StyleRefinement {
-        &mut self.style
-    }
-}
-
-impl RenderOnce for VerticalSplit {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = self.state.read(cx);
-        let progress = self.bottom_progress.clamp(0., 1.);
-        let maximized = self.bottom_maximized_progress.clamp(0., 1.);
-        let resizable = progress == 1. && maximized == 0.;
-        let available = f32::from(state.bounds.get().size.height);
-        let collapsed = (available - self.collapsed_bottom_height).max(0.);
-        let height = collapsed + (state.height() * (1. - maximized) - collapsed) * progress;
-        let bounds = state.bounds.clone();
-        let measure_state = self.state.downgrade();
-        let release_state = self.state.downgrade();
-        let measure = canvas(
-            move |new_bounds, _, cx| {
-                if bounds.replace(new_bounds) != new_bounds {
-                    let _ = measure_state.update(cx, |_, cx| cx.notify());
-                }
-            },
-            move |_, _, window, _| {
-                // ResizeHandle captures the drag. Persistence also needs release outside the split.
-                window.on_mouse_event({
-                    let release = release_state.clone();
-                    move |event: &MouseUpEvent, phase, _, cx| {
-                        if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
-                            return;
-                        }
-                        let _ = release.update(cx, |state, cx| {
-                            if state.dragging {
-                                state.dragging = false;
-                                state.commit(cx);
-                                cx.notify();
-                            }
-                        });
-                    }
-                });
-                window.on_mouse_event({
-                    let release = release_state.clone();
-                    move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase != DispatchPhase::Capture
-                            || event.pressed_button == Some(MouseButton::Left)
-                        {
-                            return;
-                        }
-                        let _ = release.update(cx, |state, cx| {
-                            if state.dragging {
-                                state.dragging = false;
-                                state.commit(cx);
-                                cx.notify();
-                            }
-                        });
-                    }
-                });
-            },
-        )
-        .absolute()
-        .size_full();
-        let dragged_state = self.state.clone();
-        let divider = el! {
-            .div { relative; flex_shrink_0; w_full; h: $(DIVIDER_HEIGHT * progress * (1. - maximized)).px } [
-                ..$(self.divider_background),
-                @if (resizable) $(SplitHandle::new(self.state.clone()).label(self.label)), @end,
-            ]
+    let split_size = move || {
+        let p = progress.get();
+        let m = maximized.get();
+        let target_h = if collapsed.get() && bottom_progress.is_none() {
+            collapsed_bottom_height
+        } else {
+            collapsed_bottom_height + (width.get() - collapsed_bottom_height) * p
         };
-        el! {
-            .div { # "vertical-split"; relative; flex; flex_col; size_full; min_h_0; overflow_hidden;
-                refine_style: $&self.style;
-                on_drag_move: $(move |event: &DragMoveEvent<Resize>, _, cx| {
-                    if !resizable || event.drag(cx).state != dragged_state {
-                        return;
+        let max_mix = (m * p).clamp(0.0, 1.0);
+        if max_mix <= 1e-4 {
+            Some(format!("{target_h:.2}px"))
+        } else {
+            let base_weight = 1.0 - max_mix;
+            Some(format!(
+                "calc({:.2}px * {base_weight:.4} + 100% * {max_mix:.4})",
+                target_h
+            ))
+        }
+    };
+
+    view! {
+        column(
+            node_ref = container,
+            class = "gds-split",
+            attr:data-collapsed = move || (progress.get() <= 1e-4).then(|| "true".to_owned()),
+            class = class,
+            {..attrs}
+        ) {
+            box(class = "gds-split__leading") {{leading.view()}}
+            Show(when = move || show_divider.get()) {
+                {{
+                    let bg = divider_background.clone();
+                    view! {
+                        box(class = "gds-split__handle-slot") {
+                            Show(when = move || !resizable.get()) {
+                                box(class = "gds-split__passive-line", a11y:hidden = true) {}
+                            }
+                            {bg.map(|render_bg| AnyView::new(view! {
+                                box(class = "gds-split__divider-bg", a11y:hidden = true) {
+                                    {render_bg.view()}
+                                }
+                            }))}
+                            Show(when = move || resizable.get()) {
+                                SplitHandle(state = state)
+                            }
+                        }
                     }
-                    dragged_state.update(cx, |state, cx| {
-                        state.adjust(f32::from(event.event.position.y - state.bounds.get().origin.y), cx);
-                    });
-                });
-            } [
-                .div { flex; flex_col; flex_shrink_0; h: height.px; min_h_0; overflow_hidden;
-                    when: $(progress == 0.), $(|pane| pane.h_auto().flex_1());
-                } [$(self.top)],
-                divider,
-                .div { flex; flex_col; flex_1; min_h_0; overflow_hidden;
-                    when: $(progress == 0.), $(|pane| pane.flex_none().h(px(self.collapsed_bottom_height)));
-                } [$(self.bottom)],
-                measure,
-            ]
+                }}
+            }
+            box(
+                class = "gds-split__trailing",
+                var:--gds-split-size = split_size
+            ) {{trailing.view()}}
         }
     }
 }
+
+/// Optional change payload emitted when split dragging commits a height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Changed(pub f32);

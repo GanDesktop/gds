@@ -19,7 +19,7 @@ dev app *args:
 shell:
     {{ develop }}
 
-# 构建整个套件，或指定 files / agents / images / portal / nixes。
+# 构建 Files 与 Portal（可指定 files / portal / all）。
 build app="all":
     @just _cargo build "$@"
 
@@ -81,7 +81,7 @@ uninstall app="all":
     nix profile remove "${uniq_paths[@]}"
 
 # 使用 target/debug 缓存构建，并安装本机开发版入口。
-install-dev app="all":
+install-dev app="files":
     #!/usr/bin/env bash
     set -euo pipefail
     just _cargo build "$1" --locked
@@ -95,23 +95,23 @@ uninstall-dev app="all":
 
 # 检查全部 Rust 目标。
 check:
-    {{ develop }} --command cargo check --workspace --features files,agents,portal,nixes,images,gpui-kit/test-support --all-targets
+    {{ develop }} --command cargo check --workspace --features files,portal --all-targets
 
 # 检查代码格式与全部 Clippy 规范门禁。
 lint:
     #!/usr/bin/env bash
     set -euo pipefail
     {{ develop }} --command cargo fmt --all --check
-    {{ develop }} --command cargo clippy --workspace --features gui-tests,files-e2e,portal,nixes,images --lib --bins -- -D clippy::disallowed_methods -D warnings
-    {{ develop }} --command cargo clippy --workspace --features gui-tests,files-e2e,portal,nixes,images --all-targets -- -D warnings
+    {{ develop }} --command cargo clippy --workspace --features gui-tests,files-e2e,portal --lib --bins -- -D clippy::disallowed_methods -D warnings
+    {{ develop }} --command cargo clippy --workspace --features gui-tests,files-e2e,portal --all-targets -- -D warnings
 
 # 运行测试，可传测试名称等 Cargo 参数。
 test *args:
-    {{ develop }} --command cargo test --workspace --features files,agents,portal,nixes,images,gpui-kit/test-support "$@"
+    {{ develop }} --command cargo test --workspace --features files,portal "$@"
 
-# 为真实桌面 VM 构建 Files/Images 普通版本，并打包精确源码和运行依赖。
+# 为真实桌面 VM 构建 Files 普通版本，并打包精确源码和运行依赖。
 e2e-build:
-    {{ develop }} --command cargo build --locked --bin gds-files --bin gds-images --features files,images
+    {{ develop }} --command cargo build --locked --bin gds-files --features files
     {{ develop }} --command python3 scripts/e2e.py bundle
 
 # 安装客体的 AT-SPI/Python/剪贴板测试依赖，不重置磁盘快照。
@@ -129,7 +129,7 @@ test-files *args:
 test-images *args:
     @just test-e2e -m images "$@"
 
-# 迁移期间保留的旧 Weston 流程；不作为桌面兼容性验收。
+# 原生 UI 事件/渲染与独立 Weston E2E 工作流。
 test-files-native:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -155,18 +155,15 @@ _cargo command app *args:
     case "$app" in
         all)
             if [ "$command" = run ]; then
-                printf '%s\n' '启动时请指定目标：just dev files / just dev agents / just dev images / just dev portal / just dev nixes' >&2
+                printf '%s\n' '启动时请指定目标：just dev files / just dev portal' >&2
                 exit 2
             fi
-            targets=(--bins --features files,agents,portal,nixes,images)
+            targets=(--bins --features files,portal)
             ;;
         files) targets=(--bin gds-files --features files) ;;
-        agents) targets=(--bin gds-agents --features agents) ;;
-        images) targets=(--bin gds-images --features images) ;;
-        nixes) targets=(--bin gds-nixes --features nixes) ;;
         portal) targets=(--bin xdg-desktop-portal-gds --features portal) ;;
         *)
-            printf '未知应用：%s；可选 files、agents、images、portal、nixes\n' "$app" >&2
+            printf '未知应用：%s；可选 files、portal\n' "$app" >&2
             exit 2
             ;;
     esac

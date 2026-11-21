@@ -152,3 +152,20 @@ fn numeric_fields_emit_exact_integer_variants() {
         assert!(tokens.contains(expected), "missing {expected} in {tokens}");
     }
 }
+
+#[test]
+fn enum_choices_use_gds_i18n_without_app_parameter() {
+    let input = syn::parse_str(
+        "enum Mode {
+            #[setting(label = \"mode-a\")] A,
+            #[setting(label = \"mode-b\")] B,
+        }",
+    )
+    .expect("valid enum declaration");
+    let tokens = expand(input).expect("valid choices enum").to_string();
+    assert!(tokens.contains("fn choices () -> Vec"), "{tokens}");
+    assert!(
+        tokens.contains("app :: Gds :: current () . i18n () . text"),
+        "{tokens}"
+    );
+}

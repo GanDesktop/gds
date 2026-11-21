@@ -1,8 +1,7 @@
-//! Appearance preferences, palette installation, materials and live updates.
+//! Appearance preferences, palette installation, materials, and live updates.
 
 mod hot_reload;
 mod material;
-mod observer;
 mod palette;
 mod terminal;
 pub use terminal::TerminalColors;
@@ -11,17 +10,21 @@ pub mod provider;
 mod tests;
 
 pub use hot_reload::HotReload;
-pub use observer::{Change, Observer};
+pub use material::Material;
 pub use palette::Palette as Colors;
 pub use provider::{Source, builtin::Theme as BuiltinTheme};
 
+/// Stylesheet identifier used when installing `--zui-*` and `--gds-*` tokens into a window.
+pub const APPEARANCE_SHEET: &str = "gds-appearance";
+
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use gpui_kit::component::{Theme, ThemeMode};
-use gpui_kit::{App, Global, Hsla, WindowAppearance};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zgui_ui_tokens::{ColorScheme, Theme as TokensTheme, theme_sheet};
 
+use super::{motion, tokens, typography};
 use provider::Loaded;
 
 /// Source category shown separately from the selected palette.
@@ -51,11 +54,18 @@ pub enum Mode {
     Dark,
 }
 
-impl From<Mode> for ThemeMode {
-    fn from(mode: Mode) -> Self {
-        match mode {
-            Mode::Light => Self::Light,
-            Mode::Dark => Self::Dark,
+impl Mode {
+    pub const fn color_scheme(self) -> ColorScheme {
+        match self {
+            Self::Light => ColorScheme::Light,
+            Self::Dark => ColorScheme::Dark,
+        }
+    }
+
+    const fn css_keyword(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
         }
     }
 }
@@ -71,14 +81,11 @@ pub enum ModePreference {
 
 impl ModePreference {
     /// Resolve a platform-backed preference without changing the stored choice.
-    pub fn resolve(self, appearance: WindowAppearance) -> Mode {
+    pub fn resolve(self, platform: Mode) -> Mode {
         match self {
             Self::Light => Mode::Light,
             Self::Dark => Mode::Dark,
-            Self::System => match appearance {
-                WindowAppearance::Light | WindowAppearance::VibrantLight => Mode::Light,
-                WindowAppearance::Dark | WindowAppearance::VibrantDark => Mode::Dark,
-            },
+            Self::System => platform,
         }
     }
 }
@@ -98,7 +105,7 @@ pub struct Appearance {
 
 impl Default for Appearance {
     fn default() -> Self {
-        let opacity = crate::appearance::tokens::SurfaceOpacity::default();
+        let opacity = tokens::SurfaceOpacity::default();
         Self {
             source: Source::default(),
             builtin: BuiltinTheme::default(),
@@ -159,196 +166,112 @@ impl Error {
     }
 }
 
-/// Update client-side window corners without reloading the palette.
-pub(crate) fn update_window_corners(rounded: bool, cx: &mut App) {
-    let radius = gpui_kit::px(if rounded {
-        crate::appearance::tokens::WINDOW_CORNER_RADIUS
-    } else {
-        0.
-    });
-    Theme::update(cx, |theme| {
-        theme.window_radius = radius;
-    });
-    cx.refresh_windows();
-}
-
-#[derive(Clone, Copy)]
-struct Material {
-    content: Hsla,
-    sidebar: Hsla,
-    content_opacity: f32,
-    sidebar_opacity: f32,
-}
-impl Global for Material {}
-
-pub(super) struct CurrentApplied {
-    pub appearance: Appearance,
-    pub source_path: Option<PathBuf>,
-}
-impl Global for CurrentApplied {}
-
-/// Read the selected source and apply one fully parsed palette to GPUI Kit.
-///
-/// Install the initial appearance after `gpui_kit::init`, before the first window.
-/// This synchronous path also serves manual refreshes; [`HotReload`] owns live
-/// refreshes and reuses the same loading and installation path.
-/// Controls and text remain opaque. Root and data-table surfaces are cleared;
-/// application-owned panels draw their material once using the helpers below.
-///
-/// # Errors
-/// Returns an error for invalid opacity, unavailable source files, inactive
-/// desktop shells, or unsupported/malformed palette data. The previous valid
-/// theme and material settings are retained on every such failure.
-pub(crate) fn apply(appearance: &Appearance, cx: &mut App) -> Result<Applied, Error> {
-    appearance.prepare(cx.window_appearance())?.install(cx)
-}
-
 /// A validated palette that can be read away from the UI thread.
 /// Applications can compare snapshots before installing external changes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Prepared {
-    appearance: Appearance,
+    pub(crate) appearance: Appearance,
     loaded: Loaded,
 }
 
 impl Prepared {
-    /// Files that can change this prepared appearance.
+    /// Files affecting this palette, including the active source file resolved during loading.
     pub fn source_paths(&self) -> Vec<PathBuf> {
         let mut paths = self.appearance.source_paths();
-        paths.extend(self.loaded.source_path.clone());
+        if let Some(path) = &self.loaded.source_path {
+            paths.push(path.clone());
+        }
         paths.sort();
         paths.dedup();
         paths
     }
-    /// Install the prepared palette without reading source files again.
-    ///
-    /// # Errors
-    /// Reports invalid surface opacity; the previous palette remains installed.
-    pub(crate) fn install(self, cx: &mut App) -> Result<Applied, Error> {
-        apply_loaded(&self.appearance, self.loaded, cx)
+
+    pub fn colors(&self) -> Colors {
+        self.loaded.palette
     }
-}
 
-/// Install one fully parsed palette. Shared by the synchronous [`apply`] path
-/// and background refreshes, so every entry point writes the same state.
-///
-/// # Errors
-/// Returns an error for invalid opacity. Neither opacity is changed and the
-/// previous theme stays applied if validation fails.
-fn apply_loaded(appearance: &Appearance, loaded: Loaded, cx: &mut App) -> Result<Applied, Error> {
-    validate_opacity("content_opacity", appearance.content_opacity)?;
-    validate_opacity("sidebar_opacity", appearance.sidebar_opacity)?;
-    let Loaded {
-        palette,
-        mode,
-        source_path,
-    } = loaded;
+    pub fn mode(&self) -> Mode {
+        self.loaded.mode
+    }
 
-    // A mode change reloads Kit's registered palette. Re-assert globals,
-    // materials, window corners, and user typography before applying our
-    // final theme overrides in a single Theme::update pass.
-    Theme::change(ThemeMode::from(mode), None, cx);
-    cx.set_global(palette);
-    cx.set_global(Material {
-        content: palette.content,
-        sidebar: palette.sidebar,
-        content_opacity: appearance.content_opacity,
-        sidebar_opacity: appearance.sidebar_opacity,
-    });
-    cx.set_global(CurrentApplied {
-        appearance: appearance.clone(),
-        source_path: source_path.clone(),
-    });
-    update_window_corners(appearance.rounded_corners, cx);
-    material::Material::install(cx);
-    // Kit reloads the registered theme on a mode change, and a theme file may
-    // name its own fonts. Re-assert the user's typography so switching theme,
-    // mode or opacity never resets the font family or size.
-    crate::appearance::typography::reapply(cx);
-    Theme::update(cx, |theme| {
-        palette.apply_to(&mut theme.colors);
-        // Keep Kit's tinted border/inset line, not its outer 3px halo: our
-        // scrolling surfaces clip at their edges. Reapply on every palette load.
-        theme.focus_ring = false;
+    pub fn appearance(&self) -> &Appearance {
+        &self.appearance
+    }
 
-        // Tables inherit their surrounding content material. Keep the background
-        // role opaque: native dialogs and other raised surfaces use it directly.
-        let mut clear = palette.content;
-        clear.a = 0.0;
-        // Data tables share the surrounding content material, not a second underlay.
-        theme.colors.table = clear;
-        theme.tokens.table = clear.into();
-        theme.colors.table_even = clear;
-        theme.tokens.table_even = clear.into();
-        theme.colors.table_head = clear;
-        theme.tokens.table_head = clear.into();
-        theme.colors.table_row_border = clear;
-        theme.tokens.table_row_border = clear.into();
-        theme.colors.scrollbar = clear;
-        theme.tokens.scrollbar = clear.into();
+    pub fn material(&self) -> Material {
+        Material {
+            content: self.loaded.palette.content,
+            sidebar: self.loaded.palette.sidebar,
+            content_opacity: self.appearance.content_opacity,
+            sidebar_opacity: self.appearance.sidebar_opacity,
+        }
+    }
 
-        // Every theme application re-aligns the shared toast column, so switching
-        // themes cannot move it or leave it under the toolbar.
-        theme.notification.placement = gpui_kit::Anchor::TopRight;
-        theme.notification.margins = gpui_kit::base::Edges {
-            top: gpui_kit::px(super::tokens::TOOLBAR_HEIGHT + super::tokens::NOTIFICATION_TOP_GAP),
-            right: gpui_kit::px(super::tokens::NOTIFICATION_INSET),
-            bottom: gpui_kit::px(super::tokens::NOTIFICATION_INSET),
-            left: gpui_kit::px(super::tokens::NOTIFICATION_INSET),
+    pub fn applied(&self) -> Applied {
+        Applied {
+            source: self.appearance.source.clone(),
+            mode: self.loaded.mode,
+            source_path: self.loaded.source_path.clone(),
+        }
+    }
+
+    pub fn tokens_theme(
+        &self,
+        typography: &typography::Resolved,
+        motion: motion::Policy,
+    ) -> TokensTheme {
+        self.loaded.palette.tokens_theme(
+            self.loaded.mode,
+            typography,
+            motion,
+            self.appearance.rounded_corners,
+        )
+    }
+
+    /// Generate the `:root` Stylo CSS sheet containing all `--gds-*` custom properties.
+    pub fn gds_stylesheet_css(
+        &self,
+        typography: &typography::Resolved,
+        motion: motion::Policy,
+    ) -> String {
+        let mut out = String::from(":root {\n");
+        let _ = writeln!(out, "    color-scheme: {};", self.loaded.mode.css_keyword());
+        let window_radius = if self.appearance.rounded_corners {
+            tokens::WINDOW_CORNER_RADIUS
+        } else {
+            0.0
         };
-    });
-    Ok(Applied {
-        source: appearance.source.clone(),
-        mode,
-        source_path,
-    })
-}
-
-/// Update only the existing surface opacity, without reloading a palette.
-///
-/// This is the slider update path: it does not read source files, change the
-/// selected mode, or touch Kit's text, selection or transparent-root colors.
-///
-/// # Errors
-/// Returns an error for non-finite/out-of-range alpha or when no appearance has
-/// been applied yet. Neither opacity is changed if validation fails.
-pub(crate) fn update_opacity(content: f32, sidebar: f32, cx: &mut App) -> Result<(), Error> {
-    validate_opacity("content_opacity", content)?;
-    validate_opacity("sidebar_opacity", sidebar)?;
-    if !cx.has_global::<Material>() {
-        return Err(Error::MaterialNotInitialized);
+        let _ = writeln!(out, "    --gds-radius-window: {window_radius}px;");
+        let _ = writeln!(
+            out,
+            "    --gds-radius-control: {}px;",
+            tokens::DataListStyle::ROW_RADIUS
+        );
+        self.loaded.palette.write_css_declarations(&mut out);
+        self.material().write_css_declarations(&mut out);
+        tokens::write_css_declarations(&mut out);
+        typography.write_css_declarations(&mut out);
+        motion.write_css_declarations(&mut out);
+        out.push_str("}\n");
+        out
     }
-    let material = cx.global_mut::<Material>();
-    material.content_opacity = content;
-    material.sidebar_opacity = sidebar;
-    cx.refresh_windows();
-    Ok(())
-}
 
-/// Background for the application-owned content surface, not text or controls.
-/// The window/root must permit transparency for alpha to reach the desktop.
-pub(crate) fn content_background(cx: &App) -> Hsla {
-    let Some(material) = cx.try_global::<Material>() else {
-        return Theme::global(cx).background;
-    };
-    let mut color = material.content;
-    color.a = material.content_opacity;
-    color
-}
-
-/// Background for the application-owned sidebar and toolbar surfaces.
-pub(crate) fn sidebar_background(cx: &App) -> Hsla {
-    let Some(material) = cx.try_global::<Material>() else {
-        return Theme::global(cx).sidebar;
-    };
-    let mut color = material.sidebar;
-    color.a = material.sidebar_opacity;
-    color
+    /// Generate the combined Stylo CSS sheet containing `--zui-*` and `--gds-*` tokens.
+    pub fn full_stylesheet_css(
+        &self,
+        typography: &typography::Resolved,
+        motion: motion::Policy,
+    ) -> String {
+        let tokens = self.tokens_theme(typography, motion);
+        let zui = theme_sheet(":root", &tokens, &tokens, self.loaded.mode.color_scheme());
+        let gds = self.gds_stylesheet_css(typography, motion);
+        format!("{zui}\n{gds}")
+    }
 }
 
 /// # Errors
 /// Rejects non-finite alpha and values outside the supported range.
-fn validate_opacity(name: &'static str, value: f32) -> Result<(), Error> {
+pub(crate) fn validate_opacity(name: &'static str, value: f32) -> Result<(), Error> {
     if value.is_finite() && (0.0..=1.0).contains(&value) {
         Ok(())
     } else {
@@ -361,7 +284,7 @@ impl Appearance {
     /// before resolving the initial theme synchronously on the UI thread.
     pub async fn prime_session(&self) {
         #[cfg(target_os = "linux")]
-        if self.source == Source::System && provider::system::is_gnome() {
+        if self.source == Source::System || self.mode == ModePreference::System {
             super::portal::prime().await;
         }
     }
@@ -370,11 +293,12 @@ impl Appearance {
     pub fn source_paths(&self) -> Vec<PathBuf> {
         self.source.source_paths()
     }
+
     /// Read and validate one complete palette for a known platform appearance.
     ///
     /// # Errors
     /// Reports invalid opacity, unavailable source files or malformed palette data.
-    pub fn prepare(&self, window_appearance: WindowAppearance) -> Result<Prepared, Error> {
+    pub fn prepare(&self, window_appearance: Mode) -> Result<Prepared, Error> {
         validate_opacity("content_opacity", self.content_opacity)?;
         validate_opacity("sidebar_opacity", self.sidebar_opacity)?;
         Ok(Prepared {
@@ -407,7 +331,7 @@ impl Appearance {
     ///
     /// # Errors
     /// Propagates source discovery, file access and palette decoding failures.
-    fn load_for(&self, window_appearance: WindowAppearance) -> Result<Loaded, Error> {
+    fn load_for(&self, window_appearance: Mode) -> Result<Loaded, Error> {
         self.source.load(self.mode, window_appearance, self.builtin)
     }
 }

@@ -1,6 +1,7 @@
 gds-about-version = 版本
 gds-about-build-tag = 构建标识
 gds-about-copy = 复制
+gds-about-copied = 已复制
 gds-about-website = 网站
 gds-about-feedback = 反馈
 gds-about-credits = 致谢

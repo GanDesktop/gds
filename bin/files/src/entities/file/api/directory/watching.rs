@@ -18,13 +18,6 @@ pub(crate) struct Watching {
 impl Watching {
     /// # Errors
     /// Reports failures creating or installing the filesystem watch.
-    #[allow(dead_code)]
-    pub(crate) fn new(path: &Path) -> notify::Result<Self> {
-        Self::with_limit(path, DEFAULT_WATCH_INCREMENTAL_LIMIT)
-    }
-
-    /// # Errors
-    /// Reports failures creating or installing the filesystem watch.
     pub(crate) fn with_limit(path: &Path, incremental_limit: usize) -> notify::Result<Self> {
         let (sender, events) = mpsc::channel(1);
         let pending = Arc::new(Mutex::new(Changes::with_limit(incremental_limit)));

@@ -1,26 +1,17 @@
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
+use zgui::prelude::*;
+use zgui::{component, view};
 
-use super::super::container::container_traits;
-
-/// The flexible page body; children own scrolling and selection surfaces.
-#[derive(IntoElement)]
-pub struct PageContent {
-    base: Div,
-}
-
-impl Default for PageContent {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex; flex_col; flex_1; min_h_0; min_w_0; overflow_hidden; } },
+/// Flexible page body; children own scrolling and selection surfaces.
+#[component]
+pub fn PageContent(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_page_stylesheets();
+    view! {
+        column(class = "gds-page-content", class = class, {..attrs}) {
+            {children.into_view_once()}
         }
-    }
-}
-
-container_traits!(PageContent);
-
-impl RenderOnce for PageContent {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

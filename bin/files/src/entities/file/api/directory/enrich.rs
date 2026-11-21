@@ -63,6 +63,7 @@ impl ProbeBudget {
         }
     }
 
+    #[cfg(test)]
     pub const fn union(self, other: Self) -> Self {
         match (self, other) {
             (Self::Full, _) | (_, Self::Full) => Self::Full,
@@ -104,6 +105,7 @@ impl EnrichmentNeed {
             && self.budget.is_satisfied_by(covered.budget)
     }
 
+    #[cfg(test)]
     pub const fn union(self, other: Self) -> Self {
         Self {
             children: self.children || other.children,
@@ -115,11 +117,6 @@ impl EnrichmentNeed {
 }
 
 impl Entry {
-    /// Whether both handles point to the exact same underlying [`EntryData`] allocation.
-    pub fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-
     /// Whether this entry still requires secondary I/O to satisfy `need`.
     pub fn needs_enrichment(&self, need: EnrichmentNeed) -> bool {
         match self.kind {
@@ -183,7 +180,7 @@ pub fn plan_enrichment(
 ///
 /// # Errors
 /// Returns [`Error::Cancelled`] when `cancel` is triggered before or during the batch.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn probe_batch(
     entries: &[Entry],
     need: EnrichmentNeed,
@@ -234,9 +231,8 @@ pub fn probe_batch_with_limit(
             }
             EntryKind::File => {
                 if need.content && !data.content_probed {
-                    if data.details.content.is_none() {
-                        data.details.content = ContentType::detect_header(&data.name, &data.path);
-                    }
+                    data.details.content =
+                        ContentType::probe_content(&data.name, &data.path).or(data.details.content);
                     data.content_probed = true;
                 }
             }
@@ -257,9 +253,13 @@ pub fn probe_batch_with_limit(
                         kind: EntryKind::File,
                         content,
                     }) = &mut data.details.target
-                        && content.is_none()
                     {
-                        *content = ContentType::detect_header(&data.name, &data.path);
+                        let target_name = std::fs::read_link(&data.path).ok().and_then(|target| {
+                            target.file_name().map(std::ffi::OsStr::to_os_string)
+                        });
+                        let name = target_name.as_deref().unwrap_or(data.name.as_os_str());
+                        *content =
+                            ContentType::probe_content(name, &data.path).or_else(|| content.take());
                     }
                     data.content_probed = true;
                 }

@@ -1,22 +1,15 @@
-mod appearance;
-mod extensions;
-mod files;
-mod general;
-mod performance;
-mod terminal;
+//! Settings destinations and their pure editor models.
 
-pub(super) use performance::{PerformanceForm, PerformanceFormEditor};
+pub mod performance;
 
-use gpui_kit::{Context, Div, assets::IconName};
-
-use super::View;
+use gds::ui::IconName;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     General,
     Appearance,
-    Terminal,
     Files,
+    Terminal,
     Extensions,
     Performance,
 }
@@ -31,48 +24,35 @@ impl Page {
         Self::Performance,
     ];
 
-    pub fn label_id(self) -> &'static str {
+    #[must_use]
+    pub const fn label_id(self) -> &'static str {
         match self {
             Self::General => "settings-general",
             Self::Appearance => "settings-appearance",
-            Self::Terminal => "settings-terminal",
             Self::Files => "settings-files",
+            Self::Terminal => "settings-terminal",
             Self::Extensions => "settings-extensions",
             Self::Performance => "settings-performance",
         }
     }
 
-    pub(super) fn icon(self) -> IconName {
+    #[must_use]
+    pub const fn icon(self) -> IconName {
         match self {
             Self::General => IconName::Settings,
             Self::Appearance => IconName::Palette,
-            Self::Terminal => IconName::Terminal,
             Self::Files => IconName::Folder,
+            Self::Terminal => IconName::Terminal,
             Self::Extensions => IconName::Plug,
             Self::Performance => IconName::Gauge,
         }
     }
 
-    /// Position in [`Page::ALL`], used for focus and wrap-around page cycling.
+    #[must_use]
     pub(super) fn index(self) -> usize {
-        match self {
-            Self::General => 0,
-            Self::Appearance => 1,
-            Self::Terminal => 3,
-            Self::Files => 2,
-            Self::Extensions => 4,
-            Self::Performance => 5,
-        }
-    }
-
-    pub(super) fn render(self, view: &mut View, cx: &mut Context<View>) -> Div {
-        match self {
-            Self::General => view.render_general(cx),
-            Self::Appearance => view.render_appearance(cx),
-            Self::Terminal => view.render_terminal(cx),
-            Self::Files => view.render_files(cx),
-            Self::Extensions => view.render_extensions(cx),
-            Self::Performance => view.render_performance(cx),
-        }
+        Self::ALL
+            .iter()
+            .position(|page| *page == self)
+            .expect("every settings page is a destination")
     }
 }

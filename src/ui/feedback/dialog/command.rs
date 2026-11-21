@@ -1,86 +1,57 @@
-use super::DIALOG_CONTEXT;
-use crate::ui::Shortcut;
-use gpui_kit::component::dialog::{Cancel, Confirm};
-use gpui_kit::*;
+use zgui::vocab::{Key, KeyEvent, Modifiers};
 
-/// The two decisions every dialog offers, each with one shared binding.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use crate::ui::shortcut::Shortcut;
+
+/// Keyboard confirmation/cancellation commands routed to active modal dialogs (`shortcuts.md` §1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DialogCommand {
     Confirm,
     Cancel,
 }
 
 impl DialogCommand {
+    /// Every dialog command in canonical order.
     pub const ALL: [Self; 2] = [Self::Confirm, Self::Cancel];
 
-    pub fn label_id(self) -> &'static str {
+    /// Fluent localization message ID describing this dialog command.
+    #[must_use]
+    pub const fn label_id(self) -> &'static str {
         match self {
             Self::Confirm => "dialog-confirm",
             Self::Cancel => "dialog-cancel",
         }
     }
 
-    pub fn default_stroke(self) -> &'static str {
+    /// Default mnemonic [`Shortcut`] bound to this dialog command (`Alt+A` / `Alt+C`).
+    #[must_use]
+    pub fn default_stroke(self) -> Shortcut {
         match self {
-            Self::Confirm => "alt-a",
-            Self::Cancel => "alt-c",
+            Self::Confirm => Shortcut::new(Key::character("a"), Modifiers::ALT),
+            Self::Cancel => Shortcut::new(Key::character("c"), Modifiers::ALT),
         }
     }
 
-    /// The existing `gpui-base` actions, so the keyboard path and the click
-    /// path reach the same dialog callbacks.
-    pub fn action(self) -> Box<dyn Action> {
-        match self {
-            Self::Confirm => Box::new(Confirm { secondary: false }),
-            Self::Cancel => Box::new(Cancel),
-        }
-    }
-
-    pub fn context(self) -> Option<&'static str> {
-        Some(DIALOG_CONTEXT)
-    }
-
+    /// Alias for [`Self::default_stroke`].
+    #[must_use]
     pub fn shortcut(self) -> Shortcut {
-        Shortcut::new(self.action(), self.context())
+        self.default_stroke()
     }
 
-    pub(super) fn button_id(self) -> &'static str {
-        match self {
-            Self::Confirm => "dialog-confirm",
-            Self::Cancel => "dialog-cancel",
-        }
+    /// Returns `true` when `key` and `modifiers` match this command's default stroke.
+    #[must_use]
+    pub fn matches(self, key: &Key, modifiers: Modifiers) -> bool {
+        self.default_stroke().matches(key, modifiers)
     }
 
-    /// Distinct from [`Self::button_id`], whose element state is the button's
-    /// own focus handle.
-    pub(super) fn anchor_key(self) -> &'static str {
-        match self {
-            Self::Confirm => "dialog-confirm-anchor",
-            Self::Cancel => "dialog-cancel-anchor",
-        }
+    /// Returns `true` when a key event and `modifiers` match this command's default stroke.
+    #[must_use]
+    pub fn matches_event(self, event: &KeyEvent, modifiers: Modifiers) -> bool {
+        self.default_stroke().matches_event(event, modifiers)
     }
+}
 
-    /// Distinct from [`Self::anchor_key`], whose element state is the focus
-    /// handle; one element path cannot hold both states.
-    pub(super) fn tooltip_id(self) -> &'static str {
-        match self {
-            Self::Confirm => "dialog-confirm-hint",
-            Self::Cancel => "dialog-cancel-hint",
-        }
-    }
-
-    pub(super) fn binding(self, cx: &App) -> KeyBinding {
-        let context = KeyBindingContextPredicate::parse(DIALOG_CONTEXT)
-            .expect("bundled action contexts are valid")
-            .into();
-        KeyBinding::load(
-            self.default_stroke(),
-            self.action(),
-            Some(context),
-            false,
-            None,
-            cx,
-        )
-        .expect("bundled dialog shortcuts are valid")
+impl From<DialogCommand> for Shortcut {
+    fn from(command: DialogCommand) -> Self {
+        command.default_stroke()
     }
 }

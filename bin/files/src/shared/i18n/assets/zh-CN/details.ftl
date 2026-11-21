@@ -1,4 +1,5 @@
 details-format = 格式
+details-mime = MIME 类型
 details-created = 创建时间
 details-target = 目标
 details-dimensions = 尺寸
@@ -15,6 +16,8 @@ details-line-endings = 换行
 details-folders = 文件夹
 details-files = 文件
 details-links = 链接
+details-items = 项目数量
+details-calculating = 正在计算…
 details-mixed = 混合
 details-yes = 是
 details-no = 否

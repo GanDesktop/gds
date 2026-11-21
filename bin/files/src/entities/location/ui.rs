@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use gpui_kit::{App, assets::IconName};
+use gds::ui::IconName;
 
 use super::{Location, scheme::TagAddress};
 use crate::shared::i18n;
@@ -120,7 +120,7 @@ impl Location {
         }
     }
 
-    pub(crate) fn label(&self, cx: &App) -> String {
+    pub(crate) fn label(&self) -> String {
         match self {
             Self::Tags(address) if !address.tag().is_empty() => address.label().to_owned(),
             Self::Remote(address) => address.name(),
@@ -134,12 +134,12 @@ impl Location {
                 .unwrap_or(relative)
                 .to_string_lossy()
                 .into_owned(),
-            Self::Volume { .. } => i18n::text(Collection::Volumes.label_id(), cx).to_string(),
+            Self::Volume { .. } => i18n::text(Collection::Volumes.label_id()),
             _ => {
                 let collection = self
                     .collection()
                     .expect("non-path location belongs to a collection");
-                i18n::text(collection.label_id(), cx).to_string()
+                i18n::text(collection.label_id())
             }
         }
     }

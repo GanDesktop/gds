@@ -1,120 +1,110 @@
-//! Icon-only controls sharing suite sizing and shortcut presentation.
+use zgui::prelude::*;
+use zgui::reactive::{LocalStorage, Signal};
+use zgui::{component, view};
+use zgui_ui::{ButtonProps as ZuiButtonProps, ButtonSize, ButtonVariant, SpinnerProps};
 
-use crate::appearance::tokens::{ICON_BUTTON_SIZE, TOOLTIP_DELAY};
-use crate::ui::shortcut::ShortcutHint as Hint;
-use crate::ui::*;
-use gds_uim::el;
-use gpui_kit::assets::IconName;
-use gpui_kit::component::{Disableable as _, Selectable as _, button::ButtonVariants as _};
-use gpui_kit::{IntoElement, prelude::*, *};
+use crate::ui::Shortcut;
+use crate::ui::actions::Command;
+use crate::ui::icon::{IconName, IconProps};
+use crate::ui::keytips::anchor_when;
 
-#[derive(IntoElement)]
-pub struct IconButton {
-    id: ElementId,
-    button: button::Button,
-    label: SharedString,
-    command: Option<Shortcut>,
-    /// A binding outside the workspace command set; it wins when both are set.
-    shortcut: Option<Shortcut>,
-    disabled: bool,
-}
-
-impl IconButton {
-    pub fn new(id: impl Into<ElementId>) -> Self {
-        let id = id.into();
-        let button = button::Button::icon_button(id.clone());
-        Self {
-            id,
-            button,
-            label: "".into(),
-            command: None,
-            shortcut: None,
-            disabled: false,
-        }
-    }
-
-    pub fn icon(mut self, icon: IconName) -> Self {
-        self.button = self.button.control_icon(icon);
-        self
-    }
-
-    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
-        self.label = label.into();
-        self.button = self.button.accessibility_label(self.label.clone());
-        self
-    }
-
-    pub fn command(mut self, command: impl Into<Shortcut>) -> Self {
-        self.command = Some(command.into());
-        self
-    }
-
-    /// The binding this control runs outside the workspace command set.
-    ///
-    /// Its hint and tooltip then read that binding exactly like a command
-    /// control, so a key is never advertised from the wrong scope.
-    pub fn shortcut(mut self, shortcut: Shortcut) -> Self {
-        self.shortcut = Some(shortcut);
-        self
-    }
-
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self.button = self.button.disabled(disabled);
-        self
-    }
-
-    pub fn active(mut self, active: bool) -> Self {
-        if active {
-            self.button = self.button.primary();
-        }
-        self
-    }
-
-    /// Persistent on/off state uses shared selection and accessibility semantics.
-    pub fn toggled(mut self, toggled: bool) -> Self {
-        self.button = self.button.selected(toggled).toggled(toggled);
-        self
-    }
-
-    pub fn on_click(
-        mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.button = self.button.on_click(handler);
-        self
+const fn icon_px_for_size(size: ButtonSize) -> f32 {
+    match size {
+        ButtonSize::IconXs | ButtonSize::Xs => 12.0,
+        ButtonSize::IconSm | ButtonSize::Sm => 14.0,
+        ButtonSize::IconLg | ButtonSize::Lg => 18.0,
+        ButtonSize::Icon | ButtonSize::Md => crate::appearance::tokens::ICON_SIZE,
     }
 }
 
-impl RenderOnce for IconButton {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self {
-            id,
-            button,
-            label,
-            command,
-            shortcut,
-            disabled,
-        } = self;
-        let shortcut = shortcut.or(command);
-        // A disabled control cannot run its action, so it never advertises a key.
-        let hint = match &shortcut {
-            Some(shortcut) if !disabled => {
-                Some(keytips::anchor(window, cx, id.clone(), shortcut.clone()))
-            }
-            _ => None,
-        };
-        let tooltip = match shortcut {
-            Some(shortcut) => Hint::shortcut(label, shortcut),
-            None => Hint::command(label, None),
+/// Shared `32x32px` icon-only control wrapping `zgui_ui::Button` with accessible name, hover
+/// crossfade, loading spinner, `Corner` hold-to-reveal keytip, and `ShortcutHint` tooltip.
+#[allow(clippy::too_many_arguments)]
+#[component]
+pub fn IconButton(
+    #[prop(into)] icon: Signal<IconName, LocalStorage>,
+    #[prop(into)] label: Signal<String, LocalStorage>,
+    #[prop(into, optional)] hover_icon: Option<Signal<IconName, LocalStorage>>,
+    #[prop(optional)] icon_size: Option<f32>,
+    #[prop(default = ButtonVariant::Ghost)] variant: ButtonVariant,
+    #[prop(default = ButtonSize::Icon)] size: ButtonSize,
+    #[prop(into, default = Signal::stored_local(false))] disabled: Signal<bool, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(false))] loading: Signal<bool, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(false))] active: Signal<bool, LocalStorage>,
+    #[prop(into, optional)] toggled: Option<Signal<bool, LocalStorage>>,
+    #[prop(optional)] command: Option<Command>,
+    #[prop(optional)] shortcut: Option<Shortcut>,
+    #[prop(into, default = Signal::stored_local(true))] shortcut_enabled: Signal<
+        bool,
+        LocalStorage,
+    >,
+    #[prop(default = true)] tooltip: bool,
+    #[prop(optional)] node_ref: Option<NodeRef>,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+) -> impl IntoView {
+    super::install_button_stylesheets();
+    let resolved_ref = node_ref.unwrap_or_default();
+    let effective_disabled = Signal::derive_local(move || disabled.get() || loading.get());
+    let effective_shortcut = shortcut.or_else(|| command.map(Shortcut::command));
+    let can_advertise =
+        Signal::derive_local(move || shortcut_enabled.get() && !effective_disabled.get());
+
+    if let Some(ref key) = effective_shortcut {
+        anchor_when(resolved_ref, key.clone(), can_advertise);
+    }
+
+    let advertised_a11y = effective_shortcut
+        .as_ref()
+        .filter(|_| shortcut_enabled.get_untracked());
+    let own = super::button_attrs(
+        Attrs::new().a11y_from(A11yBinding::unspecified().label(move || label.get())),
+        toggled,
+        loading,
+        active,
+        advertised_a11y,
+    );
+    let glyph_size = icon_size.unwrap_or_else(|| icon_px_for_size(size));
+
+    let core = AnyView::new(view! {
+        ZuiButton(
+            variant = variant,
+            size = size,
+            disabled = effective_disabled,
+            node_ref = Some(resolved_ref),
+            class = "gds-icon-button",
+            class = class,
+            {..own},
+            {..attrs}
+        ) {
+            {move || {
+                if loading.get() {
+                    AnyView::new(view! { Spinner() })
+                } else if let Some(hover) = hover_icon {
+                    AnyView::new(view! {
+                        box(class = "gds-icon-button__artwork") {
+                            Icon(
+                                name = icon,
+                                size = glyph_size,
+                                class = "gds-icon-button__primary",
+                            )
+                            Icon(
+                                name = hover,
+                                size = glyph_size,
+                                class = "gds-icon-button__hover",
+                            )
+                        }
+                    })
+                } else {
+                    AnyView::new(view! { Icon(name = icon, size = glyph_size) })
+                }
+            }}
         }
-        .builder();
-        // The hint's containing block is the button, not a stretched parent row.
-        el! {
-            .div { # id; relative; size: ICON_BUTTON_SIZE.px; flex_shrink_0; tooltip_show_delay: TOOLTIP_DELAY; tooltip: tooltip } [
-                button,
-                @if (let Some(hint) = hint) hint, @end,
-            ]
-        }
+    });
+
+    if tooltip {
+        super::wrap_tooltip(core, Some(label), effective_shortcut, can_advertise)
+    } else {
+        core
     }
 }

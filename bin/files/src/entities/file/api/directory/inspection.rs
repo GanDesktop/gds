@@ -7,18 +7,11 @@ impl Entry {
         let kind = match self.kind {
             EntryKind::Directory => Kind::Directory,
             EntryKind::SymbolicLink => Kind::Symlink,
-            _ => match self
-                .details
-                .content
-                .as_ref()
-                .map(|content| content.category)
-            {
-                Some(ContentCategory::Image) => Kind::Image,
-                Some(ContentCategory::Audio) => Kind::Audio,
-                Some(ContentCategory::Video) => Kind::Video,
-                Some(ContentCategory::Text | ContentCategory::Code | ContentCategory::Document) => {
-                    Kind::Text
-                }
+            _ => match self.details.content.as_ref() {
+                Some(content) if content.category == ContentCategory::Image => Kind::Image,
+                Some(content) if content.category == ContentCategory::Audio => Kind::Audio,
+                Some(content) if content.category == ContentCategory::Video => Kind::Video,
+                Some(content) if content.text_previewable => Kind::Text,
                 _ => Kind::Other,
             },
         };

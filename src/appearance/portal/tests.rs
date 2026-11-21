@@ -87,15 +87,7 @@ async fn portal_snapshot_and_live_changes_share_one_subscription() {
     let initial = snapshot();
     assert!(initial.primed);
     assert_eq!(initial.color_scheme, Some(Mode::Dark));
-    assert_eq!(
-        initial.accent_color,
-        Some(Rgba {
-            r: 0.2,
-            g: 0.5,
-            b: 0.9,
-            a: 1.0
-        })
-    );
+    assert_eq!(initial.accent_color, Some(Color::srgb(0.2, 0.5, 0.9, 1.0)));
 
     let interface = service
         .object_server()
@@ -118,12 +110,7 @@ async fn portal_snapshot_and_live_changes_share_one_subscription() {
             (0.8, 0.3, 0.1),
             true,
             None,
-            Some(Rgba {
-                r: 0.8,
-                g: 0.3,
-                b: 0.1,
-                a: 1.0,
-            }),
+            Some(Color::srgb(0.8, 0.3, 0.1, 1.0)),
         ),
     ] {
         reduced.store(next_reduced, Ordering::SeqCst);

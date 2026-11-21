@@ -14,22 +14,12 @@ repository = "https://github.com/GanDesktop/gds"
 feedback = "https://github.com/GanDesktop/gds/issues"
 license-file = "LICENSE"
 credits = [
-    { name = "GPUI", website = "https://github.com/zed-industries/zed" },
-    { name = "gpui-kit", website = "https://github.com/longbridge/gpui-kit" },
-    { name = "gds-uim", website = "https://github.com/GanDesktop/gds-uim" },
+    { name = "zgui", website = "https://github.com/zortax/zgui" },
 ]
 
 [package.metadata.gds.about.applications.gds-files]
 name = "GDS Files"
 icon = "assets/files/icon-solid.svg"
-
-[package.metadata.gds.about.applications.gds-agents]
-name = "GDS Agents"
-icon = "assets/agents/icon-solid.svg"
-
-[package.metadata.gds.about.applications.gds-images]
-name = "GDS Images"
-icon = "assets/images/icon-solid.svg"
 
 [workspace]
 members = ["macros/gds-settings-derive"]
@@ -38,6 +28,8 @@ resolver = "3"
 [workspace.lints.cargo]
 # build.rs 通过 CARGO_PKG_HOMEPAGE 注入应用主页链接，现阶段与仓库地址相同
 redundant_homepage = "allow"
+# build-dependencies (serde, toml) are only active when feature `ui` compiles metadata checks in build.rs
+unused_dependencies = "allow"
 
 [workspace.lints.rust]
 unused_must_use = "deny"
@@ -80,31 +72,16 @@ path = "bin/files/src/main.rs"
 required-features = ["files"]
 
 [[bin]]
-name = "gds-agents"
-path = "bin/agents/src/main.rs"
-required-features = ["agents"]
-
-[[bin]]
 name = "xdg-desktop-portal-gds"
 path = "bin/portal/src/main.rs"
 required-features = ["portal"]
-
-[[bin]]
-name = "gds-nixes"
-path = "bin/nixes/src/main.rs"
-required-features = ["nixes"]
-
-[[bin]]
-name = "gds-images"
-path = "bin/images/src/main.rs"
-required-features = ["images"]
 
 [features]
 # Capability features. Dependencies are declared once in the group of the
 # capability that owns them; every feature enables the packages its own code
 # uses directly.
 default = []
-app = ["task-manager", "dep:gpui-kit", "dep:tracing"]
+app = ["task-manager", "dep:zgui", "dep:zgui-ui-tokens", "dep:tracing"]
 task-manager = ["dep:tokio", "dep:tokio-util", "dep:thiserror", "dep:nix"]
 desktop-protocol = ["dep:serde"]
 persistence = ["dep:thiserror", "dep:tempfile", "dep:nix"]
@@ -139,40 +116,29 @@ remote = [
 ]
 appearance = [
     "app", "persistence", "task-manager",
-    "watch", "dep:gpui-kit", "dep:fontconfig-sys", "dep:directories", "dep:tracing",
+    "watch", "dep:zgui", "dep:zgui-ui-tokens", "dep:color", "dep:fontconfig-sys", "dep:directories", "dep:tracing",
     "dep:serde", "dep:serde_json", "dep:thiserror", "dep:toml", "dep:rust-ini",
     "dep:zbus", "dep:futures-lite",
 ]
-i18n = ["dep:fluent-bundle", "dep:fluent-syntax", "dep:gpui-kit", "dep:serde", "dep:thiserror", "dep:unic-langid"]
+i18n = ["dep:fluent-bundle", "dep:fluent-syntax", "dep:serde", "dep:thiserror", "dep:unic-langid"]
 ui = [
     "app",
     "appearance", "i18n", "persistence", "logs", "terminal", "file-inspection",
-    "dep:gds-settings-derive", "dep:gds-uim", "dep:gpui", "dep:anyhow",
+    "dep:zgui", "dep:zgui-ui", "dep:zgui-ui-tokens", "dep:zgui-ui-primitives", "dep:zgui-ui-icons",
+    "dep:zgui-image",
+    "dep:gds-settings-derive", "dep:anyhow",
     "dep:unicode-segmentation", "dep:unicode-width", "dep:chrono", "dep:serde_json",
     "dep:rust-embed",
 ]
 files = [
     "ui", "desktop", "file-tags", "storage", "remote", "dep:clap", "dep:globset",
-    "dep:mime_guess", "dep:xdg-mime", "dep:trash", "dep:tokio-util", "dep:walkdir",
+    "dep:memmap2", "dep:mime_guess", "dep:roxmltree", "dep:xdg-mime", "dep:trash",
+    "dep:tokio-util", "dep:walkdir", "dep:which",
 ]
-agents = [
-    "ui", "desktop", "storage", "dep:clap", "dep:tokio-util", "dep:mime_guess",
-    "dep:bas", "dep:base64", "dep:jiff",
-    "dep:reqwest_client", "dep:vt100",
-    "dep:similar", "dep:markdown", "dep:html5ever",
-    "dep:markup5ever_rcdom", "dep:rodio", "dep:futures",
-    "dep:tokio-stream", "dep:tonic",
-    "dep:uuid", "dep:sha2", "dep:rustls",
-    "gpui-kit/tree-sitter-markdown", "gpui-kit/tree-sitter-rust",
-    "gpui-kit/tree-sitter-bash", "gpui-kit/tree-sitter-python",
-    "gpui-kit/tree-sitter-typescript", "gpui-kit/tree-sitter-diff",
-    "dep:arboard", "dep:dirs", "dep:which",
-    "dep:strum", "dep:time", "dep:agent-client-protocol",
-    "dep:process-wrap",
-]
-nixes = ["ui", "dep:clap", "dep:tokio", "dep:serde", "dep:serde_json", "dep:anyhow"]
 image-engine = [
     "file-tags",
+    "dep:crc32fast",
+    "dep:flate2",
     "dep:image",
     "dep:moxcms",
     "dep:nix",
@@ -184,26 +150,18 @@ image-engine = [
     "dep:tokio-util",
     "dep:tracing",
 ]
-images = [
-    "ui",
-    "desktop",
-    "file-tags",
-    "image-engine",
-    "dep:clap",
-    "dep:directories",
-    "dep:serde",
-    "dep:strum",
-    "dep:tokio-util",
-    "dep:toml",
-    "dep:trash",
-    "dep:url",
-]
 portal = [
     "desktop-protocol", "dep:anyhow", "dep:tokio", "dep:clap", "dep:nix",
     "dep:serde_json", "dep:thiserror", "dep:url", "dep:zbus",
 ]
-gui-tests = ["files", "agents", "gpui-kit/test-support", "zbus?/p2p"]
-files-e2e = ["files", "gpui-kit/test-support", "dep:futures"]
+gui-tests = ["files", "dep:zgui-platform-headless", "zbus?/p2p"]
+files-e2e = [
+    "files",
+    "dep:futures",
+    "dep:zgui-platform-headless",
+    "dep:zgui-render-wgpu",
+    "dep:zgui-render-vector-vello",
+]
 
 [dependencies]
 # Async runtime, errors and serialization shared by several capabilities.
@@ -259,7 +217,7 @@ toasty-driver-sqlite = { version = "=0.11.0", optional = true }
 toasty-core = { version = "=0.11.0", optional = true }
 
 # Terminal backend.
-# Published MIT PTY transport and Apache-2.0 terminal emulator; no GPUI forks.
+# Published MIT PTY transport and Apache-2.0 terminal emulator.
 portable-pty = { version = "=0.9.0", optional = true }
 alacritty_terminal = { version = "=0.26.0", optional = true }
 
@@ -267,13 +225,15 @@ alacritty_terminal = { version = "=0.26.0", optional = true }
 lofty = { version = "0.25", optional = true }
 mp4-atom = { version = "0.17", optional = true }
 
-# Thumbnail rendering.
-# Thumbnail filenames and PNG metadata use already locked libraries.
+# Thumbnail rendering and image engine.
+# Thumbnail filenames, gzip/PNG CRC, and PNG metadata use already locked libraries.
+crc32fast = { version = "1.5", optional = true }
+flate2 = { version = "1.1", optional = true }
 md-5 = { version = "=0.10.6", optional = true }
 png = { version = "=0.18.1", optional = true }
 resvg = { version = "=0.46.0", optional = true }
 # Header-only dimension/colour probing needs these decoders; every feature here
-# is already enabled by GPUI, so the resolved dependency set does not change.
+# matches the decoders already enabled by `zgui-image`.
 image = { version = "0.25.10", optional = true, default-features = false, features = [
     "bmp",
     "gif",
@@ -295,17 +255,23 @@ russh-sftp = { version = "=3.0.1", optional = true }
 smb = { version = "=0.10.2", default-features = false, features = ["async", "sign", "encrypt", "std-fs-impls"], optional = true }
 
 # Appearance and i18n.
-gpui-kit = { git = "https://github.com/GanDesktop/gpui-kit", branch = "gds-0.10.0", optional = true, features = ["gpui-fast"] }
+color = { version = "0.3", optional = true }
 rust-ini = { version = "0.21", features = ["brackets-in-section-names"], optional = true }
 fluent-bundle = { version = "0.16", optional = true }
 fluent-syntax = { version = "0.12", optional = true }
-unic-langid = { version = "0.9", optional = true }
+unic-langid = { version = "0.9", features = ["likelysubtags"], optional = true }
 
 # Shared UI.
-gpui = { package = "gpui", git = "https://github.com/GanDesktop/gpui-fast", branch = "gds-0.1.16", optional = true }
-gds-uim = { git = "https://github.com/GanDesktop/gds-uim", rev = "90f5424edf6ba9c5ffaacc2b11cb5ffe24960519", optional = true }
+zgui = { git = "https://github.com/GanDesktop/zgui", branch = "gds-0.1.0", features = ["tokio"], optional = true }
+zgui-ui = { git = "https://github.com/GanDesktop/zgui", branch = "gds-0.1.0", optional = true }
+zgui-ui-tokens = { git = "https://github.com/GanDesktop/zgui", branch = "gds-0.1.0", optional = true }
+zgui-ui-primitives = { git = "https://github.com/GanDesktop/zgui", branch = "gds-0.1.0", optional = true }
+zgui-ui-icons = { git = "https://github.com/GanDesktop/zgui", branch = "gds-0.1.0", optional = true }
+zgui-image = { git = "https://github.com/GanDesktop/zgui", branch = "gds-0.1.0", optional = true }
+zgui-platform-headless = { git = "https://github.com/GanDesktop/zgui", branch = "gds-0.1.0", optional = true }
+zgui-render-wgpu = { git = "https://github.com/GanDesktop/zgui", branch = "gds-0.1.0", optional = true }
+zgui-render-vector-vello = { git = "https://github.com/GanDesktop/zgui", branch = "gds-0.1.0", optional = true }
 gds-settings-derive = { path = "macros/gds-settings-derive", optional = true }
-# Kit's RustEmbed sources must stay self-contained in installed dev builds too.
 rust-embed = { version = "8", optional = true, features = ["debug-embed"] }
 unicode-segmentation = { version = "1", optional = true }
 unicode-width = { version = "0.2", optional = true }
@@ -314,7 +280,9 @@ unicode-width = { version = "0.2", optional = true }
 # The picker matches raw (possibly non-UTF-8) basenames, so globbing is done on
 # `Path` values instead of hand-rolled `String` matching.
 globset = { version = "0.4", optional = true }
+memmap2 = { version = "0.9", optional = true }
 mime_guess = { version = "2", optional = true }
+roxmltree = { version = "0.21", optional = true }
 xdg-mime = { version = "0.4", optional = true }
 trash = { version = "5.3.0", optional = true }
 
@@ -322,7 +290,6 @@ trash = { version = "5.3.0", optional = true }
 agent-client-protocol = { version = "=3.3.0", features = ["unstable", "unstable_protocol_v2"], optional = true }
 bas = { package = "bas-client", git = "https://github.com/GanDesktop/bas", branch = "main", features = ["workspace-schema"], optional = true }
 dirs = { version = "6", optional = true }
-reqwest_client = { package = "reqwest_client", git = "https://github.com/GanDesktop/gpui-fast", branch = "gds-0.1.16", optional = true }
 rodio = { version = "=0.21.1", optional = true, default-features = false, features = ["playback", "flac", "mp3", "mp4", "vorbis", "wav", "tracing"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 tonic = { version = "0.14", features = ["tls-ring"], optional = true }
@@ -333,7 +300,7 @@ which = { version = "8", optional = true }
 clap = { version = "4", features = ["derive", "env"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ashpd = { version = "0.13", default-features = false, features = ["async-io", "open_uri"], optional = true }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "open_uri"], optional = true }
 fontconfig-sys = { package = "yeslogic-fontconfig-sys", version = "6.0", optional = true }
 zbus = { version = "5.19", default-features = false, features = ["tokio"], optional = true }
 rustix = { version = "1.1", features = ["fs", "event"], optional = true }
@@ -358,6 +325,7 @@ futures-lite = "2"
 regex = "1"
 serde_json = "1"
 tempfile = "3"
+zgui-platform-headless = { git = "https://github.com/GanDesktop/zgui", branch = "gds-0.1.0" }
 bas = { package = "bas-client", git = "https://github.com/GanDesktop/bas", branch = "main" }
 bas-server = { git = "https://github.com/GanDesktop/bas", branch = "main" }
 # Runtime-generated TLS fixtures for the imported connection tests.
@@ -369,8 +337,15 @@ tonic-prost = "0.14"
 # terminal tests; production code does not need nix's term feature.
 nix = { version = "0.31", features = ["process", "term"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { version = "5.19", default-features = false, features = ["tokio", "p2p"] }
+
 [profile.dev]
 debug = 1
+
+# Keep application code easy to step through while optimizing the UI runtime and its dependencies.
+[profile.dev.package."*"]
+opt-level = 2
 
 # Use standard release optimization while keeping compilation parallel.
 [profile.release]

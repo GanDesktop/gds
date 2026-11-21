@@ -2,7 +2,7 @@
 callPackage ../../package.nix {
   inherit buildTag rustPlatform;
   application = "files";
-  description = "Native GPUI file manager and file chooser";
+  description = "Native Wayland and X11 file manager and file chooser";
   # Nix's Linux sandbox rejects chmod with setuid/setgid bits and mounts /build on
   # tmpfs, which does not support user.* extended attributes (EOPNOTSUPP).
   checkFlags = [

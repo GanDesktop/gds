@@ -3,35 +3,25 @@ mod control;
 mod description;
 mod label;
 
-pub use actions::{SettingActions, SettingReset};
-pub use control::SettingControl;
-pub use description::SettingDescription;
-use gds_uim::el;
-use gpui_kit::component::{ActiveTheme as _, StyledExt as _};
-use gpui_kit::{IntoElement, prelude::*, *};
-pub use label::SettingLabel;
+pub use actions::{SettingActions, SettingActionsProps, SettingReset, SettingResetProps};
+pub use control::{SettingControl, SettingControlProps};
+pub use description::{SettingDescription, SettingDescriptionProps};
+pub use label::{SettingLabel, SettingLabelProps};
 
-use crate::ui::container::container_traits;
+use zgui::prelude::*;
+use zgui::{component, view};
 
-/// A setting's description and controls, composed as ordinary children.
-#[derive(IntoElement)]
-pub struct SettingRow {
-    base: Div,
-}
-
-impl Default for SettingRow {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex; items_center; justify_between; gap_6; py_4; border_b_1; } },
+/// A setting's label column and aligned action controls.
+#[component]
+pub fn SettingRow(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_settings_stylesheets();
+    view! {
+        row(class = "gds-setting-row", class = class, {..attrs}) {
+            {children.into_view_once()}
         }
-    }
-}
-
-container_traits!(SettingRow);
-
-impl RenderOnce for SettingRow {
-    fn render(mut self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let style = std::mem::take(self.base.style());
-        el! { $(self.base) { border_color: $(cx.theme().border); refine_style: $&style; } }
     }
 }

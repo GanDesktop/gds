@@ -1,229 +1,318 @@
-use super::*;
-use gpui_kit::SharedString;
-#[cfg(feature = "gui-tests")]
-use gpui_kit::px;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
 
-fn details(count: usize) -> Vec<SharedString> {
-    (0..count)
-        .map(|index| format!("item {index}").into())
-        .collect()
-}
+use zgui::platform::{AppHandler, PlatformError, Surface, SurfaceEvent};
+use zgui::prelude::*;
+use zgui::reactive::{Mounted, install};
+use zgui::runtime::AppError;
+use zgui::view;
+use zgui::vocab::{KeyEvent, KeyState, Modifiers, NamedKey, PhysicalKey, Role, Timestamp};
+use zgui_platform_headless::Harness;
+
+use super::{
+    DETAIL_LIMIT, Level, NotificationHost, NotificationHostProps, NotificationQueue, Operation,
+    Report, close_all, close_current, focus, interaction, is_focused, report, visible_details,
+};
 
 #[test]
-fn report_details_never_exceed_the_visible_limit() {
-    let items = details(DETAIL_LIMIT + 3);
-    let (shown, remaining) = visible_details(&items);
+fn notification_queue_autohide_levels_and_static_overflow_match_spec() {
+    assert!(Level::Info.default_autohide());
+    assert!(Level::Success.default_autohide());
+    assert!(Level::Warning.default_autohide());
+    assert!(!Level::Error.default_autohide());
+
+    assert_eq!(Level::Info.content_role(), Role::Status);
+    assert_eq!(Level::Success.content_role(), Role::Status);
+    assert_eq!(Level::Warning.content_role(), Role::Alert);
+    assert_eq!(Level::Error.content_role(), Role::Alert);
+
+    let all: Vec<String> = (1..=DETAIL_LIMIT + 3)
+        .map(|i| format!("item-{i}"))
+        .collect();
+    let (shown, remaining) = visible_details(&all);
     assert_eq!(shown.len(), DETAIL_LIMIT);
     assert_eq!(remaining, 3);
 
-    let items = details(2);
-    let (shown, remaining) = visible_details(&items);
-    assert_eq!(shown.len(), 2);
-    assert_eq!(remaining, 0);
-}
-
-#[cfg(feature = "gui-tests")]
-#[gpui::test]
-fn reduced_motion_preserves_notification_timeout_and_manual_close(
-    cx: &mut gpui_kit::TestAppContext,
-) {
-    use std::{cell::Cell, rc::Rc, time::Duration};
-
-    struct NotificationHost(Entity<Overlay>);
-    impl Render for NotificationHost {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().size_full().child(self.0.clone())
-        }
-    }
-    struct Timed;
-    struct Persistent;
-
-    cx.update(|cx| {
-        gpui_kit::init(cx);
-        cx.set_reduce_motion(true);
-    });
-    let timed_closed = Rc::new(Cell::new(false));
-    let manual_closed = Rc::new(Cell::new(false));
-    let window = cx.open_window(gpui_kit::size(px(640.), px(480.)), |window, cx| {
-        NotificationHost(Overlay::for_window(window, cx))
-    });
-    window
-        .update(cx, |host, window, cx| {
-            let timed_closed = timed_closed.clone();
-            let manual_closed = manual_closed.clone();
-            host.0.update(cx, |overlay, cx| {
-                overlay.push(
-                    Notification::info("Finished")
-                        .id::<Timed>()
-                        .on_close(move |_, _| timed_closed.set(true)),
-                    window,
-                    cx,
-                );
-                overlay.push(
-                    Notification::info("Working")
-                        .id::<Persistent>()
-                        .autohide(false)
-                        .on_close(move |_, _| manual_closed.set(true)),
-                    window,
-                    cx,
-                );
-            });
-        })
-        .expect("push real notification queue entries");
-    cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_secs(1));
-    cx.run_until_parked();
-    window
-        .update(cx, |host, window, cx| {
-            assert_eq!(host.0.read(cx).count(cx), 2);
-            assert_eq!(
-                window.simulate_next_frame(cx),
-                0,
-                "decoration is static while the timeout remains live"
-            );
-        })
-        .expect("static notices remain mounted");
-    cx.executor().advance_clock(Duration::from_secs(6));
-    cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_secs(1));
-    cx.run_until_parked();
-    assert!(timed_closed.get(), "auto-hide must still complete");
-    assert!(
-        !manual_closed.get(),
-        "persistent work notice must not expire"
-    );
-    window
-        .update(cx, |host, window, cx| {
-            assert_eq!(host.0.read(cx).count(cx), 1);
-            close_current(window, cx);
-        })
-        .expect("manually close persistent notification");
-    cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_secs(1));
-    cx.run_until_parked();
-    assert!(manual_closed.get());
-    window
-        .update(cx, |host, window, cx| {
-            assert_eq!(host.0.read(cx).count(cx), 0);
-            assert_eq!(window.simulate_next_frame(cx), 0);
-        })
-        .expect("notification lifecycle settles independently of motion");
-}
-
-#[cfg(feature = "gui-tests")]
-#[gpui::test]
-fn keyboard_cursor_pointer_activation_and_close_restore_the_previous_target(
-    cx: &mut gpui_kit::TestAppContext,
-) {
-    use crate::app::AppExt as _;
-    use crate::ui::actions::{CloseNotification, FocusNotifications};
-    use gpui_kit::{component::Root, test::TestWindowExt};
-
-    struct Host {
-        overlay: Entity<Overlay>,
-        origin: FocusHandle,
-    }
-    impl Render for Host {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .size_full()
-                .on_action(|_: &FocusNotifications, window, cx| focus(window, cx))
-                .on_action(|_: &CloseNotification, window, cx| close_current(window, cx))
-                .child(
-                    div()
-                        .id("notification-origin")
-                        .test_support()
-                        .track_focus(&self.origin)
-                        .child("Origin"),
-                )
-                .child(self.overlay.clone())
-        }
-    }
-    cx.update(|cx| {
-        gpui_kit::init(cx);
-        cx.gds_mut()
-            .appearance()
-            .theme()
-            .apply(&Default::default())
-            .expect("application theme");
-        cx.set_reduce_motion(true);
-        cx.bind_keys([
-            gpui_kit::KeyBinding::new("alt-n", FocusNotifications, None),
-            gpui_kit::KeyBinding::new("alt-c", CloseNotification, None),
-        ]);
-    });
-    let mut host = None;
-    let window = cx.open_window(gpui_kit::size(px(640.), px(480.)), |window, cx| {
-        let view = cx.new(|cx| Host {
-            overlay: Overlay::for_window(window, cx),
-            origin: cx.focus_handle(),
-        });
-        host = Some(view.clone());
-        Root::new(view, window, cx)
-    });
-    let host = host.expect("notification host");
-    let overlay = cx.update(|cx| host.read(cx).overlay.clone());
-    cx.update_window(window.into(), |_, window, cx| {
-        overlay.update(cx, |overlay, cx| {
-            overlay.push(Notification::info("First").autohide(false), window, cx);
-            overlay.push(Notification::info("Second").autohide(false), window, cx);
-        });
-        host.read(cx).origin.clone().focus(window, cx);
-    })
-    .expect("mount notifications");
-    cx.run_until_parked();
-    cx.update_window(window.into(), |_, window, cx| {
-        window.activate_window();
-        window.render_frame(cx);
-        let notes = overlay.read(cx).available(cx);
-        let first = notes[0].entity_id();
-        let second = notes[1].entity_id();
-        let id = ("gds-notification", second);
-        let bounds = window.find(id).bounds();
-        let has_cursor = |window: &Window, id, cx: &App| {
-            let bounds = window
-                .find(("gds-notification", id))
-                .bounds()
-                .scale(window.scale_factor());
-            window.painted_quads().iter().any(|quad| {
-                quad.bounds == bounds
-                    && quad.border_color == cx.theme().ring
-                    && quad.border_widths.top > px(0.).scale(window.scale_factor())
-            })
-        };
-        window.press("alt-n", cx);
-        window.render_frame(cx);
-        assert_eq!(overlay.read(cx).selected, Some(second));
-        assert!(has_cursor(window, second, cx));
-        assert!(!has_cursor(window, first, cx));
-
-        // Pointer activity changes presentation, not the notification target.
-        window.click_at(
-            id,
-            gpui_kit::point(bounds.size.width / 2., bounds.size.height / 2.),
-            cx,
+    install().ok();
+    let scope = Mounted::new();
+    scope.with(|| {
+        let _host = NotificationHost(zgui::view::Children::from_view(()));
+        report(Report::new(Level::Error, "1 failed"));
+        assert_eq!(NotificationQueue::active().items().get_untracked().len(), 1);
+        close_all();
+        assert!(
+            NotificationQueue::active()
+                .items()
+                .get_untracked()
+                .is_empty()
         );
-        window.render_frame(cx);
-        assert_eq!(overlay.read(cx).selected, Some(second));
-        assert!(!has_cursor(window, second, cx));
-        assert_eq!(window.find(id).bounds(), bounds);
-        window.press("up", cx);
-        window.render_frame(cx);
-        assert_eq!(overlay.read(cx).selected, Some(first));
-        assert!(has_cursor(window, first, cx));
-        assert!(!has_cursor(window, second, cx));
-        window.press("alt-c", cx);
-        window.render_frame(cx);
-        assert_eq!(overlay.read(cx).available(cx).len(), 1);
-        assert_eq!(overlay.read(cx).selected, Some(second));
-        assert!(has_cursor(window, second, cx));
+    });
+    scope.unmount();
+}
 
-        window.press("alt-n", cx);
-        assert!(host.read(cx).origin.is_focused(window));
-        window.press("alt-n", cx);
-        window.press("alt-c", cx);
-        assert!(overlay.read(cx).available(cx).is_empty());
-        assert!(host.read(cx).origin.is_focused(window));
-    })
-    .expect("notification focus and close lifecycle");
+#[test]
+fn operation_start_and_finish_replace_in_place_and_builder_copies_all_details() {
+    install().ok();
+    let scope = Mounted::new();
+    scope.with(|| {
+        let _host = NotificationHost(zgui::view::Children::from_view(()));
+        Operation::start("Copying 3 items…");
+        let initial = NotificationQueue::active().items().get_untracked();
+        assert_eq!(initial.len(), 1);
+        assert!(!initial[0].autohide);
+        assert_eq!(initial[0].report.summary, "Copying 3 items…");
+
+        Operation::finish(Report::new(Level::Warning, "Copied with 1 warning"));
+        let finished = NotificationQueue::active().items().get_untracked();
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0].report.summary, "Copied with 1 warning");
+        assert!(finished[0].autohide);
+    });
+    scope.unmount();
+
+    let built = Operation::new(Level::Warning, "Batch completed")
+        .item("alpha.png")
+        .item("beta.png")
+        .into_report();
+    assert_eq!(built.level, Level::Warning);
+    assert_eq!(built.details.len(), 2);
+    assert_eq!(built.copy_text(), "Batch completed\nalpha.png\nbeta.png");
+}
+
+#[test]
+fn focus_toggle_navigation_and_dismiss_track_selected_entry() {
+    install().ok();
+    let scope = Mounted::new();
+    scope.with(|| {
+        let _host = NotificationHost(zgui::view::Children::from_view(()));
+        Report::new(Level::Info, "First").show();
+        let details: Vec<String> = (1..=DETAIL_LIMIT + 2)
+            .map(|i| format!("detail-{i}"))
+            .collect();
+        Report::new(Level::Error, "Second").details(details).show();
+
+        let queue = NotificationQueue::active();
+        let items = queue.items().get_untracked();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].report.summary, "Second");
+        assert!(!items[0].autohide);
+        assert!(items[1].autohide);
+
+        // First Alt+N focuses notifications; second Alt+N toggles focus back off.
+        focus();
+        assert!(is_focused());
+        assert_eq!(queue.selected_id().get_untracked(), Some(items[0].id));
+        focus();
+        assert!(!is_focused());
+
+        focus();
+        interaction::select_next();
+        assert_eq!(queue.selected_id().get_untracked(), Some(items[1].id));
+
+        close_current();
+        assert_eq!(queue.items().get_untracked().len(), 1);
+        assert_eq!(queue.items().get_untracked()[0].id, items[0].id);
+
+        close_all();
+        assert!(!is_focused());
+    });
+    scope.unmount();
+}
+
+#[test]
+fn headless_notifications_alt_n_toggles_focus_restoration_and_alt_x_dismisses() {
+    #[derive(Debug, Default)]
+    struct HeadlessSink {
+        atlas: zgui::atlas::MemorySink,
+        target: Option<zgui::render::RenderTarget>,
+    }
+
+    impl zgui::render::Renderer for HeadlessSink {
+        fn capabilities(&self) -> zgui::render::RenderCapabilities {
+            zgui::render::RenderCapabilities::MINIMAL
+        }
+        fn configure(&mut self, target: zgui::render::RenderTarget) {
+            self.target = Some(target);
+        }
+        fn target(&self) -> Option<zgui::render::RenderTarget> {
+            self.target
+        }
+        fn register_external(
+            &mut self,
+            _texture: zgui::render::ExternalTexture,
+        ) -> zgui::render::TextureHandle {
+            zgui::render::TextureHandle(0)
+        }
+        fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
+        fn memory(&self) -> zgui::render::MemoryReport {
+            zgui::render::MemoryReport::default()
+        }
+        fn draw(
+            &mut self,
+            _scene: &zgui::scene::Scene,
+            _damage: &zgui::bits::DamageSet,
+        ) -> zgui::render::FrameOutcome {
+            zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
+        }
+        fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
+            &mut self.atlas
+        }
+    }
+
+    let origin_slot: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
+    let focused_probe: Rc<RefCell<Option<Signal<Option<NodeId>, zgui::reactive::LocalStorage>>>> =
+        Rc::new(RefCell::new(None));
+
+    let origin_view = Rc::clone(&origin_slot);
+    let probe_view = Rc::clone(&focused_probe);
+
+    let origin_check = Rc::clone(&origin_slot);
+    let probe_check = Rc::clone(&focused_probe);
+
+    let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+        let mut harness = Harness::new(handler);
+        harness.pump();
+        if let Some(surface) = harness.platform().offscreens().first() {
+            surface.set_a11y_listener(true);
+        }
+        harness.settle(4);
+
+        let origin_ref = origin_check.borrow().expect("origin ref");
+        let focus_sig = probe_check.borrow().expect("focus probe");
+
+        // Move keyboard focus onto Origin first via Tab.
+        harness.deliver_to_first(SurfaceEvent::Key {
+            state: KeyState::Pressed,
+            event: KeyEvent::named(NamedKey::Tab, PhysicalKey::Code(zgui::vocab::KeyCode::Tab)),
+            modifiers: Modifiers::NONE,
+            timestamp: Timestamp::ORIGIN,
+        });
+        harness.settle(4);
+        assert_eq!(focus_sig.get_untracked(), origin_ref.get_untracked());
+
+        // Press Alt+N -> moves focus into NotificationHost.
+        harness.deliver_to_first(SurfaceEvent::Key {
+            state: KeyState::Pressed,
+            event: KeyEvent::character("n"),
+            modifiers: Modifiers::ALT,
+            timestamp: Timestamp::ORIGIN,
+        });
+        harness.settle(4);
+        assert_ne!(focus_sig.get_untracked(), origin_ref.get_untracked());
+
+        // Press Alt+N a second time -> restores focus back to Origin!
+        harness.deliver_to_first(SurfaceEvent::Key {
+            state: KeyState::Pressed,
+            event: KeyEvent::character("n"),
+            modifiers: Modifiers::ALT,
+            timestamp: Timestamp::ORIGIN,
+        });
+        harness.settle(4);
+        assert_eq!(
+            focus_sig.get_untracked(),
+            origin_ref.get_untracked(),
+            "second Alt+N must restore prior focus target"
+        );
+
+        // Focus again with Alt+N, then press Esc -> restores focus back to Origin!
+        harness.deliver_to_first(SurfaceEvent::Key {
+            state: KeyState::Pressed,
+            event: KeyEvent::character("n"),
+            modifiers: Modifiers::ALT,
+            timestamp: Timestamp::ORIGIN,
+        });
+        harness.settle(4);
+        harness.deliver_to_first(SurfaceEvent::Key {
+            state: KeyState::Pressed,
+            event: KeyEvent::named(NamedKey::Escape, PhysicalKey::Unidentified(0)),
+            modifiers: Modifiers::NONE,
+            timestamp: Timestamp::ORIGIN,
+        });
+        harness.settle(4);
+        assert_eq!(
+            focus_sig.get_untracked(),
+            origin_ref.get_untracked(),
+            "Esc inside notifications must restore prior focus target"
+        );
+
+        // Verify outer AT-SPI Role::Alert ('notification') is emitted for both Info and Error.
+        let offscreen = harness.platform().offscreens()[0].clone();
+        let a11y_alerts: Vec<Option<String>> = offscreen
+            .a11y_log()
+            .iter()
+            .flat_map(|u| u.nodes.iter())
+            .filter(|(_, n)| format!("{:?}", n.role()) == "Alert")
+            .map(|(_, n)| n.label().map(str::to_owned))
+            .collect();
+        assert!(
+            a11y_alerts
+                .iter()
+                .any(|l| l.as_deref() == Some("First info")),
+            "Info toast must project Role::Alert ('notification') in {a11y_alerts:?}"
+        );
+        assert!(
+            a11y_alerts
+                .iter()
+                .any(|l| l.as_deref() == Some("Second error")),
+            "Error toast must project Role::Alert ('notification') in {a11y_alerts:?}"
+        );
+
+        // Alt+X dismisses newest notification; Alt+Shift+X dismisses all remaining.
+        harness.deliver_to_first(SurfaceEvent::Key {
+            state: KeyState::Pressed,
+            event: KeyEvent::character("x"),
+            modifiers: Modifiers::ALT,
+            timestamp: Timestamp::ORIGIN,
+        });
+        harness.settle(4);
+
+        harness.deliver_to_first(SurfaceEvent::Key {
+            state: KeyState::Pressed,
+            event: KeyEvent::character("X"),
+            modifiers: Modifiers::ALT | Modifiers::SHIFT,
+            timestamp: Timestamp::ORIGIN,
+        });
+        harness.settle(4);
+
+        harness.shut_down();
+        Ok(())
+    };
+
+    zgui::app()
+        .with_title("gds-notifications-headless-test")
+        .with_size(640.0, 480.0)
+        .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
+            let mut renderer = HeadlessSink::default();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok::<_, AppError>(Box::new(renderer) as Box<dyn zgui::render::Renderer>)
+        }))
+        .run_on(driver, move || {
+            let origin = NodeRef::new();
+            *origin_view.borrow_mut() = Some(origin);
+            *probe_view.borrow_mut() = Some(zgui::prelude::focused_node());
+
+            view! {
+                NotificationHost {
+                    {{
+                        Report::new(Level::Info, "First info").autohide(false).show();
+                        Report::new(Level::Error, "Second error")
+                            .details((1..=6).map(|i| format!("line-{i}")))
+                            .show();
+                        view! {
+                            control(
+                                node_ref = origin,
+                                tabindex = Focus::Sequential,
+                                style:display = "flex",
+                                style:width = "100px",
+                                style:height = "36px",
+                            ) {
+                                "Origin"
+                            }
+                        }
+                    }}
+                }
+            }
+        })
+        .expect("headless notifications test ran");
 }

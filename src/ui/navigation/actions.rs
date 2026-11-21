@@ -1,22 +1,30 @@
-use crate::appearance::tokens::{ICON_BUTTON_SIZE, SIDEBAR_ITEM_HEIGHT};
-use crate::ui::container::container_traits;
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
-#[derive(IntoElement)]
-pub struct NavItemActions {
-    base: Div,
-}
+use zgui::prelude::*;
+use zgui::{component, view};
 
-impl Default for NavItemActions {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { absolute; right_0; top: $px((SIDEBAR_ITEM_HEIGHT - ICON_BUTTON_SIZE) / 2.); flex; } },
+#[component]
+pub fn NavItemActions(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_navigation_stylesheets();
+    let no_drag = zgui::prelude::try_use_window().map(|w| w.no_drag_handler());
+    view! {
+        row(
+            class = "gds-nav-item__actions",
+            class = class,
+            on:pointer_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
+                ev.stop_propagation();
+                if let Some(ref handler) = no_drag {
+                    handler(ev);
+                }
+            },
+            on:click = |ev: &mut zgui::view::EventCx<'_, zgui::view::events::Click>| {
+                ev.stop_propagation();
+            },
+            {..attrs}
+        ) {
+            {children.into_view_once()}
         }
-    }
-}
-container_traits!(NavItemActions);
-impl RenderOnce for NavItemActions {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

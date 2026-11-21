@@ -1,10 +1,10 @@
 use super as dms;
-use crate::appearance::theme::{Error, Mode, ModePreference};
-use gpui_kit::{Hsla, rgb};
+use crate::appearance::theme::{Error, Mode, ModePreference, provider::color::rgb};
 use std::path::Path;
+use zgui::canvas::zgui_color::Color;
 
-fn color(value: u32) -> Hsla {
-    rgb(value).into()
+fn color(value: u32) -> Color {
+    rgb(value)
 }
 
 fn dms_export(active_mode: &str) -> String {
@@ -199,15 +199,24 @@ fn dms_preserves_surface_levels_boundaries_and_paired_selection_in_native_compon
     assert_eq!(parsed.palette.panel, color(0x282828));
     assert_eq!(parsed.palette.panel_foreground, color(0xeeeeee));
     assert_eq!(parsed.palette.shadow, color(0x010203));
-    let mut native = gpui_kit::component::ThemeColor::default();
-    parsed.palette.apply_to(&mut native);
-    assert_eq!(native.border, color(0x444444));
-    assert_eq!(native.input, color(0x888888));
-    assert_eq!(native.sidebar_accent, color(0x345678));
-    assert_eq!(native.sidebar_accent_foreground, color(0xfedcba));
-    assert_eq!(native.table_active, native.sidebar_accent);
-    assert_eq!(native.accent_foreground, native.sidebar_accent_foreground);
-    assert_eq!(native.popover, parsed.palette.panel);
+    let tokens = parsed.palette.tokens_theme(
+        Mode::Dark,
+        &crate::appearance::typography::Preferences::default()
+            .resolve()
+            .expect("default typography"),
+        crate::appearance::motion::Policy::default(),
+        true,
+    );
+    assert_eq!(tokens.color.border, "#444444");
+    assert_eq!(tokens.color.input, "#888888");
+    assert_eq!(tokens.color.sidebar_accent, "#345678");
+    assert_eq!(tokens.color.sidebar_accent_foreground, "#fedcba");
+    assert_eq!(tokens.color.accent, tokens.color.sidebar_accent);
+    assert_eq!(
+        tokens.color.accent_foreground,
+        tokens.color.sidebar_accent_foreground
+    );
+    assert_eq!(tokens.color.popover, "#282828");
 }
 
 #[test]
@@ -257,8 +266,174 @@ fn dms_rejects_missing_roles_and_incomplete_color_pairs() {
         r##"{"mode":"dark","colors":{"light":{}}}"##,
         r##"{"mode":"dark","colors":{"dark":{"surface":"#111111"}}}"##,
         r##"{"mode":"dark","colors":{"dark":{"surface":"#111111","on_surface":"#eeeeee","primary":"#abcdef","on_primary":"#123456","primary_container":"#222222"}}}"##,
+        r##"{"mode":"dark","colors":{"dark":{"surface":"#111111","on_surface":"#eeeeee","primary":"#abcdef","on_primary":"#123456","secondary_container":"#222222"}}}"##,
+        r##"{"mode":"dark","colors":{"dark":{"surface":"#111111","on_surface":"#eeeeee","primary":"#abcdef","on_primary":"#123456","tertiary":"#222222"}}}"##,
+        r##"{"mode":"dark","colors":{"dark":{"surface":"#111111","on_surface":"#eeeeee","primary":"#abcdef","on_primary":"#123456","error_container":"#222222"}}}"##,
+        r##"{"mode":"dark","colors":{"dark":{"surface":"#111111","on_surface":"#eeeeee","primary":"#abcdef","on_primary":"#123456","inverse_surface":"#222222"}}}"##,
         r##"{"mode":"dark","colors":{"dark":{"surface":"not-a-color","on_surface":"#eeeeee","primary":"#abcdef","on_primary":"#123456"}}}"##,
     ] {
         assert!(dms::parse(source, Path::new("dms-colors.json"), ModePreference::Dark).is_err());
     }
+}
+
+#[test]
+fn dms_full_material3_export_maps_all_50_roles_and_contrasting_neutral_control() {
+    let source = r##"{
+        "mode": "light",
+        "colors": {
+            "light": {
+                "background": "#fff8f6",
+                "on_background": "#231917",
+                "surface": "#fff8f6",
+                "on_surface": "#231917",
+                "surface_dim": "#e8d6d1",
+                "surface_bright": "#fff8f6",
+                "surface_container_lowest": "#ffffff",
+                "surface_container_low": "#fff1ed",
+                "surface_container": "#fff8f6",
+                "surface_container_high": "#fceae5",
+                "surface_container_highest": "#f7e4df",
+                "surface_variant": "#f5ded7",
+                "on_surface_variant": "#53433e",
+                "surface_tint": "#8f4c34",
+                "inverse_surface": "#392e2b",
+                "inverse_on_surface": "#ffede8",
+                "inverse_primary": "#ffb59c",
+                "outline": "#85736e",
+                "outline_variant": "#d8c2bb",
+                "shadow": "#000000",
+                "scrim": "#010101",
+                "source_color": "#ecccc2",
+                "primary": "#8f4c34",
+                "on_primary": "#ffffff",
+                "primary_container": "#ffdbcf",
+                "on_primary_container": "#390c00",
+                "primary_fixed": "#ffdbcf",
+                "primary_fixed_dim": "#ffb59c",
+                "on_primary_fixed": "#390c00",
+                "on_primary_fixed_variant": "#72351f",
+                "secondary": "#77574c",
+                "on_secondary": "#ffffff",
+                "secondary_container": "#ffdbcf",
+                "on_secondary_container": "#2c160e",
+                "secondary_fixed": "#ffdbcf",
+                "secondary_fixed_dim": "#e7bdb0",
+                "on_secondary_fixed": "#2c160e",
+                "on_secondary_fixed_variant": "#5d4036",
+                "tertiary": "#6a5e2f",
+                "on_tertiary": "#ffffff",
+                "tertiary_container": "#f3e2a7",
+                "on_tertiary_container": "#221b00",
+                "tertiary_fixed": "#f3e2a7",
+                "tertiary_fixed_dim": "#d6c68d",
+                "on_tertiary_fixed": "#221b00",
+                "on_tertiary_fixed_variant": "#51461a",
+                "error": "#ba1a1a",
+                "on_error": "#ffffff",
+                "error_container": "#ffdad6",
+                "on_error_container": "#410002"
+            },
+            "dark": {
+                "background": "#1a110f",
+                "on_background": "#f1dfd9",
+                "surface": "#1a110f",
+                "on_surface": "#f1dfd9",
+                "surface_dim": "#1a110f",
+                "surface_bright": "#423733",
+                "surface_container_lowest": "#140c0a",
+                "surface_container_low": "#231917",
+                "surface_container": "#1a110f",
+                "surface_container_high": "#271d1a",
+                "surface_container_highest": "#322824",
+                "surface_variant": "#53433e",
+                "on_surface_variant": "#d8c2bb",
+                "surface_tint": "#ffb59c",
+                "inverse_surface": "#f1dfd9",
+                "inverse_on_surface": "#392e2b",
+                "inverse_primary": "#8f4c34",
+                "outline": "#a08d87",
+                "outline_variant": "#53433e",
+                "shadow": "#000000",
+                "scrim": "#020202",
+                "source_color": "#ecccc2",
+                "primary": "#ffb59c",
+                "on_primary": "#55200b",
+                "primary_container": "#72351f",
+                "on_primary_container": "#ffdbcf",
+                "primary_fixed": "#ffdbcf",
+                "primary_fixed_dim": "#ffb59c",
+                "on_primary_fixed": "#390c00",
+                "on_primary_fixed_variant": "#72351f",
+                "secondary": "#e7bdb0",
+                "on_secondary": "#442a21",
+                "secondary_container": "#5d4036",
+                "on_secondary_container": "#ffdbcf",
+                "secondary_fixed": "#ffdbcf",
+                "secondary_fixed_dim": "#e7bdb0",
+                "on_secondary_fixed": "#2c160e",
+                "on_secondary_fixed_variant": "#5d4036",
+                "tertiary": "#d6c68d",
+                "on_tertiary": "#393005",
+                "tertiary_container": "#51461a",
+                "on_tertiary_container": "#f3e2a7",
+                "tertiary_fixed": "#f3e2a7",
+                "tertiary_fixed_dim": "#d6c68d",
+                "on_tertiary_fixed": "#221b00",
+                "on_tertiary_fixed_variant": "#51461a",
+                "error": "#ffb4ab",
+                "on_error": "#690005",
+                "error_container": "#93000a",
+                "on_error_container": "#ffdad6"
+            }
+        }
+    }"##;
+
+    let typo = crate::appearance::typography::Preferences::default()
+        .resolve()
+        .expect("default typography");
+    let motion = crate::appearance::motion::Policy::default();
+
+    let light = dms::parse(source, Path::new("dms-colors.json"), ModePreference::Light)
+        .expect("full DMS light scheme");
+    assert_eq!(light.palette.surface_container_lowest, color(0xffffff));
+    assert_eq!(light.palette.surface_container_highest, color(0xf7e4df));
+    assert_eq!(light.palette.panel, color(0xfceae5));
+    // Light neutral control stands above panel (#fceae5) and content (#fff8f6) using lowest (#ffffff).
+    assert_eq!(light.palette.control, color(0xffffff));
+    assert_ne!(light.palette.control, light.palette.panel);
+    assert_ne!(light.palette.control, light.palette.content);
+    assert_eq!(light.palette.secondary, color(0x77574c));
+    assert_eq!(light.palette.on_secondary, color(0xffffff));
+    assert_eq!(light.palette.secondary_container, color(0xffdbcf));
+    assert_eq!(light.palette.on_secondary_container, color(0x2c160e));
+    assert_eq!(light.palette.tertiary, color(0x6a5e2f));
+    assert_eq!(light.palette.tertiary_container, color(0xf3e2a7));
+    assert_eq!(light.palette.error_container, color(0xffdad6));
+    assert_eq!(light.palette.on_error_container, color(0x410002));
+    assert_eq!(light.palette.inverse_surface, color(0x392e2b));
+    assert_eq!(light.palette.inverse_on_surface, color(0xffede8));
+    assert_eq!(light.palette.inverse_primary, color(0xffb59c));
+    assert_eq!(light.palette.scrim, color(0x010101));
+    assert_eq!(light.palette.source_color, color(0xecccc2));
+
+    let light_tokens = light
+        .palette
+        .tokens_theme(Mode::Light, &typo, motion, false);
+    assert_eq!(light_tokens.color.secondary, "#ffdbcf");
+    assert_eq!(light_tokens.color.secondary_foreground, "#2c160e");
+
+    let dark = dms::parse(source, Path::new("dms-colors.json"), ModePreference::Dark)
+        .expect("full DMS dark scheme");
+    assert_eq!(dark.palette.surface_container_lowest, color(0x140c0a));
+    assert_eq!(dark.palette.surface_container_highest, color(0x322824));
+    assert_eq!(dark.palette.panel, color(0x271d1a));
+    // Dark neutral control stands above panel (#271d1a) and content (#1a110f) using highest (#322824).
+    assert_eq!(dark.palette.control, color(0x322824));
+    assert_ne!(dark.palette.control, dark.palette.panel);
+    assert_ne!(dark.palette.control, dark.palette.content);
+    assert_eq!(dark.palette.secondary_container, color(0x5d4036));
+    assert_eq!(dark.palette.on_secondary_container, color(0xffdbcf));
+    assert_eq!(dark.palette.tertiary_container, color(0x51461a));
+    assert_eq!(dark.palette.error_container, color(0x93000a));
+    assert_eq!(dark.palette.scrim, color(0x020202));
 }

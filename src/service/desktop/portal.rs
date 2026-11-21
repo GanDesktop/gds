@@ -39,8 +39,7 @@ pub(super) struct Portal {
 }
 
 impl Portal {
-    /// Connect on Tokio so zbus uses its Tokio backend. GPUI enables ashpd's
-    /// async-io feature and may initialize its process-wide connection first.
+    /// Connect on Tokio so zbus uses its Tokio backend.
     ///
     /// # Errors
     /// Reports an unavailable session bus.

@@ -1,9 +1,10 @@
 //! Single-instance D-Bus negotiation and `org.freedesktop.FileManager1` command dispatch.
 
-use super::{APP_ID, config::Mode, windows};
 use gds::service::desktop::file_manager::{Command, Error, Server};
 use gds::service::task_manager::Scope;
 use tokio::sync::mpsc;
+
+use super::{APP_ID, config::Mode, windows};
 
 pub(super) enum Acquire {
     /// Another Files instance handled the launch request (or already owns the service bus name);
@@ -54,60 +55,68 @@ impl DesktopIntegration {
         }
     }
 
-    /// Spawns the command forwarding loop once UI services and the window host are installed.
-    ///
-    /// # Errors
-    /// Returns an error if the task supervisor is already shutting down.
-    pub fn listen(
-        self,
-        tasks: &Scope,
-        windows: windows::Host,
-        cx: &mut gpui_kit::App,
-    ) -> anyhow::Result<()> {
+    /// Serve D-Bus on Tokio; UI delivery remains owned by the application root.
+    pub fn listen(self, tasks: &Scope, windows: windows::Host) {
+        enum Delivery {
+            Command(Command),
+            Notice(String),
+        }
+
+        let (ui_tx, ui_rx) = mpsc::channel(32);
+        zgui::tokio::spawn_receiver(ui_rx, move |message| match message {
+            Delivery::Command(command) => windows.dispatch_desktop(command),
+            Delivery::Notice(message) => windows.report_notice(message),
+        });
+
         let Self {
             mut server,
             mut receiver,
         } = self;
         let cancel = tasks.token();
-        let completion = tasks.register_named(
-            "Desktop requests",
-            gds::service::task_manager::Execution::Supervisor,
-        )?;
-        cx.spawn(async move |cx| {
+        let watcher = tasks.spawn_named("Desktop requests", async move {
             let claim = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => None,
-                claim = server.claim_file_manager() => Some(claim),
+                _ = cancel.cancelled() => return,
+                claim = server.claim_file_manager() => claim,
             };
             match claim {
-                Some(Ok(Some(provider))) => {
-                    let message = format!(
-                        "org.freedesktop.FileManager1 is already provided by {provider}; Files did not take ownership of this interface."
-                    );
-                    tracing::warn!(%message, "file-manager integration unavailable");
-                    cx.update(|cx| windows.report_notice(message, cx));
+                Ok(Some(provider)) => {
+                    let _ = ui_tx
+                        .send(Delivery::Notice(format!(
+                            "org.freedesktop.FileManager1 is already provided by {provider}; Files did not take ownership of this interface."
+                        )))
+                        .await;
                 }
-                Some(Ok(None)) | None => {}
-                Some(Err(error)) => {
-                    tracing::warn!(%error, "file-manager integration unavailable");
-                    cx.update(|cx| windows.report_notice(error.to_string(), cx));
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = ui_tx.send(Delivery::Notice(error.to_string())).await;
                 }
             }
             loop {
-                let command = tokio::select! {
+                enum Event {
+                    Cancelled,
+                    Command(Option<Command>),
+                }
+                let event = tokio::select! {
                     biased;
-                    _ = cancel.cancelled() => None,
-                    command = receiver.recv() => command,
+                    _ = cancel.cancelled() => Event::Cancelled,
+                    command = receiver.recv() => Event::Command(command),
                 };
-                let Some(command) = command else {
-                    break;
-                };
-                cx.update(|cx| windows.dispatch_desktop(command, cx));
+                match event {
+                    Event::Cancelled | Event::Command(None) => break,
+                    Event::Command(Some(command)) => {
+                        if ui_tx.send(Delivery::Command(command)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
             }
             drop(server);
-            drop(completion);
-        })
-        .detach();
-        Ok(())
+        });
+        zgui::task::spawn_local(async move {
+            if let Err(error) = watcher.await {
+                tracing::error!(%error, "desktop request listener stopped");
+            }
+        });
     }
 }

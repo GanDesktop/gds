@@ -109,6 +109,10 @@ impl Scope {
         self.node().inspection.is_some()
     }
 
+    pub fn runtime_handle(&self) -> Option<&tokio::runtime::Handle> {
+        self.runtime.as_ref()
+    }
+
     pub fn child(&self) -> Owner {
         self.named_child("Scope")
     }

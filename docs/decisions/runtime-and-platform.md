@@ -2,17 +2,16 @@
 
 ## 1. Injecting Tokio `zbus` Connections into `ashpd`
 
-- **Context**: GDS standardizes all application async I/O (UDisks2, Settings Portal, FileManager1, OpenURI) on a single Tokio runtime owned by `service::task_manager::Supervisor`. However, GPUI internally enables `ashpd/async-io`, and `ashpd` forbids enabling its `async-io` and `tokio` Cargo features simultaneously in the same dependency graph.
-- **Compromise**: Even when compiled with `async-io`, `zbus` 5.19+ selects its Tokio backend dynamically if the `zbus::Connection` is constructed inside an active Tokio runtime context. GDS therefore constructs its shared `zbus::Connection` inside Tokio and passes it explicitly into `ashpd` requests via `OpenFileRequest::connection(...)`, avoiding `ashpd`'s process-global connection (which GPUI may have initialized on `async-io`).
-- **References**: [`zbus` Tokio runtime support](https://docs.rs/zbus/5.19.0/zbus/#special-tokio-support), [GPUI async execution model](https://zed.dev/blog/zed-decoded-async-rust).
+- **Context**: GDS standardizes all application async I/O (UDisks2, Settings Portal, FileManager1, OpenURI) on a single Tokio runtime owned by `service::task_manager::Supervisor`. Enabling `ashpd`'s `tokio` feature directly keeps the dependency graph free of `async-io`, and GDS constructs its shared `zbus::Connection` inside Tokio and passes it explicitly into `ashpd` requests via `OpenFileRequest::connection(...)` rather than creating a separate portal connection per call.
+- **References**: [`zbus` Tokio runtime support](https://docs.rs/zbus/5.19.0/zbus/#special-tokio-support).
 
-## 2. Wayland Core `wl_data_device` vs X11 File Clipboard
+## 2. Multi-MIME File Clipboard & Unfocused Fallback
 
-- **Context**: GDS exchanges copied/cut file URI lists (`text/uri-list` plus GNOME/KDE copy-cut MIME markers) and rich attachments without privileged compositor clipboard protocols.
+- **Context**: GDS Files exchanges copied/cut file URI lists (`text/uri-list`, `x-special/gnome-copied-files`, `application/x-kde-cutselection`, `application/x-gds-clipboard-id`, `text/plain;charset=utf-8`) and rich remote URI offers without privileged compositor clipboard protocols (`wlr-data-control` or `ext-data-control`).
 - **Compromise**:
-  - On **Wayland**, GDS uses GPUI's `read_clipboard_mime` / `write_clipboard_mime` over the standard core [`wl_data_device`](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_data_device) protocol rather than `wlr-data-control` or `ext-data-control`. Reading or claiming the clipboard requires an active keyboard focus seat and input serial (`NotFocused` is returned when unfocused; headless Weston E2E seats without physical key serials cannot claim cross-client clipboard ownership).
-  - On **X11**, GPUI's `ClipboardItem` abstraction does not yet expose arbitrary multi-MIME file-transfer offers on parity with Wayland; X11 file copy/cut metadata currently operates only within the same GDS process.
-- **Retirement condition**: Extend X11 `SELECTION` target negotiation in `gpui-fast-linux` when X11 desktop parity is scheduled (see [Apps & Platform Roadmap](../roadmap/apps.md)).
+  - On **Linux Wayland and X11** (plus `zgui-platform-headless`), GDS uses `zgui`'s `Clipboards::read_mime` and `Clipboards::write_mime` with offer revision compare-and-swap (`ClipboardError::Changed`) so cut-completion and explicit removal never overwrite a newer clipboard selection.
+  - On **Wayland**, claiming the selection over core [`wl_data_device`](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_data_device) requires active focus and a seat input serial (`ClipboardError::NotFocused` when unfocused). Because headless Weston E2E sessions and synthetic UI drivers without physical seat serials cannot claim compositor clipboard ownership, GDS retains an in-process `Snapshot` cache fallback (keyed against the observed platform offer revision) whenever `write_mime` reports `NotFocused`, `UnsupportedFormat`, or `UnsupportedKind`.
+  - Non-Linux desktop targets (`arboard` fallback) lack multi-MIME file offers and use the same in-process `Snapshot` cache fallback for file copy/cut metadata.
 
 ## 3. Niri-Only `WindowControls` Hiding vs Tiling Surface Opacity
 

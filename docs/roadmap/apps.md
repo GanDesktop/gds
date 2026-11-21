@@ -18,7 +18,7 @@ Shortcuts across Files and Agents currently use a single data-driven registry (`
 - Extend the [desktop VM workflows](../development/vm-e2e.md) with `--portal-request` roundtrips, multi-window `FileManager1` D-Bus activation, column editor persistence and the remaining desktop/service scenarios. CLI file picking and location view recovery already have VM workflows.
 - Extend the shared VM framework to GDS Agents, covering local mock-BAS stream reconnection and compact/full workspace transitions.
 
-## 4. Secondary Display Servers & Operating Systems
+## 4. Companion App Migrations & Secondary Operating Systems
 
-- **Linux + X11**: Complete multi-MIME file clipboard (`text/uri-list` + copy/cut markers) parity on X11 in `gpui-fast-linux`.
-- **macOS & Windows**: Establish native PTY process-group management, live OS reduced-motion change notifications, platform volume backends, and desktop visual/IME acceptance testing.
+- **Companion Apps**: Migrate `gds-agents` and `gds-nixes` from legacy GPUI sources onto `zgui` and restore their `[[bin]]` targets.
+- **macOS & Windows**: Establish native PTY process-group management, live OS reduced-motion change notifications, multi-MIME file clipboard offers, platform volume backends, and desktop visual/IME acceptance testing.

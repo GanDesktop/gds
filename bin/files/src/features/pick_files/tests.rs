@@ -1,4 +1,8 @@
-use std::{ffi::OsString, fs, path::PathBuf};
+use std::{
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use gds::service::desktop::protocol::chooser::{Choice, Mode, Request};
 
@@ -141,4 +145,40 @@ fn session_outcome_isolates_confirmation_cancellation_and_output_failure() {
     assert_eq!(failed_slot.get(), Outcome::Failed);
     assert!(!failed_session.cancel());
     assert_eq!(failed_slot.get(), Outcome::Failed);
+}
+
+#[test]
+fn portal_mime_filters_use_shared_database_for_detected_and_filename_paths() {
+    use gds::service::desktop::protocol::chooser::{Filter as PortalFilter, Pattern};
+
+    let request = Request {
+        app_id: String::new(),
+        parent_window: String::new(),
+        title: String::from("Choose"),
+        accept_label: None,
+        modal: true,
+        current_folder: None,
+        current_file: None,
+        filters: vec![
+            PortalFilter {
+                label: String::from("Text"),
+                patterns: vec![Pattern::Mime(String::from("text/plain"))],
+            },
+            PortalFilter {
+                label: String::from("Any"),
+                patterns: vec![Pattern::Mime(String::from("*/*"))],
+            },
+        ],
+        current_filter: None,
+        choices: Vec::new(),
+        mode: Mode::Open {
+            multiple: false,
+            directory: false,
+        },
+    };
+    let options = Options::from_request(request).expect("build portal MIME options");
+    assert!(options.matches_type(0, Path::new("report.bin"), Some("text/plain")));
+    assert!(options.matches_type(0, Path::new("script.bin"), Some("text/x-python")));
+    assert!(!options.matches_type(0, Path::new("archive.bin"), Some("application/zip")));
+    assert!(options.matches_type(1, Path::new("unknown.xyz"), None));
 }

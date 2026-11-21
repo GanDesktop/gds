@@ -1,20 +1,75 @@
+use gds::i18n;
+use gds::ui::button::{ButtonProps, ButtonSize, ButtonVariant};
+use gds::ui::settings::SettingResetProps;
+use gds::ui::{IconButtonProps, IconName, IconProps};
+use zgui::prelude::*;
+use zgui::view;
+use zgui::view::install_stylesheet;
+
 use crate::entities::preferences::FilesPreferences;
-use crate::widgets::settings::ui::View;
-use gds::app::AppExt as _;
-use gds::i18n::t;
-use gds::ui::{
-    button::Button,
-    settings::{SettingReset, form},
-};
-use gds_uim::el;
-use gpui_kit::{
-    assets::IconName,
-    component::{ActiveTheme, Icon, Sizable, button::ButtonVariants},
-    *,
-};
+
+const PERFORMANCE_SHEET: &str = "gds-files-settings-performance";
+const PERFORMANCE_CSS: &str = r#"
+.gds-settings-perf {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.gds-settings-perf__banner {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 6px;
+    border: 1px solid var(--gds-border);
+    background: color-mix(in srgb, var(--gds-surface) 50%, transparent);
+}
+
+.gds-settings-perf__banner[data-locked="true"] {
+    border-color: color-mix(in srgb, var(--gds-warning) 40%, transparent);
+    background: color-mix(in srgb, var(--gds-warning) 8%, transparent);
+}
+
+.gds-settings-perf__icon {
+    padding-top: 2px;
+    color: var(--gds-muted-foreground);
+}
+
+.gds-settings-perf__banner[data-locked="true"] .gds-settings-perf__icon {
+    color: var(--gds-warning);
+}
+
+.gds-settings-perf__text {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0%;
+    min-width: 0;
+    gap: 4px;
+}
+
+.gds-settings-perf__title {
+    font-weight: 600;
+}
+
+.gds-settings-perf__desc {
+    color: var(--gds-muted-foreground);
+    white-space: normal;
+}
+
+.gds-settings-perf__action {
+    display: flex;
+    align-items: center;
+    align-self: center;
+    flex-shrink: 0;
+}
+"#;
 
 /// Form model for GDS Files runtime performance parameters displayed on [`super::Page::Performance`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, gds::ConfigEditor)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, gds::ConfigEditor,
+)]
 pub(in crate::widgets::settings::ui) struct PerformanceForm {
     #[setting(
         label = "files-advanced-stream-delay",
@@ -46,6 +101,12 @@ pub(in crate::widgets::settings::ui) struct PerformanceForm {
     )]
     pub stream_min_entries: usize,
 
+    #[setting(
+        label = "files-advanced-content-probing",
+        help = "files-advanced-content-probing-help",
+        group = "files-advanced-group-enrichment"
+    )]
+    pub content_probing: bool,
     #[setting(
         label = "probe-budget",
         help = "probe-budget-help",
@@ -217,6 +278,7 @@ impl From<&FilesPreferences> for PerformanceForm {
             stream_initial_delay_ms: files.streaming.initial_delay_ms,
             stream_interval_ms: files.streaming.interval_ms,
             stream_min_entries: files.streaming.min_entries,
+            content_probing: files.enrichment.content_probing,
             probe_budget: files.probe_budget,
             enrich_max_concurrent_batches: files.enrichment.max_concurrent_batches,
             enrich_batch_size: files.enrichment.batch_size,
@@ -245,7 +307,8 @@ impl Default for PerformanceForm {
 }
 
 impl PerformanceForm {
-    pub(in crate::widgets::settings::ui) fn is_default(&self) -> bool {
+    #[cfg(test)]
+    pub(super) fn is_default(&self) -> bool {
         *self == Self::default()
     }
 
@@ -256,6 +319,7 @@ impl PerformanceForm {
         files.streaming.initial_delay_ms = self.stream_initial_delay_ms;
         files.streaming.interval_ms = self.stream_interval_ms;
         files.streaming.min_entries = self.stream_min_entries;
+        files.enrichment.content_probing = self.content_probing;
         files.probe_budget = self.probe_budget;
         files.enrichment.max_concurrent_batches = self.enrich_max_concurrent_batches;
         files.enrichment.batch_size = self.enrich_batch_size;
@@ -277,134 +341,161 @@ impl PerformanceForm {
     }
 }
 
-impl View {
-    pub(in crate::widgets::settings::ui) fn render_performance(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let colors = cx.gds().appearance().theme().colors();
+impl super::super::View {
+    pub(in crate::widgets::settings::ui) fn performance(&self) -> AnyView {
+        install_stylesheet(PERFORMANCE_SHEET, PERFORMANCE_CSS);
         let unlocked = self.performance_unlocked;
-        let reset_label = t!(@cx, "form-reset");
-        let on_reset = cx.listener(Self::reset_performance);
-        let reset = (unlocked && !PerformanceForm::from(&self.preferences.files).is_default())
-            .then(|| {
-                Button::icon_button("settings-performance-reset")
-                    .control_icon(IconName::RotateCcw)
-                    .accessibility_label(reset_label.clone())
-                    .tooltip(reset_label)
-                    .on_click(on_reset)
-            });
-        let action = if unlocked {
-            el! { .SettingReset::default [..reset] }.into_any_element()
-        } else {
-            Button::new("settings-performance-unlock")
-                .small()
-                .primary()
-                .label(t!(@cx, "settings-performance-unlock"))
-                .on_click(cx.listener(Self::unlock_performance))
-                .into_any_element()
-        };
-        let (border_color, bg_color, icon) = if unlocked {
-            (
-                colors.border,
-                colors.surface.opacity(0.5),
-                Icon::new(IconName::Info)
-                    .size_4()
-                    .mt_0p5()
-                    .flex_shrink_0()
-                    .text_color(cx.theme().muted_foreground),
-            )
-        } else {
-            (
-                colors.warning.opacity(0.4),
-                colors.warning.opacity(0.08),
-                Icon::new(IconName::TriangleAlert)
-                    .size_4()
-                    .mt_0p5()
-                    .flex_shrink_0()
-                    .text_color(colors.warning),
-            )
-        };
-        let notice = el! {
-            .div {
-                # "settings-performance-notice";
-                test_support;
-                flex; items_start; justify_between; gap_4;
-                p_4; mb_4;
-                rounded: $(cx.theme().radius);
-                border_1;
-                border_color: border_color;
-                bg: bg_color;
-            } [
-                .div { flex; items_start; gap_3; flex_1; min_w_0; } [
-                    $(icon),
-                    .div { flex; flex_col; gap_1; flex_1; min_w_0; } [
-                        .div {
-                            text_sm;
-                            font_weight: FontWeight::SEMIBOLD;
-                            text_color: $(cx.theme().foreground);
-                        } [$(t!(@cx, "settings-performance-notice-title"))],
-                        .div {
-                            text_sm;
-                            whitespace_normal;
-                            text_color: $(cx.theme().muted_foreground);
-                        } [$(t!(@cx, "settings-performance-notice"))],
-                    ],
-                ],
-                .div { flex_shrink_0; flex; items_center; } [action],
-            ]
-        };
-        el! {
-            .div [
-                .div { # "settings-performance-page"; test_support; flex; flex_col; } [
-                    notice,
-                    $(self.performance.clone()),
-                ],
-            ]
-        }
-    }
+        let reset = self.clone();
+        let focus = self.page_focus;
+        let preferences = self.preferences;
+        let disabled = Signal::derive_local(move || !unlocked.get());
+        let editor = self.subform(
+            |p| PerformanceForm::from(&p.files),
+            move |p, v| {
+                if unlocked.get_untracked() {
+                    v.apply_to(&mut p.files);
+                }
+            },
+        );
+        let form_view = editor.disabled(disabled).view();
 
-    pub(in crate::widgets::settings::ui) fn unlock_performance(
-        &mut self,
-        _: &ClickEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.performance_unlocked {
-            return;
-        }
-        self.performance_unlocked = true;
-        self.performance
-            .update(cx, |editor, cx| editor.set_disabled(false, cx));
-        cx.notify();
+        AnyView::new(view! {
+            column(class = "gds-settings-perf", attr:data-testid = "settings-performance-page") {
+                row(
+                    class = "gds-settings-perf__banner",
+                    attr:data-locked = move || (!unlocked.get()).then(|| "true".to_owned()),
+                    attr:data-testid = "settings-performance-notice",
+                ) {
+                    box(class = "gds-settings-perf__icon") {
+                        {move || {
+                            let name = if unlocked.get() {
+                                IconName::Info
+                            } else {
+                                IconName::TriangleAlert
+                            };
+                            view! { Icon(name = name, size = 16.0) }.into_view()
+                        }}
+                    }
+                    column(class = "gds-settings-perf__text") {
+                        text(class = "gds-settings-perf__title") {{move || i18n::text("settings-performance-notice-title")}}
+                        text(class = "gds-settings-perf__desc") {{move || i18n::text("settings-performance-notice")}}
+                    }
+                    box(class = "gds-settings-perf__action") {
+                        {move || {
+                            let reset_view = reset.clone();
+                            if unlocked.get() {
+                                let modified = preferences.with(|p| {
+                                    PerformanceForm::from(&p.files) != PerformanceForm::default()
+                                });
+                                AnyView::new(view! {
+                                    SettingReset {
+                                        {modified.then(|| view! {
+                                            IconButton(
+                                                icon = IconName::RotateCcw,
+                                                label = Signal::derive_local(|| i18n::text("form-reset")),
+                                                attr:data-testid = "settings-performance-reset",
+                                                on:click = move |_| {
+                                                    reset_view.apply(|p| {
+                                                        PerformanceForm::default().apply_to(&mut p.files);
+                                                    });
+                                                    focus.focus();
+                                                },
+                                            )
+                                        }.into_view())}
+                                    }
+                                })
+                            } else {
+                                AnyView::new(view! {
+                                    Button(
+                                        variant = ButtonVariant::Default,
+                                        size = ButtonSize::Sm,
+                                        attr:data-testid = "settings-performance-unlock",
+                                        on:click = move |_| {
+                                            unlocked.set(true);
+                                            focus.focus();
+                                        },
+                                    ) {{move || i18n::text("settings-performance-unlock")}}
+                                })
+                            }
+                        }}
+                    }
+                }
+                {form_view}
+            }
+        })
     }
+}
 
-    pub(in crate::widgets::settings::ui) fn reset_performance(
-        &mut self,
-        _: &ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.performance_unlocked {
-            return;
-        }
-        self.change(window, cx, |preferences| {
-            PerformanceForm::default().apply_to(&mut preferences.files)
-        });
-    }
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
 
-    pub(in crate::widgets::settings::ui) fn on_performance_edited(
-        &mut self,
-        _: &Entity<PerformanceFormEditor>,
-        event: &form::Changed<PerformanceForm>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.performance_unlocked {
-            return;
-        }
-        self.change(window, cx, |preferences| {
-            event.value.apply_to(&mut preferences.files)
-        });
+    use super::*;
+
+    #[test]
+    fn performance_form_projects_applies_and_resets_without_touching_basic_settings() {
+        let mut source = FilesPreferences::default();
+        assert!(PerformanceForm::from(&source).is_default());
+
+        source.streaming.initial_delay_ms = 200;
+        source.streaming.interval_ms = 400;
+        source.streaming.min_entries = 350;
+        source.probe_budget = 512;
+        source.enrichment.content_probing = false;
+        source.enrichment.max_concurrent_batches = 8;
+        source.enrichment.batch_size = 64;
+        source.enrichment.child_count_limit = 2500;
+        source.enrichment.priority_limit = 256;
+        source.enrichment.coalesce_ms = 64;
+        source.enrichment.reorder_coalesce_ms = 300;
+        source.enrichment.coalesce_max_updates = 1024;
+        source.preview.workers = 4;
+        source.preview.cache_entries = 512;
+        source.preview.cache_mib = 256;
+        source.preview.max_thumbnail_source_mib = 64;
+        source.preview.video_thumbnail_timeout_secs = 20;
+        source.watching.debounce_ms = 250;
+        source.watching.incremental_limit = 512;
+        source.transfer.local_buffer_kib = 128;
+        source.transfer.remote_buffer_kib = 256;
+
+        let custom_form = PerformanceForm::from(&source);
+        assert!(!custom_form.is_default());
+
+        let mut target = FilesPreferences {
+            show_hidden: true,
+            auto_focus_search: false,
+            ..Default::default()
+        };
+        target.sidebar.show_volumes = false;
+        target
+            .volume_mount_points
+            .insert("uuid-1".into(), PathBuf::from("/mnt/data"));
+
+        assert!(custom_form.apply_to(&mut target));
+        assert!(!custom_form.apply_to(&mut target));
+
+        assert_eq!(target.streaming, source.streaming);
+        assert_eq!(target.probe_budget, source.probe_budget);
+        assert_eq!(target.enrichment, source.enrichment);
+        assert_eq!(target.preview, source.preview);
+        assert_eq!(target.watching, source.watching);
+        assert_eq!(target.transfer, source.transfer);
+
+        assert!(PerformanceForm::default().apply_to(&mut target));
+        let defaults = FilesPreferences::default();
+        assert_eq!(target.streaming, defaults.streaming);
+        assert_eq!(target.probe_budget, defaults.probe_budget);
+        assert_eq!(target.enrichment, defaults.enrichment);
+        assert_eq!(target.preview, defaults.preview);
+        assert_eq!(target.watching, defaults.watching);
+        assert_eq!(target.transfer, defaults.transfer);
+        assert!(target.show_hidden);
+        assert!(!target.auto_focus_search);
+        assert!(!target.sidebar.show_volumes);
+        assert_eq!(
+            target.volume_mount_points.get("uuid-1"),
+            Some(&PathBuf::from("/mnt/data"))
+        );
     }
 }

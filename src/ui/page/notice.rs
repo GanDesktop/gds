@@ -1,27 +1,16 @@
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
+use zgui::prelude::*;
+use zgui::{component, view};
 
-use super::super::container::container_traits;
-use super::{ACTION_GAP, HEADER_PADDING_X};
-
-/// An optional notice between the heading and content.
-#[derive(IntoElement)]
-pub struct PageNotice {
-    base: Div,
-}
-
-impl Default for PageNotice {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex_shrink_0; min_w_0; px: HEADER_PADDING_X.px; pb: ACTION_GAP.px; } },
+#[component]
+pub fn PageNotice(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_page_stylesheets();
+    view! {
+        row(class = "gds-page-notice", class = class, {..attrs}) {
+            {children.into_view_once()}
         }
-    }
-}
-
-container_traits!(PageNotice);
-
-impl RenderOnce for PageNotice {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

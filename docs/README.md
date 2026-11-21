@@ -1,6 +1,6 @@
 # GDS Documentation
 
-GDS (Gan Desktop Suit) is a suite of native desktop applications built with GPUI around a unified visual language. **Linux + Wayland** is the primary target, with Linux + X11 as secondary support.
+GDS (Gan Desktop Suit) is a suite of native desktop applications built around a unified visual language. Currently, **GDS Files** runs on [`zgui`](https://github.com/GanDesktop/zgui/tree/gds-0.1.0) alongside the UI-independent **GDS Portal**; **Linux + Wayland** is the primary target, with **Linux + X11** as secondary support.
 
 Documentation is organized into **Current State**, **Technical Decisions & Compromises**, and **Roadmap**:
 
@@ -8,10 +8,10 @@ Documentation is organized into **Current State**, **Technical Decisions & Compr
 
 | Component | Role | Usage & Integration | Feature Reference |
 | --- | --- | --- | --- |
-| **GDS Files** | Native local & SFTP/SMB file manager and picker | [User Guide](../bin/files/README.md) · [简体中文](../bin/files/docs/i18n/zh-CN/README.md) | [Files Overview](apps/files/README.md) |
+| **GDS Files** | Native local & SFTP/SMB file manager and picker (`zgui`) | [User Guide](../bin/files/README.md) · [简体中文](../bin/files/docs/i18n/zh-CN/README.md) | [Files Overview](apps/files/README.md) |
 | **GDS Portal** | `org.freedesktop.impl.portal.FileChooser` backend | [Portal README](../bin/portal/README.md) · [NixOS Portal Setup](apps/files/nixos.md#file-chooser-portal) | [File Picker & Protocol](apps/files/picker.md) |
-| **GDS Agents** | Native session workspace for an external BAS daemon | [Agents README](../bin/agents/README.md) · [简体中文](../bin/agents/docs/i18n/zh-CN/README.md) | [Agents Overview](apps/agents/README.md) |
-| **GDS Nixes** | Flake-based Home Manager configuration browser | [Nixes README](../bin/nixes/README.md) | [Nixes Overview](apps/nixes/README.md) |
+| **GDS Agents** *(unmigrated source)* | Native session workspace for an external BAS daemon | [Agents README](../bin/agents/README.md) · [简体中文](../bin/agents/docs/i18n/zh-CN/README.md) | [Agents Overview](apps/agents/README.md) |
+| **GDS Nixes** *(unmigrated source)* | Flake-based Home Manager configuration browser | [Nixes README](../bin/nixes/README.md) | [Nixes Overview](apps/nixes/README.md) |
 
 ### Distribution & Packaging Guides
 
@@ -32,8 +32,8 @@ Documentation is organized into **Current State**, **Technical Decisions & Compr
 
 ## Architecture & Development
 
-- **[Developer Guide](development.md)** — repository layout, `just` commands, FSD slices, crate features, UIM/i18n conventions, and CI release pipeline
-  - [Task Ownership & Shutdown](development/task-manager.md) — `Supervisor`, `Scope` cancellation vs completion, and `AppExt` lifecycle
+- **[Developer Guide](development.md)** — repository layout, `just` commands, FSD slices, crate features, `view!` / Stylo / i18n conventions, and CI release pipeline
+  - [Task Ownership & Shutdown](development/task-manager.md) — `Supervisor`, `Scope` cancellation vs completion, and `Gds` / `zgui` lifecycle
   - [Storage & Persistence](development/storage.md) — atomic config files (`persistence`) and Toasty SQLite (`service::storage`)
   - [Agents & BAS Protocol](development/agents-protocol.md) — dual ACP/management streams, frontend multiplexing, and workspace provider forms
   - [Desktop Test Virtual Machines](development/virtual-machines.md) — local libvirt guests (`just vm`) and `clean-base` package verification
@@ -52,5 +52,5 @@ Documentation is organized into **Current State**, **Technical Decisions & Compr
 ## Decisions & Roadmap
 
 - **[Technical Decisions & Compromises](decisions/README.md)** — why active upstream forks, runtime boundaries, PTY workers, and external CLI integrations work the way they do, and when to retire them
-- **[Roadmap](roadmap/README.md)** — planned milestones across Files, distribution channels, GPUI cold-start optimization, and companion apps
+- **[Roadmap](roadmap/README.md)** — planned milestones across Files, distribution channels, and companion app migrations
 - **[Changelog](../CHANGELOG.md)** — release history by version

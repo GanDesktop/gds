@@ -1,26 +1,26 @@
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
+use zgui::prelude::*;
+use zgui::{component, view};
 
-use super::super::super::container::container_traits;
-
-/// A column for arbitrary section children. Scrolling is opt-in and requires an ID.
-#[derive(IntoElement)]
-pub struct SideBarSectionContent {
-    base: Div,
-}
-
-impl Default for SideBarSectionContent {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex; flex_col; w_full; min_w_0; } },
-        }
-    }
-}
-
-container_traits!(SideBarSectionContent);
-
-impl RenderOnce for SideBarSectionContent {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
+/// Column for section items; scrolling is opt-in (`scrollable = true`).
+#[component]
+pub fn SideBarSectionContent(
+    #[prop(default = false)] scrollable: bool,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::super::install_sidebar_stylesheets();
+    if scrollable {
+        AnyView::new(view! {
+            scroll(class = "gds-sidebar__section-content--scrollable", class = class, {..attrs}) {
+                column(class = "gds-sidebar__section-content-inner") {{children.into_view_once()}}
+            }
+        })
+    } else {
+        AnyView::new(view! {
+            column(class = "gds-sidebar__section-content", class = class, {..attrs}) {
+                {children.into_view_once()}
+            }
+        })
     }
 }

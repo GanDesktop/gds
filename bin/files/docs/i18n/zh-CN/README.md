@@ -3,7 +3,7 @@
 
 # <img src="../../../../../assets/files/icon-desktop.svg" alt="GDS Files 图标" width="32" height="32" align="middle"> GDS Files
 
-GDS Files 是基于GPUI开发的原生文件管理器。专注于为Wayland用户提供一个美观易用的文件管理体验。
+GDS Files 是基于 zgui 开发的原生文件管理器。专注于为Wayland用户提供一个美观易用的文件管理体验。
 
 ![概览](../../assets/overview.png)
 

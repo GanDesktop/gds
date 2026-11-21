@@ -47,11 +47,6 @@ pub struct LoadRequest {
 }
 
 impl LoadRequest {
-    pub fn resolve_remote(mut self, address: gds::service::remote::Address) -> Self {
-        self.location = Location::Remote(address);
-        self.path = None;
-        self
-    }
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
@@ -297,27 +292,14 @@ impl<V: Default> Navigation<V> {
     pub fn history_index(&self) -> usize {
         self.history_index
     }
-    pub fn can_go_back(&self) -> bool {
-        self.back_location().is_some()
-    }
-    pub fn can_go_forward(&self) -> bool {
-        self.forward_location().is_some()
-    }
     pub fn is_loading(&self) -> bool {
         self.pending.is_some()
     }
     pub fn pending_location(&self) -> Option<&Location> {
         self.pending.as_ref().map(LoadRequest::location)
     }
-    pub fn back_location(&self) -> Option<&Location> {
-        self.history_index
-            .checked_sub(1)
-            .map(|index| &self.history[index].location)
-    }
-    pub fn forward_location(&self) -> Option<&Location> {
-        self.history
-            .get(self.history_index + 1)
-            .map(|visit| &visit.location)
+    pub fn pending_path(&self) -> Option<&Path> {
+        self.pending.as_ref().and_then(LoadRequest::path)
     }
 
     pub fn prepare_open(
@@ -384,17 +366,9 @@ impl<V: Default> Navigation<V> {
             .as_ref()
             .is_some_and(|pending| pending.id == request.id)
     }
+    #[cfg(test)]
     pub fn had_partial_commit(&self, request: &LoadRequest) -> bool {
         self.is_current_request(request) && self.pending_committed
-    }
-    pub fn cancel_request(&mut self, request: &LoadRequest) -> bool {
-        if self.is_current_request(request) {
-            self.pending = None;
-            self.pending_committed = false;
-            true
-        } else {
-            false
-        }
     }
     /// Apply an intermediate progressive snapshot for an in-flight local directory scan
     /// while keeping [`Self::is_loading`] active until [`Self::finish_load`] completes.

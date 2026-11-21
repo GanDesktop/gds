@@ -1,7 +1,6 @@
 //! Files owns its application messages; GDS supplies Fluent and base messages.
 
-pub use gds::i18n::{Error, Language, text};
-pub(crate) use gds::t;
+pub use gds::i18n::{Error, Language, text, text_untracked};
 
 /// Build a Fluent catalog combining suite messages with Files translations.
 ///
@@ -18,6 +17,7 @@ pub fn prepare(language: Language) -> Result<gds::i18n::Catalog, Error> {
             include_str!("i18n/assets/en-US/recycle.ftl"),
             include_str!("i18n/assets/en-US/terminal.ftl"),
             include_str!("i18n/assets/en-US/network.ftl"),
+            include_str!("i18n/assets/en-US/mime.ftl"),
         ],
         Language::Chinese => [
             include_str!("i18n/assets/zh-CN/app.ftl"),
@@ -28,6 +28,7 @@ pub fn prepare(language: Language) -> Result<gds::i18n::Catalog, Error> {
             include_str!("i18n/assets/zh-CN/recycle.ftl"),
             include_str!("i18n/assets/zh-CN/terminal.ftl"),
             include_str!("i18n/assets/zh-CN/network.ftl"),
+            include_str!("i18n/assets/zh-CN/mime.ftl"),
         ],
     };
     gds::i18n::Catalog::new(language, &sources)

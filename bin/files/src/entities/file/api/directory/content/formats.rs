@@ -1,59 +1,45 @@
-//! Embedded MIME categories and short display names.
-use super::ContentCategory;
+//! Minimal last-resort MIME category patches embedded at build time.
+//!
+//! Primary classification comes from `shared-mime-info` (`generic-icons`,
+//! top-level MIME types, and `subclasses`) plus generated GitHub Linguist
+//! source-code rules. This table only handles the few binary formats that
+//! `shared-mime-info` leaves without a generic icon or inherited category.
+
+use std::{collections::HashMap, sync::LazyLock};
+
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    sync::{Arc, LazyLock},
-};
+
+use super::ContentCategory;
 
 const CONFIG: &str = include_str!("assets/mime-types.toml");
 
-static FORMATS: LazyLock<HashMap<String, Format>> = LazyLock::new(|| {
-    let config: Config = toml::from_str(CONFIG).expect("invalid embedded MIME presentation config");
+static PATCHES: LazyLock<HashMap<String, ContentCategory>> = LazyLock::new(|| {
+    let config: Config = toml::from_str(CONFIG).expect("invalid embedded MIME patch config");
     config
-        .formats
+        .patches
         .into_iter()
         .flat_map(|rule| {
-            let name = rule.name.map(Arc::<str>::from);
             let category = rule.category;
-            rule.mimes.into_iter().map(move |mime| {
-                let interned_mime = Arc::<str>::from(mime.as_str());
-                (
-                    mime,
-                    Format {
-                        category,
-                        name: name.clone(),
-                        mime: interned_mime,
-                    },
-                )
-            })
+            rule.mimes.into_iter().map(move |mime| (mime, category))
         })
         .collect()
 });
 
 #[derive(Deserialize)]
 struct Config {
-    formats: Vec<Rule>,
+    #[serde(default)]
+    patches: Vec<PatchRule>,
 }
 
 #[derive(Deserialize)]
-struct Rule {
+struct PatchRule {
     mimes: Vec<String>,
     category: ContentCategory,
-    name: Option<String>,
 }
 
-#[derive(Clone)]
-pub(super) struct Format {
-    pub category: ContentCategory,
-    pub name: Option<Arc<str>>,
-    pub mime: Arc<str>,
-}
-
-impl Format {
-    pub fn for_mime(mime: &str) -> Option<&'static Self> {
-        FORMATS.get(mime)
-    }
+/// Look up a last-resort category patch for canonical `mime`.
+pub(super) fn patch_category(mime: &str) -> Option<ContentCategory> {
+    PATCHES.get(mime).copied()
 }
 
 #[cfg(test)]

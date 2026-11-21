@@ -1,20 +1,21 @@
 //! Suite window defaults, titlebars, and platform-aware window controls.
 
-use std::{cell::Cell, rc::Rc};
+#[cfg(test)]
+mod tests;
 
-use crate::app::AppExt as _;
-use gpui_kit::{
-    AnyElement, App, ClickEvent, Decorations, Div, IntoElement, MouseButton, ParentElement,
-    RenderOnce, SharedString, Stateful, Styled, TestSupportExt, Window, WindowControlArea,
-    WindowDecorations, WindowOptions,
-    assets::IconName,
-    component::{ActiveTheme, Icon, InteractiveElementExt, Sizable, button::ButtonVariants},
-    div,
-    prelude::*,
-    px,
-};
+use zgui::geom::{Css, CssPx, Point, Size};
+use zgui::prelude::*;
+use zgui::reactive::{LocalStorage, UnsyncCallback};
+use zgui::vocab::PointerButton;
+use zgui::{component, css, view};
+use zgui_ui::{TooltipContentProps, TooltipProps, TooltipTriggerProps};
 
-pub const HEIGHT: f32 = crate::appearance::tokens::TOOLBAR_HEIGHT;
+use crate::app::Gds;
+use crate::appearance::tokens;
+use crate::ui::button::IconButtonProps;
+use crate::ui::icon::IconName;
+
+pub const HEIGHT: f32 = tokens::TOOLBAR_HEIGHT;
 pub const MACOS_CONTROLS_WIDTH: f32 = 80.;
 const INITIAL_WIDTH: f32 = 960.;
 const INITIAL_HEIGHT: f32 = 640.;
@@ -22,335 +23,458 @@ const DISPLAY_FRACTION: f32 = 0.85;
 const MIN_WIDTH: f32 = 520.;
 const MIN_HEIGHT: f32 = 360.;
 
-pub fn minimum_size() -> gpui_kit::Size<gpui_kit::Pixels> {
-    gpui_kit::size(px(MIN_WIDTH), px(MIN_HEIGHT))
+const WINDOW_SHEET: &str = "gds-ui-window";
+
+const WINDOW_CSS: &str = css!(
+    ".gds-window-controls {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 4px;
+        flex-shrink: 0;
+    }
+    .gds-window-controls__button .gds-icon {
+        width: var(--gds-small-icon-size, 12px);
+        height: var(--gds-small-icon-size, 12px);
+    }
+    .gds-window-controls__close:hover {
+        background-color: var(--gds-error);
+        color: var(--gds-error-foreground);
+    }
+    .gds-titlebar {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 6px;
+        height: var(--gds-toolbar-height, 52px);
+        flex-shrink: 0;
+        padding: 0 12px;
+        background-color: var(--gds-sidebar-bg, var(--gds-sidebar));
+        border-bottom: 1px solid var(--gds-border);
+    }
+    .gds-titlebar__slot {
+        display: inline-flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 4px;
+        flex-shrink: 0;
+    }
+    .gds-titlebar__title {
+        font-size: var(--gds-font-size-small, 14px);
+        color: var(--gds-foreground);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }"
+);
+
+fn install_window_stylesheets() {
+    crate::ui::styles::install_ui_stylesheets();
+    zgui::view::install_stylesheet(WINDOW_SHEET, WINDOW_CSS);
 }
 
-pub fn initial_size() -> gpui_kit::Size<gpui_kit::Pixels> {
-    gpui_kit::size(px(INITIAL_WIDTH), px(INITIAL_HEIGHT))
+#[must_use]
+pub fn minimum_size() -> Size<CssPx, Css> {
+    Size::new(CssPx(MIN_WIDTH), CssPx(MIN_HEIGHT))
 }
 
-/// Leave room for desktop panels and decorations on small displays.
-/// Tiling compositors remain free to choose the final window allocation.
-pub fn fit_size(
-    requested: gpui_kit::Size<gpui_kit::Pixels>,
-    cx: &App,
-) -> gpui_kit::Size<gpui_kit::Pixels> {
-    let Some(display) = cx.primary_display() else {
+#[must_use]
+pub fn initial_size() -> Size<CssPx, Css> {
+    Size::new(CssPx(INITIAL_WIDTH), CssPx(INITIAL_HEIGHT))
+}
+
+/// Clamp `requested` within `DISPLAY_FRACTION` of the primary monitor when available.
+#[must_use]
+pub fn fit_size(requested: Size<CssPx, Css>) -> Size<CssPx, Css> {
+    if !zgui::reactive::is_ui_thread() {
+        return requested;
+    }
+    let Some(monitors) = zgui::prelude::try_use_monitors() else {
         return requested;
     };
-    let available = display.visible_bounds().size;
-    gpui_kit::size(
-        requested.width.min(available.width * DISPLAY_FRACTION),
-        requested.height.min(available.height * DISPLAY_FRACTION),
+    let list = monitors.get_untracked();
+    let Some(primary) = list.first() else {
+        return requested;
+    };
+    let (avail_w, avail_h) = if let Some(logical) = primary.logical {
+        (logical.size.width.0, logical.size.height.0)
+    } else {
+        let scale = primary
+            .fractional_scale
+            .unwrap_or(primary.scale_factor)
+            .max(1.0) as f32;
+        (primary.size.width.0 / scale, primary.size.height.0 / scale)
+    };
+    if avail_w <= 0.0 || avail_h <= 0.0 {
+        return requested;
+    }
+    Size::new(
+        CssPx(requested.width.0.min(avail_w * DISPLAY_FRACTION)),
+        CssPx(requested.height.0.min(avail_h * DISPLAY_FRACTION)),
     )
 }
 
-type Handler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+/// Defaults for GDS client-side-decorated transparent workspace windows.
+#[must_use]
+pub fn workspace_options(title: impl Into<String>, app_id: Option<&str>) -> WindowOptions {
+    let size = fit_size(initial_size());
+    let min = minimum_size();
+    let mut options = WindowOptions::new(title.into())
+        .with_size(size.width.0, size.height.0)
+        .with_min_size(min.width.0, min.height.0)
+        .with_decorations(Decorations::None)
+        .with_transparent(true);
+    if let Some(id) = app_id {
+        options = options.with_application_id(id);
+    }
+    options
+}
 
-/// Defaults for windows that draw the GDS toolbar or titlebar. macOS keeps its
-/// native traffic lights; Linux and Windows share the custom control component.
+/// Compatibility alias matching legacy `window_options()` callers.
+#[must_use]
 pub fn window_options() -> WindowOptions {
-    WindowOptions {
-        titlebar: cfg!(target_os = "macos").then(gpui_kit::component::TitleBar::title_bar_options),
-        app_owns_titlebar_drag: cfg!(target_os = "macos"),
-        window_decorations: Some(WindowDecorations::Client),
-        window_background: crate::appearance::tokens::WINDOW_BACKGROUND,
-        ..Default::default()
+    workspace_options("", None)
+}
+
+/// Parents `window` under an external desktop handle (`"wayland:<token>"` or `"x11:<xid>"`).
+pub fn set_external_parent(window: &WindowHandle, parent: &str, modal: bool) {
+    if parent.is_empty() {
+        return;
+    }
+    if let Err(error) = window.set_external_parent(parent, modal) {
+        tracing::debug!(%parent, modal, %error, "failed to apply external window parent");
     }
 }
 
-#[derive(Default, IntoElement)]
-pub struct WindowControls {
-    maximize: Option<Handler>,
-    close: Option<Handler>,
-}
-
-impl WindowControls {
-    pub fn on_maximize(
-        mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.maximize = Some(Box::new(handler));
-        self
-    }
-
-    pub fn on_close_window(
-        mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.close = Some(Box::new(handler));
-        self
-    }
-
-    fn session_hides_controls(desktop: Option<&str>, has_niri_socket: bool) -> bool {
-        match desktop.map(str::trim).filter(|desktop| !desktop.is_empty()) {
-            Some(desktop) => desktop
-                .split(':')
-                .any(|name| name.trim().eq_ignore_ascii_case("niri")),
-            None => has_niri_socket,
-        }
-    }
-
-    fn hidden_in_current_session() -> bool {
-        let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
-        let has_niri_socket =
-            std::env::var_os("NIRI_SOCKET").is_some_and(|socket| !socket.is_empty());
-        Self::session_hides_controls(desktop.as_deref(), has_niri_socket)
+/// Passes an external activation token (`xdg-activation-v1` / desktop startup ID) to `window`.
+pub fn activate_with_token(window: &WindowHandle, token: &str) {
+    if !token.is_empty() {
+        window.activate_with_token(token);
     }
 }
 
-fn control(
-    id: &'static str,
-    icon: IconName,
-    hint: SharedString,
-    area: WindowControlArea,
-) -> super::button::Button {
-    super::button::Button::new(id)
-        .ghost()
-        .xsmall()
-        .w(px(crate::appearance::tokens::ICON_BUTTON_SIZE))
-        .h(px(crate::appearance::tokens::ICON_BUTTON_SIZE))
-        .p_0()
-        .flex_shrink_0()
-        .child(
-            div()
-                .id(gpui_kit::SharedString::from(format!("{id}-icon")))
-                .test_support()
-                .flex()
-                .child(Icon::new(icon).with_size(px(crate::appearance::tokens::SMALL_ICON_SIZE))),
-        )
-        .accessibility_label(hint.clone())
-        .tooltip(hint)
-        .when(cfg!(target_os = "windows"), |button| {
-            button.window_control_area(area)
+/// Opens the desktop's native window menu at window-local `pos`, in CSS pixels.
+pub fn show_window_menu(window: &WindowHandle, pos: Point<CssPx, Css>) {
+    window.show_window_menu(pos);
+}
+
+pub(crate) fn session_hides_controls(desktop: Option<&str>, has_niri_socket: bool) -> bool {
+    match desktop.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(desktop) => desktop
+            .split(':')
+            .any(|name| name.trim().eq_ignore_ascii_case("niri")),
+        None => has_niri_socket,
+    }
+}
+
+fn hidden_in_current_session() -> bool {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
+    let has_niri_socket = std::env::var_os("NIRI_SOCKET").is_some_and(|socket| !socket.is_empty());
+    session_hides_controls(desktop.as_deref(), has_niri_socket)
+}
+
+/// Returns `true` when `target` is inside a focusable interactive control beneath `current`.
+pub(crate) fn is_interactive_descendant(
+    current: zgui::view::NodeId,
+    target: zgui::view::NodeId,
+) -> bool {
+    if current == target {
+        return false;
+    }
+    zgui::view::current_host().is_some_and(|host| {
+        host.focusables(current).into_iter().any(|focusable| {
+            focusable != current && (focusable == target || host.contains(focusable, target))
         })
-        .on_mouse_down(MouseButton::Left, |_, window, cx| {
-            window.prevent_default();
-            cx.stop_propagation();
-        })
+    })
 }
 
-impl RenderOnce for WindowControls {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let mut controls = div()
-            .id("window-controls")
-            .test_support()
-            .flex()
-            .items_center()
-            .gap_1()
-            .flex_shrink_0();
-        if cfg!(target_os = "macos") || cfg!(target_family = "wasm") {
-            return controls.hidden();
+/// Shared pointer-down handler for client-side titlebars, toolbars, and drag strips.
+pub(crate) fn drag_pointer_down_handler(
+    window: Option<WindowHandle>,
+) -> impl Fn(&mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>) {
+    let move_handler = window.as_ref().map(WindowHandle::move_drag_handler);
+    let menu_win = window;
+    move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
+        if is_interactive_descendant(ev.current, ev.target) {
+            return;
         }
-        // A compositor may grant server decorations even when the application
-        // requested client decorations. It already supplies min/max/close.
-        if cfg!(target_os = "linux")
-            && (Self::hidden_in_current_session()
-                || !matches!(window.window_decorations(), Decorations::Client { .. }))
-        {
-            return controls.hidden();
+        if ev.button == Some(PointerButton::Secondary) {
+            if let Some(ref w) = menu_win
+                && !w.server_decorated().get_untracked()
+            {
+                show_window_menu(w, ev.position);
+            }
+            ev.stop_propagation();
+        } else if let Some(ref handler) = move_handler {
+            handler(ev);
+            ev.stop_propagation();
         }
-        let supported = window.window_controls();
-        if supported.minimize {
-            controls = controls.child(
-                control(
-                    "window-minimize",
-                    IconName::WindowMinimize,
-                    crate::i18n::text("window-minimize", cx),
-                    WindowControlArea::Min,
-                )
-                .on_click(|_, window, cx| {
-                    cx.stop_propagation();
-                    window.minimize_window();
-                }),
-            );
-        }
-        if supported.maximize {
-            let (icon, hint) = if window.is_maximized() {
-                (
-                    IconName::WindowRestore,
-                    crate::i18n::text("window-restore", cx),
-                )
-            } else {
-                (
-                    IconName::WindowMaximize,
-                    crate::i18n::text("window-maximize", cx),
-                )
-            };
-            controls = controls.child(
-                control("window-maximize", icon, hint, WindowControlArea::Max).on_click(
-                    move |event, window, cx| {
-                        cx.stop_propagation();
-                        if let Some(handler) = &self.maximize {
-                            handler(event, window, cx);
+    }
+}
+
+fn localized_label(key: &str, fallback: &str) -> String {
+    Gds::try_current().map_or_else(|| fallback.to_owned(), |g| g.i18n().text(key))
+}
+
+fn control_button(
+    icon: Signal<IconName, LocalStorage>,
+    label: Signal<String, LocalStorage>,
+    extra_class: &'static str,
+    window: Option<WindowHandle>,
+    on_activate: impl Fn(Option<&WindowHandle>) + 'static,
+) -> AnyView {
+    let no_drag = window.as_ref().map(WindowHandle::no_drag_handler);
+    AnyView::new(view! {
+        Tooltip(delay = crate::appearance::tokens::TOOLTIP_DELAY) {
+            TooltipTrigger {
+                IconButton(
+                    icon = icon,
+                    label = label,
+                    class = extra_class,
+                    a11y:role = Role::Button,
+                    a11y:label = move || label.get(),
+                    on:pointer_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
+                        if let Some(ref handler) = no_drag {
+                            handler(ev);
                         } else {
-                            window.zoom_window();
+                            ev.stop_propagation();
                         }
                     },
-                ),
-            );
+                    on:click = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::Click>| {
+                        ev.stop_propagation();
+                        on_activate(window.as_ref());
+                    }
+                )
+            }
+            TooltipContent {{move || label.get()}}
         }
-        controls.child(
-            control(
-                "window-close",
-                IconName::WindowClose,
-                crate::i18n::text("window-close", cx),
-                WindowControlArea::Close,
-            )
-            .on_click(move |event, window, cx| {
-                cx.stop_propagation();
-                if let Some(handler) = &self.close {
-                    handler(event, window, cx);
-                } else {
-                    window.remove_window();
+    })
+}
+
+fn render_window_controls(
+    class: Classes,
+    hide_session: bool,
+    on_maximize: Option<UnsyncCallback<()>>,
+    on_close_window: Option<UnsyncCallback<()>>,
+) -> AnyView {
+    install_window_stylesheets();
+    if cfg!(target_os = "macos")
+        || cfg!(target_family = "wasm")
+        || (cfg!(target_os = "linux") && hide_session)
+    {
+        return AnyView::new(());
+    }
+    let window = zgui::prelude::try_use_window();
+    let visible = Signal::derive_local({
+        let window = window.clone();
+        move || !window.as_ref().is_some_and(|w| w.server_decorated().get())
+    });
+    let can_minimize = Signal::derive_local({
+        let window = window.clone();
+        move || window.as_ref().is_none_or(|w| w.can_minimize().get())
+    });
+    let can_maximize = Signal::derive_local({
+        let window = window.clone();
+        move || window.as_ref().is_none_or(|w| w.can_maximize().get())
+    });
+    let max_icon = Signal::derive_local({
+        let window = window.clone();
+        move || {
+            if window.as_ref().is_some_and(|w| w.maximized().get()) {
+                IconName::WindowRestore
+            } else {
+                IconName::WindowMaximize
+            }
+        }
+    });
+    let max_label = Signal::derive_local({
+        let window = window.clone();
+        move || {
+            if window.as_ref().is_some_and(|w| w.maximized().get()) {
+                localized_label("window-restore", "Restore window")
+            } else {
+                localized_label("window-maximize", "Maximize window")
+            }
+        }
+    });
+    let min_label = Signal::derive_local(|| localized_label("window-minimize", "Minimize window"));
+    let close_label = Signal::derive_local(|| localized_label("window-close", "Close window"));
+
+    let min_window = window.clone();
+    let max_window = window.clone();
+    let close_window = window;
+
+    AnyView::new(view! {
+        Show(when = move || visible.get()) {
+            {{
+                let min_win = min_window.clone();
+                let max_win = max_window.clone();
+                let close_win = close_window.clone();
+                view! {
+                    row(class = "gds-window-controls", class = class.clone()) {
+                        Show(when = move || can_minimize.get()) {
+                            {{control_button(
+                                Signal::stored_local(IconName::WindowMinimize),
+                                min_label,
+                                "gds-window-controls__button",
+                                min_win.clone(),
+                                |win| {
+                                    if let Some(w) = win {
+                                        w.minimize();
+                                    }
+                                },
+                            )}}
+                        }
+                        Show(when = move || can_maximize.get()) {
+                            {{
+                                let on_max = on_maximize;
+                                control_button(
+                                    max_icon,
+                                    max_label,
+                                    "gds-window-controls__button",
+                                    max_win.clone(),
+                                    move |win| {
+                                        if let Some(ref cb) = on_max {
+                                            cb.run(());
+                                        } else if let Some(w) = win {
+                                            w.toggle_maximized();
+                                        }
+                                    },
+                                )
+                            }}
+                        }
+                        {{
+                            let on_close = on_close_window;
+                            control_button(
+                                Signal::stored_local(IconName::WindowClose),
+                                close_label,
+                                "gds-window-controls__button gds-window-controls__close",
+                                close_win,
+                                move |win| {
+                                    if let Some(ref cb) = on_close {
+                                        cb.run(());
+                                    } else if let Some(w) = win {
+                                        w.close();
+                                    }
+                                },
+                            )
+                        }}
+                    }
                 }
-            }),
-        )
+            }}
+        }
+    })
+}
+
+/// Client-side window control buttons (minimize, maximize/restore, close), suppressed under Niri
+/// and server-decorated windows.
+#[component]
+pub fn WindowControls(
+    #[prop(optional)] on_maximize: Option<UnsyncCallback<()>>,
+    #[prop(optional)] on_close_window: Option<UnsyncCallback<()>>,
+    #[prop(into, optional)] class: Classes,
+) -> impl IntoView {
+    render_window_controls(
+        class,
+        hidden_in_current_session(),
+        on_maximize,
+        on_close_window,
+    )
+}
+
+fn render_title_bar(
+    title: Signal<String, LocalStorage>,
+    leading: Option<Children>,
+    trailing: Option<Children>,
+    on_maximize: Option<UnsyncCallback<()>>,
+    on_close_window: Option<UnsyncCallback<()>>,
+    class: Classes,
+    hide_controls: bool,
+) -> impl IntoView {
+    if let Some(gds) = Gds::try_current() {
+        let _ = gds.appearance().install_window_sheet();
+    }
+    install_window_stylesheets();
+    let window = zgui::prelude::try_use_window();
+    let no_drag_lead = window.as_ref().map(WindowHandle::no_drag_handler);
+    let no_drag_trail = window.as_ref().map(WindowHandle::no_drag_handler);
+    let drag_handler = drag_pointer_down_handler(window);
+
+    view! {
+        row(
+            class = "gds-titlebar gds-toolbar",
+            class = class,
+            on:pointer_down = drag_handler
+        ) {
+            {leading.map(|slot| AnyView::new(view! {
+                row(
+                    class = "gds-titlebar__slot",
+                    on:pointer_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
+                        if let Some(ref handler) = no_drag_lead {
+                            handler(ev);
+                        } else {
+                            ev.stop_propagation();
+                        }
+                    }
+                ) {
+                    {slot.into_view_once()}
+                }
+            }))}
+            text(class = "gds-titlebar__title") {{move || title.get()}}
+            spacer() {}
+            {trailing.map(|slot| AnyView::new(view! {
+                row(
+                    class = "gds-titlebar__slot",
+                    on:pointer_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
+                        if let Some(ref handler) = no_drag_trail {
+                            handler(ev);
+                        } else {
+                            ev.stop_propagation();
+                        }
+                    }
+                ) {
+                    {slot.into_view_once()}
+                }
+            }))}
+            {render_window_controls(Classes::default(), hide_controls, on_maximize, on_close_window)}
+        }
     }
 }
 
 #[cfg(test)]
-mod tests;
-
-#[derive(Default, IntoElement)]
-pub struct TitleBar {
-    children: Vec<AnyElement>,
-    controls: WindowControls,
+pub(crate) fn title_bar_with_forced_controls(
+    title: &str,
+    on_maximize: Option<UnsyncCallback<()>>,
+    on_close_window: Option<UnsyncCallback<()>>,
+) -> impl IntoView {
+    render_title_bar(
+        Signal::stored_local(title.to_owned()),
+        None,
+        None,
+        on_maximize,
+        on_close_window,
+        Classes::default(),
+        false,
+    )
 }
 
-impl TitleBar {
-    pub fn window_options() -> WindowOptions {
-        window_options()
-    }
-
-    pub fn on_close_window(
-        mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.controls = self.controls.on_close_window(handler);
-        self
-    }
-}
-
-impl ParentElement for TitleBar {
-    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
-        self.children.extend(elements);
-    }
-}
-
-#[derive(Default)]
-pub(super) struct DragBarState {
-    dragging: Cell<bool>,
-    press_allowed: Cell<bool>,
-}
-
-impl DragBarState {
-    pub(super) fn mouse_down(&self, default_prevented: bool) {
-        let allowed = !default_prevented;
-        self.dragging.set(allowed);
-        self.press_allowed.set(allowed);
-    }
-
-    pub(super) fn mouse_up(&self) {
-        self.dragging.set(false);
-    }
-
-    pub(super) fn mouse_down_out(&self) {
-        self.dragging.set(false);
-        self.press_allowed.set(false);
-    }
-
-    pub(super) fn should_start_window_move(&self, is_left_button_held: bool) -> bool {
-        self.dragging.replace(false) && is_left_button_held
-    }
-
-    pub(super) fn take_double_click(&self, default_prevented: bool) -> bool {
-        self.press_allowed.replace(false) && !default_prevented
-    }
-}
-
-fn handle_titlebar_double_click(window: &mut Window) {
-    if cfg!(target_os = "macos") {
-        window.titlebar_double_click();
-    } else if window.window_controls().maximize {
-        window.zoom_window();
-    }
-}
-
-pub(super) fn drag_bar_interactions(
-    element: Stateful<Div>,
-    drag_state_id: &'static str,
-    window: &mut Window,
-    cx: &mut App,
-) -> Stateful<Div> {
-    let state = window
-        .use_keyed_state(drag_state_id, cx, |_, _| Rc::new(DragBarState::default()))
-        .read(cx)
-        .clone();
-    let down = state.clone();
-    let up = state.clone();
-    let outside = state.clone();
-    let move_state = state.clone();
-    let mut element = element
-        .window_control_area(WindowControlArea::Drag)
-        .on_mouse_down(MouseButton::Left, move |_, window, _| {
-            down.mouse_down(window.default_prevented());
-        })
-        .on_mouse_up(MouseButton::Left, move |_, _, _| up.mouse_up())
-        .on_mouse_down_out(move |_, _, _| outside.mouse_down_out())
-        .on_mouse_move(move |event, window, _| {
-            if move_state.should_start_window_move(event.dragging()) {
-                window.start_window_move();
-            }
-        })
-        .on_double_click(move |_, window, _| {
-            if state.take_double_click(window.default_prevented()) {
-                handle_titlebar_double_click(window);
-            }
-        });
-    if cfg!(target_os = "linux")
-        && matches!(window.window_decorations(), Decorations::Client { .. })
-    {
-        element = element.on_mouse_down(MouseButton::Right, |event, window, _| {
-            if !window.default_prevented() {
-                window.show_window_menu(event.position);
-            }
-        });
-    }
-    element
-}
-
-impl RenderOnce for TitleBar {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let title = drag_bar_interactions(
-            div()
-                .id("title-bar-content")
-                .flex()
-                .items_center()
-                .flex_1()
-                .h_full()
-                .text_size(crate::appearance::tokens::SMALL),
-            "title-bar-drag-state",
-            window,
-            cx,
-        );
-        div()
-            .id("title-bar")
-            .flex()
-            .items_center()
-            .gap_1()
-            .h(px(HEIGHT))
-            .flex_shrink_0()
-            .px_3()
-            .when(
-                cfg!(target_os = "macos") && !window.is_fullscreen(),
-                |bar| bar.pl(px(MACOS_CONTROLS_WIDTH)),
-            )
-            .bg(cx.gds().appearance().theme().sidebar_background())
-            .border_b_1()
-            .border_color(cx.theme().title_bar_border)
-            .child(title.children(self.children))
-            .child(self.controls)
-    }
+/// Draggable titlebar strip with optional leading/trailing slots and window menu on secondary click.
+#[component]
+pub fn TitleBar(
+    #[prop(into)] title: Signal<String, LocalStorage>,
+    #[prop(optional)] leading: Option<Children>,
+    #[prop(optional)] trailing: Option<Children>,
+    #[prop(optional)] on_maximize: Option<UnsyncCallback<()>>,
+    #[prop(optional)] on_close_window: Option<UnsyncCallback<()>>,
+    #[prop(into, optional)] class: Classes,
+) -> impl IntoView {
+    render_title_bar(
+        title,
+        leading,
+        trailing,
+        on_maximize,
+        on_close_window,
+        class,
+        hidden_in_current_session(),
+    )
 }

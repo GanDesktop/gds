@@ -1,10 +1,13 @@
 //! Read Plasma's effective colors from kdeglobals.
 use std::path::Path;
 
-use gpui_kit::{Hsla, Rgba, rgb};
 use ini::Ini;
+use zgui::canvas::zgui_color::{Color, ColorSpace};
 
-use super::super::{Loaded, builtin, color::hex_color};
+use super::super::{
+    Loaded, builtin,
+    color::{hex_color, rgb},
+};
 use crate::appearance::theme::{Error, Mode, ModePreference, palette::Palette};
 
 /// Read Plasma's effective colors, including the applied accent and custom edits.
@@ -21,10 +24,12 @@ pub(super) fn parse(
         ModePreference::Light => Mode::Light,
         ModePreference::Dark => Mode::Dark,
         ModePreference::System => {
-            let background: Rgba = required(&ini, "Colors:Window", "BackgroundNormal")?.into();
+            let [r, g, b] = required(&ini, "Colors:Window", "BackgroundNormal")?
+                .to_space(ColorSpace::Srgb)
+                .components();
             // Match Plasma's Settings portal: qGray(windowBackground) < 192.
             // https://invent.kde.org/plasma/xdg-desktop-portal-kde/-/blob/master/src/settings.cpp
-            let gray = (background.r * 11.0 + background.g * 16.0 + background.b * 5.0) / 32.0;
+            let gray = (r * 11.0 + g * 16.0 + b * 5.0) / 32.0;
             if gray < 192.0 / 255.0 {
                 Mode::Dark
             } else {
@@ -76,13 +81,19 @@ fn parse_kde(ini: &Ini, mode: Mode) -> Result<Palette, Error> {
     palette.tooltip_foreground =
         optional(ini, "Colors:Tooltip", "ForegroundNormal")?.unwrap_or(palette.sidebar_foreground);
     palette.link = optional(ini, "Colors:View", "ForegroundLink")?.unwrap_or(palette.primary);
+    palette.sync_material_defaults(mode);
+    if let Some(button_bg) = optional(ini, "Colors:Button", "BackgroundNormal")? {
+        palette.control = button_bg;
+        palette.control_foreground =
+            optional(ini, "Colors:Button", "ForegroundNormal")?.unwrap_or(palette.foreground);
+    }
     palette.terminal_fallback(mode);
     Ok(palette)
 }
 
 /// # Errors
 /// Rejects a present named color if it is not valid RGB/ARGB data.
-fn optional(ini: &Ini, section: &str, key: &str) -> Result<Option<Hsla>, Error> {
+fn optional(ini: &Ini, section: &str, key: &str) -> Result<Option<Color>, Error> {
     ini.get_from(Some(section), key)
         .map(|value| named_color(value, &format!("{section}.{key}")))
         .transpose()
@@ -90,14 +101,14 @@ fn optional(ini: &Ini, section: &str, key: &str) -> Result<Option<Hsla>, Error> 
 
 /// # Errors
 /// Rejects a missing required named color or invalid color data.
-fn required(ini: &Ini, section: &str, key: &str) -> Result<Hsla, Error> {
+fn required(ini: &Ini, section: &str, key: &str) -> Result<Color, Error> {
     optional(ini, section, key)?
         .ok_or_else(|| Error::invalid(format!("{section}.{key}"), "required color is missing"))
 }
 
 /// # Errors
 /// Rejects unsupported color syntax, missing channels and values outside u8.
-fn named_color(value: &str, field: &str) -> Result<Hsla, Error> {
+fn named_color(value: &str, field: &str) -> Result<Color, Error> {
     if value.trim().starts_with('#') {
         return hex_color(value, field, true);
     }
@@ -111,7 +122,7 @@ fn named_color(value: &str, field: &str) -> Result<Hsla, Error> {
     }
     let color =
         (u32::from(channels[0]) << 16) | (u32::from(channels[1]) << 8) | u32::from(channels[2]);
-    Ok(rgb(color).into())
+    Ok(rgb(color))
 }
 
 #[cfg(test)]

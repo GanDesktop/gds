@@ -1,10 +1,11 @@
-//! Validate every fallible presentation change before touching application state.
+//! Validate presentation changes before committing the application snapshot.
 
 use super::Preferences;
 use crate::shared::i18n;
-use gds::app::AppExt as _;
-use gds::appearance::{theme, typography};
-use gpui_kit::App;
+use gds::{
+    app::Gds,
+    appearance::{theme, typography},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -20,16 +21,18 @@ pub(super) struct Prepared {
     theme: Option<theme::Prepared>,
     font: Option<typography::Preferences>,
     language: Option<gds::i18n::Catalog>,
+    time_format: Option<gds::ui::time::Format>,
+    animations_enabled: Option<bool>,
 }
 
 impl Prepared {
-    pub(super) fn new(
-        preferences: &Preferences,
-        previous: &Preferences,
-        cx: &App,
-    ) -> Result<Self, Error> {
+    pub(super) fn new(preferences: &Preferences, previous: &Preferences) -> Result<Self, Error> {
         let theme = (preferences.appearance != previous.appearance)
-            .then(|| preferences.appearance.prepare(cx.window_appearance()))
+            .then(|| {
+                preferences
+                    .appearance
+                    .prepare(Gds::current().appearance().theme().mode_untracked())
+            })
             .transpose()?;
         let font = (preferences.font != previous.font)
             .then(|| {
@@ -40,35 +43,45 @@ impl Prepared {
         let language = (preferences.language != previous.language)
             .then(|| i18n::prepare(preferences.language.unwrap_or_else(i18n::Language::detect)))
             .transpose()?;
+        let time_format =
+            (preferences.time_format != previous.time_format).then_some(preferences.time_format);
+        let animations_enabled = (preferences.animations_enabled != previous.animations_enabled)
+            .then(|| preferences.animations_enabled.unwrap_or(true));
         Ok(Self {
             theme,
             font,
             language,
+            time_format,
+            animations_enabled,
         })
     }
 
-    pub(super) fn install(self, preferences: &Preferences, cx: &mut App) {
+    pub(super) fn appearance_changed(&self) -> bool {
+        self.theme.is_some()
+    }
+
+    pub(super) fn install(self, _preferences: &Preferences) {
+        let gds = Gds::current();
         if let Some(theme) = self.theme {
-            cx.gds_mut()
-                .appearance()
+            gds.appearance()
                 .theme()
                 .install(theme)
                 .expect("prepared theme has valid opacity");
         }
         if let Some(font) = self.font {
-            cx.gds_mut()
-                .appearance()
+            gds.appearance()
                 .typography()
                 .apply(&font)
-                .expect("prepared font has a valid size");
+                .expect("prepared font has valid size");
         }
         if let Some(language) = self.language {
-            cx.gds_mut().i18n().install_catalog(language);
+            gds.i18n().install_catalog(language);
         }
-        cx.gds_mut().ui().time().apply(preferences.time_format);
-        cx.gds_mut()
-            .appearance()
-            .motion()
-            .set_enabled(preferences.animations_enabled.unwrap_or(true));
+        if let Some(time_format) = self.time_format {
+            gds::ui::time::apply(time_format);
+        }
+        if let Some(animations_enabled) = self.animations_enabled {
+            gds.appearance().motion().set_enabled(animations_enabled);
+        }
     }
 }

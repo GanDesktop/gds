@@ -1,17 +1,17 @@
 //! Shared Linux XDG Settings Portal snapshot and change stream.
-use super::theme::{Mode, provider::system};
-use crate::service::task_manager::{Scope, Task as IoTask};
+use super::theme::Mode;
 use futures_lite::StreamExt as _;
-use gpui_kit::{App, Global, Rgba, Task};
 use std::{
+    cell::Cell,
     collections::HashMap,
     sync::{OnceLock, RwLock},
     time::Duration,
 };
 use tokio::sync::watch;
 use zbus::zvariant::OwnedValue;
+use zgui::canvas::zgui_color::Color;
 
-#[cfg(all(test, feature = "gui-tests"))]
+#[cfg(test)]
 mod tests;
 
 const NAMESPACE: &str = "org.freedesktop.appearance";
@@ -25,7 +25,7 @@ type Settings = HashMap<String, HashMap<String, OwnedValue>>;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Snapshot {
     pub color_scheme: Option<Mode>,
-    pub accent_color: Option<Rgba>,
+    pub accent_color: Option<Color>,
     pub primed: bool,
 }
 
@@ -90,24 +90,21 @@ pub(crate) async fn prime() {
     }
 }
 
-struct Watch {
-    io: IoTask<()>,
-    _updates: Task<()>,
-}
-impl Global for Watch {}
-impl Drop for Watch {
-    fn drop(&mut self) {
-        self.io.abort();
-    }
+thread_local! {
+    static FOLLOWING: Cell<bool> = const { Cell::new(false) };
 }
 
-pub(super) fn follow(tasks: &Scope, cx: &mut App) {
-    if cx.has_global::<Watch>() {
+pub(crate) fn follow() {
+    if FOLLOWING.with(|following| following.replace(true)) {
         return;
     }
-    let (sender, mut receiver) = watch::channel(None);
-    let cancel = tasks.token();
-    let io = tasks.spawn_named("Watch appearance portal", async move {
+    zgui::reactive::on_cleanup_local(|| FOLLOWING.with(|following| following.set(false)));
+    let (sender, receiver) = watch::channel(None);
+    let scope = crate::app::Gds::current()
+        .tasks()
+        .owner_scope("Desktop appearance portal");
+    let cancel = scope.token();
+    drop(scope.spawn_named("Watch appearance portal", async move {
         let result = tokio::select! {
             _ = cancel.cancelled() => return,
             result = listen(sender) => result,
@@ -115,24 +112,19 @@ pub(super) fn follow(tasks: &Scope, cx: &mut App) {
         if let Err(error) = result {
             tracing::warn!(%error, "appearance portal unavailable; keeping the last system preference");
         }
-    });
-    let updates = cx.spawn(async move |cx| {
-        while receiver.changed().await.is_ok() {
-            let update = *receiver.borrow_and_update();
-            if let Some(update) = update {
-                cx.update(|cx| {
-                    super::motion::system_changed(update.reduced_motion, cx);
-                    if update.appearance_changed && system::is_gnome() {
-                        super::theme::Observer::refresh_if_active(cx);
-                    }
-                });
-            }
+    }));
+    drop(zgui::tokio::spawn_watch(receiver, move |update| {
+        let Some(update) = update else {
+            return;
+        };
+        let app = crate::app::Gds::current();
+        app.appearance()
+            .motion()
+            .system_changed(update.reduced_motion);
+        if update.appearance_changed {
+            app.appearance().theme().refresh_for_portal();
         }
-    });
-    cx.set_global(Watch {
-        io,
-        _updates: updates,
-    });
+    }));
 }
 
 async fn portal_proxy(connection: &zbus::Connection) -> zbus::Result<zbus::Proxy<'_>> {
@@ -228,19 +220,14 @@ fn parse_settings(settings: &Settings) -> State {
     }
 }
 
-fn parse_accent_color(value: &OwnedValue) -> Option<Rgba> {
+fn parse_accent_color(value: &OwnedValue) -> Option<Color> {
     let cloned = value.try_clone().ok()?;
     let (r, g, b) = <(f64, f64, f64)>::try_from(cloned).ok()?;
     if [r, g, b]
         .iter()
         .all(|channel| channel.is_finite() && (0.0..=1.0).contains(channel))
     {
-        Some(Rgba {
-            r: r as f32,
-            g: g as f32,
-            b: b as f32,
-            a: 1.0,
-        })
+        Some(Color::srgb(r as f32, g as f32, b as f32, 1.0))
     } else {
         None
     }

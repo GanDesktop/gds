@@ -1,645 +1,1161 @@
-//! A native settings workspace and the preferences of the current application.
+//! Reactive settings pages editing the persisted application schema.
 
-use crate::entities::preferences::{Preferences, PreferencesEditor};
-use crate::shared::ui::actions::{Command, SETTINGS_CONTEXT};
-use gds::appearance::typography::PreferencesEditor as FontEditor;
-use gds::ui::terminal::PreferencesEditor as TerminalEditor;
-mod controls;
+mod appearance;
 mod pages;
 mod tags;
-#[cfg(test)]
-mod tests;
 
+use std::rc::Rc;
+
+use gds::appearance::tokens::{
+    COLLAPSED_SIDEBAR_WIDTH, SIDEBAR_ICON_SIZE, SIDEBAR_WIDTH, TOOLTIP_DELAY,
+};
+use gds::i18n;
+use gds::ui::field::FieldLabelProps;
+use gds::ui::keytips::{self, HintPlacement};
+use gds::ui::navigation::NavItemProps;
+use gds::ui::settings::form::{Changed, Editor, Model};
+use gds::ui::settings::{
+    NumberControlProps, PERCENTAGE_RANGE, SettingActionsProps, SettingControlProps,
+    SettingDescriptionProps, SettingLabelProps, SettingResetProps, SettingRowProps,
+};
+use gds::ui::sidebar::{SideBarContentProps, SideBarProps, SidebarPresentation};
+use gds::ui::tooltip::{HintTooltipProps, TooltipTextProps};
+use gds::ui::{
+    FrameContext, IconButtonProps, IconName, IconProps, Shortcut, ShortcutBadgeProps,
+    ToggleSwitchProps,
+};
+use serde::{Serialize, de::DeserializeOwned};
+use zgui::prelude::*;
+use zgui::reactive::{LocalStorage, ReadSignal, RwSignal, UnsyncCallback};
+use zgui::view::{ShowProps, install_stylesheet};
+use zgui::vocab::{Key, NamedKey};
+use zgui::{component, view};
+use zgui_ui::{TooltipContentProps, TooltipProps, TooltipTriggerProps};
+use zgui_ui_primitives::Binding;
+
+use crate::entities::preferences::Preferences;
+use crate::shared::ui::actions::Command;
 pub use pages::Page;
 
-use controls::{
-    Choice, ChoiceControl, ChoiceEvent, ChoiceState, Field, NumberControl, PERCENTAGE_RANGE,
-};
-use gds_uim::el;
-use gpui_kit::{
-    component::{
-        ActiveTheme, WindowExt,
-        slider::{SliderEvent, SliderState, SliderValue},
-    },
-    *,
-};
+const SETTINGS_SHEET: &str = "gds-files-settings";
+const SETTINGS_CSS: &str = r#"
+.gds-settings-sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+    gap: 4px;
+    padding: var(--gds-sidebar-padding, 10px);
+    box-sizing: border-box;
+}
 
-use gds::{
-    appearance::{theme, tokens::SIDEBAR_PADDING, typography},
-    i18n::{t, text},
-    service::task_manager::{Owner, Scope},
-    ui::{Frame, NavItem, Shortcut, sidebar::SidebarPresentation},
-};
+.gds-settings-sidebar > .zui-tooltip__trigger {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+}
+
+.gds-settings-nav-corner-anchor {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.gds-settings-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0%;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    padding: 24px;
+    box-sizing: border-box;
+    outline: none;
+    box-shadow: none;
+}
+
+.gds-settings-content:focus,
+.gds-settings-content:focus-visible {
+    outline: none;
+    box-shadow: none;
+}
+
+.gds-settings-heading {
+    font-size: var(--gds-font-size-xl, 20px);
+    font-weight: 600;
+    margin-bottom: 20px;
+}
+
+.gds-settings-col {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+}
+
+.gds-settings-label-trigger {
+    display: inline-flex;
+    align-self: flex-start;
+    max-width: 100%;
+}
+
+.gds-setting-control.gds-setting-control > .zui-select,
+.gds-setting-control.gds-setting-control .zui-select {
+    width: 100%;
+    min-width: 0;
+    height: var(--gds-control-height, 36px);
+    min-height: var(--gds-control-height, 36px);
+    background: var(--gds-content);
+    color: var(--gds-foreground);
+    border: 1px solid var(--gds-outline);
+    border-radius: var(--gds-radius-control, 6px);
+    box-shadow: none;
+    outline: none;
+    box-sizing: border-box;
+}
+
+.gds-setting-control.gds-setting-control .zui-select:focus,
+.gds-setting-control.gds-setting-control .zui-select:focus-visible {
+    border-color: var(--gds-primary);
+    box-shadow: none;
+    outline: none;
+}
+
+.gds-settings-footer {
+    font-size: var(--gds-font-size-xs, 12px);
+    color: var(--gds-muted-foreground);
+}
+"#;
 
 #[derive(Clone)]
-pub enum Event {
-    /// An immediate change request; the application applies, persists, then reports the result.
-    Apply(Preferences),
-}
-
 pub struct View {
-    tasks: Owner,
-    tags: tags::Controls,
-    preferences: Preferences,
-    sidebar: SidebarPresentation,
-    page: Page,
-    /// One focus target per page, so page cycling keeps keyboard navigation
-    /// inside the visible page and blurs controls on the page being left.
-    page_focus: [FocusHandle; Page::ALL.len()],
-    general: Entity<PreferencesEditor>,
-    source: ChoiceControl<theme::SourceKind>,
-    system_theme_available: bool,
-    custom: ChoiceControl<std::path::PathBuf>,
-    themes: Vec<theme::provider::custom::Entry>,
-    theme_scan: Option<Task<()>>,
-    builtin: ChoiceControl<theme::BuiltinTheme>,
-    mode: ChoiceControl<theme::ModePreference>,
-    content_opacity: NumberControl,
-    sidebar_opacity: NumberControl,
-    performance: Entity<pages::PerformanceFormEditor>,
-    performance_unlocked: bool,
-    font: Entity<FontEditor>,
-    terminal: Entity<TerminalEditor>,
-    _subscriptions: Vec<Subscription>,
+    preferences: ReadSignal<Preferences, LocalStorage>,
+    on_apply: Rc<dyn Fn(Preferences)>,
+    page: RwSignal<Page, LocalStorage>,
+    themes: appearance::Themes,
+    tags: tags::Probe,
+    nav_refs: [NodeRef; Page::ALL.len()],
+    page_focus: NodeRef,
+    performance_unlocked: RwSignal<bool, LocalStorage>,
 }
-
-impl EventEmitter<Event> for View {}
 
 impl View {
-    fn source_kind(preferences: &Preferences, system_available: bool) -> theme::SourceKind {
-        match &preferences.appearance.source {
-            theme::Source::System if !system_available => theme::SourceKind::Builtin,
-            source => theme::SourceKind::from(source),
-        }
-    }
-
     pub fn new(
-        preferences: Preferences,
-        sidebar: SidebarPresentation,
-        tasks: Scope,
-        window: &mut Window,
-        cx: &mut Context<Self>,
+        preferences: ReadSignal<Preferences, LocalStorage>,
+        on_apply: impl Fn(Preferences) + 'static,
     ) -> Self {
-        let tasks = tasks.named_child("Settings");
-        let general = cx.new(|cx| PreferencesEditor::new(preferences.clone(), window, cx));
-        let themes = Vec::new();
-        let custom_path = match &preferences.appearance.source {
-            theme::Source::Custom(path) => path.clone(),
-            _ => std::path::PathBuf::new(),
-        };
-        let custom = ChoiceControl::new(
-            Choice::<std::path::PathBuf>::catalog(&themes, cx),
-            &custom_path,
-            true,
-            window,
-            cx,
-        );
-        let system_theme_available = theme::Source::system_available(cx.window_appearance());
-        let source = ChoiceControl::new(
-            Choice::<theme::SourceKind>::catalog(system_theme_available, cx),
-            &Self::source_kind(&preferences, system_theme_available),
-            false,
-            window,
-            cx,
-        );
-        let builtin = ChoiceControl::new(
-            Choice::<theme::BuiltinTheme>::catalog(cx),
-            &preferences.appearance.builtin,
-            false,
-            window,
-            cx,
-        );
-        let mode = ChoiceControl::new(
-            Choice::<theme::ModePreference>::catalog(cx),
-            &preferences.appearance.mode,
-            false,
-            window,
-            cx,
-        );
-        let content_opacity = NumberControl::new(
-            preferences.appearance.content_opacity * 100.0,
-            PERCENTAGE_RANGE,
-            cx,
-        );
-        let sidebar_opacity = NumberControl::new(
-            preferences.appearance.sidebar_opacity * 100.0,
-            PERCENTAGE_RANGE,
-            cx,
-        );
-        let performance = cx.new(|cx| {
-            let mut editor = pages::PerformanceFormEditor::new(
-                pages::PerformanceForm::from(&preferences.files),
-                window,
-                cx,
-            );
-            editor.set_disabled(true, cx);
-            editor
-        });
-        let font = cx.new(|cx| FontEditor::new(preferences.font.clone(), window, cx));
-        let terminal = cx.new(|cx| TerminalEditor::new(preferences.terminal.clone(), window, cx));
-        let tag_editor = cx.new(|cx| {
-            crate::entities::tags::CommandsEditor::new(
-                preferences.tags.commands.clone(),
-                window,
-                cx,
-            )
-        });
-        let mut subscriptions = vec![
-            cx.subscribe_in(&performance, window, Self::on_performance_edited),
-            cx.subscribe_in(&tag_editor, window, Self::on_tags_edited),
-            cx.subscribe_in(&terminal, window, Self::on_terminal_edited),
-            cx.subscribe_in(&general, window, Self::on_general_edited),
-            cx.subscribe_in(&source.state, window, Self::on_source_confirm),
-            cx.subscribe_in(&custom.state, window, Self::on_custom_confirm),
-            cx.subscribe_in(&mode.state, window, Self::on_mode_confirm),
-            cx.subscribe_in(&builtin.state, window, Self::on_builtin_confirm),
-            cx.subscribe_in(&font, window, Self::on_font_edited),
-        ];
-        let initial_commands = preferences.tags.commands.clone();
-        let mut view = Self {
-            tasks,
-            tags: tags::Controls {
-                editor: tag_editor,
-                state: tags::CheckState::Failed {
-                    commands: initial_commands,
-                    error: String::new(),
-                },
-            },
+        Self {
             preferences,
-            sidebar,
-            page: Page::General,
-            page_focus: std::array::from_fn(|_| cx.focus_handle()),
-            general,
-            source,
-            system_theme_available,
-            custom,
-            themes,
-            theme_scan: None,
-            builtin,
-            mode,
-            content_opacity,
-            sidebar_opacity,
-            performance,
-            performance_unlocked: false,
-            font,
-            terminal,
-            _subscriptions: Vec::new(),
-        };
-        for field in Field::NUMBERS {
-            let state = view.number_control(field).state.clone();
-            subscriptions.push(cx.subscribe_in(&state, window, Self::on_slider_change(field)));
-            // Kit accessibility increments notify the state without a Change event.
-            subscriptions.push(cx.observe_in(&state, window, Self::on_slider_notify(field)));
-        }
-        view._subscriptions = subscriptions;
-        view.scan_custom_themes(window, cx);
-        view.probe_tags(cx);
-        view
-    }
-
-    pub fn refresh_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.system_theme_available = theme::Source::system_available(cx.window_appearance());
-        self.sync_controls(window, cx);
-        self.scan_custom_themes(window, cx);
-    }
-
-    fn scan_custom_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let work = self
-            .tasks
-            .spawn_blocking_named("Scan user themes", theme::provider::custom::catalog);
-        self.theme_scan = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = work.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.theme_scan = None;
-                match result {
-                    Ok(Ok(themes)) => {
-                        this.themes = themes;
-                        this.sync_controls(window, cx);
-                        cx.notify();
-                    }
-                    Ok(Err(error)) => tracing::warn!(%error, "cannot list user themes"),
-                    Err(error) => tracing::warn!(%error, "user theme scan cancelled"),
-                }
-            });
-        }));
-        cx.notify();
-    }
-
-    pub fn set_sidebar_presentation(
-        &mut self,
-        sidebar: SidebarPresentation,
-        cx: &mut Context<Self>,
-    ) {
-        if self.sidebar != sidebar {
-            self.sidebar = sidebar;
-            cx.notify();
+            on_apply: Rc::new(on_apply),
+            page: RwSignal::new_local(Page::General),
+            themes: appearance::Themes::new(&preferences.get_untracked()),
+            tags: tags::Probe::new(preferences),
+            nav_refs: std::array::from_fn(|_| NodeRef::new()),
+            page_focus: NodeRef::new(),
+            performance_unlocked: RwSignal::new_local(false),
         }
     }
 
-    /// Move to the adjacent settings page, wrapping at both ends of the sidebar.
-    ///
-    /// Only the visible page changes: file tabs and preference values are
-    /// untouched. Focus moves into the new page, which also dismisses a menu or
-    /// editor that belonged to the page being left. A modal dialog keeps both
-    /// focus and the current page.
-    pub fn cycle_page(&mut self, backwards: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) {
+    fn apply(&self, change: impl FnOnce(&mut Preferences)) {
+        let previous = self.preferences.get_untracked();
+        let mut next = previous.clone();
+        change(&mut next);
+        self.themes.normalize_source(&mut next.appearance.source);
+        if next == previous {
             return;
         }
-        let count = Page::ALL.len();
-        let current = self.page.index();
-        let next = if backwards {
-            (current + count - 1) % count
-        } else {
-            (current + 1) % count
-        };
-        self.select_page(Page::ALL[next], window, cx);
-    }
-
-    /// Open a specific settings page without changing the underlying workspace.
-    pub fn select_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) {
-            return;
-        }
-        self.page = page;
-        self.page_focus[page.index()].focus(window, cx);
-        cx.notify();
-    }
-
-    /// Update the controls after application or rollback, without submitting another request.
-    pub fn set_preferences(
-        &mut self,
-        preferences: Preferences,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let tags_changed = self.preferences.tags.commands != preferences.tags.commands;
-        self.preferences = preferences;
-        self.sync_controls(window, cx);
-        if tags_changed {
-            self.probe_tags(cx);
-        }
-        cx.notify();
-    }
-
-    fn sync_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.tags.editor.update(cx, |editor, cx| {
-            editor.set_value(self.preferences.tags.commands.clone(), window, cx)
-        });
-        self.general.update(cx, |editor, cx| {
-            editor.set_value(self.preferences.clone(), window, cx)
-        });
-        self.source.sync(
-            Choice::<theme::SourceKind>::catalog(self.system_theme_available, cx),
-            &Self::source_kind(&self.preferences, self.system_theme_available),
-            window,
-            cx,
-        );
-        let custom_path = match &self.preferences.appearance.source {
-            theme::Source::Custom(path) => path.clone(),
-            _ => self
-                .custom
-                .state
-                .read(cx)
-                .selected_value()
-                .cloned()
-                .unwrap_or_default(),
-        };
-        self.custom.sync(
-            Choice::<std::path::PathBuf>::catalog(&self.themes, cx),
-            &custom_path,
-            window,
-            cx,
-        );
-        self.builtin.sync(
-            Choice::<theme::BuiltinTheme>::catalog(cx),
-            &self.preferences.appearance.builtin,
-            window,
-            cx,
-        );
-        self.mode.sync(
-            Choice::<theme::ModePreference>::catalog(cx),
-            &self.preferences.appearance.mode,
-            window,
-            cx,
-        );
-        self.content_opacity.sync(
-            self.preferences.appearance.content_opacity * 100.0,
-            window,
-            cx,
-        );
-        self.sidebar_opacity.sync(
-            self.preferences.appearance.sidebar_opacity * 100.0,
-            window,
-            cx,
-        );
-        self.performance.update(cx, |editor, cx| {
-            editor.set_value(
-                pages::PerformanceForm::from(&self.preferences.files),
-                window,
-                cx,
-            )
-        });
-        self.font.update(cx, |editor, cx| {
-            editor.set_value(self.preferences.font.clone(), window, cx)
-        });
-        self.terminal.update(cx, |editor, cx| {
-            editor.set_value(self.preferences.terminal.clone(), window, cx)
-        });
-    }
-
-    fn change(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        update: impl FnOnce(&mut Preferences) -> bool,
-    ) {
-        if !update(&mut self.preferences) {
-            return;
-        }
-        if !self.system_theme_available
-            && self.preferences.appearance.source == theme::Source::System
-        {
-            self.preferences.appearance.source = theme::Source::Builtin;
-        }
-        self.sync_controls(window, cx);
-        cx.emit(Event::Apply(self.preferences.clone()));
-        cx.notify();
-    }
-
-    fn on_general_edited(
-        &mut self,
-        _: &Entity<PreferencesEditor>,
-        event: &gds::ui::settings::form::Changed<Preferences>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.change(window, cx, |preferences| {
-            Field::replace(preferences, event.value.clone())
-        });
-    }
-
-    fn on_terminal_edited(
-        &mut self,
-        _: &Entity<TerminalEditor>,
-        event: &gds::ui::settings::form::Changed<gds::ui::terminal::Preferences>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.change(window, cx, |preferences| {
-            Field::replace(&mut preferences.terminal, event.value.clone())
-        });
-    }
-
-    fn on_font_edited(
-        &mut self,
-        _: &Entity<FontEditor>,
-        event: &gds::ui::settings::form::Changed<typography::Preferences>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.change(window, cx, |preferences| {
-            Field::replace(&mut preferences.font, event.value.clone())
-        });
-    }
-
-    fn on_source_confirm(
-        &mut self,
-        _: &Entity<ChoiceState<theme::SourceKind>>,
-        event: &ChoiceEvent<theme::SourceKind>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let ChoiceEvent::Confirm(Some(value)) = event {
-            let source = match value {
-                theme::SourceKind::System => theme::Source::System,
-                theme::SourceKind::Builtin => theme::Source::Builtin,
-                theme::SourceKind::Custom => {
-                    cx.notify();
-                    let Some(path) = self.custom.state.read(cx).selected_value().cloned() else {
-                        return;
-                    };
-                    theme::Source::Custom(path)
-                }
-            };
-            self.change(window, cx, |preferences| {
-                Field::replace(&mut preferences.appearance.source, source)
-            });
+        let language_changed = next.language != previous.language;
+        (self.on_apply)(next);
+        if language_changed {
+            self.page_focus.focus();
         }
     }
 
-    fn on_custom_confirm(
-        &mut self,
-        _: &Entity<ChoiceState<std::path::PathBuf>>,
-        event: &ChoiceEvent<std::path::PathBuf>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let ChoiceEvent::Confirm(Some(path)) = event {
-            self.change(window, cx, |preferences| {
-                Field::replace(
-                    &mut preferences.appearance.source,
-                    theme::Source::Custom(path.clone()),
-                )
-            });
-        }
-    }
-
-    fn on_builtin_confirm(
-        &mut self,
-        _: &Entity<ChoiceState<theme::BuiltinTheme>>,
-        event: &ChoiceEvent<theme::BuiltinTheme>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let ChoiceEvent::Confirm(Some(value)) = event {
-            self.change(window, cx, |preferences| {
-                Field::replace(&mut preferences.appearance.builtin, *value)
-            });
-        }
-    }
-
-    fn on_mode_confirm(
-        &mut self,
-        _: &Entity<ChoiceState<theme::ModePreference>>,
-        event: &ChoiceEvent<theme::ModePreference>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let ChoiceEvent::Confirm(Some(value)) = event {
-            self.change(window, cx, |preferences| {
-                Field::replace(&mut preferences.appearance.mode, *value)
-            });
-        }
-    }
-
-    fn on_slider_change(
-        field: Field,
-    ) -> impl Fn(&mut Self, &Entity<SliderState>, &SliderEvent, &mut Window, &mut Context<Self>)
+    fn subform<T>(
+        &self,
+        get: fn(&Preferences) -> T,
+        set: impl Fn(&mut Preferences, T) + Clone + 'static,
+    ) -> Editor<T>
+    where
+        T: Model + Serialize + DeserializeOwned,
     {
-        move |view, _, event, window, cx| {
-            if let SliderEvent::Change(value) = event {
-                view.number_changed(field, *value, window, cx);
+        let preferences = self.preferences;
+        let view = self.clone();
+        let set_binding = set.clone();
+        let value = Binding::controlled(
+            Signal::derive_local(move || preferences.with(get)),
+            move |next| view.apply(|preferences| set_binding(preferences, next)),
+        );
+        let apply_view = self.clone();
+        Editor::new(value)
+            .reset_focus(self.page_focus)
+            .on_change(move |changed: Changed<T>| {
+                apply_view.apply(|preferences| set(preferences, changed.value));
+            })
+    }
+
+    pub(super) fn reset_button(
+        &self,
+        modified: Signal<bool, LocalStorage>,
+        testid: Option<&'static str>,
+        on_reset: impl Fn() + Clone + 'static,
+    ) -> AnyView {
+        let focus = self.page_focus;
+        AnyView::new(view! {
+            SettingReset {
+                {move || {
+                    let on_reset = on_reset.clone();
+                    modified.get().then(|| {
+                        let attrs = match testid {
+                            Some(id) => Attrs::new().attribute(zgui::view::AttrName::new("data-testid"), id),
+                            None => Attrs::new(),
+                        };
+                        view! {
+                            IconButton(
+                                icon = IconName::RotateCcw,
+                                label = Signal::derive_local(|| i18n::text("settings-reset-default")),
+                                on:click = move |_| {
+                                    on_reset();
+                                    focus.focus();
+                                },
+                                {..attrs}
+                            )
+                        }
+                        .into_view()
+                    })
+                }}
             }
-        }
+        })
     }
 
-    fn on_slider_notify(
-        field: Field,
-    ) -> impl Fn(&mut Self, Entity<SliderState>, &mut Window, &mut Context<Self>) {
-        move |view, state, window, cx| {
-            let value = state.read(cx).value();
-            if !view
-                .number_control(field)
-                .notification_is_programmatic(value)
-            {
-                view.number_changed(field, value, window, cx);
-            }
-        }
+    pub(super) fn reset<T: PartialEq + 'static>(
+        &self,
+        _label: &'static str,
+        get: fn(&Preferences) -> T,
+        set: fn(&mut Preferences, T),
+    ) -> AnyView {
+        let preferences = self.preferences;
+        let view = self.clone();
+        let modified =
+            Signal::derive_local(move || preferences.with(get) != get(&Preferences::default()));
+        self.reset_button(modified, None, move || {
+            view.apply(|preferences| set(preferences, get(&Preferences::default())));
+        })
     }
 
-    fn on_toggle_change(
-        field: Field,
-    ) -> impl Fn(&mut Self, &bool, &mut Window, &mut Context<Self>) {
-        move |view, checked, window, cx| {
-            if field == Field::TagsEnabled && *checked && !view.tags_available() {
-                return;
-            }
-            view.change(window, cx, |preferences| {
-                field.set_bool(preferences, *checked)
-            });
-        }
-    }
-
-    fn on_reset(field: Field) -> impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) {
-        move |view, _, window, cx| view.change(window, cx, |preferences| field.reset(preferences))
-    }
-
-    fn on_page(
-        destination: Page,
-    ) -> impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) {
-        move |view, _, _, cx| {
-            if view.page != destination {
-                view.page = destination;
-                cx.notify();
-            }
-        }
-    }
-
-    fn number_control(&self, field: Field) -> &NumberControl {
-        match field {
-            Field::ContentOpacity => &self.content_opacity,
-            Field::SidebarOpacity => &self.sidebar_opacity,
-            _ => unreachable!("only numeric fields own numeric controls"),
-        }
-    }
-
-    fn number_changed(
-        &mut self,
-        field: Field,
-        value: SliderValue,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let SliderValue::Single(value) = value else {
-            return;
-        };
-        let Some(range) = field.number_range() else {
-            return;
-        };
-        let Some(current) = field.number(&self.preferences) else {
-            return;
-        };
-        let value = range.quantize(value);
-        if range.equivalent(current, value) {
-            return;
-        }
-        self.change(window, cx, |preferences| {
-            field.set_number(preferences, value)
+    pub(super) fn toggle_with_reset(
+        &self,
+        label: &'static str,
+        help: &'static str,
+        get: fn(&Preferences) -> bool,
+        set: fn(&mut Preferences, bool),
+        reset_fn: fn(&mut Preferences),
+    ) -> AnyView {
+        let preferences = self.preferences;
+        let view = self.clone();
+        let reset_view = self.clone();
+        let title_ref = NodeRef::new();
+        let value = Binding::controlled(
+            Signal::derive_local(move || preferences.with(get)),
+            move |checked| view.apply(|preferences| set(preferences, checked)),
+        );
+        let modified =
+            Signal::derive_local(move || preferences.with(get) != get(&Preferences::default()));
+        let reset = self.reset_button(modified, None, move || {
+            reset_view.apply(reset_fn);
         });
+        let title = if help.is_empty() {
+            AnyView::new(view! {
+                FieldLabel(node_ref = title_ref) {{move || i18n::text(label)}}
+            })
+        } else {
+            AnyView::new(view! {
+                box(class = "gds-settings-label-trigger") {
+                    HintTooltip(text = Signal::derive_local(move || i18n::text(help))) {
+                        FieldLabel(node_ref = title_ref) {{move || i18n::text(label)}}
+                    }
+                }
+            })
+        };
+        AnyView::new(view! {
+            SettingRow {
+                SettingLabel {
+                    {title}
+                    {(!help.is_empty()).then(|| view! {
+                        SettingDescription {{move || i18n::text(help)}}
+                    }.into_view())}
+                }
+                SettingActions {
+                    {reset}
+                    SettingControl {
+                        ToggleSwitch(
+                            checked = value,
+                            labelled_by = Some(title_ref),
+                        )
+                    }
+                }
+            }
+        })
     }
 
-    fn navigation_shortcut(&self, destination: Page) -> Option<Shortcut> {
-        let count = Page::ALL.len();
-        let current = self.page.index();
-        let next = (current + 1) % count;
-        let previous = (current + count - 1) % count;
-        let destination = destination.index();
-        if destination == next {
-            Some(Shortcut::new(
-                Command::NextTab.action(),
-                Some(SETTINGS_CONTEXT),
-            ))
-        } else if destination == previous {
-            Some(Shortcut::new(
-                Command::PreviousTab.action(),
-                Some(SETTINGS_CONTEXT),
-            ))
+    pub(super) fn toggle(
+        &self,
+        label: &'static str,
+        help: &'static str,
+        get: fn(&Preferences) -> bool,
+        set: fn(&mut Preferences, bool),
+    ) -> AnyView {
+        let preferences = self.preferences;
+        let view = self.clone();
+        let reset_view = self.clone();
+        let title_ref = NodeRef::new();
+        let value = Binding::controlled(
+            Signal::derive_local(move || preferences.with(get)),
+            move |checked| view.apply(|preferences| set(preferences, checked)),
+        );
+        let modified =
+            Signal::derive_local(move || preferences.with(get) != get(&Preferences::default()));
+        let reset = self.reset_button(modified, None, move || {
+            reset_view.apply(|preferences| set(preferences, get(&Preferences::default())));
+        });
+        let title = if help.is_empty() {
+            AnyView::new(view! {
+                FieldLabel(node_ref = title_ref) {{move || i18n::text(label)}}
+            })
+        } else {
+            AnyView::new(view! {
+                box(class = "gds-settings-label-trigger") {
+                    HintTooltip(text = Signal::derive_local(move || i18n::text(help))) {
+                        FieldLabel(node_ref = title_ref) {{move || i18n::text(label)}}
+                    }
+                }
+            })
+        };
+        AnyView::new(view! {
+            SettingRow {
+                SettingLabel {
+                    {title}
+                    {(!help.is_empty()).then(|| view! {
+                        SettingDescription {{move || i18n::text(help)}}
+                    }.into_view())}
+                }
+                SettingActions {
+                    {reset}
+                    SettingControl {
+                        ToggleSwitch(
+                            checked = value,
+                            labelled_by = Some(title_ref),
+                        )
+                    }
+                }
+            }
+        })
+    }
+
+    pub(super) fn opacity(
+        &self,
+        label: &'static str,
+        get: fn(&Preferences) -> f32,
+        set: fn(&mut Preferences, f32),
+    ) -> AnyView {
+        let preferences = self.preferences;
+        let view = self.clone();
+        let reset_view = self.clone();
+        let title_ref = NodeRef::new();
+        let pct = Signal::derive_local(move || {
+            f64::from(PERCENTAGE_RANGE.quantize(preferences.with(get) * 100.0))
+        });
+        let binding = Binding::controlled(pct, move |next| {
+            let quantized = PERCENTAGE_RANGE.quantize(next as f32);
+            let current = preferences.with_untracked(get) * 100.0;
+            if !PERCENTAGE_RANGE.equivalent(current, quantized) {
+                view.apply(|p| set(p, quantized / 100.0));
+            }
+        });
+        let modified = Signal::derive_local(move || {
+            !opacity_matches_default(preferences.with(get), get(&Preferences::default()))
+        });
+        let reset = self.reset_button(modified, None, move || {
+            reset_view.apply(|p| set(p, get(&Preferences::default())));
+        });
+        AnyView::new(view! {
+            SettingRow {
+                SettingLabel {
+                    FieldLabel(node_ref = title_ref) {{move || i18n::text(label)}}
+                }
+                SettingActions {
+                    {reset}
+                    SettingControl {
+                        row(class = "gds-setting-number-row") {
+                            NumberControl(
+                                value = binding,
+                                range = PERCENTAGE_RANGE,
+                                label = i18n::text_untracked(label),
+                                labelled_by = Some(title_ref),
+                            )
+                            text(class = "gds-setting-number-value") {
+                                {move || format!("{:.0}%", pct.get())}
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    fn contents(&self) -> AnyView {
+        match self.page.get() {
+            Page::General => {
+                let view = self.clone();
+                let preferences = self.preferences;
+                let editor = Editor::new(Binding::controlled(
+                    Signal::derive_local(move || preferences.get()),
+                    move |next| view.apply(|preferences| *preferences = next),
+                ))
+                .reset_focus(self.page_focus)
+                .view();
+                AnyView::new(view! {
+                    column(class = "gds-settings-col") { {editor} }
+                })
+            }
+            Page::Appearance => self.appearance(),
+            Page::Files => AnyView::new(view! {
+                column(class = "gds-settings-col") {
+                    {self.toggle(
+                        "sidebar-show-volumes",
+                        "",
+                        |p| p.files.sidebar.show_volumes,
+                        |p, v| p.files.sidebar.show_volumes = v,
+                    )}
+                    {self.toggle(
+                        "auto-focus-search",
+                        "",
+                        |p| p.files.auto_focus_search,
+                        |p, v| p.files.auto_focus_search = v,
+                    )}
+                }
+            }),
+            Page::Terminal => {
+                let preferences = self.preferences;
+                let view = self.clone();
+                AnyView::new(view! {
+                    column(class = "gds-settings-col") {
+                        {self.toggle_with_reset(
+                            "files-terminal-enabled",
+                            "",
+                            Preferences::terminal_enabled,
+                            |p, v| p.terminal_enabled = Some(v),
+                            |p| p.terminal_enabled = Preferences::default().terminal_enabled,
+                        )}
+                        Show(when = move || preferences.with(Preferences::terminal_enabled)) {
+                            {{
+                                let terminal = view
+                                    .subform(|p| p.terminal.clone(), |p, v| p.terminal = v)
+                                    .view();
+                                view! {
+                                    box { {terminal} }
+                                }
+                            }}
+                        }
+                    }
+                })
+            }
+            Page::Extensions => self.extensions(),
+            Page::Performance => self.performance(),
+        }
+    }
+
+    pub(super) fn adjacent(page: Page, backwards: bool) -> Page {
+        let offset = if backwards { Page::ALL.len() - 1 } else { 1 };
+        Page::ALL[(page.index() + offset) % Page::ALL.len()]
+    }
+
+    pub(super) fn navigation_shortcut(current: Page, destination: Page) -> Option<Shortcut> {
+        if destination == Self::adjacent(current, false) {
+            Some(Command::NextTab.shortcut())
+        } else if destination == Self::adjacent(current, true) {
+            Some(Command::PreviousTab.shortcut())
         } else {
             None
         }
     }
 
-    fn navigation_item(&self, index: usize, destination: Page, cx: &mut Context<Self>) -> NavItem {
-        let id = ("settings-page", index);
-        let icon = destination.icon();
-        let label = text(destination.label_id(), cx);
-        // Holding Alt reveals the real page-cycle binding on the adjacent row.
-        let shortcut = self.navigation_shortcut(destination);
-        let on_page = cx.listener(Self::on_page(destination));
-        let item = el! {
-            (id, icon, label).NavItem::new {
-                presentation: $self.sidebar;
-                selected: $(self.page == destination);
-                on_click: on_page;
+    pub fn cycle_page(&self, backwards: bool) {
+        if keytips::has_active_modal_scope() {
+            return;
+        }
+        self.page
+            .set(Self::adjacent(self.page.get_untracked(), backwards));
+        self.page_focus.focus();
+    }
+
+    fn handle_cycle_shortcut(
+        &self,
+        event: &mut zgui::view::EventCx<'_, zgui::view::events::KeyDown>,
+    ) {
+        if event.repeat || keytips::has_active_modal_scope() {
+            return;
+        }
+        let held = event.modifiers.held();
+        if held.control() && !held.alt() && !held.meta() && event.key == Key::Named(NamedKey::Tab) {
+            self.cycle_page(held.shift());
+            event.prevent_default();
+            event.stop_propagation();
+        }
+    }
+
+    fn navigation_item(
+        &self,
+        destination: Page,
+        pres_sig: Signal<SidebarPresentation, LocalStorage>,
+    ) -> AnyView {
+        let page = self.page;
+        let selected = Signal::derive_local(move || page.get() == destination);
+        let item_ref = self.nav_refs[destination.index()];
+        let corner_ref = NodeRef::new();
+
+        let next_expanded = Signal::derive_local(move || {
+            !pres_sig.get().collapsed() && destination == Self::adjacent(page.get(), false)
+        });
+        let prev_expanded = Signal::derive_local(move || {
+            !pres_sig.get().collapsed() && destination == Self::adjacent(page.get(), true)
+        });
+        let next_collapsed = Signal::derive_local(move || {
+            pres_sig.get().collapsed() && destination == Self::adjacent(page.get(), false)
+        });
+        let prev_collapsed = Signal::derive_local(move || {
+            pres_sig.get().collapsed() && destination == Self::adjacent(page.get(), true)
+        });
+
+        keytips::stage_shortcut(
+            item_ref,
+            Command::NextTab.shortcut(),
+            HintPlacement::Trailing,
+            next_expanded,
+        );
+        keytips::stage_shortcut(
+            item_ref,
+            Command::PreviousTab.shortcut(),
+            HintPlacement::Trailing,
+            prev_expanded,
+        );
+        keytips::stage_shortcut(
+            corner_ref,
+            Command::NextTab.shortcut(),
+            HintPlacement::Corner,
+            next_collapsed,
+        );
+        keytips::stage_shortcut(
+            corner_ref,
+            Command::PreviousTab.shortcut(),
+            HintPlacement::Corner,
+            prev_collapsed,
+        );
+
+        let icon_view = AnyView::new(view! {
+            Icon(name = destination.icon(), size = SIDEBAR_ICON_SIZE)
+        });
+        let label_view = AnyView::new(view! {
+            {move || i18n::text(destination.label_id())}
+        });
+        let tooltip_label = Signal::derive_local(move || i18n::text(destination.label_id()));
+
+        let nav_row = view! {
+            NavItem(
+                node_ref = item_ref,
+                selected = selected,
+                presentation = pres_sig,
+                icon = icon_view,
+                label = label_view,
+                tooltip_enabled = false,
+                attr:data-testid = format!("settings-page-{}", destination.index()),
+                a11y:label = move || i18n::text(destination.label_id()),
+                on_click = UnsyncCallback::new(move |()| {
+                    if page.get_untracked() != destination {
+                        page.set(destination);
+                    }
+                }),
+            ) {
+                box(
+                    node_ref = corner_ref,
+                    class = "gds-settings-nav-corner-anchor",
+                    a11y:hidden = true,
+                ) {}
             }
         };
-        match shortcut {
-            Some(shortcut) => item.shortcut(shortcut),
-            None => item,
-        }
+
+        AnyView::new(view! {
+            Tooltip(delay = TOOLTIP_DELAY) {
+                TooltipTrigger {{nav_row}}
+                TooltipContent(class = "gds-tooltip-content", arrow = false) {
+                    row(class = "gds-shortcut-hint") {
+                        box(class = "gds-shortcut-hint__label") {
+                            TooltipText(text = tooltip_label)
+                        }
+                        {move || {
+                            Self::navigation_shortcut(page.get(), destination).map(|shortcut| {
+                                view! {
+                                    box(class = "gds-shortcut-hint__keys") {
+                                        ShortcutBadge(shortcut = shortcut)
+                                    }
+                                }
+                                .into_view()
+                            })
+                        }}
+                    }
+                }
+            }
+        })
     }
 
-    fn render_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
-        let items: Vec<_> = Page::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(index, destination)| self.navigation_item(index, destination, cx))
-            .collect();
-        el! {
-            .div { size_full; min_h_0; flex; flex_col; gap_1; p: SIDEBAR_PADDING.px } [..items]
-        }
-        .into_any_element()
+    /// Uses the host frame's synchronized sidebar width without painting an extra surface.
+    pub fn sidebar(&self, presentation: SidebarPresentation) -> AnyView {
+        let view = self.clone();
+        AnyView::new(view! {
+            SettingsSidebar(view = view, presentation = presentation)
+        })
     }
 
-    fn render_page_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub fn content(&self) -> AnyView {
+        install_stylesheet(SETTINGS_SHEET, SETTINGS_CSS);
+        self.themes.refresh();
         let page = self.page;
-        let content = page.render(self, cx);
-        let title = text(page.label_id(), cx);
-        let page_focus = self.page_focus[page.index()].clone();
-        el! {
-            .div {
-                # "settings-page-content";
-                track_focus: $(&page_focus);
-                size_full; min_w_0; overflow_y_scroll; p_6;
-            } [
-                .div { text_xl; mb_5 } [title],
-                content,
-            ]
-        }
-        .into_any_element()
+        let focus = self.page_focus;
+        let contents = self.clone();
+        let navigation = self.clone();
+        let focus_on_mount = zgui::reactive::RenderEffect::new(move |prev: Option<bool>| {
+            let mounted = focus.get().is_some();
+            if mounted && prev != Some(true) {
+                focus.focus();
+            }
+            mounted
+        });
+        zgui::reactive::on_cleanup_local(move || drop(focus_on_mount));
+
+        AnyView::new(view! {
+            scroll(
+                class = "gds-settings-content",
+                node_ref = focus,
+                tabindex = {Focus::Sequential},
+                on:key_down = move |event| navigation.handle_cycle_shortcut(event),
+            ) {
+                text(class = "gds-settings-heading") {{move || i18n::text(page.get().label_id())}}
+                {move || contents.contents()}
+            }
+        })
+    }
+
+    pub fn footer_text(&self) -> AnyView {
+        install_stylesheet(SETTINGS_SHEET, SETTINGS_CSS);
+        AnyView::new(view! {
+            text(class = "gds-settings-footer") {{move || i18n::text("settings-auto-apply")}}
+        })
     }
 }
 
-impl Render for View {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let navigation = self.render_navigation(cx);
-        let content = self.render_page_content(cx);
-        let workspace = Frame::default()
-            .sidebar_width(self.sidebar.width())
-            .workspace(navigation, content, cx);
-        el! {
-            .div { size_full; min_h_0; flex; flex_col; text_color: $(cx.theme().foreground) } [workspace]
+#[component]
+fn SettingsSidebar(view: View, presentation: SidebarPresentation) -> impl IntoView {
+    install_stylesheet(SETTINGS_SHEET, SETTINGS_CSS);
+    let frame_sidebar_width = FrameContext::current().and_then(|ctx| ctx.sidebar_width);
+    let initial_frame_width = frame_sidebar_width.map(|sig| sig.get_untracked());
+    let pres_sig = Signal::derive_local(move || {
+        if let (Some(width_sig), Some(initial_w)) = (frame_sidebar_width, initial_frame_width) {
+            let live_w = width_sig.get();
+            if (initial_w - presentation.width()).abs() < 0.5 || (live_w - initial_w).abs() >= 0.5 {
+                return SidebarPresentation::from_width(
+                    live_w,
+                    SIDEBAR_WIDTH,
+                    COLLAPSED_SIDEBAR_WIDTH,
+                );
+            }
         }
+        presentation
+    });
+
+    let navigation = view.clone();
+    let items = Page::ALL
+        .into_iter()
+        .map(|destination| view.navigation_item(destination, pres_sig))
+        .collect::<Vec<_>>();
+
+    view! {
+        SideBar(
+            presentation = pres_sig,
+            label = i18n::text_untracked("settings"),
+        ) {
+            SideBarContent {
+                column(
+                    class = "gds-settings-sidebar",
+                    on:key_down = move |event| navigation.handle_cycle_shortcut(event),
+                ) {
+                    {items}
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn opacity_matches_default(current: f32, default: f32) -> bool {
+    PERCENTAGE_RANGE.equivalent(current * 100.0, default * 100.0)
+}
+
+impl IntoView for View {
+    type Output = AnyView;
+
+    fn into_view(self) -> Self::Output {
+        self.content()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use gds::app::Gds;
+    use gds::appearance::{theme, tokens};
+    use gds::service::task_manager::Scope;
+    use gds::ui::frame::{FrameProps, WorkspaceFrameProps};
+    use gds::ui::keytips::KeytipHostProps;
+    use gds::ui::sidebar::SidebarPresentation;
+    use zgui::app::Fonts;
+    use zgui::atlas::{SinkError, TextureFormat, TextureId, TextureSink};
+    use zgui::geom::{CssPx, Device, DevicePx, Edges, Point, Rect, Size};
+    use zgui::platform::{AppHandler, Decorations, PlatformError, Surface, SurfaceEvent};
+    use zgui::prelude::*;
+    use zgui::reactive::{RwSignal, flush};
+    use zgui::render::{
+        ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
+        Renderer, TextureHandle,
+    };
+    use zgui::runtime::AppError;
+    use zgui::view;
+    use zgui::vocab::{
+        Key, Modifiers, NamedKey, PointerAction, PointerButton, PointerEvent, Role, Timestamp,
+    };
+    use zgui_platform_headless::Harness;
+
+    use super::{Page, Preferences, View, opacity_matches_default};
+
+    struct NoopSink;
+
+    impl TextureSink for NoopSink {
+        fn create_texture(
+            &mut self,
+            _: TextureId,
+            _: Size<i32, Device>,
+            _: TextureFormat,
+        ) -> Result<(), SinkError> {
+            Ok(())
+        }
+
+        fn write_texture(
+            &mut self,
+            _: TextureId,
+            _: Rect<i32, Device>,
+            _: TextureFormat,
+            _: &[u8],
+        ) -> Result<(), SinkError> {
+            Ok(())
+        }
+
+        fn destroy_texture(&mut self, _: TextureId) {}
+    }
+
+    struct NoopRenderer {
+        target: Option<RenderTarget>,
+        sink: NoopSink,
+    }
+
+    impl Renderer for NoopRenderer {
+        fn capabilities(&self) -> RenderCapabilities {
+            RenderCapabilities::MINIMAL
+        }
+
+        fn configure(&mut self, target: RenderTarget) {
+            self.target = Some(target);
+        }
+
+        fn target(&self) -> Option<RenderTarget> {
+            self.target
+        }
+
+        fn draw(&mut self, _: &zgui::scene::Scene, _: &zgui::bits::DamageSet) -> FrameOutcome {
+            FrameOutcome::Presented(FrameStats::default())
+        }
+
+        fn register_external(&mut self, _: ExternalTexture) -> TextureHandle {
+            TextureHandle(1)
+        }
+
+        fn release_external(&mut self, _: TextureHandle) {}
+
+        fn memory(&self) -> MemoryReport {
+            MemoryReport::ZERO
+        }
+
+        fn texture_sink(&mut self) -> &mut dyn TextureSink {
+            &mut self.sink
+        }
+    }
+
+    fn noop_renderer(
+        _: &Arc<dyn Surface>,
+        target: RenderTarget,
+    ) -> Result<Box<dyn Renderer>, AppError> {
+        Ok(Box::new(NoopRenderer {
+            target: Some(target),
+            sink: NoopSink,
+        }))
+    }
+
+    #[test]
+    fn opacity_equivalence_and_page_cycling_match_gpui_contracts() {
+        assert!(opacity_matches_default(0.85, 0.85));
+        assert!(opacity_matches_default(0.853, 0.85));
+        assert!(opacity_matches_default(0.996, 1.0));
+        assert!(!opacity_matches_default(0.84, 0.85));
+
+        assert_eq!(View::adjacent(Page::General, false), Page::Appearance);
+        assert_eq!(View::adjacent(Page::General, true), Page::Performance);
+        assert_eq!(View::adjacent(Page::Performance, false), Page::General);
+
+        assert_eq!(
+            View::navigation_shortcut(Page::General, Page::Appearance),
+            Some(gds::ui::Shortcut::new(
+                Key::Named(NamedKey::Tab),
+                Modifiers::CONTROL
+            ))
+        );
+        assert_eq!(
+            View::navigation_shortcut(Page::General, Page::Performance),
+            Some(gds::ui::Shortcut::new(
+                Key::Named(NamedKey::Tab),
+                Modifiers::CONTROL | Modifiers::SHIFT
+            ))
+        );
+        assert_eq!(View::navigation_shortcut(Page::General, Page::Files), None);
+    }
+
+    #[test]
+    fn settings_sidebar_fits_column_preserves_clicked_nav_focus_and_centers_collapsed_icons() {
+        let content_focus_slot: Arc<Mutex<Option<NodeRef>>> = Arc::new(Mutex::new(None));
+        let nav_refs_slot: Arc<Mutex<Option<[NodeRef; Page::ALL.len()]>>> =
+            Arc::new(Mutex::new(None));
+        let page_slot: Arc<Mutex<Option<RwSignal<Page, zgui::reactive::LocalStorage>>>> =
+            Arc::new(Mutex::new(None));
+        let width_slot: Arc<Mutex<Option<RwSignal<f32, zgui::reactive::LocalStorage>>>> =
+            Arc::new(Mutex::new(None));
+        let focused_slot: Arc<
+            Mutex<Option<Signal<Option<zgui::view::NodeId>, zgui::reactive::LocalStorage>>>,
+        > = Arc::new(Mutex::new(None));
+
+        let content_driver = Arc::clone(&content_focus_slot);
+        let nav_driver = Arc::clone(&nav_refs_slot);
+        let page_driver = Arc::clone(&page_slot);
+        let width_driver = Arc::clone(&width_slot);
+        let focused_driver = Arc::clone(&focused_slot);
+
+        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+            let mut harness = Harness::new(handler);
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(1280.0),
+                DevicePx(800.0),
+            )));
+            harness.settle(32);
+
+            let surface = harness
+                .platform()
+                .offscreens()
+                .first()
+                .cloned()
+                .expect("headless surface");
+            harness
+                .platform()
+                .set_surface_tiled(surface.id(), Edges::ALL);
+            harness.settle(16);
+
+            // 1. Regression check for #94: `.gds-settings-sidebar` fits 222px and leaves >1000px for content!
+            let content_node = content_driver.lock().expect("lock").expect("content ref");
+            let content_bounds = content_node.window_bounds().expect("content bounds");
+            let scale = content_node.scale().max(1.0);
+            let content_x = content_bounds.origin.x.0 / scale;
+            let content_w = content_bounds.size.width.0 / scale;
+            assert!(
+                (content_x - tokens::SIDEBAR_WIDTH).abs() < 2.0,
+                "settings content must start at sidebar boundary (~222px), got x={content_x}"
+            );
+            assert!(
+                content_w > 1000.0,
+                "settings content must fill remaining 1280px width (>1000px), got w={content_w}"
+            );
+
+            // 2. Click the Appearance NavItem -> switches page WITHOUT yanking focus to `page_focus`!
+            let appearance_pos = Point::new(CssPx(80.0), CssPx(72.0));
+            harness.deliver_to_first(SurfaceEvent::Pointer {
+                action: PointerAction::Pressed,
+                event: PointerEvent::mouse(appearance_pos).with_button(PointerButton::Primary),
+                modifiers: Modifiers::NONE,
+                timestamp: Timestamp::ORIGIN,
+            });
+            harness.deliver_to_first(SurfaceEvent::Pointer {
+                action: PointerAction::Released,
+                event: PointerEvent::mouse(appearance_pos).with_button(PointerButton::Primary),
+                modifiers: Modifiers::NONE,
+                timestamp: Timestamp::ORIGIN,
+            });
+            harness.settle(16);
+
+            let current_page = page_driver
+                .lock()
+                .expect("lock")
+                .expect("page sig")
+                .get_untracked();
+            assert_eq!(current_page, Page::Appearance);
+
+            let focused_after_click = focused_driver
+                .lock()
+                .expect("lock")
+                .expect("focused signal")
+                .get_untracked();
+            assert!(
+                focused_after_click.is_some(),
+                "clicked category NavItem must retain focus"
+            );
+            let nav_refs = nav_driver.lock().expect("lock").expect("nav refs");
+            assert_eq!(
+                focused_after_click,
+                nav_refs[Page::Appearance.index()].get_untracked(),
+                "clicked Appearance NavItem must retain direct focus (not yanked to page_focus)"
+            );
+            assert_ne!(
+                focused_after_click,
+                content_node.get_untracked(),
+                "clicking a category NavItem must NOT yank focus onto page_focus"
+            );
+
+            let a11y_nodes: Vec<_> = surface
+                .a11y_log()
+                .into_iter()
+                .flat_map(|update| update.nodes)
+                .map(|(_, node)| {
+                    (
+                        node.role(),
+                        node.label().map(str::to_owned),
+                        node.bounds()
+                            .map(|rect| (rect.x1 - rect.x0, rect.y1 - rect.y0)),
+                    )
+                })
+                .collect();
+            for expected_select in ["Theme source", "Built-in palette", "Color mode"] {
+                let select_size = a11y_nodes
+                    .iter()
+                    .rev()
+                    .find_map(|(role, label, size)| {
+                        (*role == Role::ComboBox && label.as_deref() == Some(expected_select))
+                            .then_some(*size)
+                            .flatten()
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("{expected_select} must expose Role::ComboBox SelectTrigger bounds")
+                    });
+                let width_css = select_size.0 / f64::from(scale);
+                let height_css = select_size.1 / f64::from(scale);
+                assert!(
+                    (width_css - f64::from(gds::ui::settings::CONTROL_WIDTH)).abs() < 1.0,
+                    "{expected_select} SelectTrigger must fill CONTROL_WIDTH (260px), got {width_css}"
+                );
+                assert!(
+                    (height_css - 36.0).abs() < 1.0,
+                    "{expected_select} SelectTrigger must match 36px control height, got {height_css}"
+                );
+            }
+            let switch_sizes: Vec<(f64, f64)> = a11y_nodes
+                .iter()
+                .filter_map(|(role, _, size)| (*role == Role::Switch).then_some(*size).flatten())
+                .collect();
+            assert!(
+                switch_sizes.len() >= 2,
+                "Appearance page must render Rounded corners and Interface animations ToggleSwitch controls"
+            );
+            for (sw_w, sw_h) in switch_sizes {
+                let width_css = sw_w / f64::from(scale);
+                let height_css = sw_h / f64::from(scale);
+                assert!(
+                    (width_css - 44.0).abs() < 1.0 && (height_css - 24.0).abs() < 1.0,
+                    "Settings ToggleSwitch must lay out at 44x24px alongside 36px controls, got {width_css}x{height_css}"
+                );
+            }
+            assert!(
+                a11y_nodes
+                    .iter()
+                    .any(|(role, label, _)| *role == Role::Button
+                        && label.as_deref() == Some("Reset to default")),
+                "modified Theme source row must render Reset to default IconButton"
+            );
+
+            // 3. Collapse sidebar width to 58px -> content shifts cleanly to x=58px and category rail centers at x=29px!
+            let width_sig = width_driver.lock().expect("lock").expect("width sig");
+            width_sig.set(tokens::COLLAPSED_SIDEBAR_WIDTH);
+            flush();
+            harness.settle(24);
+
+            let collapsed_content_bounds = content_node.window_bounds().expect("collapsed content");
+            let collapsed_content_x = collapsed_content_bounds.origin.x.0 / scale;
+            assert!(
+                (collapsed_content_x - tokens::COLLAPSED_SIDEBAR_WIDTH).abs() < 2.0,
+                "collapsed settings content must start at ~58px, got x={collapsed_content_x}"
+            );
+
+            let collapsed_nav_centers: Vec<f32> = nav_refs
+                .into_iter()
+                .map(|node| {
+                    let b = node.window_bounds().expect("collapsed nav item bounds");
+                    (b.origin.x.0 + b.size.width.0 * 0.5) / scale
+                })
+                .collect();
+            assert_eq!(collapsed_nav_centers.len(), Page::ALL.len());
+            assert!(
+                collapsed_nav_centers
+                    .iter()
+                    .all(|cx| (cx - 29.0).abs() < 0.5)
+            );
+
+            harness.shut_down();
+            Ok(())
+        };
+
+        zgui::app()
+            .with_fonts(Fonts::shipped_only())
+            .with_renderer(Box::new(noop_renderer))
+            .with_decorations(Decorations::None)
+            .with_size(1280.0, 800.0)
+            .run_on(driver, move || {
+                let gds = Gds::install(Scope::default());
+                let catalog = crate::shared::i18n::prepare(gds::i18n::Language::English)
+                    .expect("English catalog");
+                gds.i18n().install_catalog(catalog);
+
+                let mut initial = Preferences::default();
+                initial.appearance.source = theme::Source::Builtin;
+                let prefs = RwSignal::new_local(initial);
+                let apply_prefs = prefs;
+                let view = View::new(prefs.read_only(), move |next| apply_prefs.set(next));
+
+                let sidebar_w = RwSignal::new_local(tokens::SIDEBAR_WIDTH);
+                *width_slot.lock().expect("lock") = Some(sidebar_w);
+                *content_focus_slot.lock().expect("lock") = Some(view.page_focus);
+                *nav_refs_slot.lock().expect("lock") = Some(view.nav_refs);
+                *page_slot.lock().expect("lock") = Some(view.page);
+                *focused_slot.lock().expect("lock") = Some(zgui::view::focused_node());
+
+                let sidebar_view = view.sidebar(SidebarPresentation::default());
+                let content_view = view.content();
+
+                view! {
+                    KeytipHost {
+                        Frame(sidebar_width = Signal::from(sidebar_w)) {
+                            WorkspaceFrame(
+                                sidebar = sidebar_view,
+                                content = content_view,
+                                paint_content_surface = true,
+                            )
+                        }
+                    }
+                }
+            })
+            .expect("headless settings layout test succeeds");
+    }
+
+    #[test]
+    fn terminal_page_subform_stays_mounted_across_nested_preference_edits() {
+        let prefs_slot: Arc<Mutex<Option<RwSignal<Preferences, zgui::reactive::LocalStorage>>>> =
+            Arc::new(Mutex::new(None));
+        let page_slot: Arc<Mutex<Option<RwSignal<Page, zgui::reactive::LocalStorage>>>> =
+            Arc::new(Mutex::new(None));
+
+        let prefs_driver = Arc::clone(&prefs_slot);
+        let page_driver = Arc::clone(&page_slot);
+
+        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+            let mut harness = Harness::new(handler);
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(1280.0),
+                DevicePx(800.0),
+            )));
+            let surface = harness
+                .platform()
+                .offscreens()
+                .first()
+                .cloned()
+                .expect("headless surface");
+            surface.set_a11y_listener(true);
+            harness.settle(24);
+
+            let page = page_driver.lock().expect("lock").expect("page sig");
+            page.set(Page::Terminal);
+            flush();
+            harness.settle(24);
+
+            let collect_switch_ids = || -> Vec<zgui::vocab::NodeId> {
+                let mut ids = Vec::new();
+                for update in surface.a11y_log() {
+                    for (id, node) in update.nodes {
+                        if node.role() == Role::Switch && !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                }
+                ids
+            };
+
+            let before_ids = collect_switch_ids();
+            assert!(
+                before_ids.len() >= 2,
+                "Terminal page must mount enable toggle plus subform toggles, got {}",
+                before_ids.len()
+            );
+
+            // Mutating a nested terminal boolean must NOT tear down & recreate subform Switch nodes!
+            let prefs = prefs_driver.lock().expect("lock").expect("prefs sig");
+            prefs.update(|p| p.terminal.login_shell = !p.terminal.login_shell);
+            flush();
+            harness.settle(16);
+
+            let after_ids = collect_switch_ids();
+            assert_eq!(
+                before_ids, after_ids,
+                "editing nested terminal preferences must preserve mounted subform ToggleSwitch nodes without remounting"
+            );
+
+            harness.shut_down();
+            Ok(())
+        };
+
+        zgui::app()
+            .with_fonts(Fonts::shipped_only())
+            .with_renderer(Box::new(noop_renderer))
+            .with_decorations(Decorations::None)
+            .with_size(1280.0, 800.0)
+            .run_on(driver, move || {
+                let gds = Gds::install(Scope::default());
+                let catalog = crate::shared::i18n::prepare(gds::i18n::Language::English)
+                    .expect("English catalog");
+                gds.i18n().install_catalog(catalog);
+
+                let initial = Preferences {
+                    terminal_enabled: Some(true),
+                    ..Default::default()
+                };
+                let prefs = RwSignal::new_local(initial);
+                let apply_prefs = prefs;
+                let view = View::new(prefs.read_only(), move |next| apply_prefs.set(next));
+
+                *prefs_slot.lock().expect("lock") = Some(prefs);
+                *page_slot.lock().expect("lock") = Some(view.page);
+
+                view.content()
+            })
+            .expect("terminal subform Show stability test succeeds");
     }
 }

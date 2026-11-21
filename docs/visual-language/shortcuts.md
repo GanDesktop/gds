@@ -68,7 +68,7 @@ Registered exclusively while a modal dialog is open, intercepting keys before ba
 | --- | --- |
 | **File workspace / tab list** | `Ctrl+N` / `Ctrl+W` open/close file tabs; `Ctrl+P` toggles details. |
 | **Terminal dock (tab rail & header)** | `Ctrl+N` / `Ctrl+W` open/close terminal instances without touching file tabs. |
-| **Terminal PTY input** | `Ctrl+N` / `Ctrl+W`, `Ctrl+Shift+C/V`, `F6`, `Ctrl+,`, and `Ctrl+\`` are handled by GDS; `Ctrl+C/D/B/L/R`, `Esc`, arrows, and `Tab`/`Shift+Tab` go straight to the PTY (`NoAction` bypasses Kit `Tab` focus traversal). |
+| **Terminal PTY input** | `Ctrl+N` / `Ctrl+W`, `Ctrl+Shift+C/V`, `F6`, `Ctrl+,`, and `Ctrl+\`` are handled by GDS; `Ctrl+C/D/B/L/R`, `Esc`, arrows, and `Tab`/`Shift+Tab` go straight to the PTY (bypassing window `Tab` focus traversal). |
 | **Text inputs (path, filter, forms)** | Preserve native cursor/selection/clipboard editing; unhandled window actions propagate outward. |
 | **Settings & Help (`ui::page::stack`)** | `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle settings categories; `Esc`, `Alt+Left`, `Ctrl+W`, or the top-left back arrow pop one overlay level and restore prior focus without closing underlying file tabs. |
 | **Modal dialog** | Captures `Alt+A` / `Enter` and `Alt+C` / `Esc` exclusively; blocks background workspace shortcuts and keytips. |

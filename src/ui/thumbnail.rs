@@ -1,116 +1,313 @@
-//! Reusable still preview backed by the shared file inspection cache.
+//! Reusable still preview backed by the shared file inspection cache and icon fallback.
+
+use zgui::prelude::*;
+use zgui::reactive::LocalStorage;
+use zgui::view::ChildrenFn;
+use zgui::{component, css, view};
+
 use super::file_inspection::{Cache, State};
-use crate::{
-    i18n::t,
-    service::file_inspection::{Kind, Request, Source},
-};
-use gds_uim::el;
-use gpui_kit::{
-    IntoElement,
-    assets::IconName,
-    component::{ActiveTheme, Icon},
-    prelude::*,
-    *,
-};
+use crate::app::Gds;
+use crate::service::file_inspection::{Kind, Request, Source};
+use crate::ui::icon::{IconName, IconProps};
 
-#[derive(IntoElement)]
-pub struct Thumbnail {
-    base: Div,
-    cache: Entity<Cache>,
-    source: Source,
-    fallback: Option<AnyElement>,
-    show_status: bool,
+const SHEET: &str = css!(
+    r#"
+    .gds-thumbnail.gds-thumbnail {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .gds-thumbnail__img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+    }
+
+    .gds-thumbnail__fallback {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        color: var(--gds-muted-foreground);
+    }
+
+    .gds-thumbnail__status {
+        width: 100%;
+        padding: 0px 8px;
+        font-size: var(--gds-font-size-xs, 12px);
+        color: var(--gds-muted-foreground);
+        text-align: center;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+    }
+    "#
+);
+
+/// Reusable view builder invoked whenever [`Thumbnail`] renders fallback artwork.
+#[derive(Clone)]
+pub struct ViewFn(ChildrenFn);
+
+impl ViewFn {
+    #[must_use]
+    pub fn new<V: IntoView + 'static>(build: impl Fn() -> V + 'static) -> Self {
+        Self(ChildrenFn::new(move || AnyView::new(build())))
+    }
+
+    #[must_use]
+    pub fn render(&self) -> AnyView {
+        self.0.view()
+    }
 }
 
-impl Thumbnail {
-    pub fn new(cache: Entity<Cache>, source: Source) -> Self {
-        Self {
-            base: div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .overflow_hidden(),
-            cache,
-            source,
-            fallback: None,
-            show_status: false,
+impl<F, V> From<F> for ViewFn
+where
+    F: Fn() -> V + 'static,
+    V: IntoView + 'static,
+{
+    fn from(build: F) -> Self {
+        Self::new(build)
+    }
+}
+
+impl From<ChildrenFn> for ViewFn {
+    fn from(children: ChildrenFn) -> Self {
+        Self(children)
+    }
+}
+
+impl From<ViewFn> for ChildrenFn {
+    fn from(view: ViewFn) -> Self {
+        view.0
+    }
+}
+
+fn fallback_icon(kind: Kind) -> IconName {
+    match kind {
+        Kind::Image => IconName::Image,
+        Kind::Video => IconName::FileVideoCamera,
+        Kind::Audio => IconName::FileMusic,
+        Kind::Directory => IconName::Folder,
+        _ => IconName::File,
+    }
+}
+
+fn status_label(key: &'static str, fallback: &'static str) -> String {
+    Gds::try_current().map_or_else(|| fallback.to_owned(), |gds| gds.i18n().text(key))
+}
+
+/// Renders a media thumbnail for `source` strictly from cached [`zgui_image::ImageBytes::url`],
+/// falling back to `fallback` or a typed [`Icon`] without bypassing `file_inspection` limits.
+#[component]
+pub fn Thumbnail(
+    cache: Cache,
+    #[prop(into)] source: Signal<Source, LocalStorage>,
+    #[prop(into, optional)] fallback: Option<ViewFn>,
+    #[prop(default = false)] show_status: bool,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+) -> impl IntoView {
+    if zgui::view::current_host().is_some() {
+        crate::ui::styles::install_ui_stylesheets();
+        zgui::view::install_stylesheet("gds-ui-thumbnail", SHEET);
+    }
+
+    view! {
+        box(class = "gds-thumbnail", class = class, {..attrs}) {
+            {move || {
+                let src = source.get();
+                let snap = cache.snapshot(&src, Request::Thumbnail);
+                if let State::Ready(bytes) = snap.thumbnail {
+                    return AnyView::new(view! {
+                        image(class = "gds-thumbnail__img", src = {Some(bytes.url())})
+                    });
+                }
+
+                let artwork = match (&fallback, &snap.thumbnail) {
+                    (Some(custom), _) => custom.render(),
+                    (None, State::TooLarge) => {
+                        AnyView::new(view! { Icon(name = IconName::ImageOff, size = 32.0) })
+                    }
+                    (None, _) => {
+                        AnyView::new(view! { Icon(name = fallback_icon(src.kind), size = 32.0) })
+                    }
+                };
+
+                let status = show_status
+                    .then(|| match snap.thumbnail {
+                        State::NotRequested | State::Unavailable => None,
+                        State::Loading => {
+                            Some(status_label("gds-thumbnail-loading", "Loading preview…"))
+                        }
+                        State::TooLarge => Some(status_label(
+                            "gds-thumbnail-too-large",
+                            "This image is too large to preview",
+                        )),
+                        State::Failed(_) => {
+                            Some(status_label("gds-thumbnail-failed", "Preview unavailable"))
+                        }
+                        State::Ready(_) => unreachable!("ready thumbnails return above"),
+                    })
+                    .flatten();
+
+                AnyView::new(view! {
+                    column(class = "gds-thumbnail__fallback") {
+                        {artwork}
+                        {status.map(|label| view! { text(class = "gds-thumbnail__status") {{label}} }.into_view())}
+                    }
+                })
+            }}
         }
     }
-
-    pub fn fallback(mut self, element: impl IntoElement) -> Self {
-        self.fallback = Some(element.into_any_element());
-        self
-    }
-
-    pub fn show_status(mut self, show: bool) -> Self {
-        self.show_status = show;
-        self
-    }
-
-    fn placeholder(icon: IconName, message: Option<SharedString>, color: Hsla) -> AnyElement {
-        el! {
-            .div { size_full; flex; flex_col; items_center; justify_center; gap_2; text_color: color; } [
-                icon.Icon::new { size: 32.0.px; },
-                @if (let Some(message) = message)
-                    .div { px_2; text_xs; text_center; } [message],
-                @end,
-            ]
-        }.into_any_element()
-    }
 }
 
-impl Styled for Thumbnail {
-    fn style(&mut self) -> &mut StyleRefinement {
-        self.base.style()
-    }
-}
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
-impl RenderOnce for Thumbnail {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = self.cache.update(cx, |cache, cx| {
-            cache
-                .request(self.source.clone(), Request::Thumbnail, cx)
-                .thumbnail
-        });
-        let icon = match self.source.kind {
-            Kind::Video => IconName::FileVideoCamera,
-            Kind::Audio => IconName::FileMusic,
-            Kind::Image => IconName::Image,
-            _ => IconName::File,
-        };
-        if let State::Ready(image) = state {
-            let color = cx.theme().muted_foreground;
-            let failed = self.show_status.then(|| t!(@cx, "gds-thumbnail-failed"));
-            let loading = self.show_status.then(|| t!(@cx, "gds-thumbnail-loading"));
-            return self.base.child(
-                img(image)
-                    .object_fit(ObjectFit::Contain)
-                    .size_full()
-                    .with_loading(move || Self::placeholder(icon, loading.clone(), color))
-                    .with_fallback(move || {
-                        Self::placeholder(IconName::ImageOff, failed.clone(), color)
-                    }),
+    use zgui::app::Fonts;
+    use zgui::geom::{DevicePx, Size};
+    use zgui::platform::{AppHandler, PlatformError, Surface, SurfaceEvent};
+    use zgui::runtime::AppError;
+    use zgui_platform_headless::Harness;
+
+    use super::{ThumbnailProps, ViewFn};
+    use crate::service::file_inspection::{Kind, Source};
+    use crate::ui::file_inspection::{Cache, Options};
+
+    #[test]
+    fn unrequested_and_unavailable_thumbnails_omit_status_and_render_custom_fallback() {
+        #[derive(Default)]
+        struct Sink {
+            atlas: zgui::atlas::MemorySink,
+            target: Option<zgui::render::RenderTarget>,
+        }
+
+        impl zgui::render::Renderer for Sink {
+            fn capabilities(&self) -> zgui::render::RenderCapabilities {
+                zgui::render::RenderCapabilities::MINIMAL
+            }
+            fn configure(&mut self, target: zgui::render::RenderTarget) {
+                self.target = Some(target);
+            }
+            fn target(&self) -> Option<zgui::render::RenderTarget> {
+                self.target
+            }
+            fn register_external(
+                &mut self,
+                _: zgui::render::ExternalTexture,
+            ) -> zgui::render::TextureHandle {
+                zgui::render::TextureHandle(0)
+            }
+            fn release_external(&mut self, _: zgui::render::TextureHandle) {}
+            fn memory(&self) -> zgui::render::MemoryReport {
+                zgui::render::MemoryReport::default()
+            }
+            fn draw(
+                &mut self,
+                _: &zgui::scene::Scene,
+                _: &zgui::bits::DamageSet,
+            ) -> zgui::render::FrameOutcome {
+                zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
+            }
+            fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
+                &mut self.atlas
+            }
+        }
+
+        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+            let mut harness = Harness::new(handler);
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(200.0),
+                DevicePx(200.0),
+            )));
+            if let Some(surface) = harness.platform().offscreens().first() {
+                surface.set_a11y_listener(true);
+            }
+            harness.settle(8);
+
+            let surface = harness.platform().offscreens()[0].clone();
+            let mut nodes = HashMap::new();
+            for update in surface.a11y_log() {
+                for (id, node) in update.nodes {
+                    nodes.insert(id, node);
+                }
+            }
+
+            let texts: Vec<String> = nodes
+                .values()
+                .filter_map(|n| n.value().or_else(|| n.label()).map(str::to_owned))
+                .collect();
+            assert!(
+                texts.iter().any(|t| t == "Custom fallback artwork"),
+                "expected custom fallback view in {texts:?}"
             );
-        }
-        let fallback = self
-            .fallback
-            .unwrap_or_else(|| Icon::new(icon).size(px(32.)).into_any_element());
-        let status = match state {
-            State::NotRequested | State::Unavailable => SharedString::default(),
-            State::Loading => t!(@cx, "gds-thumbnail-loading"),
-            State::TooLarge => t!(@cx, "gds-thumbnail-too-large"),
-            State::Failed(_) => t!(@cx, "gds-thumbnail-failed"),
-            State::Ready(_) => unreachable!("ready thumbnails return their image"),
+            assert!(
+                !texts.iter().any(|t| t == "Preview unavailable"),
+                "NotRequested/Unavailable must not show 'Preview unavailable' in {texts:?}"
+            );
+            assert!(
+                nodes.values().all(|n| format!("{:?}", n.role()) != "Image"),
+                "NotRequested/Unavailable with text fallbacks must mount zero Image nodes"
+            );
+
+            harness.shut_down();
+            Ok(())
         };
-        el! {
-            $(self.base) { gap_2; text_color: $(cx.theme().muted_foreground); } [
-                fallback,
-                @if (self.show_status && !status.is_empty())
-                    .div { px_2; text_xs; text_center; w_full; overflow_hidden; } [status],
-                @end,
-            ]
-        }
+
+        zgui::app()
+            .with_fonts(Fonts::shipped_only())
+            .with_size(200.0, 200.0)
+            .with_renderer(Box::new(|_: &Arc<dyn Surface>, target| {
+                let mut sink = Sink::default();
+                zgui::render::Renderer::configure(&mut sink, target);
+                Ok::<_, AppError>(Box::new(sink) as Box<dyn zgui::render::Renderer>)
+            }))
+            .run_on(driver, move || {
+                let disabled_cache = Cache::new(Options {
+                    capacity: 0,
+                    workers: 0,
+                    ..Options::default()
+                });
+                let image_src = Source {
+                    path: PathBuf::from("/tmp/unrequested-huge.png"),
+                    kind: Kind::Image,
+                    size: Some(64),
+                    modified: None,
+                };
+                let folder_src = Source {
+                    path: PathBuf::from("/tmp/folder"),
+                    kind: Kind::Directory,
+                    size: None,
+                    modified: None,
+                };
+                zgui::view! {
+                    column {
+                        Thumbnail(
+                            cache = disabled_cache.clone(),
+                            source = image_src,
+                            show_status = true,
+                            fallback = ViewFn::new(|| zgui::view! { text { "Custom fallback artwork" } }),
+                        )
+                        Thumbnail(
+                            cache = disabled_cache,
+                            source = folder_src,
+                            show_status = true,
+                            fallback = ViewFn::new(|| zgui::view! { text { "Unavailable folder fallback" } }),
+                        )
+                    }
+                }
+            })
+            .expect("headless Thumbnail test ran");
     }
 }

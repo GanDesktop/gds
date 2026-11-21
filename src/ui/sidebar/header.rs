@@ -1,26 +1,16 @@
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
+use zgui::prelude::*;
+use zgui::{component, view};
 
-use super::super::container::container_traits;
-
-/// A column above the scrolling content that keeps its natural height.
-#[derive(IntoElement)]
-pub struct SideBarHeader {
-    base: Div,
-}
-
-impl Default for SideBarHeader {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex; flex_col; flex_shrink_0; w_full; min_w_0; } },
+#[component]
+pub fn SideBarHeader(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_sidebar_stylesheets();
+    view! {
+        column(class = "gds-sidebar__header", class = class, {..attrs}) {
+            {children.into_view_once()}
         }
-    }
-}
-
-container_traits!(SideBarHeader);
-
-impl RenderOnce for SideBarHeader {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

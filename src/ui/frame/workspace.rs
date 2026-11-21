@@ -1,33 +1,61 @@
-use super::*;
-use gds_uim::el;
+use zgui::prelude::*;
+use zgui::{component, view};
 
-impl Frame {
-    pub fn workspace(&self, sidebar: AnyElement, content: AnyElement, cx: &App) -> Div {
-        let surface = div()
-            .size_full()
-            .bg(cx.gds().appearance().theme().content_background())
-            .child(content);
-        self.workspace_with_content_surface(sidebar, surface.into_any_element(), cx)
+use super::{FrameContext, vertical_divider};
+
+/// Flexible workspace body region inside [`super::Frame`].
+///
+/// Set `paint_content_surface = false` when wrapping composite split panes (such as a top file
+/// browser + bottom terminal dock) that each paint their own translucent material once.
+#[component]
+pub fn WorkspaceFrame(
+    #[prop(optional)] sidebar: Option<AnyView>,
+    #[prop(optional)] content: Option<AnyView>,
+    #[prop(default = true)] paint_content_surface: bool,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    #[prop(optional)] children: Option<Children>,
+) -> impl IntoView {
+    super::install_frame_stylesheets();
+
+    if sidebar.is_none() && content.is_none() {
+        return AnyView::new(view! {
+            row(
+                class = "gds-workspace-frame gds-workspace-frame--legacy",
+                attr:data-paint-surface = paint_content_surface.then(|| "true".to_owned()),
+                class = class,
+                {..attrs}
+            ) {
+                {children.map(Children::into_view_once)}
+            }
+        });
     }
 
-    /// For composite content whose panes paint their own material. Do not add a
-    /// shared underlay: translucent pane backgrounds would accumulate its alpha.
-    pub fn workspace_with_content_surface(
-        &self,
-        sidebar: AnyElement,
-        content: AnyElement,
-        cx: &App,
-    ) -> Div {
-        let width = self.sidebar_width;
-        let divider = self.vertical_divider(cx);
-        el! {
-            .div { relative; flex; flex_1; min_h_0; w_full } [
-                @if (let Some(width) = width)
-                    .div { # "frame-workspace-sidebar"; test_support; w: width.px; h_full; flex_shrink_0; bg: $(cx.gds().appearance().theme().sidebar_background()) } [sidebar],
-                @end,
-                .div { flex_1; min_w_0; h_full } [content],
-                ..divider,
-            ]
+    let sidebar_width = FrameContext::current().and_then(|ctx| ctx.sidebar_width);
+    let divider = vertical_divider(sidebar_width);
+
+    let sidebar_col = sidebar_width.map(|width_sig| {
+        AnyView::new(view! {
+            box(
+                class = "gds-workspace-frame__sidebar",
+                style:width = move || Some(format!("{:.2}px", width_sig.get()))
+            ) {
+                {sidebar}
+            }
+        })
+    });
+
+    AnyView::new(view! {
+        row(class = "gds-workspace-frame", class = class, {..attrs}) {
+            {sidebar_col}
+            box(
+                class = "gds-workspace-frame__content",
+                attr:data-paint-surface = paint_content_surface.then(|| "true".to_owned())
+            ) {
+                {content}
+                {children.map(Children::into_view_once)}
+            }
+            {divider}
         }
-    }
+    })
 }

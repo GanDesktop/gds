@@ -2,7 +2,6 @@
 
 use std::{
     io::{BufRead as _, BufReader},
-    os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     process::{Child, Command},
 };
@@ -132,13 +131,20 @@ impl Fixture {
 
     fn script(&self, body: &str) {
         let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
-        std::fs::write(
-            &self.executable,
-            format!("#!{}\n{body}\n", Path::new(&shell).display()),
-        )
-        .expect("picker script");
-        std::fs::set_permissions(&self.executable, std::fs::Permissions::from_mode(0o755))
-            .expect("executable script");
+        let content = format!("#!{}\n{body}\n", Path::new(&shell).display());
+        // Write via a short-lived child process so concurrent multi-threaded `fork()`s in other
+        // tests never inherit a writable FD to `self.executable` and trigger Linux `ETXTBSY`.
+        let status = Command::new(&shell)
+            .args([
+                "-c",
+                "tmp=\"$1.tmp\"; printf '%s' \"$2\" > \"$tmp\" && chmod 755 \"$tmp\" && mv -f \"$tmp\" \"$1\"",
+                "write-picker",
+            ])
+            .arg(&self.executable)
+            .arg(&content)
+            .status()
+            .expect("write picker script child");
+        assert!(status.success(), "write picker script exited with {status}");
     }
 
     async fn call(&self, member: &str, suffix: &str, options: Options) -> Response {

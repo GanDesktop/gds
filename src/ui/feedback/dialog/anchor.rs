@@ -1,36 +1,27 @@
-use gpui_kit::{prelude::*, *};
+use zgui::prelude::*;
+use zgui::view::current_host;
 
-/// A dialog control's own focus node, so activating the control dispatches its
-/// action on the dialog it belongs to rather than on whatever holds focus.
-///
-/// `Window::dispatch_action` routes along the focused element; dispatching from
-/// a node inside the control walks the control's own ancestors, which end at
-/// the dialog that owns it, stacked dialogs included.
-#[derive(Clone)]
-pub(super) struct DispatchAnchor {
-    handle: FocusHandle,
+/// Focus anchor restored when a modal dialog closes.
+#[derive(Clone, Copy, Default)]
+pub struct DialogAnchor {
+    pub trigger: NodeRef,
 }
 
-impl DispatchAnchor {
-    pub(super) fn new(key: &'static str, window: &mut Window, cx: &mut App) -> Self {
-        let handle = window
-            .use_keyed_state(key, cx, |_, cx| cx.focus_handle())
-            .read(cx)
-            .clone();
-        Self { handle }
+impl DialogAnchor {
+    /// Creates an anchor targeting `trigger`.
+    #[must_use]
+    pub fn new(trigger: NodeRef) -> Self {
+        Self { trigger }
     }
 
-    /// Zero-size, out of flow and never hovered: it only gives the handle a
-    /// place in the dispatch tree, not in the tab order.
-    pub(super) fn element(&self) -> Div {
-        div().absolute().size_0().track_focus(&self.handle)
+    /// Captures the currently focused element in the active window, if any.
+    #[must_use]
+    pub fn capture() -> Option<zgui::view::NodeId> {
+        current_host().and_then(|host| host.focused().get_untracked())
     }
 
-    pub(super) fn dispatch(&self, action: &dyn Action, window: &mut Window, cx: &mut App) {
-        if self.handle.is_focused(window) || self.handle.contains(&self.handle, window) {
-            self.handle.dispatch_action(action, window, cx);
-        } else {
-            window.dispatch_action(action.boxed_clone(), cx);
-        }
+    /// Returns focus to `self.trigger` if bound in the window.
+    pub fn restore(self) {
+        self.trigger.focus();
     }
 }

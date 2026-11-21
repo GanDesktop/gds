@@ -1,77 +1,162 @@
-use super::keycap::Keycap;
-use super::*;
-use gds_uim::el;
-use gpui_kit::IntoElement;
+use zgui::prelude::*;
+use zgui::{component, css, view};
 
-#[derive(Clone, IntoElement)]
-pub struct ShortcutBadge {
-    source: BadgeSource,
+use super::keycap::{KeycapProps, install_keycap_stylesheet};
+use super::{HeldModifier, Shortcut};
+
+const SHEET: &str = css!(
+    r#"
+    .gds-shortcut-badge {
+        display: inline-flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 4px;
+        flex-wrap: nowrap;
+        flex-shrink: 0;
+    }
+    "#
+);
+
+fn install_badge_stylesheets() {
+    if zgui::view::current_host().is_some() {
+        zgui::view::install_stylesheet("gds-ui-shortcut-badge", SHEET);
+        install_keycap_stylesheet();
+    }
 }
 
-/// Where a badge's keys come from: a control's own shortcut, resolved in its
-/// declared scope, or a binding already resolved for the current context.
-#[derive(Clone)]
-enum BadgeSource {
-    Shortcut(Shortcut),
-    Binding(KeyBinding),
-    Gesture(Vec<SharedString>),
+/// Converts a single gesture label or a sequence of keycap labels into discrete keycap strings.
+pub trait IntoKeycapTokens {
+    /// Expands `self` into ordered keycap labels.
+    fn into_keycap_tokens(self) -> Vec<String>;
+}
+
+impl IntoKeycapTokens for &str {
+    fn into_keycap_tokens(self) -> Vec<String> {
+        if self.is_empty() {
+            Vec::new()
+        } else {
+            vec![self.to_owned()]
+        }
+    }
+}
+
+impl IntoKeycapTokens for String {
+    fn into_keycap_tokens(self) -> Vec<String> {
+        if self.is_empty() {
+            Vec::new()
+        } else {
+            vec![self]
+        }
+    }
+}
+
+impl<S: AsRef<str>, const N: usize> IntoKeycapTokens for [S; N] {
+    fn into_keycap_tokens(self) -> Vec<String> {
+        self.into_iter()
+            .map(|token| token.as_ref().to_owned())
+            .filter(|token| !token.is_empty())
+            .collect()
+    }
+}
+
+impl<S: AsRef<str>> IntoKeycapTokens for &[S] {
+    fn into_keycap_tokens(self) -> Vec<String> {
+        self.iter()
+            .map(|token| token.as_ref().to_owned())
+            .filter(|token| !token.is_empty())
+            .collect()
+    }
+}
+
+impl<S: Into<String>> IntoKeycapTokens for Vec<S> {
+    fn into_keycap_tokens(self) -> Vec<String> {
+        self.into_iter()
+            .map(Into::into)
+            .filter(|token| !token.is_empty())
+            .collect()
+    }
+}
+
+/// Visual cluster of independent `22px` `.gds-keycap` pills representing a keyboard shortcut or
+/// pointer gesture (`shortcuts.md` §3).
+#[derive(Clone, Debug)]
+pub struct ShortcutBadge {
+    tokens: Vec<String>,
+    class: Classes,
 }
 
 impl ShortcutBadge {
-    pub(super) fn gesture(keys: impl IntoIterator<Item = SharedString>) -> Self {
+    /// Creates a keycap cluster from a keyboard [`Shortcut`].
+    #[must_use]
+    pub fn new(shortcut: impl Into<Shortcut>) -> Self {
         Self {
-            source: BadgeSource::Gesture(keys.into_iter().collect()),
+            tokens: shortcut.into().display_tokens(),
+            class: Classes::default(),
         }
     }
-    pub fn new(command: impl Into<Shortcut>) -> Self {
-        Self::bound(command.into())
-    }
 
-    /// A badge for any action, resolved through its own key context.
-    pub fn bound(shortcut: Shortcut) -> Self {
+    /// Creates a keycap cluster for pointer/mouse gestures (e.g. `"Middle-click"` or
+    /// `["Ctrl", "Click"]`) that share the suite's `22px` keycap presentation in Help views.
+    #[must_use]
+    pub fn gesture(keys: impl IntoKeycapTokens) -> Self {
         Self {
-            source: BadgeSource::Shortcut(shortcut),
+            tokens: keys.into_keycap_tokens(),
+            class: Classes::default(),
         }
     }
 
-    /// A badge for a binding that is already known to apply right now.
-    pub fn binding(binding: KeyBinding) -> Self {
-        Self {
-            source: BadgeSource::Binding(binding),
-        }
+    /// Appends additional CSS classes to the badge container.
+    #[must_use]
+    pub fn with_class(mut self, class: impl Into<Classes>) -> Self {
+        self.class = self.class.merged(class.into());
+        self
     }
 
-    pub(super) fn labels(&self, window: &Window) -> Vec<SharedString> {
-        let binding = match &self.source {
-            BadgeSource::Shortcut(shortcut) => shortcut.binding(window),
-            BadgeSource::Binding(binding) => Some(binding.clone()),
-            BadgeSource::Gesture(keys) => return keys.clone(),
-        };
-        key_labels(binding.as_ref())
+    /// Returns the discrete keycap labels rendered by this badge.
+    #[must_use]
+    pub fn labels(&self) -> &[String] {
+        &self.tokens
     }
 
-    /// The whole combination as one compact label, such as `R` or `Shift+Tab`,
-    /// with the modifier the user is already holding left out because the press
-    /// itself shows it.
-    ///
-    /// It is spelled from [`key_labels`], the same names the keycaps use, so the
-    /// two presentations cannot drift apart.
-    pub(crate) fn path_label(bindings: &[KeyBinding], held: HeldModifier) -> Option<SharedString> {
-        let labels = bindings
-            .iter()
-            .flat_map(|binding| key_labels_omitting(Some(binding), Some(held)))
-            .collect::<Vec<_>>();
-        if labels.is_empty() {
-            return None;
-        }
-        let parts = labels.iter().map(AsRef::<str>::as_ref).collect::<Vec<_>>();
-        Some(parts.join("+").into())
+    /// Formats `shortcut` as a compact keytip string with `held` omitted (`Ctrl+R` -> `"R"`,
+    /// `Ctrl+Shift+Tab` -> `"Shift+Tab"`), returning `None` when `shortcut` does not belong to
+    /// `held`'s modifier group.
+    #[must_use]
+    pub fn path_label(shortcut: &Shortcut, held: HeldModifier) -> Option<String> {
+        shortcut.compact_label(held)
     }
 }
 
-impl RenderOnce for ShortcutBadge {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let keys = self.labels(window).into_iter().map(Keycap::new);
-        el! { .div { flex; items_center; gap: KEY_GAP.px } [..keys] }
+fn render_tokens(tokens: Vec<String>, class: Classes) -> AnyView {
+    install_badge_stylesheets();
+    AnyView::new(view! {
+        row(class = "gds-shortcut-badge", class = class) {
+            for entry in move || tokens.clone().into_iter().enumerate().collect::<Vec<_>>(), key = |entry: &(usize, String)| entry.0 {
+                Keycap(label = entry.1)
+            }
+        }
+    })
+}
+
+impl IntoView for ShortcutBadge {
+    type Output = AnyView;
+
+    fn into_view(self) -> Self::Output {
+        render_tokens(self.tokens, self.class)
     }
+}
+
+/// Declarative keycap cluster displaying a [`Shortcut`] or explicit gesture tokens.
+#[component]
+pub fn ShortcutBadge(
+    #[prop(optional)] shortcut: Option<Shortcut>,
+    #[prop(optional)] gesture: Option<Vec<String>>,
+    #[prop(into, optional)] class: Classes,
+) -> impl IntoView {
+    let tokens = match (gesture, shortcut) {
+        (Some(keys), _) => keys,
+        (None, Some(key)) => key.display_tokens(),
+        (None, None) => Vec::new(),
+    };
+    render_tokens(tokens, class)
 }

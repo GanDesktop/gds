@@ -1,172 +1,203 @@
-//! Window-bound hints for text supplied by agents, paths, and errors.
+//! Shared GDS tooltip wrappers around `zgui-ui::Tooltip` (`README.md` §1, `shortcuts.md` §3).
 
-use gds_uim::el;
-use gpui_kit::base::StyledExt;
-use gpui_kit::{
-    AnyElement, AnyView, App, Div, FontWeight, IntoElement, ParentElement, SharedString, Stateful,
-    StatefulInteractiveElement, TestSupportExt, Window, component::ActiveTheme,
-    component::tooltip::Tooltip, div, prelude::*, px,
-};
 use unicode_segmentation::UnicodeSegmentation;
+use zgui::prelude::*;
+use zgui::reactive::LocalStorage;
+use zgui::{component, css, view};
+use zgui_ui::{TooltipContentProps, TooltipProps, TooltipProviderProps, TooltipTriggerProps};
 
-const EDGE_SPACE: f32 = 32.;
-const MAX_WIDTH: f32 = 360.;
-const MAX_HEIGHT: f32 = 320.;
+pub use crate::appearance::tokens::TOOLTIP_DELAY;
+
 const WORD_SEGMENT: usize = 16;
 
-// GPUI wraps at whitespace, but not necessarily inside a path or an error token.
-// Insert soft wrap opportunities without changing the visible characters.
+const SHEET: &str = css!(
+    r#"
+    .zui-tooltip,
+    .zui-tooltip.gds-tooltip-content {
+        --zui-surface-fill: var(--gds-panel);
+        --zui-surface-ink: var(--gds-panel-foreground);
+        --zui-surface-border: 1px solid var(--gds-border);
+        --zui-surface-radius: 8px;
+        background-color: var(--gds-panel);
+        color: var(--gds-panel-foreground);
+        border: 1px solid var(--gds-border);
+        border-radius: 8px;
+        padding: 6px 10px;
+        max-width: 360px;
+        max-height: 320px;
+        overflow-y: auto;
+        font-family: var(--gds-font-sans);
+        font-size: var(--gds-font-size-small, 14px);
+        font-weight: 400;
+        line-height: 1.35;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+    }
+
+    .zui-tooltip .zui-tooltip__arrow {
+        display: none;
+    }
+
+    .zui-tooltip .gds-tooltip-text,
+    .gds-tooltip-text {
+        color: var(--gds-panel-foreground);
+        font-size: var(--gds-font-size-small, 14px);
+        line-height: 1.35;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .gds-tooltip-details {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-width: 340px;
+        max-height: 304px;
+        overflow-y: auto;
+    }
+
+    .gds-tooltip-details__title {
+        color: var(--gds-panel-foreground);
+        font-size: var(--gds-font-size-small, 14px);
+        font-weight: 600;
+        line-height: 1.35;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .gds-tooltip-details__item {
+        font-size: var(--gds-font-size-small, 14px);
+        color: var(--gds-muted-foreground);
+        line-height: 1.35;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    "#
+);
+
+/// Inserts zero-width break opportunities (`\u{200B}`) after path/token separators (`/`, `\`, `:`,
+/// `-`, `_`) AND every 16 graphemes inside unbroken non-whitespace runs (`main:tooltip.rs`).
+#[must_use]
 pub fn wrap_tokens(text: &str) -> String {
-    let mut result = String::new();
-    let mut run = 0;
+    let mut out = String::with_capacity(text.len());
+    let mut run = 0usize;
     for grapheme in text.graphemes(true) {
         if grapheme.chars().all(char::is_whitespace) {
             run = 0;
-        } else {
-            if run == WORD_SEGMENT {
-                result.push('\u{200b}');
-                run = 0;
+            out.push_str(grapheme);
+            continue;
+        }
+        if matches!(grapheme, "/" | "\\" | ":" | "-" | "_") {
+            out.push_str(grapheme);
+            out.push('\u{200B}');
+            run = 0;
+            continue;
+        }
+        if run == WORD_SEGMENT {
+            out.push('\u{200B}');
+            run = 0;
+        }
+        run += 1;
+        out.push_str(grapheme);
+    }
+    out
+}
+
+pub(crate) fn install_tooltip_stylesheet() {
+    if zgui::view::current_host().is_some() {
+        zgui::view::install_stylesheet("gds-ui-tooltip", SHEET);
+    }
+}
+
+/// Window-root tooltip configuration provider with GDS `400ms` hover delay.
+#[component]
+pub fn GdsTooltipProvider(children: Children) -> impl IntoView {
+    install_tooltip_stylesheet();
+    view! {
+        TooltipProvider(delay = TOOLTIP_DELAY) {
+            {children.into_view_once()}
+        }
+    }
+}
+
+/// Plain localized text content for a GDS tooltip bubble (`14px` `--gds-panel-foreground` with
+/// CSS `overflow-wrap: anywhere` and clean AT-SPI text projection).
+#[component]
+pub fn TooltipText(#[prop(into)] text: Signal<String, LocalStorage>) -> impl IntoView {
+    install_tooltip_stylesheet();
+    view! {
+        text(class = "gds-tooltip-text") {{move || text.get()}}
+    }
+}
+
+/// Convenience helper pairing a trigger child with plain tooltip text using the `400ms` GDS hover
+/// delay and immediate keyboard focus reveal.
+#[component]
+pub fn HintTooltip(
+    #[prop(into)] text: Signal<String, LocalStorage>,
+    #[prop(into, optional)] trigger_class: Classes,
+    children: Children,
+) -> impl IntoView {
+    install_tooltip_stylesheet();
+    view! {
+        Tooltip(delay = TOOLTIP_DELAY) {
+            TooltipTrigger(class = trigger_class) {{children.into_view_once()}}
+            TooltipContent(class = "gds-tooltip-content", arrow = false) {
+                TooltipText(text = text)
             }
-            run += 1;
         }
-        result.push_str(grapheme);
-    }
-    result
-}
-
-/// Attach a hoverable, scrollable hint to any element, including disabled buttons.
-pub fn bounded(
-    id: impl Into<gpui_kit::ElementId>,
-    child: impl IntoElement,
-    text: impl Into<SharedString>,
-) -> Stateful<Div> {
-    let text = text.into();
-    el! {
-        .div {
-            # id;
-            hoverable_tooltip: $(move |window, cx| view(text.clone(), window, cx));
-        } [
-            child,
-        ]
     }
 }
 
-pub fn view(text: impl Into<SharedString>, window: &mut Window, cx: &mut App) -> AnyView {
-    view_with_id("bounded-tooltip-content", text, window, cx)
-}
-
-pub fn view_with_id(
-    id: &'static str,
-    text: impl Into<SharedString>,
-    window: &mut Window,
-    cx: &mut App,
-) -> AnyView {
-    let text = text.into();
-    let content = wrap_tokens(&text);
-    element(
-        id,
-        text,
-        move |_, _| {
-            el! {
-                .div {
-                    whitespace_normal;
-                } [
-                    $(content.clone()),
-                ]
+/// Tooltip wrapper pairing a semibold summary line with secondary muted detail lines.
+#[component]
+pub fn DetailsTooltip(
+    #[prop(into)] summary: Signal<String, LocalStorage>,
+    #[prop(into)] details: Signal<Vec<String>, LocalStorage>,
+    children: Children,
+) -> impl IntoView {
+    install_tooltip_stylesheet();
+    view! {
+        Tooltip(delay = TOOLTIP_DELAY) {
+            TooltipTrigger {{children.into_view_once()}}
+            TooltipContent(class = "gds-tooltip-content", arrow = false) {
+                column(class = "gds-tooltip-details") {
+                    text(class = "gds-tooltip-details__title") {{move || wrap_tokens(&summary.get())}}
+                    for entry in move || details.get().into_iter().enumerate().collect::<Vec<_>>(), key = |entry: &(usize, String)| entry.0 {
+                        text(class = "gds-tooltip-details__item") {{wrap_tokens(&entry.1)}}
+                    }
+                }
             }
-            .into_any_element()
-        },
-        window,
-        cx,
-    )
-}
-
-/// A title followed by independently wrapped metadata, bounded to the window.
-#[derive(Clone)]
-pub struct Details {
-    title: SharedString,
-    lines: Vec<SharedString>,
-}
-
-impl Details {
-    pub fn new(title: impl Into<SharedString>) -> Self {
-        Self {
-            title: title.into(),
-            lines: Vec::new(),
         }
     }
-
-    pub fn line(mut self, text: impl Into<SharedString>) -> Self {
-        self.lines.push(text.into());
-        self
-    }
-
-    pub fn view(&self, window: &mut Window, cx: &mut App) -> AnyView {
-        let label = std::iter::once(self.title.as_ref())
-            .chain(self.lines.iter().map(AsRef::as_ref))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let title = wrap_tokens(&self.title);
-        let lines: Vec<_> = self.lines.iter().map(|line| wrap_tokens(line)).collect();
-        element(
-            "details-tooltip-content",
-            label,
-            move |_, cx| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(title.clone()))
-                    .children(lines.iter().map(|line| {
-                        div()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(line.clone())
-                    }))
-                    .into_any_element()
-            },
-            window,
-            cx,
-        )
-    }
 }
 
-/// Attach a custom hint whose rows are built whenever the tooltip is shown.
-pub fn element(
-    id: &'static str,
-    label: impl Into<SharedString>,
-    content: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
-    window: &mut Window,
-    cx: &mut App,
-) -> AnyView {
-    let viewport = window.viewport_size();
-    let width = (f32::from(viewport.width) - EDGE_SPACE).clamp(1., MAX_WIDTH);
-    let height = (f32::from(viewport.height) - EDGE_SPACE).clamp(1., MAX_HEIGHT);
-    let label = label.into();
-    let mut style = gpui_kit::StyleRefinement::default();
-    style.text.font_fallbacks = window.text_style().font_fallbacks.clone();
-    Tooltip::element(move |window, cx| {
-        el! {
-            .div {
-                # id;
-                test_support;
-                role: gpui_kit::Role::Label;
-                aria_label: $(label.clone());
-                max_w: $(px((width - 16.).max(1.)));
-                max_h: $(px((height - 12.).max(1.)));
-                overflow_y_scroll;
-                text_size: crate::appearance::tokens::SMALL;
-                whitespace_normal;
-            } [
-                $(content(window, cx)),
-            ]
-        }
-    })
-    .refine_style(&style)
-    .font_family(cx.theme().font_family.clone())
-    .font_weight(FontWeight::NORMAL)
-    .text_size(crate::appearance::tokens::SMALL)
-    .line_height(gpui_kit::TextStyle::default().line_height)
-    .max_w(px(width))
-    .max_h(px(height))
-    .build(window, cx)
+/// Build plain tooltip body content matching legacy `tooltip::view(text)` callers.
+#[must_use]
+pub fn view(text: impl Into<String>) -> AnyView {
+    let text = text.into();
+    AnyView::new(view! { TooltipText(text = text) })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{TOOLTIP_DELAY, wrap_tokens};
+
+    #[test]
+    fn tooltip_delay_and_token_wrapping_break_separators_and_16_grapheme_runs() {
+        assert_eq!(TOOLTIP_DELAY, Duration::from_millis(400));
+        assert_eq!(
+            wrap_tokens("/home/very-long"),
+            "/\u{200B}home/\u{200B}very-\u{200B}long"
+        );
+        assert_eq!(
+            wrap_tokens("0123456789abcdefGHIJKLMNOPQRSTUVwxyz"),
+            "0123456789abcdef\u{200B}GHIJKLMNOPQRSTUV\u{200B}wxyz"
+        );
+        assert_eq!(
+            wrap_tokens("short words stay intact"),
+            "short words stay intact"
+        );
+    }
 }

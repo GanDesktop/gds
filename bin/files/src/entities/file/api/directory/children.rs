@@ -24,7 +24,6 @@ impl ChildCount {
     ///
     /// Returns `None` when the directory cannot be read or its entries cannot be
     /// enumerated. A missing count is never shown or sorted as zero.
-    #[allow(dead_code)]
     pub(super) fn from_path(path: &Path) -> Option<Self> {
         Self::from_path_with_limit(path, DEFAULT_CHILD_COUNT_LIMIT)
     }

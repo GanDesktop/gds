@@ -1,31 +1,27 @@
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
+use zgui::prelude::*;
+use zgui::{component, view};
 
-use super::super::container::container_traits;
-
-/// Fills the remaining height and scrolls vertically. Use `overflow_hidden()`
-/// when its children own scrolling, such as independently scrollable sections.
-/// For scrolling, provide a stable `id()` or an explicit `track_scroll()` handle.
-#[derive(IntoElement)]
-pub struct SideBarContent {
-    base: Div,
-}
-
-impl Default for SideBarContent {
-    fn default() -> Self {
-        Self {
-            base: el! { .div {
-                flex; flex_col; flex_1; min_w_0; min_h_0;
-            } },
-        }
-        .overflow_y_scroll()
-    }
-}
-
-container_traits!(SideBarContent);
-
-impl RenderOnce for SideBarContent {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
+/// Fills remaining sidebar height and scrolls vertically by default; pass `scrollable = false`
+/// when child sections manage independent scrollports.
+#[component]
+pub fn SideBarContent(
+    #[prop(default = true)] scrollable: bool,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_sidebar_stylesheets();
+    if scrollable {
+        AnyView::new(view! {
+            scroll(class = "gds-sidebar__content", class = class, {..attrs}) {
+                column(class = "gds-sidebar__content-inner") {{children.into_view_once()}}
+            }
+        })
+    } else {
+        AnyView::new(view! {
+            column(class = "gds-sidebar__content--static", class = class, {..attrs}) {
+                {children.into_view_once()}
+            }
+        })
     }
 }

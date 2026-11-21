@@ -1,5 +1,4 @@
-//! Suite settings presentation: rows, numeric ranges and keyboard-accessible sliders.
-//! Preference models, defaults and persistence belong to their applications.
+//! Suite settings presentation: flat hairline rows, numeric ranges, and keyboard-accessible sliders.
 
 pub mod form;
 mod row;
@@ -7,17 +6,151 @@ mod row;
 pub use row::*;
 
 use crate::appearance::typography;
-use gds_uim::el;
-use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
-use gpui_kit::{prelude::*, *};
-use std::cell::Cell;
+use zgui::prelude::*;
+use zgui::reactive::{LocalStorage, UnsyncCallback};
+use zgui::{component, css, view};
+use zgui_ui::SliderProps;
+use zgui_ui_primitives::Binding;
 
 pub const CONTROL_WIDTH: f32 = 260.0;
-const RESET_WIDTH: f32 = 32.0;
-const CONTROL_GAP: f32 = 8.0;
-const NUMBER_LABEL_WIDTH_REMS: f32 = 4.5;
+pub(crate) const RESET_WIDTH: f32 = 32.0;
+pub(crate) const CONTROL_GAP: f32 = 8.0;
+pub const NUMBER_LABEL_WIDTH_REMS: f32 = 4.5;
 
-#[derive(Clone, Copy, Debug)]
+const SETTINGS_SHEET: &str = "gds-ui-settings";
+
+const SETTINGS_CSS: &str = css!(
+    ".gds-setting-form.gds-setting-form {
+        display: flex;
+        flex-direction: column;
+        gap: 0px;
+        width: 100%;
+    }
+    .gds-setting-form.gds-setting-form[data-disabled=\"true\"] {
+        opacity: 0.6;
+    }
+    .gds-setting-section.gds-setting-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0px;
+        width: 100%;
+    }
+    .gds-setting-group.gds-setting-group {
+        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-weight: 400;
+        color: var(--gds-muted-foreground);
+        padding-top: 16px;
+    }
+    .gds-setting-row.gds-setting-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 16px 0px;
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid var(--gds-border);
+        border-radius: 0px;
+        width: 100%;
+    }
+    .gds-setting-label.gds-setting-label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex: 1 1 0%;
+        min-width: 0px;
+        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+    }
+    .gds-setting-title.gds-setting-title {
+        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-weight: 400;
+        color: var(--gds-foreground);
+    }
+    .gds-setting-description.gds-setting-description {
+        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        color: var(--gds-muted-foreground);
+    }
+    .gds-setting-error.gds-setting-error {
+        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        color: var(--gds-error);
+    }
+    .gds-setting-actions.gds-setting-actions {
+        display: flex;
+        flex-direction: row;
+        flex-shrink: 0;
+        align-items: center;
+        gap: var(--gds-setting-gap, 8px);
+    }
+    .gds-setting-reset.gds-setting-reset {
+        width: var(--gds-setting-reset-size, 32px);
+        height: var(--gds-setting-reset-size, 32px);
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .gds-setting-control.gds-setting-control {
+        width: var(--gds-setting-control-width, 260px);
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-end;
+    }
+    .gds-setting-control.gds-setting-control > .zui-select__trigger,
+    .gds-setting-control.gds-setting-control .zui-select__trigger,
+    .gds-setting-control.gds-setting-control > .zui-combobox,
+    .gds-setting-control.gds-setting-control .zui-input-group,
+    .gds-setting-control.gds-setting-control > .gds-input-field,
+    .gds-setting-control.gds-setting-control > .gds-textarea-field,
+    .gds-setting-control.gds-setting-control > .gds-setting-number-row,
+    .gds-setting-control.gds-setting-control > .gds-setting-number {
+        width: 100%;
+    }
+    .gds-setting-control .zui-select__trigger {
+        background: var(--gds-content);
+        border: 1px solid var(--gds-outline);
+        border-radius: var(--gds-radius-control, 6px);
+        box-shadow: none;
+        outline: none;
+    }
+    .gds-setting-control .zui-select__trigger:focus,
+    .gds-setting-control .zui-select__trigger:focus-visible {
+        border-color: var(--gds-primary);
+        box-shadow: none;
+        outline: none;
+    }
+    .gds-setting-number.gds-setting-number {
+        flex: 1 1 0%;
+        min-width: 0px;
+        width: 100%;
+    }
+    .gds-setting-number-row.gds-setting-number-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+    }
+    .gds-setting-number-value.gds-setting-number-value {
+        width: 4.5rem;
+        min-width: 4.5rem;
+        flex-shrink: 0;
+        text-align: right;
+        white-space: nowrap;
+        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-variant-numeric: tabular-nums;
+        color: var(--gds-foreground);
+    }"
+);
+
+pub(crate) fn install_settings_stylesheets() {
+    crate::ui::styles::install_ui_stylesheets();
+    zgui::view::install_stylesheet(SETTINGS_SHEET, SETTINGS_CSS);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NumberRange {
     pub min: f32,
     pub max: f32,
@@ -25,6 +158,7 @@ pub struct NumberRange {
 }
 
 impl NumberRange {
+    #[must_use]
     pub fn quantize(self, value: f32) -> f32 {
         if !value.is_finite() {
             return self.max;
@@ -33,6 +167,7 @@ impl NumberRange {
         (((value - self.min) / self.step).round() * self.step + self.min).clamp(self.min, self.max)
     }
 
+    #[must_use]
     pub fn equivalent(self, left: f32, right: f32) -> bool {
         left.is_finite() && right.is_finite() && self.quantize(left) == self.quantize(right)
     }
@@ -50,116 +185,34 @@ pub const FONT_SIZE_RANGE: NumberRange = NumberRange {
     step: 1.0,
 };
 
-pub struct NumberControl {
-    pub state: Entity<SliderState>,
-    focus: FocusHandle,
-    pub range: NumberRange,
-    programmatic_value: Cell<Option<f32>>,
-}
-
-impl NumberControl {
-    pub fn new<T: 'static>(value: f32, range: NumberRange, cx: &mut Context<T>) -> Self {
-        let state = cx.new(|_| {
-            SliderState::new()
-                .min(range.min)
-                .max(range.max)
-                .step(range.step)
-                .default_value(range.quantize(value))
-        });
-        Self {
-            state,
-            focus: cx.focus_handle(),
-            range,
-            programmatic_value: Cell::new(None),
-        }
-    }
-
-    /// Keeping equal state untouched also preserves an active drag.
-    pub fn sync<T: 'static>(&self, value: f32, window: &mut Window, cx: &mut Context<T>) {
-        let value = self.range.quantize(value);
-        if self.state.read(cx).value() != SliderValue::Single(value) {
-            self.programmatic_value.set(Some(value));
-            self.state
-                .update(cx, |state, cx| state.set_value(value, window, cx));
-        }
-    }
-
-    pub fn notification_is_programmatic(&self, value: SliderValue) -> bool {
-        self.programmatic_value
-            .take()
-            .is_some_and(|expected| value == SliderValue::Single(expected))
-    }
-
-    fn pointer_focus_handler(
-        &self,
-        disabled: bool,
-    ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + use<> {
-        let focus = self.focus.clone();
-        move |_, window, cx| {
-            if !disabled {
-                focus.focus(window, cx);
-            }
-        }
-    }
-
-    fn key_handler(&self, disabled: bool) -> impl Fn(&KeyDownEvent, &mut Window, &mut App) + use<> {
-        let state = self.state.clone();
-        let range = self.range;
-        move |event, window, cx| {
-            let modifiers = event.keystroke.modifiers;
-            if disabled || modifiers.control || modifiers.alt || modifiers.platform {
-                return;
-            }
-            let current = state.read(cx).value().end();
-            let next = match event.keystroke.key.as_str() {
-                "left" | "down" => current - range.step,
-                "right" | "up" => current + range.step,
-                "home" => range.min,
-                "end" => range.max,
-                _ => return,
-            };
-            let next = range.quantize(next);
-            cx.stop_propagation();
-            window.prevent_default();
-            if next != current {
-                state.update(cx, |state, cx| {
-                    state.set_value(next, window, cx);
-                    cx.emit(SliderEvent::Change(SliderValue::Single(next)));
-                });
-            }
-        }
-    }
-
-    pub fn element(
-        &self,
-        id: ElementId,
-        label: SharedString,
-        value_label: SharedString,
-        disabled: bool,
-    ) -> impl IntoElement + use<> {
-        let on_pointer_down = self.pointer_focus_handler(disabled);
-        let on_key_down = self.key_handler(disabled);
-        el! {
-            .div {
-                # id;
-                test_support;
-                track_focus: $(&self.focus);
-                tab_index: $(if disabled { -1 } else { 0 }); tab_stop: $(!disabled);
-                flex; items_center; gap: CONTROL_GAP.px; w_full;
-                on_mouse_down: MouseButton::Left, on_pointer_down;
-                on_key_down: on_key_down;
-            } [
-                $(&self.state).Slider::new {
-                    accessibility_label: label; disabled: disabled;
-                    flex_1;
-                },
-                // The value and its unit share one unbreakable line.
-                .div {
-                    w: $(rems(NUMBER_LABEL_WIDTH_REMS));
-                    flex_shrink_0; whitespace_nowrap;
-                    text_right; text_sm;
-                } [value_label],
-            ]
+/// Keyboard-accessible quantized numeric slider paired with a live readout.
+#[allow(clippy::too_many_arguments)]
+#[component]
+pub fn NumberControl(
+    #[prop(into, optional)] value: Binding<f64>,
+    range: NumberRange,
+    #[prop(optional)] on_change: Option<UnsyncCallback<f64>>,
+    #[prop(into, default = Signal::stored_local(false))] disabled: Signal<bool, LocalStorage>,
+    #[prop(into, optional)] label: Option<String>,
+    #[prop(optional)] labelled_by: Option<NodeRef>,
+    #[prop(optional)] node_ref: Option<NodeRef>,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+) -> impl IntoView {
+    install_settings_stylesheets();
+    view! {
+        box(class = "gds-setting-number", class = class, {..attrs}) {
+            Slider(
+                value = value,
+                min = f64::from(range.min),
+                max = f64::from(range.max),
+                step = f64::from(range.step),
+                disabled = disabled,
+                label = label,
+                labelled_by = labelled_by,
+                node_ref = node_ref,
+                on_change = on_change
+            )
         }
     }
 }

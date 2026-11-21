@@ -8,8 +8,8 @@ Current system behavior belongs in the main documentation (`docs/development.md`
 
 | Document | Scope |
 | --- | --- |
-| [Upstream Forks & Dependency Pins](upstream-patches.md) | Why `gpui-kit` and `gpui-fast` track direct `GanDesktop/*` Git forks without `[patch.crates-io]`, plus `smb = 0.10.2` and `rust-embed` constraints |
-| [Hybrid-GPU Direct Vulkan Initialization](hybrid-gpu-vulkan-init.md) | Conservative allowlist `VK_LUNARG_direct_driver_loading`, single-roundtrip `dmabuf` `dev_t` probe, and clean `VULKAN \| GL` fallback avoiding ~1.9 s dGPU wakes |
-| [Runtime, Clipboard & Platform Compromises](runtime-and-platform.md) | Injecting Tokio `zbus` into `ashpd`, Wayland `wl_data_device` focus serials vs X11 clipboard scope, Niri window controls vs tiling opacity, and `shell.nix` / `NIX_CFLAGS_LINK` build guards |
+| [Upstream Forks & Dependency Pins](upstream-patches.md) | Why `zgui` tracks the direct `GanDesktop/zgui` (`gds-0.1.0`) Git fork without `[patch.crates-io]`, plus `smb = 0.10.2` and `rust-embed` constraints |
+| [Hybrid-GPU Direct Vulkan Initialization](hybrid-gpu-vulkan-init.md) | Conservative allowlist `VK_LUNARG_direct_driver_loading`, single-roundtrip `dmabuf` `dev_t` probe, and clean `VULKAN \| GL` fallback avoiding ~2 s dGPU wakes |
+| [Runtime, Clipboard & Platform Compromises](runtime-and-platform.md) | Injecting Tokio `zbus` into `ashpd`, multi-MIME file clipboard CAS with unfocused fallback, Niri window controls vs tiling opacity, and `shell.nix` / `NIX_CFLAGS_LINK` build guards |
 | [Terminal PTY Loop & Directory Policy](terminal-pty-loop.md) | Why `service::terminal` implements its own Tokio `AsyncFd` + `SIGCHLD` session loop instead of Alacritty's upstream event loop, and why directory switching never injects `cd` into live shells |
 | [External Tool Integrations](external-integrations.md) | CLI-based Baloo/KIO tag queries vs linking Qt/C++, external archive delegation (`OpenURI` vs CLI `7zz`), and non-NixOS `--nix` OpenGL limitations |

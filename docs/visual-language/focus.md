@@ -12,9 +12,9 @@ Keyboard focus across GDS is light, complete, and distinct from selection. Appli
 
 ## Single Owner, 1 px Thin Contour
 
-GDS installs GPUI Kit's `Theme.focus_ring = false` across initial startup, mode/source switches, and hot-reload updates:
+GDS disables `zgui-ui`'s external focus ring shadows (`FocusTokens::disable_ring_shadows` / `--zui-focus-ring-shadow: 0 0 #0000`) across initial startup, mode/source switches, and hot-reload updates:
 
-- Rather than disabling focus cues, `focus_ring = false` removes Kit's external `3 px` halo and instead tints existing `1 px` borders (or paints an inset/edge `1 px` contour on borderless controls and filled buttons using a contrast-safe foreground line).
+- Rather than disabling focus cues, disabling outer ring shadows removes `3 px` box-shadow halos and instead tints existing `1 px` borders (or paints an inset/edge `1 px` `:focus-visible` contour on borderless controls and filled buttons using a contrast-safe foreground line).
 - Shared buttons display this contour only in keyboard modality, while inputs, selects, and switches retain focus cues in both pointer and keyboard modalities.
 - Semantic focus ink remains opaque in all palettes, including High Contrast.
 - Accessible regions (`Alt+Space`, `Alt+L`, `Alt+V`, `Alt+T`, `Alt+N`) outline **only** the region or active notification cursor itself—once a child control or table owns focus, the enclosing region draws no second frame, and pointer clicks on rows or blank space leave no region outline.
@@ -27,7 +27,7 @@ In Files' data table context, native table selection bindings are disabled so `T
 
 ### Offscreen Rendering Comparison
 
-2× WGPU offscreen renders of the Files browser illustrating why the inset `1 px` contour replaced Kit's outer halo inside clipped scroll viewports:
+2× WGPU offscreen renders of the Files browser illustrating why the inset `1 px` contour replaced outer `3 px` halos inside clipped scroll viewports:
 
 | Clipped outer 3 px halo (avoided) | Shared 1 px inset keyboard contour |
 | --- | --- |

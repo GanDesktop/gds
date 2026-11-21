@@ -50,25 +50,20 @@ fn symlink_targets_preserve_file_directory_broken_and_unreachable_states() {
     assert!(snapshot.warnings.is_empty());
 
     let file_link = assert_symlink_entry(&snapshot, root.path(), "file-link.png");
+    let expected_rust = ContentType::from_mime(
+        ContentCategory::Code,
+        Arc::from("text/rust"),
+        DetectionSource::Filename,
+        true,
+    );
     assert_eq!(
         file_link.details.target,
         Some(LinkTarget::Resolved {
             kind: EntryKind::File,
-            content: Some(ContentType::new(
-                ContentCategory::Code,
-                Some("Rust"),
-                Some("text/rust"),
-            )),
+            content: Some(expected_rust.clone()),
         })
     );
-    assert_eq!(
-        file_link.details.display_content(),
-        Some(&ContentType::new(
-            ContentCategory::Code,
-            Some("Rust"),
-            Some("text/rust"),
-        ))
-    );
+    assert_eq!(file_link.details.display_content(), Some(&expected_rust));
 
     let folder_link = assert_symlink_entry(&snapshot, root.path(), "folder-link");
     assert_eq!(

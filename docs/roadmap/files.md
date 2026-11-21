@@ -1,5 +1,7 @@
 # GDS Files Roadmap
 
+See [File Type Detection and Display](file-types.md) for localized MIME descriptions, category icons, and ambiguous filename matches.
+
 ## 1. Built-In Archive Browsing & Extraction
 
 GDS Files currently delegates `.zip`, `.7z`, `.tar`, and `.tar.gz` files to external desktop archive managers. Planned built-in support splits into two phases:

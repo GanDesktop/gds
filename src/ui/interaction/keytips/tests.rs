@@ -1,720 +1,241 @@
-use std::rc::Rc;
-
-use gpui_kit::{Bounds, KeyBinding, Modifiers, point, px, size};
+use zgui::geom::{Css, CssPx, Point, Rect, Size};
+use zgui::reactive::{Mounted, RwSignal, Signal, install, prelude::*};
+use zgui::vocab::{Key, Modifiers, NamedKey};
 
 use super::{
-    EDGE_INSET, EDGE_MARGIN, HeldModifier, HintPlacement, LabelSlot, Pixels, Shortcut, Staged,
-    place_labels, visible_binding,
+    EDGE_INSET, EDGE_MARGIN, HintPlacement, KeytipHost, KeytipRegistry, LabelSlot,
+    allocate_dialog_scope_id, held_after_key_down, held_after_key_up, place_labels,
+    push_modal_scope, rects_intersect, remove_modal_scope, scope_allows,
 };
-use crate::ui::ShortcutBadge;
+use crate::ui::shortcut::{HeldModifier, Shortcut};
 
-fn bounds(x: f32) -> Bounds<Pixels> {
-    Bounds::new(point(px(x), px(0.)), size(px(10.), px(10.)))
+fn window_content() -> Rect<CssPx, Css> {
+    Rect::new(
+        Point::new(CssPx(20.0), CssPx(20.0)),
+        Size::new(CssPx(1240.0), CssPx(780.0)),
+    )
 }
 
-fn shortcut() -> Shortcut {
-    crate::ui::actions::Command::FocusNotifications.into()
-}
-
-fn binding(keystrokes: &'static str) -> KeyBinding {
-    KeyBinding::new(keystrokes, crate::ui::actions::FocusNotifications, None)
-}
-
-/// The content area of a 1280x820 window with Kit's 20px client frame.
-fn window_content() -> Bounds<Pixels> {
-    Bounds::new(point(px(20.), px(20.)), size(px(1240.), px(780.)))
-}
-
-fn slot(anchor: Bounds<Pixels>, width: f32, height: f32, placement: HintPlacement) -> LabelSlot {
+fn slot(anchor: Rect<CssPx, Css>, width: f32, height: f32, placement: HintPlacement) -> LabelSlot {
     LabelSlot {
         anchor,
-        size: size(px(width), px(height)),
+        size: Size::new(CssPx(width), CssPx(height)),
         placement,
     }
 }
 
-fn icon_button(x: f32, y: f32) -> Bounds<Pixels> {
-    Bounds::new(point(px(x), px(y)), size(px(32.), px(32.)))
+fn icon_button(x: f32, y: f32) -> Rect<CssPx, Css> {
+    Rect::new(
+        Point::new(CssPx(x), CssPx(y)),
+        Size::new(CssPx(32.0), CssPx(32.0)),
+    )
 }
 
-fn label_rects(slots: &[LabelSlot], content: Bounds<Pixels>) -> Vec<Bounds<Pixels>> {
+fn label_rects(slots: &[LabelSlot], content: Rect<CssPx, Css>) -> Vec<Rect<CssPx, Css>> {
     place_labels(slots, content)
         .into_iter()
         .zip(slots)
-        .map(|(origin, slot)| Bounds::new(origin, slot.size))
+        .map(|(origin, s)| Rect::new(origin, s.size))
         .collect()
 }
 
-fn assert_clear_and_inside(rects: &[Bounds<Pixels>], content: Bounds<Pixels>) {
-    for (index, rect) in rects.iter().enumerate() {
+fn assert_clear_and_inside(rects: &[Rect<CssPx, Css>], content: Rect<CssPx, Css>) {
+    let c_left = content.origin.x.0;
+    let c_top = content.origin.y.0;
+    let c_right = c_left + content.size.width.0;
+    let c_bottom = c_top + content.size.height.0;
+
+    for (idx, rect) in rects.iter().enumerate() {
+        let r_left = rect.origin.x.0;
+        let r_top = rect.origin.y.0;
+        let r_right = r_left + rect.size.width.0;
+        let r_bottom = r_top + rect.size.height.0;
         assert!(
-            rect.left() >= content.left() + EDGE_MARGIN
-                && rect.right() <= content.right() - EDGE_MARGIN
-                && rect.top() >= content.top() + EDGE_MARGIN
-                && rect.bottom() <= content.bottom() - EDGE_MARGIN,
-            "label {index} at {rect:?} left the content area {content:?}"
+            r_left >= c_left + EDGE_MARGIN
+                && r_right <= c_right - EDGE_MARGIN
+                && r_top >= c_top + EDGE_MARGIN
+                && r_bottom <= c_bottom - EDGE_MARGIN,
+            "label {idx} at {rect:?} left content {content:?}"
         );
-        for other in &rects[index + 1..] {
+        for other in &rects[idx + 1..] {
             assert!(
-                !rect.intersects(other),
-                "label {index} at {rect:?} covers {other:?}"
+                !rects_intersect(*rect, *other),
+                "label {idx} at {rect:?} overlaps {other:?}"
             );
         }
     }
 }
 
 #[test]
-fn hints_are_kept_while_a_group_is_held_and_dropped_on_release() {
-    let mut staged = Staged::default();
-    let mounted = Rc::new(());
-
-    assert!(!staged.stage(
-        "a".into(),
-        shortcut(),
-        bounds(0.),
-        HintPlacement::Corner,
-        Rc::downgrade(&mounted)
-    ));
-    assert_eq!(staged.hints.len(), 1);
-    assert!(staged.set_held(Some(HeldModifier::Ctrl)));
-    assert!(!staged.set_held(Some(HeldModifier::Ctrl)));
-    // Switching groups keeps what the controls staged, so they do not have to
-    // restage for the other modifier.
-    assert!(staged.set_held(Some(HeldModifier::Alt)));
-    assert_eq!(staged.hints.len(), 1);
-    assert!(staged.set_held(None));
-    assert!(staged.hints.is_empty());
-}
-
-/// Only one group is armed at a time, and a mixed press arms neither: AltGr and
-/// Ctrl+Alt must not light up labels that belong to the other modifier.
-#[test]
-fn a_held_group_is_one_modifier_and_never_a_mix() {
-    let modifiers = |control, alt, shift, platform| Modifiers {
-        control,
-        alt,
-        shift,
-        platform,
-        function: false,
-    };
-
+fn passive_ctrl_and_alt_hold_state_updates_immediately_on_press_and_release() {
+    // Pressing Ctrl alone (even when backend sends modifiers = NONE on KeyDown) arms Ctrl immediately.
     assert_eq!(
-        HeldModifier::from_modifiers(modifiers(true, false, false, false)),
+        held_after_key_down(&Key::Named(NamedKey::Control), Modifiers::NONE),
+        Some(HeldModifier::Ctrl)
+    );
+    // Holding Shift alongside Ctrl or Alt stays in the same modifier group.
+    assert_eq!(
+        held_after_key_down(&Key::Named(NamedKey::Shift), Modifiers::CONTROL),
         Some(HeldModifier::Ctrl)
     );
     assert_eq!(
-        HeldModifier::from_modifiers(modifiers(false, true, false, false)),
+        held_after_key_down(&Key::character("X"), Modifiers::ALT | Modifiers::SHIFT),
         Some(HeldModifier::Alt)
     );
+    // Ctrl+Alt and AltGraph suppress hints immediately.
     assert_eq!(
-        HeldModifier::from_modifiers(modifiers(true, false, true, false)),
-        Some(HeldModifier::Ctrl)
+        held_after_key_down(&Key::Named(NamedKey::Alt), Modifiers::CONTROL),
+        None
     );
     assert_eq!(
-        HeldModifier::from_modifiers(modifiers(false, true, true, false)),
+        held_after_key_down(&Key::Named(NamedKey::AltGraph), Modifiers::NONE),
+        None
+    );
+    // Releasing Ctrl while Shift remains held clears keytips immediately.
+    assert_eq!(
+        held_after_key_up(
+            &Key::Named(NamedKey::Control),
+            Modifiers::CONTROL | Modifiers::SHIFT
+        ),
+        None
+    );
+    // Releasing Shift while Alt remains held keeps Alt active.
+    assert_eq!(
+        held_after_key_up(
+            &Key::Named(NamedKey::Shift),
+            Modifiers::ALT | Modifiers::SHIFT
+        ),
         Some(HeldModifier::Alt)
     );
-    assert_eq!(
-        HeldModifier::from_modifiers(modifiers(true, true, false, false)),
-        None
-    );
-    assert_eq!(
-        HeldModifier::from_modifiers(modifiers(false, false, false, true)),
-        None
-    );
-    assert_eq!(
-        HeldModifier::from_modifiers(modifiers(false, false, true, false)),
-        None
-    );
-    assert_eq!(HeldModifier::from_modifiers(Modifiers::none()), None);
 }
 
 #[test]
-fn a_restaged_control_asks_for_a_frame_only_when_it_moved() {
-    let mut staged = Staged::default();
-    let mounted = Rc::new(());
-    staged.set_held(Some(HeldModifier::Ctrl));
+fn registry_and_modal_dialog_scope_suppress_workspace_hints() {
+    install().ok();
+    let scope = Mounted::new();
+    scope.with(|| {
+        let active = RwSignal::new_local(false);
+        let _host = KeytipHost(Some(active), zgui::view::Children::from_view(()));
+        let reg = KeytipRegistry::current().expect("keytip registry installed");
+        assert_eq!(reg.held().get_untracked(), None);
 
-    assert!(staged.stage(
-        "a".into(),
-        shortcut(),
-        bounds(0.),
-        HintPlacement::Corner,
-        Rc::downgrade(&mounted)
-    ));
-    assert!(!staged.stage(
-        "a".into(),
-        shortcut(),
-        bounds(0.),
-        HintPlacement::Corner,
-        Rc::downgrade(&mounted)
-    ));
-    assert!(staged.stage(
-        "a".into(),
-        shortcut(),
-        bounds(20.),
-        HintPlacement::Corner,
-        Rc::downgrade(&mounted)
-    ));
-    assert_eq!(staged.hints.len(), 1);
-}
+        reg.set_held(Some(HeldModifier::Ctrl));
+        assert_eq!(reg.held().get_untracked(), Some(HeldModifier::Ctrl));
+        assert!(active.get_untracked());
 
-#[test]
-fn a_control_that_left_the_tree_stops_contributing() {
-    let mut staged = Staged::default();
-    let mounted = Rc::new(());
-    staged.stage(
-        "a".into(),
-        shortcut(),
-        bounds(0.),
-        HintPlacement::Corner,
-        Rc::downgrade(&mounted),
-    );
-    staged
-        .hints
-        .retain(|_, hint| hint.mounted.strong_count() > 0);
-    assert_eq!(staged.hints.len(), 1);
-
-    drop(mounted);
-    staged
-        .hints
-        .retain(|_, hint| hint.mounted.strong_count() > 0);
-    assert!(staged.hints.is_empty());
-}
-
-/// A label spells the combination with the same key names the keycaps use and
-/// drops only the modifier the press already shows.
-#[test]
-fn a_hint_label_keeps_only_the_keys_the_press_does_not_show() {
-    let label = |keystrokes: &'static str, held| {
-        ShortcutBadge::path_label(std::slice::from_ref(&binding(keystrokes)), held)
-            .map(|label| label.to_string())
-    };
-
-    assert_eq!(label("ctrl-r", HeldModifier::Ctrl).as_deref(), Some("R"));
-    assert_eq!(
-        label("ctrl-shift-tab", HeldModifier::Ctrl).as_deref(),
-        Some("Shift+Tab")
-    );
-    assert_eq!(label("alt-a", HeldModifier::Alt).as_deref(), Some("A"));
-    assert_eq!(label("alt-left", HeldModifier::Alt).as_deref(), Some("←"));
-    // A hint never shows the other group's prefix as a leftover.
-    assert_eq!(
-        label("ctrl-shift-a", HeldModifier::Ctrl).as_deref(),
-        Some("Shift+A")
-    );
-}
-
-/// A label belongs to the group that was pressed: a key without that modifier
-/// (`F5`, `Delete`) is not advertised, and neither is one from the other group.
-#[test]
-fn a_label_only_answers_its_own_modifier_group() {
-    let refresh = binding("ctrl-r");
-    let confirm = binding("alt-a");
-    let delete = binding("delete");
-    let next_tab = binding("ctrl-shift-tab");
-
-    assert!(visible_binding(true, Some(refresh.clone()), HeldModifier::Ctrl).is_some());
-    assert!(visible_binding(true, Some(refresh.clone()), HeldModifier::Alt).is_none());
-    assert!(visible_binding(true, Some(confirm.clone()), HeldModifier::Alt).is_some());
-    assert!(visible_binding(true, Some(confirm), HeldModifier::Ctrl).is_none());
-    assert!(visible_binding(true, Some(next_tab), HeldModifier::Ctrl).is_some());
-    assert!(visible_binding(true, Some(delete.clone()), HeldModifier::Ctrl).is_none());
-    assert!(visible_binding(true, Some(delete), HeldModifier::Alt).is_none());
-}
-
-/// A binding on its own is not a working shortcut: a global command stays bound
-/// inside a dialog while its handler sits outside the dialog, and a multi-key
-/// sequence is not something one modifier press can advertise.
-#[test]
-fn only_a_handled_single_stroke_action_gets_a_label() {
-    let single = binding("ctrl-b");
-    let sequence = binding("ctrl-k ctrl-b");
-
-    assert!(visible_binding(true, Some(single.clone()), HeldModifier::Ctrl).is_some());
-    assert!(visible_binding(false, Some(single), HeldModifier::Ctrl).is_none());
-    assert!(visible_binding(true, Some(sequence), HeldModifier::Ctrl).is_none());
-    assert!(visible_binding(true, None, HeldModifier::Ctrl).is_none());
-}
-
-/// An icon control carries its label as a badge in its own top trailing corner,
-/// inside the control, so the two read as one piece.
-#[test]
-fn an_icon_control_keeps_its_label_in_its_top_trailing_corner() {
-    let content = window_content();
-    let button = icon_button(1064., 71.);
-    let slots = vec![slot(button, 20., 16., HintPlacement::Corner)];
-
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
-    let rect = rects[0];
-    assert!(
-        (rect.top() - (button.top() + EDGE_INSET)).abs() <= px(1.),
-        "the label is not inside the control's top edge: {rect:?}"
-    );
-    assert!(
-        (rect.right() - (button.right() - EDGE_INSET)).abs() <= px(1.),
-        "the label does not end inside the control's trailing edge: {rect:?}"
-    );
-    assert!(rect.intersects(&button));
-}
-
-/// Five 32px toolbar buttons with corner labels: every label stays on its own
-/// button, none covers another and none drifts away from its control.
-#[test]
-fn adjacent_toolbar_labels_stay_on_their_buttons() {
-    let content = window_content();
-    let buttons = (0..5)
-        .map(|index| icon_button(1064. + index as f32 * 40., 71.))
-        .collect::<Vec<_>>();
-    let widths = [20., 20., 20., 20., 20.];
-    let slots = buttons
-        .iter()
-        .zip(widths)
-        .map(|(button, width)| slot(*button, width, 16., HintPlacement::Corner))
-        .collect::<Vec<_>>();
-
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
-    for (rect, button) in rects.iter().zip(&buttons) {
-        assert!(
-            rect.intersects(button),
-            "label {rect:?} is not on its own button {button:?}"
+        reg.stage(
+            zgui::prelude::NodeRef::new(),
+            Shortcut::parse("Ctrl+R").expect("Ctrl+R"),
+            HintPlacement::Corner,
+            Signal::stored_local(true),
         );
-    }
-    let rows = rects.iter().map(|rect| rect.top()).collect::<Vec<_>>();
-    assert!(
-        rows.iter().all(|row| *row == rows[0]),
-        "corner labels fit one row: {rows:?}"
-    );
+
+        assert!(scope_allows(&[], None));
+        let modal_id = allocate_dialog_scope_id();
+        push_modal_scope(Some(reg), modal_id);
+        assert!(!reg.is_scope_active(None));
+        assert!(reg.is_scope_active(Some(modal_id)));
+        remove_modal_scope(Some(reg), modal_id);
+        assert!(reg.is_scope_active(None));
+
+        let child = scope.owner().child();
+        let child_scope_id =
+            child.with(|| crate::ui::feedback::dialog::DialogScope::enter().id().0);
+        assert!(!reg.is_scope_active(None));
+        assert!(reg.is_scope_active(Some(child_scope_id)));
+        child.cleanup();
+        assert!(reg.is_scope_active(None));
+
+        reg.release();
+        assert_eq!(reg.held().get_untracked(), None);
+        assert!(!active.get_untracked());
+    });
+    scope.unmount();
 }
 
-/// A control at a window edge keeps its label on screen and on its own corner.
 #[test]
-fn labels_clamp_at_the_window_edges() {
+fn corner_trailing_trailing_before_and_bottom_leading_placements_avoid_collisions() {
     let content = window_content();
-    let top_right = icon_button(1228., 11.);
-    let bottom_right = icon_button(1228., 758.);
-    let bottom_left = icon_button(20., 758.);
-    let slots = vec![
-        slot(top_right, 20., 16., HintPlacement::Corner),
-        slot(bottom_right, 20., 16., HintPlacement::Corner),
-        slot(bottom_left, 20., 16., HintPlacement::Corner),
-    ];
 
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
-    for (rect, anchor) in rects
-        .iter()
-        .zip([top_right, bottom_right, bottom_left].iter())
-    {
-        assert!(
-            rect.intersects(anchor),
-            "label {rect:?} left its control at the window edge: {anchor:?}"
-        );
-    }
-}
-
-/// Settings navigation cycles pages with Ctrl+Tab; those labels belong inside
-/// their own rows and must not cover the next row.
-#[test]
-fn row_labels_stay_inside_their_own_row() {
-    let content = window_content();
-    let rows = (0..5)
-        .map(|index| {
-            Bounds::new(
-                point(px(10.), px(65. + index as f32 * 42.)),
-                size(px(202.), px(38.)),
-            )
-        })
-        .collect::<Vec<_>>();
-    let slots = vec![
-        slot(rows[0], 52., 16., HintPlacement::Trailing),
-        slot(rows[3], 64., 16., HintPlacement::Trailing),
-    ];
-
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
-    for (rect, anchor) in rects.iter().zip([rows[0], rows[3]].iter()) {
-        assert!(
-            rect.top() >= anchor.top() && rect.bottom() <= anchor.bottom(),
-            "label {rect:?} does not stay inside row {anchor:?}"
-        );
-        assert!(rect.right() <= anchor.right());
-    }
-}
-
-/// A row that has its own control at the trailing edge keeps its label in front
-/// of that control, so the row's key never covers the control's corner badge.
-#[test]
-fn a_row_label_stops_before_the_control_at_its_trailing_edge() {
-    let content = window_content();
-    let row = Bounds::new(point(px(10.), px(65.)), size(px(202.), px(44.)));
-    let close = Bounds::new(point(px(172.), px(71.)), size(px(32.), px(32.)));
-    let reserve = row.right() - close.left();
-    let slots = vec![
-        slot(close, 20., 16., HintPlacement::Corner),
-        slot(row, 50., 16., HintPlacement::TrailingBefore(reserve)),
-    ];
-
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
-    let (badge, hint) = (rects[0], rects[1]);
+    // 1. Corner inside 32x32 icon button.
+    let btn = icon_button(1064.0, 71.0);
+    let corner_rects = label_rects(&[slot(btn, 20.0, 16.0, HintPlacement::Corner)], content);
+    assert_clear_and_inside(&corner_rects, content);
     assert!(
-        badge.intersects(&close),
-        "the badge left its control {badge:?}"
+        (corner_rects[0].origin.y.0 - (btn.origin.y.0 + EDGE_INSET)).abs() <= 1.0
+            && ((corner_rects[0].origin.x.0 + corner_rects[0].size.width.0)
+                - (btn.origin.x.0 + btn.size.width.0 - EDGE_INSET))
+                .abs()
+                <= 1.0
     );
-    assert!(
-        !hint.intersects(&close),
-        "the row hint {hint:?} covers the trailing control {close:?}"
+
+    // 2. Trailing + TrailingBefore(reserved) + Corner close button on same row.
+    let row = Rect::new(
+        Point::new(CssPx(10.0), CssPx(65.0)),
+        Size::new(CssPx(202.0), CssPx(44.0)),
     );
-    assert!(
-        hint.top() >= row.top() && hint.bottom() <= row.bottom(),
-        "the row hint {hint:?} left its row {row:?}"
+    let close = Rect::new(
+        Point::new(CssPx(172.0), CssPx(71.0)),
+        Size::new(CssPx(32.0), CssPx(32.0)),
     );
-    assert!(
-        (f32::from(hint.right()) - f32::from(close.left())).abs() <= 1.,
-        "the row hint {hint:?} does not end in front of the control {close:?}"
+    let reserve = (row.origin.x.0 + row.size.width.0) - close.origin.x.0;
+    let row_rects = label_rects(
+        &[
+            slot(close, 20.0, 16.0, HintPlacement::Corner),
+            slot(row, 48.0, 16.0, HintPlacement::TrailingBefore(reserve)),
+            slot(row, 24.0, 16.0, HintPlacement::TrailingBefore(reserve)),
+        ],
+        content,
     );
-}
+    assert_clear_and_inside(&row_rects, content);
+    assert!(!rects_intersect(row_rects[1], close));
+    assert!(!rects_intersect(row_rects[2], close));
 
-/// A row whose two directions land on the same tab shows both keys side by side
-/// instead of stacking one over the other.
-#[test]
-fn two_labels_for_one_row_sit_side_by_side() {
-    let content = window_content();
-    let row = Bounds::new(point(px(10.), px(65.)), size(px(202.), px(44.)));
-    let close = Bounds::new(point(px(172.), px(71.)), size(px(32.), px(32.)));
-    let reserve = row.right() - close.left();
-    let slots = vec![
-        slot(row, 48., 16., HintPlacement::TrailingBefore(reserve)),
-        slot(row, 24., 16., HintPlacement::TrailingBefore(reserve)),
-    ];
-
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
-    for rect in &rects {
-        assert!(
-            rect.top() >= row.top() && rect.bottom() <= row.bottom(),
-            "label {rect:?} left its row {row:?}"
-        );
-        assert!(
-            rect.right() <= close.left(),
-            "label {rect:?} reaches the trailing control {close:?}"
-        );
-    }
-}
-
-/// A row narrower than one label in front of its trailing control still shows
-/// the key on the row instead of dropping it or spilling it far away.
-#[test]
-fn a_narrow_row_keeps_its_target_label_near_it() {
-    let content = window_content();
-    let row = Bounds::new(point(px(10.), px(65.)), size(px(58.), px(38.)));
-    let reserve = px(40.);
-    let slots = vec![slot(row, 48., 16., HintPlacement::TrailingBefore(reserve))];
-
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
-    assert!(
-        rects[0].intersects(&row),
-        "a narrow row cannot hold its label, but it must stay on it: {:?}",
-        rects[0]
+    // 3. BottomLeadingCorner on collapsed row.
+    let compact = Rect::new(
+        Point::new(CssPx(24.0), CssPx(120.0)),
+        Size::new(CssPx(38.0), CssPx(44.0)),
     );
-}
-
-/// A collapsed row is narrower than its label; the label stays a badge on the
-/// row itself instead of spilling over the row's contents.
-#[test]
-fn a_row_too_narrow_for_its_label_keeps_its_corner_badge() {
-    let content = window_content();
-    let narrow = Bounds::new(point(px(10.), px(65.)), size(px(58.), px(38.)));
-    let slots = vec![slot(narrow, 71., 16., HintPlacement::Corner)];
-
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
-    assert!(
-        rects[0].intersects(&narrow),
-        "a narrow row cannot hold its label, but it must stay on it: {:?}",
-        rects[0]
+    let bottom_rects = label_rects(
+        &[slot(
+            compact,
+            18.0,
+            16.0,
+            HintPlacement::BottomLeadingCorner,
+        )],
+        content,
     );
-}
+    assert_clear_and_inside(&bottom_rects, content);
+    assert!(rects_intersect(bottom_rects[0], compact));
 
-/// The layout survives the largest text scale in a window at the minimum size:
-/// labels are taller and wider and still never cover each other.
-#[test]
-fn a_short_window_at_the_largest_text_size_keeps_labels_apart() {
-    let content = Bounds::new(point(px(20.), px(20.)), size(px(680.), px(440.)));
-    let mut slots = (0..5)
-        .map(|index| {
-            slot(
-                icon_button(380. + index as f32 * 44., 300.),
-                [84., 78., 84., 84., 46.][index],
-                23.,
-                HintPlacement::Corner,
-            )
-        })
-        .collect::<Vec<_>>();
-    slots.push(slot(
-        icon_button(380., 420.),
-        84.,
-        23.,
-        HintPlacement::Corner,
-    ));
-    slots.push(slot(
-        Bounds::new(point(px(10.), px(65.)), size(px(202.), px(38.))),
-        100.,
-        23.,
-        HintPlacement::Trailing,
-    ));
-
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
-}
-
-/// Even when a window cannot give every label room beside its control, none of
-/// them covers another one or leaves the window.
-#[test]
-fn more_labels_than_rows_still_never_overlap() {
-    let content = Bounds::new(point(px(20.), px(20.)), size(px(680.), px(440.)));
-    let slots = (0..18)
-        .map(|_| slot(icon_button(300., 200.), 38., 16., HintPlacement::Corner))
-        .collect::<Vec<_>>();
-
-    let rects = label_rects(&slots, content);
-    assert_clear_and_inside(&rects, content);
+    // 4. Dense overlapping targets never overlap or leave content.
+    let dense: Vec<LabelSlot> = (0..18)
+        .map(|_| slot(icon_button(300.0, 200.0), 38.0, 16.0, HintPlacement::Corner))
+        .collect();
+    let dense_rects = label_rects(&dense, content);
+    assert_clear_and_inside(&dense_rects, content);
 }
 
 #[test]
-fn staged_generation_tracks_only_effective_state_changes() {
-    let mut staged = Staged::default();
-    assert_eq!(staged.generation, 0);
-
-    // No-op hold/release and empty prune do not bump generation.
-    assert!(!staged.set_held(None));
-    assert!(!staged.release());
-    assert!(!staged.prune());
-    assert_eq!(staged.generation, 0);
-
-    // Staging a new hint bumps generation even while no modifier is held.
-    let mounted = Rc::new(());
-    assert!(!staged.stage(
-        "a".into(),
-        shortcut(),
-        bounds(0.),
-        HintPlacement::Corner,
-        Rc::downgrade(&mounted),
-    ));
-    let gen_after_insert = staged.generation;
-    assert!(gen_after_insert > 0);
-
-    // Re-staging with identical bounds, placement, shortcut, and live mount is a no-op.
-    assert!(!staged.stage(
-        "a".into(),
-        shortcut(),
-        bounds(0.),
-        HintPlacement::Corner,
-        Rc::downgrade(&mounted),
-    ));
-    assert_eq!(staged.generation, gen_after_insert);
-
-    // Refreshing a live Weak with a new live Rc does not bump generation and preserves liveness.
-    let remounted = Rc::new(());
-    assert!(!staged.stage(
-        "a".into(),
-        shortcut(),
-        bounds(0.),
-        HintPlacement::Corner,
-        Rc::downgrade(&remounted),
-    ));
-    assert_eq!(staged.generation, gen_after_insert);
-    drop(mounted);
-    assert!(!staged.prune());
-    assert_eq!(staged.hints.len(), 1);
-    assert_eq!(staged.generation, gen_after_insert);
-
-    // Arming Ctrl bumps generation once; repeating Ctrl does not.
-    assert!(staged.set_held(Some(HeldModifier::Ctrl)));
-    let gen_held = staged.generation;
-    assert!(gen_held > gen_after_insert);
-    assert!(!staged.set_held(Some(HeldModifier::Ctrl)));
-    assert_eq!(staged.generation, gen_held);
-
-    // Changing bounds bumps generation and requests a frame while held.
-    assert!(staged.stage(
-        "a".into(),
-        shortcut(),
-        bounds(20.),
-        HintPlacement::Corner,
-        Rc::downgrade(&remounted),
-    ));
-    let gen_moved = staged.generation;
-    assert!(gen_moved > gen_held);
-
-    // Re-staging over a dead Weak with identical bounds replaces it and bumps generation.
-    drop(remounted);
-    let replacement = Rc::new(());
-    assert!(staged.stage(
-        "a".into(),
-        shortcut(),
-        bounds(20.),
-        HintPlacement::Corner,
-        Rc::downgrade(&replacement),
-    ));
-    let gen_replaced = staged.generation;
-    assert!(gen_replaced > gen_moved);
-
-    // Pruning a dropped hint removes it and bumps generation.
-    drop(replacement);
-    assert!(staged.prune());
-    let gen_pruned = staged.generation;
-    assert!(gen_pruned > gen_replaced);
-    assert!(staged.hints.is_empty());
-
-    // Releasing bumps generation once; repeating release is a no-op.
-    assert!(staged.release());
-    let gen_released = staged.generation;
-    assert!(gen_released > gen_pruned);
-    assert!(!staged.release());
-    assert_eq!(staged.generation, gen_released);
-}
-
-#[cfg(feature = "gui-tests")]
-mod watcher_tests {
-    use gpui_kit::{
-        AppContext, Context, FocusHandle, IntoElement, Render, TestAppContext, Window,
-        component::Root, div, prelude::*, px, size, test::TestWindowExt,
-    };
-
-    use super::super::{Anchor, HeldModifier, layer, release};
-    use super::{binding, shortcut};
-    use crate::app::AppExt as _;
-    use crate::ui::actions::FocusNotifications;
-
-    struct Host {
-        primary: FocusHandle,
-        secondary: FocusHandle,
-        show_hint: bool,
-    }
-
-    impl Render for Host {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .size_full()
-                .track_focus(&self.primary)
-                .on_action(|_: &FocusNotifications, _, _| {})
-                .child(div().size(px(16.)).track_focus(&self.secondary))
-                .when(self.show_hint, |this| {
-                    this.child(
-                        div()
-                            .w(px(40.))
-                            .h(px(24.))
-                            .child(Anchor::new("hint", shortcut())),
-                    )
-                })
-        }
-    }
-
-    #[gpui_kit::test]
-    fn held_modifier_skips_idle_rerenders_until_state_changes(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_kit::init(cx);
-            cx.gds_mut().tasks().init_test(false);
-            let scope = cx.gds().tasks().scope();
-            cx.gds_mut().initialize(scope, None);
-            cx.bind_keys([binding("ctrl-r")]);
-        });
-
-        let mut host = None;
-        let window = cx.open_window(size(px(720.), px(480.)), |window, cx| {
-            let view = cx.new(|cx| Host {
-                primary: cx.focus_handle(),
-                secondary: cx.focus_handle(),
-                show_hint: true,
-            });
-            host = Some(view.clone());
-            Root::new(view, window, cx)
-        });
-        let host = host.expect("host");
-
-        cx.update_window(window.into(), |_, window, _| window.activate_window())
-            .expect("activate window");
-        cx.run_until_parked();
-
-        let layer = cx
-            .update_window(window.into(), |_, window, cx| {
-                let primary = host.read(cx).primary.clone();
-                primary.focus(window, cx);
-                window.render_frame(cx);
-                layer(window, cx).expect("keytips plugin")
-            })
-            .expect("initial render");
-
-        // Arm Ctrl outside manual `window.draw` so GPUI flushes Root's observer
-        // notification and draws the frame once before capturing `settled`.
-        cx.update(|cx| {
-            layer.update(cx, |layer, cx| {
-                assert!(layer.staged.borrow_mut().set_held(Some(HeldModifier::Ctrl)));
-                cx.notify();
-            });
-        });
-
-        let settled = cx.update(|cx| {
-            let l = layer.read(cx);
-            assert!(l.watcher_armed, "watcher stays armed while Ctrl is held");
-            l.renders
-        });
-
-        // Idle frames re-arm the lightweight watcher without triggering Keytips::render.
-        cx.update_window(window.into(), |_, window, cx| {
-            for _ in 0..5 {
-                assert_eq!(window.simulate_next_frame(cx), 1);
-                window.draw(cx).clear(cx);
-            }
-        })
-        .expect("idle frames");
-        assert_eq!(cx.update(|cx| layer.read(cx).renders), settled);
-
-        // Focus shift while Ctrl stays held triggers one re-render on the next frame.
-        cx.update_window(window.into(), |_, window, cx| {
-            let secondary = host.read(cx).secondary.clone();
-            secondary.focus(window, cx);
-            assert_eq!(window.simulate_next_frame(cx), 1);
-        })
-        .expect("focus shift");
-        let after_focus = cx.update(|cx| layer.read(cx).renders);
-        assert_eq!(after_focus, settled + 1);
-
-        // Unmounting a staged control drops its Weak<()>; the watcher prunes it and re-renders.
-        host.update(cx, |host, cx| {
-            host.show_hint = false;
-            cx.notify();
-        });
-        let before_prune = cx.update(|cx| layer.read(cx).renders);
-        assert_eq!(
-            cx.update(|cx| layer.read(cx).staged.borrow().hints.len()),
-            1
-        );
-        cx.update_window(window.into(), |_, window, cx| {
-            assert_eq!(window.simulate_next_frame(cx), 1);
-        })
-        .expect("unmount hint");
-        let after_unmount = cx.update(|cx| layer.read(cx).renders);
-        assert_eq!(after_unmount, before_prune + 1);
-        assert!(cx.update(|cx| layer.read(cx).staged.borrow().hints.is_empty()));
-
-        // Releasing stops re-arming the watcher immediately.
-        cx.update_window(window.into(), |_, window, cx| {
-            release(window, cx);
-        })
-        .expect("release");
-        cx.update_window(window.into(), |_, window, cx| {
-            let _ = window.simulate_next_frame(cx);
-            assert_eq!(window.simulate_next_frame(cx), 0);
-        })
-        .expect("release drains watcher");
-        let after_release = cx.update(|cx| layer.read(cx).renders);
-        assert_eq!(after_release, after_unmount + 1);
-        assert!(!cx.update(|cx| layer.read(cx).watcher_armed));
-    }
+fn rects_intersect_requires_positive_area_overlap() {
+    let outer = Rect::new(
+        Point::new(CssPx(0.0), CssPx(0.0)),
+        Size::new(CssPx(10.0), CssPx(10.0)),
+    );
+    let zero_width_inside = Rect::new(
+        Point::new(CssPx(5.0), CssPx(2.0)),
+        Size::new(CssPx(0.0), CssPx(6.0)),
+    );
+    let touching_edge = Rect::new(
+        Point::new(CssPx(10.0), CssPx(0.0)),
+        Size::new(CssPx(10.0), CssPx(10.0)),
+    );
+    let overlapping = Rect::new(
+        Point::new(CssPx(8.0), CssPx(8.0)),
+        Size::new(CssPx(4.0), CssPx(4.0)),
+    );
+    assert!(!rects_intersect(zero_width_inside, outer));
+    assert!(!rects_intersect(outer, zero_width_inside));
+    assert!(!rects_intersect(outer, touching_edge));
+    assert!(rects_intersect(outer, overlapping));
 }

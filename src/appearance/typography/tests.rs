@@ -55,16 +55,16 @@ fn only_installed_or_unverifiable_families_are_used_directly() {
     let chosen = ResolvedFamily::resolve(Some("Noto Sans"), &installed, || {
         panic!("an installed explicit font must not query the system default")
     });
-    assert_eq!(chosen.family.as_ref(), "Noto Sans");
+    assert_eq!(chosen.family.as_str(), "Noto Sans");
     assert_eq!(chosen.unavailable, None);
 
     let missing =
         ResolvedFamily::resolve(Some("Missing Sans"), &installed, || "Sarasa UI SC".into());
-    assert_eq!(missing.family.as_ref(), "Sarasa UI SC");
+    assert_eq!(missing.family.as_str(), "Sarasa UI SC");
     assert_eq!(missing.unavailable.as_deref(), Some("Missing Sans"));
 
     let system = ResolvedFamily::resolve(None, &installed, || "Sarasa UI SC".into());
-    assert_eq!(system.family.as_ref(), "Sarasa UI SC");
+    assert_eq!(system.family.as_str(), "Sarasa UI SC");
     assert_eq!(system.unavailable, None);
 
     // An empty list means the platform font system could not be queried, so the
@@ -72,7 +72,7 @@ fn only_installed_or_unverifiable_families_are_used_directly() {
     let unverified = ResolvedFamily::resolve(Some("Custom Sans"), &[], || {
         panic!("an unverifiable explicit font must retain its configured family")
     });
-    assert_eq!(unverified.family.as_ref(), "Custom Sans");
+    assert_eq!(unverified.family.as_str(), "Custom Sans");
     assert_eq!(unverified.unavailable, None);
 }
 
@@ -121,8 +121,8 @@ mod linux_cache_tests {
             },
         );
         assert_eq!(queries.get(), 1);
-        assert_eq!(first.sans_serif.as_ref(), "Sarasa UI SC");
-        assert_eq!(first.monospace.as_ref(), "FiraCode Nerd Font");
+        assert_eq!(first.sans_serif.as_str(), "Sarasa UI SC");
+        assert_eq!(first.monospace.as_str(), "FiraCode Nerd Font");
 
         // 2. Identical env and watched state hits cache without calling query().
         let second = linux::load_or_query_with(
@@ -138,7 +138,7 @@ mod linux_cache_tests {
             },
         );
         assert_eq!(queries.get(), 1);
-        assert_eq!(second.sans_serif.as_ref(), "Sarasa UI SC");
+        assert_eq!(second.sans_serif.as_str(), "Sarasa UI SC");
 
         // 3. Env change invalidates cache.
         let env_changed = linux::load_or_query_with(
@@ -154,7 +154,7 @@ mod linux_cache_tests {
             },
         );
         assert_eq!(queries.get(), 2);
-        assert_eq!(env_changed.sans_serif.as_ref(), "Noto Sans");
+        assert_eq!(env_changed.sans_serif.as_str(), "Noto Sans");
 
         // 4. Editing a watched regular file invalidates cache.
         fs::write(&watched_file, b"<fontconfig><!-- updated --></fontconfig>")
@@ -172,7 +172,7 @@ mod linux_cache_tests {
             },
         );
         assert_eq!(queries.get(), 3);
-        assert_eq!(file_changed.sans_serif.as_ref(), "Updated Sans");
+        assert_eq!(file_changed.sans_serif.as_str(), "Updated Sans");
 
         // 5. Retargeting a watched symlink invalidates cache.
         fs::remove_file(&watched_link).expect("unlink old symlink");
@@ -190,7 +190,7 @@ mod linux_cache_tests {
             },
         );
         assert_eq!(queries.get(), 4);
-        assert_eq!(link_changed.sans_serif.as_ref(), "Symlink Sans");
+        assert_eq!(link_changed.sans_serif.as_str(), "Symlink Sans");
 
         // 6. Creating a previously Missing watched directory invalidates cache.
         fs::create_dir(&missing_dir).expect("create previously missing watched dir");
@@ -207,7 +207,7 @@ mod linux_cache_tests {
             },
         );
         assert_eq!(queries.get(), 5);
-        assert_eq!(created.sans_serif.as_ref(), "Created Sans");
+        assert_eq!(created.sans_serif.as_str(), "Created Sans");
 
         // 7. Corrupt JSON recovers by re-querying and overwriting cache.
         fs::write(&cache_path, b"{corrupt json").expect("corrupt cache");
@@ -224,7 +224,7 @@ mod linux_cache_tests {
             },
         );
         assert_eq!(queries.get(), 6);
-        assert_eq!(recovered.sans_serif.as_ref(), "Recovered Sans");
+        assert_eq!(recovered.sans_serif.as_str(), "Recovered Sans");
     }
 
     #[test]

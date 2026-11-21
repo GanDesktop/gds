@@ -1,104 +1,399 @@
 //! Shared capacity meter: the filled part is occupied or reserved; the
 //! remaining track is available. Callers supply a localized byte summary.
 
-use gds_uim::{component, el};
-use gpui_kit::{
-    IntoElement,
-    component::{ActiveTheme, Sizable, progress::Progress},
-    prelude::*,
-    *,
-};
+use zgui::prelude::*;
+use zgui::reactive::LocalStorage;
+use zgui::view::AttrName;
+use zgui::vocab::Role;
+use zgui::{component, css, view};
 
-const GAP: f32 = 5.;
-const PADDING_BOTTOM: f32 = 6.;
+use crate::app::Gds;
+
 pub const EXTRA_ROW_HEIGHT: f32 = 32.;
 
+const CAPACITY_SHEET: &str = "gds-ui-capacity";
+
+const CAPACITY_CSS: &str = css!(
+    ".gds-capacity.gds-capacity {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 5px;
+        width: 100%;
+        min-width: 0px;
+        padding-bottom: 6px;
+    }
+    .gds-capacity.gds-capacity[data-embedded=\"true\"] {
+        padding-bottom: 0px;
+    }
+    .gds-capacity.gds-capacity[data-compact=\"true\"] {
+        width: 100%;
+        min-width: 0px;
+        align-items: stretch;
+    }
+    .gds-capacity.gds-capacity .gds-capacity__track {
+        width: 100%;
+        height: 4px;
+        border-radius: 2px;
+        border: none;
+        background: color-mix(in srgb, var(--gds-foreground) 12%, transparent);
+        overflow: hidden;
+    }
+    .gds-capacity.gds-capacity[data-selected=\"true\"] .gds-capacity__track {
+        background: color-mix(in srgb, var(--gds-selection-foreground) 18%, transparent);
+    }
+    .gds-capacity.gds-capacity[data-unavailable=\"true\"] .gds-capacity__track {
+        background: color-mix(in srgb, var(--gds-foreground) 10%, transparent);
+    }
+    .gds-capacity.gds-capacity .gds-capacity__fill {
+        height: 100%;
+        width: var(--gds-capacity-width, 0%);
+        border-radius: 2px;
+        background: var(--gds-primary);
+        transform: translateX(0);
+        transition: width var(--gds-motion-normal, 160ms) var(--gds-motion-ease-out, cubic-bezier(0, 0, 0.2, 1));
+    }
+    .gds-capacity.gds-capacity[data-selected=\"true\"] .gds-capacity__fill {
+        background: var(--gds-primary);
+    }
+    .gds-capacity.gds-capacity[data-unavailable=\"true\"] .gds-capacity__fill {
+        width: 0%;
+        opacity: 0;
+    }
+    .gds-capacity.gds-capacity[data-loading=\"true\"] .gds-capacity__fill {
+        width: 40%;
+        animation: gds-capacity-indeterminate calc(1200ms * (1 - var(--gds-motion-reduced, 0))) var(--gds-motion-ease-standard, ease) infinite;
+    }
+    .gds-capacity.gds-capacity[data-loading=\"true\"][data-reduced-motion=\"true\"] .gds-capacity__fill {
+        animation: none;
+        transform: translateX(0);
+    }
+    .gds-capacity.gds-capacity .gds-capacity__label {
+        height: 17px;
+        line-height: 17px;
+        font-size: var(--gds-font-size-xs, 12px);
+        color: var(--gds-muted-foreground);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .gds-capacity.gds-capacity[data-selected=\"true\"] .gds-capacity__label {
+        color: var(--gds-selection-foreground);
+    }
+    .gds-capacity.gds-capacity[data-compact=\"true\"] .gds-capacity__label {
+        display: flex;
+        flex-direction: row;
+        justify-content: center;
+        align-items: center;
+        font-size: calc(10px * var(--gds-font-scale, 1));
+        font-variant-numeric: tabular-nums;
+        text-align: center;
+    }"
+);
+
+fn install_capacity_stylesheets() {
+    crate::ui::styles::install_ui_stylesheets();
+    zgui::view::install_stylesheet(CAPACITY_SHEET, CAPACITY_CSS);
+}
+
+fn normalized_fraction(fraction: Option<f32>, unavailable: bool) -> Option<f32> {
+    if unavailable {
+        return None;
+    }
+    fraction
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 1.0))
+}
+
+fn compact_percent_text(fraction: Option<f32>, unavailable: bool) -> String {
+    let Some(used) = normalized_fraction(fraction, unavailable) else {
+        return "\u{2014}".to_owned();
+    };
+    let free = ((1.0 - used).clamp(0.0, 1.0) * 100.0).round();
+    format!("{free:.0}%")
+}
+
+/// Displays a `4px` borderless capacity bar above a localized byte summary or compact `%` label.
+#[allow(clippy::too_many_arguments)]
 #[component]
-#[derive(IntoElement)]
-pub struct CapacityBar {
-    id: ElementId,
-    #[attr(into)]
-    label: SharedString,
-    fraction: Option<f32>,
-    #[attr]
-    compact: bool,
-    unavailable: bool,
-    embedded: bool,
-    #[attr]
-    selected: bool,
-}
+pub fn CapacityBar(
+    #[prop(into)] label: Signal<String, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(None))] fraction: Signal<Option<f32>, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(false))] compact: Signal<bool, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(false))] embedded: Signal<bool, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(false))] unavailable: Signal<bool, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(false))] selected: Signal<bool, LocalStorage>,
+    #[prop(optional)] node_ref: Option<NodeRef>,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+) -> impl IntoView {
+    install_capacity_stylesheets();
 
-impl CapacityBar {
-    pub fn new(id: impl Into<ElementId>) -> Self {
-        Self {
-            id: id.into(),
-            label: SharedString::default(),
-            fraction: None,
-            compact: false,
-            unavailable: false,
-            embedded: false,
-            selected: false,
+    let meter_a11y = A11yBinding::new(Role::ProgressIndicator)
+        .label(move || label.get())
+        .step(move |a11y| {
+            if let Some(used) = normalized_fraction(fraction.get(), unavailable.get()) {
+                a11y.numeric_range(0.0, 1.0).numeric_value(f64::from(used))
+            } else {
+                a11y
+            }
+        });
+
+    let own = Attrs::new()
+        .attribute(AttrName::new("data-compact"), move || {
+            compact.get().then(|| "true".to_owned())
+        })
+        .attribute(AttrName::new("data-embedded"), move || {
+            embedded.get().then(|| "true".to_owned())
+        })
+        .attribute(AttrName::new("data-unavailable"), move || {
+            unavailable.get().then(|| "true".to_owned())
+        })
+        .attribute(AttrName::new("data-loading"), move || {
+            (!unavailable.get() && normalized_fraction(fraction.get(), false).is_none())
+                .then(|| "true".to_owned())
+        })
+        .attribute(AttrName::new("data-reduced-motion"), move || {
+            Gds::try_current()
+                .is_some_and(|gds| gds.appearance().motion().reduced())
+                .then(|| "true".to_owned())
+        })
+        .attribute(AttrName::new("data-selected"), move || {
+            selected.get().then(|| "true".to_owned())
+        })
+        .a11y_from(meter_a11y);
+
+    view! {
+        column(
+            class = "gds-capacity",
+            node_ref = node_ref.unwrap_or_default(),
+            {..own},
+            class = class,
+            {..attrs}
+        ) {
+            box(class = "gds-capacity__track") {
+                box(
+                    class = "gds-capacity__fill",
+                    var:--gds-capacity-width = move || {
+                        let pct = normalized_fraction(fraction.get(), unavailable.get())
+                            .map_or(0.0, |v| v * 100.0);
+                        Some(format!("{pct:.2}%"))
+                    }
+                )
+            }
+            text(class = "gds-capacity__label") {{move || {
+                if compact.get() {
+                    compact_percent_text(fraction.get(), unavailable.get())
+                } else {
+                    label.get()
+                }
+            }}}
         }
     }
-
-    pub fn value(mut self, fraction: f32) -> Self {
-        self.fraction = fraction.is_finite().then(|| fraction.clamp(0., 1.));
-        self
-    }
-
-    pub fn unavailable(mut self) -> Self {
-        self.unavailable = true;
-        self
-    }
-
-    /// Let the containing cell supply spacing around the entire meter/label.
-    pub fn embedded(mut self) -> Self {
-        self.embedded = true;
-        self
-    }
 }
 
-impl RenderOnce for CapacityBar {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let summary = if self.compact {
-            self.fraction.map_or_else(
-                || "—".into(),
-                |used| format!("{:.0}%", (1. - used) * 100.).into(),
-            )
-        } else {
-            self.label.clone()
-        };
-        let bar = if self.unavailable {
-            el! { .div { w_full; h: 4.0.px; rounded: 2.0.px; bg: $(cx.theme().muted) } }
-                .into_any_element()
-        } else {
-            Progress::new(self.id)
-                .xsmall()
-                .value(self.fraction.unwrap_or_default() * 100.)
-                .loading(self.fraction.is_none())
-                .accessibility_label(self.label.clone())
-                .into_any_element()
-        };
-        el! {
-            .div { w_full; min_w_0; flex; flex_col; gap: GAP.px;
-                @if (!self.embedded) pb: PADDING_BOTTOM.px; @end;
-            } [
-                bar,
-                .div { text_xs; text_color: $(if self.selected { cx.theme().accent_foreground } else { cx.theme().muted_foreground });
-                    @if (self.compact)
-                        flex; justify_center; text_size: 10.0.px;
-                    @else
-                        truncate;
-                    @end;
-                    h: 17.0.px; line_height: 17.0.px;
-                } [
-                    @if (self.compact)
-                        .div { flex_shrink_0; whitespace_nowrap; } [summary],
-                    @else
-                        summary,
-                    @end,
-                ],
-            ]
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use zgui::app::Fonts;
+    use zgui::geom::{DevicePx, Size};
+    use zgui::platform::{AppHandler, PlatformError, Surface, SurfaceEvent};
+    use zgui::prelude::*;
+    use zgui::reactive::{Mounted, RwSignal, install};
+    use zgui::runtime::AppError;
+    use zgui::vocab::Role;
+    use zgui_platform_headless::Harness;
+
+    use super::{CapacityBarProps, EXTRA_ROW_HEIGHT, compact_percent_text, normalized_fraction};
+    use crate::app::Gds;
+    use crate::service::task_manager::Scope;
+
+    #[test]
+    fn normalized_fraction_clamps_and_filters_non_finite() {
+        assert_eq!(normalized_fraction(Some(-0.2), false), Some(0.0));
+        assert_eq!(normalized_fraction(Some(0.42), false), Some(0.42));
+        assert_eq!(normalized_fraction(Some(1.8), false), Some(1.0));
+        assert_eq!(normalized_fraction(Some(f32::NAN), false), None);
+        assert_eq!(normalized_fraction(Some(f32::INFINITY), false), None);
+        assert_eq!(normalized_fraction(Some(0.5), true), None);
+    }
+
+    #[test]
+    fn compact_percent_reports_remaining_percentage_or_em_dash() {
+        assert_eq!(compact_percent_text(Some(0.25), false), "75%");
+        assert_eq!(compact_percent_text(Some(0.0), false), "100%");
+        assert_eq!(compact_percent_text(Some(1.0), false), "0%");
+        assert_eq!(compact_percent_text(None, false), "\u{2014}");
+        assert_eq!(compact_percent_text(Some(0.5), true), "\u{2014}");
+    }
+
+    #[test]
+    fn capacity_bar_renders_four_pixel_track_above_label_in_full_and_compact_modes() {
+        #[derive(Default)]
+        struct Sink {
+            atlas: zgui::atlas::MemorySink,
+            target: Option<zgui::render::RenderTarget>,
         }
+
+        impl zgui::render::Renderer for Sink {
+            fn capabilities(&self) -> zgui::render::RenderCapabilities {
+                zgui::render::RenderCapabilities::MINIMAL
+            }
+            fn configure(&mut self, target: zgui::render::RenderTarget) {
+                self.target = Some(target);
+            }
+            fn target(&self) -> Option<zgui::render::RenderTarget> {
+                self.target
+            }
+            fn register_external(
+                &mut self,
+                _: zgui::render::ExternalTexture,
+            ) -> zgui::render::TextureHandle {
+                zgui::render::TextureHandle(0)
+            }
+            fn release_external(&mut self, _: zgui::render::TextureHandle) {}
+            fn memory(&self) -> zgui::render::MemoryReport {
+                zgui::render::MemoryReport::default()
+            }
+            fn draw(
+                &mut self,
+                _: &zgui::scene::Scene,
+                _: &zgui::bits::DamageSet,
+            ) -> zgui::render::FrameOutcome {
+                zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
+            }
+            fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
+                &mut self.atlas
+            }
+        }
+
+        let full_ref: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
+        let compact_ref: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
+        let embedded_ref: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
+        let full_view = Rc::clone(&full_ref);
+        let compact_view = Rc::clone(&compact_ref);
+        let embedded_view = Rc::clone(&embedded_ref);
+        let full_driver = Rc::clone(&full_ref);
+        let compact_driver = Rc::clone(&compact_ref);
+        let embedded_driver = Rc::clone(&embedded_ref);
+
+        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+            let mut harness = Harness::new(handler);
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(300.0),
+                DevicePx(200.0),
+            )));
+            if let Some(surface) = harness.platform().offscreens().first() {
+                surface.set_a11y_listener(true);
+            }
+            harness.settle(16);
+
+            let full = full_driver.borrow().expect("full node");
+            let compact = compact_driver.borrow().expect("compact node");
+            let embedded = embedded_driver.borrow().expect("embedded node");
+
+            let full_box = full.window_bounds().expect("full bounds");
+            let compact_box = compact.window_bounds().expect("compact bounds");
+            let embedded_box = embedded.window_bounds().expect("embedded bounds");
+
+            // Full (non-embedded) reserves 6px bottom padding over embedded (4px track + 5px gap + 17px label = 26px vs 32px).
+            let scale = full.scale().max(1.0);
+            assert!(
+                (full_box.size.height.0 / scale - EXTRA_ROW_HEIGHT).abs() < 1.0,
+                "full non-embedded height should match EXTRA_ROW_HEIGHT (32px), got {}",
+                full_box.size.height.0 / scale
+            );
+            assert!(
+                (embedded_box.size.height.0 / scale - (EXTRA_ROW_HEIGHT - 6.0)).abs() < 1.0,
+                "embedded height should omit 6px bottom padding (26px), got {}",
+                embedded_box.size.height.0 / scale
+            );
+            assert!(
+                (compact_box.size.height.0 / scale - EXTRA_ROW_HEIGHT).abs() < 1.0,
+                "compact mode keeps the 4px bar above the centered percentage, got {}",
+                compact_box.size.height.0 / scale
+            );
+
+            // Verify the label text sits in the lower portion of the meter (below the 4px bar + 5px gap).
+            let surface = harness.platform().offscreens()[0].clone();
+            let mut label_top = None;
+            for update in surface.a11y_log() {
+                for (_, node) in update.nodes {
+                    if (node.value() == Some("70 GB free of 100 GB")
+                        || node.label() == Some("70 GB free of 100 GB"))
+                        && let Some(bounds) = node.bounds()
+                    {
+                        label_top = Some(bounds.y0 as f32);
+                    }
+                }
+            }
+            if let Some(y0) = label_top {
+                assert!(
+                    y0 > full_box.origin.y.0 + 4.0 * scale,
+                    "label y0 ({y0}) must sit below the 4px track at top ({})",
+                    full_box.origin.y.0
+                );
+            }
+
+            harness.shut_down();
+            Ok(())
+        };
+
+        zgui::app()
+            .with_fonts(Fonts::shipped_only())
+            .with_size(300.0, 200.0)
+            .with_renderer(Box::new(|_: &Arc<dyn Surface>, target| {
+                let mut sink = Sink::default();
+                zgui::render::Renderer::configure(&mut sink, target);
+                Ok::<_, AppError>(Box::new(sink) as Box<dyn zgui::render::Renderer>)
+            }))
+            .run_on(driver, move || {
+                let gds = Gds::try_current().unwrap_or_else(|| Gds::install(Scope::default()));
+                gds.appearance().motion().set_enabled(false);
+                let frac = RwSignal::new_local(Some(0.3));
+                let r_full = NodeRef::new();
+                let r_compact = NodeRef::new();
+                let r_embedded = NodeRef::new();
+                *full_view.borrow_mut() = Some(r_full);
+                *compact_view.borrow_mut() = Some(r_compact);
+                *embedded_view.borrow_mut() = Some(r_embedded);
+                zgui::view! {
+                    column(style:width = "200px") {
+                        CapacityBar(
+                            label = "70 GB free of 100 GB",
+                            fraction = frac,
+                            node_ref = r_full,
+                        )
+                        CapacityBar(
+                            label = "Compact drive",
+                            fraction = frac,
+                            compact = true,
+                            node_ref = r_compact,
+                        )
+                        CapacityBar(
+                            label = "Embedded drive",
+                            fraction = Signal::stored_local(None),
+                            embedded = true,
+                            node_ref = r_embedded,
+                        )
+                    }
+                }
+            })
+            .expect("headless CapacityBar layout test ran");
+
+        install().ok();
+        let scope = Mounted::new();
+        scope.with(|| {
+            let meter_a11y = A11yBinding::new(Role::ProgressIndicator)
+                .label("Drive")
+                .step(|a| a.numeric_range(0.0, 1.0).numeric_value(0.3))
+                .lower();
+            assert_eq!(meter_a11y.role, Role::ProgressIndicator);
+            assert_eq!(meter_a11y.numeric.value, Some(0.3));
+        });
+        scope.unmount();
     }
 }

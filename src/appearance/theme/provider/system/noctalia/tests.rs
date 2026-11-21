@@ -1,45 +1,127 @@
 use super::{self as noctalia, TEMPLATE};
-use crate::appearance::theme::{Error, Mode, ModePreference};
-use gpui_kit::{Hsla, rgb};
+use crate::appearance::theme::{Error, Mode, ModePreference, provider::color::rgb};
 use std::path::Path;
+use zgui::canvas::zgui_color::Color;
 
-fn color(value: u32) -> Hsla {
-    rgb(value).into()
+fn color(value: u32) -> Color {
+    rgb(value)
 }
 
 fn rendered_template(active_mode: &str) -> String {
     let tokens = [
         ("{{ mode }}", active_mode),
+        ("{{ colors.background.dark.hex }}", "#0f1113"),
+        ("{{ colors.on_background.dark.hex }}", "#e1e2e5"),
         ("{{ colors.surface.dark.hex }}", "#101214"),
         ("{{ colors.on_surface.dark.hex }}", "#e2e2e6"),
+        ("{{ colors.surface_dim.dark.hex }}", "#101214"),
+        ("{{ colors.surface_bright.dark.hex }}", "#36393e"),
+        ("{{ colors.surface_container_lowest.dark.hex }}", "#0b0e10"),
         ("{{ colors.surface_container_low.dark.hex }}", "#181c20"),
         ("{{ colors.surface_container.dark.hex }}", "#1c2024"),
         ("{{ colors.surface_container_high.dark.hex }}", "#262a2f"),
+        ("{{ colors.surface_container_highest.dark.hex }}", "#31353a"),
+        ("{{ colors.surface_variant.dark.hex }}", "#41474d"),
         ("{{ colors.on_surface_variant.dark.hex }}", "#c2c7cf"),
+        ("{{ colors.surface_tint.dark.hex }}", "#9ecaff"),
+        ("{{ colors.inverse_surface.dark.hex }}", "#e2e2e6"),
+        ("{{ colors.inverse_on_surface.dark.hex }}", "#2e3135"),
+        ("{{ colors.inverse_primary.dark.hex }}", "#0061a4"),
         ("{{ colors.outline.dark.hex }}", "#8c9199"),
         ("{{ colors.outline_variant.dark.hex }}", "#42474e"),
         ("{{ colors.shadow.dark.hex }}", "#010203"),
+        ("{{ colors.scrim.dark.hex }}", "#000000"),
+        ("{{ colors.source_color.dark.hex }}", "#3584e4"),
         ("{{ colors.primary.dark.hex }}", "#9ecaff"),
         ("{{ colors.on_primary.dark.hex }}", "#003258"),
         ("{{ colors.primary_container.dark.hex }}", "#00497d"),
         ("{{ colors.on_primary_container.dark.hex }}", "#d1e4ff"),
+        ("{{ colors.primary_fixed.dark.hex }}", "#d1e4ff"),
+        ("{{ colors.primary_fixed_dim.dark.hex }}", "#9ecaff"),
+        ("{{ colors.on_primary_fixed.dark.hex }}", "#001d36"),
+        ("{{ colors.on_primary_fixed_variant.dark.hex }}", "#00497d"),
+        ("{{ colors.secondary.dark.hex }}", "#b9c8da"),
+        ("{{ colors.on_secondary.dark.hex }}", "#243240"),
+        ("{{ colors.secondary_container.dark.hex }}", "#3a4857"),
+        ("{{ colors.on_secondary_container.dark.hex }}", "#d5e4f7"),
+        ("{{ colors.secondary_fixed.dark.hex }}", "#d5e4f7"),
+        ("{{ colors.secondary_fixed_dim.dark.hex }}", "#b9c8da"),
+        ("{{ colors.on_secondary_fixed.dark.hex }}", "#0e1d2a"),
+        (
+            "{{ colors.on_secondary_fixed_variant.dark.hex }}",
+            "#3a4857",
+        ),
+        ("{{ colors.tertiary.dark.hex }}", "#d5bee5"),
+        ("{{ colors.on_tertiary.dark.hex }}", "#3a2948"),
+        ("{{ colors.tertiary_container.dark.hex }}", "#514060"),
+        ("{{ colors.on_tertiary_container.dark.hex }}", "#f1daff"),
+        ("{{ colors.tertiary_fixed.dark.hex }}", "#f1daff"),
+        ("{{ colors.tertiary_fixed_dim.dark.hex }}", "#d5bee5"),
+        ("{{ colors.on_tertiary_fixed.dark.hex }}", "#241432"),
+        ("{{ colors.on_tertiary_fixed_variant.dark.hex }}", "#514060"),
         ("{{ colors.error.dark.hex }}", "#ffb4ab"),
         ("{{ colors.on_error.dark.hex }}", "#690005"),
+        ("{{ colors.error_container.dark.hex }}", "#93000a"),
+        ("{{ colors.on_error_container.dark.hex }}", "#ffdad6"),
+        ("{{ colors.background.light.hex }}", "#f7f9fe"),
+        ("{{ colors.on_background.light.hex }}", "#181c1f"),
         ("{{ colors.surface.light.hex }}", "#f8f9ff"),
         ("{{ colors.on_surface.light.hex }}", "#191c20"),
+        ("{{ colors.surface_dim.light.hex }}", "#d8dae0"),
+        ("{{ colors.surface_bright.light.hex }}", "#f8f9ff"),
+        ("{{ colors.surface_container_lowest.light.hex }}", "#ffffff"),
         ("{{ colors.surface_container_low.light.hex }}", "#f2f3fa"),
         ("{{ colors.surface_container.light.hex }}", "#eceef4"),
         ("{{ colors.surface_container_high.light.hex }}", "#e6e8ee"),
+        (
+            "{{ colors.surface_container_highest.light.hex }}",
+            "#e1e2e8",
+        ),
+        ("{{ colors.surface_variant.light.hex }}", "#dee3eb"),
         ("{{ colors.on_surface_variant.light.hex }}", "#42474e"),
+        ("{{ colors.surface_tint.light.hex }}", "#0061a4"),
+        ("{{ colors.inverse_surface.light.hex }}", "#2e3135"),
+        ("{{ colors.inverse_on_surface.light.hex }}", "#eff0f7"),
+        ("{{ colors.inverse_primary.light.hex }}", "#9ecaff"),
         ("{{ colors.outline.light.hex }}", "#72777f"),
         ("{{ colors.outline_variant.light.hex }}", "#c2c7cf"),
         ("{{ colors.shadow.light.hex }}", "#040506"),
+        ("{{ colors.scrim.light.hex }}", "#000000"),
+        ("{{ colors.source_color.light.hex }}", "#3584e4"),
         ("{{ colors.primary.light.hex }}", "#0061a4"),
         ("{{ colors.on_primary.light.hex }}", "#ffffff"),
         ("{{ colors.primary_container.light.hex }}", "#d1e4ff"),
         ("{{ colors.on_primary_container.light.hex }}", "#001d36"),
+        ("{{ colors.primary_fixed.light.hex }}", "#d1e4ff"),
+        ("{{ colors.primary_fixed_dim.light.hex }}", "#9ecaff"),
+        ("{{ colors.on_primary_fixed.light.hex }}", "#001d36"),
+        ("{{ colors.on_primary_fixed_variant.light.hex }}", "#00497d"),
+        ("{{ colors.secondary.light.hex }}", "#526070"),
+        ("{{ colors.on_secondary.light.hex }}", "#ffffff"),
+        ("{{ colors.secondary_container.light.hex }}", "#d5e4f7"),
+        ("{{ colors.on_secondary_container.light.hex }}", "#0e1d2a"),
+        ("{{ colors.secondary_fixed.light.hex }}", "#d5e4f7"),
+        ("{{ colors.secondary_fixed_dim.light.hex }}", "#b9c8da"),
+        ("{{ colors.on_secondary_fixed.light.hex }}", "#0e1d2a"),
+        (
+            "{{ colors.on_secondary_fixed_variant.light.hex }}",
+            "#3a4857",
+        ),
+        ("{{ colors.tertiary.light.hex }}", "#6a5779"),
+        ("{{ colors.on_tertiary.light.hex }}", "#ffffff"),
+        ("{{ colors.tertiary_container.light.hex }}", "#f1daff"),
+        ("{{ colors.on_tertiary_container.light.hex }}", "#241432"),
+        ("{{ colors.tertiary_fixed.light.hex }}", "#f1daff"),
+        ("{{ colors.tertiary_fixed_dim.light.hex }}", "#d5bee5"),
+        ("{{ colors.on_tertiary_fixed.light.hex }}", "#241432"),
+        (
+            "{{ colors.on_tertiary_fixed_variant.light.hex }}",
+            "#514060",
+        ),
         ("{{ colors.error.light.hex }}", "#ba1a1a"),
         ("{{ colors.on_error.light.hex }}", "#ffffff"),
+        ("{{ colors.error_container.light.hex }}", "#ffdad6"),
+        ("{{ colors.on_error_container.light.hex }}", "#410002"),
         ("{{ colors.terminal_foreground.dark.hex }}", "#d0d4dc"),
         ("{{ colors.terminal_background.dark.hex }}", "#0c0e11"),
         ("{{ colors.terminal_cursor.dark.hex }}", "#9ecaff"),
@@ -104,6 +186,13 @@ fn canonical_template_renders_valid_dark_and_light_palettes_including_terminal_r
     assert_eq!(dark.palette.content, color(0x101214));
     assert_eq!(dark.palette.sidebar, color(0x181c20));
     assert_eq!(dark.palette.panel, color(0x262a2f));
+    assert_eq!(dark.palette.surface_container_lowest, color(0x0b0e10));
+    assert_eq!(dark.palette.surface_container_highest, color(0x31353a));
+    assert_eq!(dark.palette.control, color(0x31353a));
+    assert_eq!(dark.palette.secondary_container, color(0x3a4857));
+    assert_eq!(dark.palette.on_secondary_container, color(0xd5e4f7));
+    assert_eq!(dark.palette.tertiary_container, color(0x514060));
+    assert_eq!(dark.palette.error_container, color(0x93000a));
     assert_eq!(dark.palette.selection, color(0x00497d));
     assert_eq!(dark.palette.selection_foreground, color(0xd1e4ff));
     assert_eq!(dark.palette.terminal.foreground, color(0xd0d4dc));
@@ -125,6 +214,12 @@ fn canonical_template_renders_valid_dark_and_light_palettes_including_terminal_r
     .expect("explicit light mode selects light UI and terminal schemes");
     assert_eq!(light_override.mode, Mode::Light);
     assert_eq!(light_override.palette.content, color(0xf8f9ff));
+    assert_eq!(
+        light_override.palette.surface_container_lowest,
+        color(0xffffff)
+    );
+    assert_eq!(light_override.palette.control, color(0xffffff));
+    assert_eq!(light_override.palette.secondary_container, color(0xd5e4f7));
     assert_eq!(light_override.palette.terminal.background, color(0xf5f7fc));
     assert_eq!(light_override.palette.terminal.selection, color(0xcfe4ff));
     assert_eq!(

@@ -1,4 +1,4 @@
-{ lib, pkgs, rustPlatform, makeWrapper, makeDesktopItem, copyDesktopItems, pkg-config
+{ lib, pkgs, rustPlatform, makeWrapper, makeDesktopItem, copyDesktopItems, pkg-config, python3
 , application, desktopItem, description, postInstall ? "", checkFlags ? [ ]
 , extraNativeBuildInputs ? [ ], extraBuildInputs ? [ ], extraNativeCheckInputs ? [ ]
 , buildTag ? "unknown"
@@ -14,7 +14,7 @@ let
     lib.mapAttrs' (key: value: lib.nameValuePair "${key}[${locale}]" value) entries
   ) (builtins.removeAttrs labels [ "default" ]);
   libraries = with pkgs; [
-    wayland libxkbcommon fontconfig freetype libGL vulkan-loader libxcb sqlite
+    wayland libxkbcommon libx11 libxcursor libxi libxrandr fontconfig freetype libGL vulkan-loader libxcb sqlite
   ] ++ extraBuildInputs;
 in
 rustPlatform.buildRustPackage {
@@ -38,13 +38,13 @@ rustPlatform.buildRustPackage {
 
   cargoLock = import ./cargo-lock.nix;
 
-  nativeBuildInputs = [ pkg-config makeWrapper copyDesktopItems ] ++ extraNativeBuildInputs;
+  nativeBuildInputs = [ pkg-config python3 makeWrapper copyDesktopItems ] ++ extraNativeBuildInputs;
   nativeCheckInputs = [ pkgs.dbus pkgs.ffmpeg-headless pkgs.util-linux ] ++ extraNativeCheckInputs;
   buildInputs = libraries;
   dontUseCmakeConfigure = true;
   cargoBuildFlags = [ "--bin" binary ];
   buildFeatures = features;
-  checkFeatures = features ++ [ "gpui-kit/test-support" ];
+  checkFeatures = features;
   cargoTestFlags = [ "--bin" binary "--lib" ];
 
   desktopItems = [ (makeDesktopItem (desktopItem // {

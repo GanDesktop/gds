@@ -1,22 +1,22 @@
-use super::ContentPage;
-use crate::ui::container::container_traits;
-use gds_uim::el;
-use gpui_kit::{IntoElement, prelude::*, *};
-#[derive(IntoElement)]
-pub struct PageTableArea {
-    base: Div,
-}
+use zgui::prelude::*;
+use zgui::{component, view};
 
-impl Default for PageTableArea {
-    fn default() -> Self {
-        Self {
-            base: el! { .div { flex; flex_col; flex_1; min_h_0; min_w_0; overflow_hidden; px: ContentPage::TABLE_INSET.px; } },
+#[component]
+pub fn PageTableArea(
+    #[prop(optional)] node_ref: Option<NodeRef>,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    super::install_page_stylesheets();
+    view! {
+        box(
+            class = "gds-page-table-area",
+            node_ref = node_ref.unwrap_or_default(),
+            class = class,
+            {..attrs}
+        ) {
+            {children.into_view_once()}
         }
-    }
-}
-container_traits!(PageTableArea);
-impl RenderOnce for PageTableArea {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.base
     }
 }

@@ -28,6 +28,14 @@ impl Supervisor {
         self.scope.clone()
     }
 
+    pub fn runtime_handle(&self) -> &tokio::runtime::Handle {
+        self._runtime.handle()
+    }
+
+    pub fn shutdown(&self) {
+        self._runtime.block_on(self.scope.shutdown());
+    }
+
     /// Drive bootstrap work before entering the application's main-thread loop.
     ///
     /// # Errors

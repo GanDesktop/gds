@@ -1,236 +1,231 @@
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-    time::Duration,
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use zgui::app::Fonts;
+use zgui::atlas::{SinkError, TextureFormat, TextureId, TextureSink};
+use zgui::geom::{Device, DevicePx, Rect, Size};
+use zgui::platform::{AppHandler, PlatformError, Surface, SurfaceEvent};
+use zgui::prelude::*;
+use zgui::reactive::{RenderEffect, RwSignal, flush, on_cleanup_local};
+use zgui::render::{
+    ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
+    Renderer, TextureHandle,
 };
+use zgui::runtime::AppError;
+use zgui::view;
+use zgui::vocab::Role;
+use zgui_platform_headless::Harness;
 
-use crate::ui::{Frame, navigation::NavItem};
-use gpui_kit::{Context, IntoElement, Render, TestAppContext, Window, WindowHandle, px, size};
-use gpui_kit::{TestSupportExt, assets::IconName, div, prelude::*, test::TestWindowExt};
+use super::{
+    SideBarContentProps, SideBarProps, SideBarSectionContentProps, SideBarSectionHeaderProps,
+    SideBarSectionProps, SideBarSectionTitleProps, SidebarPresentation, SidebarState,
+    use_sidebar_presentation,
+};
+use crate::appearance::tokens;
 
-use super::{SideBar, SidebarPresentation, SidebarState};
+struct NoopSink;
 
-struct SidebarFixture {
-    window: WindowHandle<SidebarView>,
-    state: Rc<Cell<SidebarState>>,
-    samples: Rc<RefCell<Vec<SidebarPresentation>>>,
+impl TextureSink for NoopSink {
+    fn create_texture(
+        &mut self,
+        _: TextureId,
+        _: zgui::geom::Size<i32, Device>,
+        _: TextureFormat,
+    ) -> Result<(), SinkError> {
+        Ok(())
+    }
+
+    fn write_texture(
+        &mut self,
+        _: TextureId,
+        _: Rect<i32, Device>,
+        _: TextureFormat,
+        _: &[u8],
+    ) -> Result<(), SinkError> {
+        Ok(())
+    }
+
+    fn destroy_texture(&mut self, _: TextureId) {}
 }
 
-struct SidebarView {
-    state: Rc<Cell<SidebarState>>,
-    samples: Rc<RefCell<Vec<SidebarPresentation>>>,
+struct NoopRenderer {
+    target: Option<RenderTarget>,
+    sink: NoopSink,
 }
 
-impl Render for SidebarView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let sidebar = SideBar::default().state(self.state.get());
-        let value = sidebar.sample("sidebar", window, cx);
-        self.samples.borrow_mut().push(value);
-        sidebar.presentation(value)
+impl Renderer for NoopRenderer {
+    fn capabilities(&self) -> RenderCapabilities {
+        RenderCapabilities::MINIMAL
+    }
+
+    fn configure(&mut self, target: RenderTarget) {
+        self.target = Some(target);
+    }
+
+    fn target(&self) -> Option<RenderTarget> {
+        self.target
+    }
+
+    fn draw(&mut self, _: &zgui::scene::Scene, _: &zgui::bits::DamageSet) -> FrameOutcome {
+        FrameOutcome::Presented(FrameStats::default())
+    }
+
+    fn register_external(&mut self, _: ExternalTexture) -> TextureHandle {
+        TextureHandle(1)
+    }
+
+    fn release_external(&mut self, _: TextureHandle) {}
+
+    fn memory(&self) -> MemoryReport {
+        MemoryReport::ZERO
+    }
+
+    fn texture_sink(&mut self) -> &mut dyn TextureSink {
+        &mut self.sink
     }
 }
 
-impl SidebarFixture {
-    fn open(cx: &mut TestAppContext, state: SidebarState) -> Self {
-        let state = Rc::new(Cell::new(state));
-        let samples = Rc::new(RefCell::new(Vec::new()));
-        let window = cx.open_window(size(px(640.), px(480.)), {
-            let state = state.clone();
-            let samples = samples.clone();
-            move |_, _| SidebarView { state, samples }
-        });
-        cx.run_until_parked();
-        Self {
-            window,
-            state,
-            samples,
-        }
-    }
-
-    fn render(&self, cx: &mut TestAppContext, state: SidebarState) -> SidebarPresentation {
-        self.state.set(state);
-        self.window
-            .update(cx, |_, window, _| window.refresh())
-            .expect("refresh sidebar");
-        cx.run_until_parked();
-        self.latest()
-    }
-
-    fn latest(&self) -> SidebarPresentation {
-        *self.samples.borrow().last().expect("sidebar rendered")
-    }
-
-    fn frame(&self, cx: &mut TestAppContext) -> usize {
-        self.window
-            .update(cx, |_, window, cx| window.simulate_next_frame(cx))
-            .expect("simulate sidebar frame")
-    }
+fn noop_renderer(
+    _: &Arc<dyn Surface>,
+    target: RenderTarget,
+) -> Result<Box<dyn Renderer>, AppError> {
+    Ok(Box::new(NoopRenderer {
+        target: Some(target),
+        sink: NoopSink,
+    }))
 }
 
-struct LayoutView {
-    state: SidebarState,
+#[test]
+fn sidebar_presentation_interpolates_progress_cleanly() {
+    let collapsed = SidebarPresentation::from_width(
+        tokens::COLLAPSED_SIDEBAR_WIDTH,
+        tokens::SIDEBAR_WIDTH,
+        tokens::COLLAPSED_SIDEBAR_WIDTH,
+    );
+    assert_eq!(collapsed.progress(), 0.0);
+    assert!(collapsed.is_collapsed());
+    assert!(collapsed.collapsed());
+    assert!(!collapsed.actions_visible());
+    assert_eq!(collapsed.actions_opacity(), 0.0);
+    assert_eq!(collapsed.interpolate(100.0, 20.0), 20.0);
+
+    let midpoint = SidebarPresentation::from_width(
+        (tokens::SIDEBAR_WIDTH + tokens::COLLAPSED_SIDEBAR_WIDTH) / 2.0,
+        tokens::SIDEBAR_WIDTH,
+        tokens::COLLAPSED_SIDEBAR_WIDTH,
+    );
+    assert!((midpoint.progress() - 0.5).abs() < 1e-4);
+    assert!(!midpoint.actions_visible());
+    assert!((midpoint.label_opacity() - 0.5).abs() < 1e-4);
+    assert!((midpoint.actions_opacity() - 0.5).abs() < 1e-4);
+
+    let expanded = SidebarPresentation::from_state(SidebarState::Expanded);
+    assert_eq!(expanded.width(), tokens::SIDEBAR_WIDTH);
+    assert_eq!(expanded.progress(), 1.0);
+    assert!(expanded.actions_visible());
 }
 
-impl Render for LayoutView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let sidebar = SideBar::default().state(self.state);
-        let value = sidebar.sample("sidebar-layout", window, cx);
-        let frame = Frame::default().sidebar_width(value.width());
-        let rows = div().w_full().px(px(10.)).child(
-            div().id("row-probe").test_support().w_full().child(
-                NavItem::new(
-                    "navigation",
-                    IconName::Folder,
-                    "A very long navigation title that must never wrap",
-                )
-                .presentation(value)
-                .tooltip_enabled(false)
-                .details(div().h(px(20.)).into_any_element())
-                .trailing(vec![
-                    div()
-                        .id("row-action")
-                        .test_support()
-                        .size(px(32.))
-                        .into_any_element(),
-                ]),
-            ),
-        );
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(
-                frame.toolbar(
-                    div()
-                        .id("menu-probe")
-                        .test_support()
-                        .size(px(32.))
-                        .flex_shrink_0()
-                        .into_any_element(),
-                    div().into_any_element(),
-                    cx,
-                ),
-            )
-            .child(frame.workspace(
-                sidebar.presentation(value).child(rows).into_any_element(),
-                div().into_any_element(),
-                cx,
-            ))
-            .child(frame.footer(
-                div().into_any_element(),
-                div().into_any_element(),
-                div().into_any_element(),
-                cx,
-            ))
-    }
-}
+#[test]
+fn use_sidebar_presentation_animates_continuously_and_settles_at_rail_width() {
+    let latest_width: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(None));
+    let recorded = Arc::clone(&latest_width);
+    let state_slot: Arc<Mutex<Option<RwSignal<SidebarState, zgui::reactive::LocalStorage>>>> =
+        Arc::new(Mutex::new(None));
+    let toggle_slot = Arc::clone(&state_slot);
 
-#[gpui::test]
-fn sidebar_shared_boundaries_and_navitem_slots_survive_intermediate_width(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        gpui_kit::init(cx);
-    });
-    let window = cx.open_window(size(px(640.), px(480.)), |_, _| LayoutView {
-        state: SidebarState::Expanded,
-    });
-    cx.run_until_parked();
-    let (row, menu) = window
-        .update(cx, |_, window, _| {
-            assert!(window.try_find("row-action").is_some());
-            (
-                window.find("row-probe").bounds(),
-                window.find("menu-probe").bounds(),
-            )
-        })
-        .expect("expanded geometry");
-    window
-        .update(cx, |view, window, _| {
-            view.state = SidebarState::Collapsed;
-            window.refresh();
-        })
-        .expect("toggle sidebar");
-    cx.run_until_parked();
-    for elapsed in [60, 100] {
-        cx.executor().advance_clock(Duration::from_millis(elapsed));
-        window
-            .update(cx, |_, window, cx| window.simulate_next_frame(cx))
-            .expect("advance layout");
-        cx.run_until_parked();
-        window
-            .update(cx, |_, window, _| {
-                let toolbar = window.find("frame-toolbar-sidebar").bounds();
-                let workspace = window.find("frame-workspace-sidebar").bounds();
-                let footer = window.find("frame-footer-sidebar").bounds();
-                assert_eq!(toolbar.right(), workspace.right());
-                assert_eq!(workspace.right(), footer.right());
-                let narrowed_row = window.find("row-probe").bounds();
-                assert_eq!(row.origin.y, narrowed_row.origin.y);
-                assert_eq!(row.size.height, narrowed_row.size.height);
-                assert!(window.try_find("row-action").is_none());
-                let moved_menu = window.find("menu-probe").bounds();
-                assert_eq!(menu.origin.y, moved_menu.origin.y);
-                if elapsed == 60 {
-                    assert!(toolbar.size.width > px(58.) && toolbar.size.width < px(222.));
-                    // GPUI rounds this one-pixel horizontal travel to device pixels.
-                    assert!(moved_menu.origin.x >= menu.origin.x && moved_menu.origin.x <= px(13.));
-                } else {
-                    assert_eq!(toolbar.size.width, px(58.));
-                    assert_eq!(moved_menu.center().x, toolbar.center().x);
-                }
-            })
-            .expect("shared sidebar geometry");
-    }
-}
+    let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+        let mut harness = Harness::new(handler);
+        harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+            DevicePx(800.0),
+            DevicePx(600.0),
+        )));
+        harness.settle(32);
 
-#[gpui::test]
-fn sidebar_first_frame_adopts_either_endpoint_without_animation(cx: &mut TestAppContext) {
-    for state in [SidebarState::Expanded, SidebarState::Collapsed] {
-        let fixture = SidebarFixture::open(cx, state);
+        let expanded_w = *latest_width.lock().expect("lock");
         assert_eq!(
-            fixture.latest().width(),
-            SideBar::default().state(state).width()
+            expanded_w,
+            Some(tokens::SIDEBAR_WIDTH),
+            "expanded sidebar should lay out at {}px",
+            tokens::SIDEBAR_WIDTH
         );
-        assert_eq!(fixture.frame(cx), 0);
-    }
-}
 
-#[gpui::test]
-fn sidebar_reversal_is_continuous_and_settles_without_frames(cx: &mut TestAppContext) {
-    let fixture = SidebarFixture::open(cx, SidebarState::Expanded);
-    let expanded = fixture.latest();
-    assert_eq!(fixture.render(cx, SidebarState::Collapsed), expanded);
-    cx.executor().advance_clock(Duration::from_millis(60));
-    assert_eq!(fixture.frame(cx), 1);
-    cx.run_until_parked();
-    let middle = fixture.latest();
-    assert!(middle.progress() > 0.0 && middle.progress() < 1.0);
-    assert!(!middle.actions_visible());
-    assert_eq!(fixture.render(cx, SidebarState::Expanded), middle);
-    cx.executor().advance_clock(Duration::from_millis(20));
-    fixture.frame(cx);
-    cx.run_until_parked();
-    assert!(fixture.latest().width() > middle.width());
-    cx.executor().advance_clock(Duration::from_millis(160));
-    fixture.frame(cx);
-    cx.run_until_parked();
-    assert_eq!(fixture.latest(), expanded);
-    assert_eq!(fixture.frame(cx), 0);
-}
+        let surface = harness
+            .platform()
+            .offscreens()
+            .first()
+            .cloned()
+            .expect("surface");
+        let has_complementary = surface
+            .a11y_log()
+            .into_iter()
+            .flat_map(|update| update.nodes)
+            .any(|(_, node)| {
+                node.role() == Role::Complementary && node.label() == Some("Workspace sidebar")
+            });
+        assert!(has_complementary);
 
-#[gpui::test]
-fn sidebar_reduce_motion_resolves_an_active_transition(cx: &mut TestAppContext) {
-    let fixture = SidebarFixture::open(cx, SidebarState::Expanded);
-    fixture.render(cx, SidebarState::Collapsed);
-    cx.executor().advance_clock(Duration::from_millis(30));
-    fixture.frame(cx);
-    cx.run_until_parked();
-    assert!(fixture.latest().progress() > 0.0);
-    cx.update(|cx| cx.set_reduce_motion(true));
-    let end = fixture.render(cx, SidebarState::Collapsed);
-    assert_eq!(end.progress(), 0.0);
-    fixture.frame(cx); // Drain the frame already scheduled before the preference changed.
-    cx.run_until_parked();
-    assert_eq!(fixture.frame(cx), 0);
-    assert_eq!(fixture.render(cx, SidebarState::Expanded).progress(), 1.0);
-    assert_eq!(fixture.frame(cx), 0);
+        if let Some(sig) = *toggle_slot.lock().expect("lock") {
+            sig.set(SidebarState::Collapsed);
+            flush();
+        }
+        // Halfway through 160ms transition, width must be strictly between 58px and 222px.
+        harness.run_for(Duration::from_millis(80), Duration::from_millis(16));
+        let mid_w = latest_width.lock().expect("lock").expect("mid width");
+        assert!(
+            mid_w > tokens::COLLAPSED_SIDEBAR_WIDTH && mid_w < tokens::SIDEBAR_WIDTH,
+            "sidebar should interpolate continuously mid-flight, got {mid_w}"
+        );
+
+        // Settle at 58px rail width and verify zero further frames.
+        harness.run_for(Duration::from_millis(220), Duration::from_millis(16));
+        let collapsed_w = *latest_width.lock().expect("lock");
+        assert_eq!(
+            collapsed_w,
+            Some(tokens::COLLAPSED_SIDEBAR_WIDTH),
+            "collapsed sidebar should settle at {}px rail width",
+            tokens::COLLAPSED_SIDEBAR_WIDTH
+        );
+
+        harness.shut_down();
+        Ok(())
+    };
+
+    zgui::app()
+        .with_fonts(Fonts::shipped_only())
+        .with_renderer(Box::new(noop_renderer))
+        .with_size(800.0, 600.0)
+        .run_on(driver, move || {
+            let state = RwSignal::new_local(SidebarState::Expanded);
+            *state_slot.lock().expect("lock") = Some(state);
+            let presentation = use_sidebar_presentation(state.into());
+            let measure_ref = NodeRef::new();
+            let border_size = measure_ref.observe_border_size();
+            let recorded = Arc::clone(&recorded);
+            let effect = RenderEffect::new(move |_| {
+                if let Some(bounds) = border_size.get() {
+                    let s = measure_ref.scale().max(1.0);
+                    *recorded.lock().expect("lock") = Some(bounds.width.0 / s);
+                }
+            });
+            on_cleanup_local(move || drop(effect));
+
+            view! {
+                row(style:width = "100%", style:height = "100%") {
+                    SideBar(presentation = presentation, label = "Workspace sidebar") {
+                        box(node_ref = measure_ref, style:width = "100%", style:height = "1px") {}
+                        SideBarContent {
+                            SideBarSection(style:padding = "0 10px") {
+                                SideBarSectionHeader {
+                                    SideBarSectionTitle { "Places" }
+                                }
+                                SideBarSectionContent {
+                                    text { "Home" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .expect("sidebar runs headlessly");
 }

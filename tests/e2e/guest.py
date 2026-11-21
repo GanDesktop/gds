@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -195,6 +196,8 @@ def execute(op, args):
                       None, Gio.DBusCallFlags.NONE, 5000, None)
         if enabled:
             subprocess.run(['sudo', '-n', 'loginctl', 'unlock-sessions'], check=True, capture_output=True)
+            if shutil.which('umbriel'):
+                subprocess.run(['umbriel', 'msg', 'overview-close'], env=env, capture_output=True)
         return old
     if op == 'init':
         initialize(Path(args['root']))

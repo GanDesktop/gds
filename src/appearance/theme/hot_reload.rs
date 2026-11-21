@@ -1,122 +1,163 @@
-//! Shared palette refresh driven by the process's desktop source observer.
+//! Source-driven palette refresh owned by the application root.
+use super::{Appearance, Error, Prepared};
+use crate::{
+    app::Gds,
+    service::{
+        desktop::watch::Sources,
+        task_manager::{self, Owner},
+    },
+};
+use std::{
+    cell::{Cell, RefCell},
+    path::PathBuf,
+    rc::Rc,
+};
+use tokio::sync::mpsc;
 
-use super::{Appearance, Change, Error, Loaded, ModePreference, Observer, Source, apply_loaded};
-use gpui_kit::{App, AppContext, Context, Entity, Global, Subscription, Task};
+enum ReloadEvent {
+    FilesChanged,
+    Prepared {
+        generation: u64,
+        result: Result<Result<Prepared, Error>, task_manager::Error>,
+    },
+}
 
-struct Shared(Entity<HotReload>);
-impl Global for Shared {}
+pub struct HotReload(Rc<State>);
 
-pub struct HotReload {
-    appearance: Appearance,
-    generation: u64,
-    load: Option<Task<()>>,
-    error: Option<String>,
-    _changes: Subscription,
+struct State {
+    appearance: RefCell<Appearance>,
+    sources: RefCell<Sources>,
+    scope: Owner,
+    generation: Cell<u64>,
+    error: RefCell<Option<String>>,
+    events: mpsc::Sender<ReloadEvent>,
 }
 
 impl HotReload {
-    /// Install the application's palette watcher before creating its windows.
-    pub(crate) fn initialize(appearance: Appearance, cx: &mut App) -> Entity<Self> {
-        if let Some(shared) = cx.try_global::<Shared>() {
-            return shared.0.clone();
-        }
-        let reload = cx.new(|cx| Self::start(appearance, cx));
-        cx.set_global(Shared(reload.clone()));
-        reload
-    }
-
-    pub(crate) fn get(cx: &App) -> Entity<Self> {
-        cx.global::<Shared>().0.clone()
-    }
-
-    fn start(appearance: Appearance, cx: &mut Context<Self>) -> Self {
-        let observer = Observer::shared(cx);
-        let changes = cx.subscribe(&observer, |this, _, change, cx| {
-            if matches!(change, Change::Files)
-                || (this.appearance.mode == ModePreference::System
-                    && this.appearance.source.uses_platform_mode())
-            {
-                this.request(cx);
-            }
+    pub(crate) fn new(appearance: Appearance) -> Self {
+        let (notify, mut changes) = mpsc::channel(1);
+        let (events_tx, events_rx) = mpsc::channel(16);
+        let state = Rc::new(State {
+            appearance: RefCell::new(appearance),
+            sources: RefCell::new(Sources::new(notify)),
+            scope: Gds::current().tasks().scope().named_child("Appearance"),
+            generation: Cell::new(0),
+            error: RefCell::new(None),
+            events: events_tx.clone(),
         });
-        let mut paths = appearance.source_paths();
-        let already_applied = cx
-            .try_global::<super::CurrentApplied>()
-            .filter(|applied| applied.appearance == appearance)
-            .map(|applied| applied.source_path.clone());
-        let needs_initial_reload = match already_applied {
-            Some(source_path) => {
-                paths.extend(source_path);
-                false
-            }
-            None => true,
-        };
-        Self::watch(paths, cx);
-        let mut reload = Self {
-            appearance,
-            generation: 0,
-            load: None,
-            error: None,
-            _changes: changes,
-        };
-        if needs_initial_reload {
-            reload.request(cx);
-        }
-        reload
-    }
+        state.watch(state.appearance.borrow().source_paths());
 
-    pub(crate) fn configure(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
-        let reload = self.appearance.source != appearance.source
-            || self.appearance.mode != appearance.mode
-            || (appearance.source == Source::Builtin
-                && self.appearance.builtin != appearance.builtin);
-        self.appearance = appearance;
-        if reload {
-            Self::watch(self.appearance.source_paths(), cx);
-            self.request(cx);
-        }
-    }
-
-    fn watch(paths: Vec<std::path::PathBuf>, cx: &mut App) {
-        Observer::shared(cx).update(cx, |observer, _| {
-            if let Err(error) = observer.watch("palette", paths) {
-                tracing::warn!("cannot watch appearance sources: {error}");
-            }
-        });
-    }
-
-    fn request(&mut self, cx: &mut Context<Self>) {
-        self.generation = self.generation.wrapping_add(1);
-        let generation = self.generation;
-        let appearance = self.appearance.clone();
-        let platform = cx.window_appearance();
-        self.load = Some(cx.spawn(async move |this, cx| {
-            let loaded = cx
-                .background_spawn(async move { appearance.load_for(platform) })
-                .await;
-            let _ = this.update(cx, |this, cx| this.accept(generation, loaded, cx));
-        }));
-    }
-
-    fn accept(&mut self, generation: u64, result: Result<Loaded, Error>, cx: &mut Context<Self>) {
-        if generation != self.generation {
-            return;
-        }
-        let result = result.and_then(|loaded| {
-            let mut paths = self.appearance.source_paths();
-            paths.extend(loaded.source_path.clone());
-            Self::watch(paths, cx);
-            apply_loaded(&self.appearance, loaded, cx)
-        });
-        match result {
-            Ok(_) => self.error = None,
-            Err(error) => {
-                let error = error.to_string();
-                if self.error.as_ref() != Some(&error) {
-                    tracing::warn!("theme refresh failed, keeping the last applied theme: {error}");
-                    self.error = Some(error);
+        let state_ui = Rc::clone(&state);
+        drop(zgui::tokio::spawn_receiver(
+            events_rx,
+            move |event| match event {
+                ReloadEvent::FilesChanged => {
+                    if let Err(error) = state_ui.sources.borrow_mut().refresh() {
+                        tracing::warn!(%error, "cannot refresh appearance watches");
+                    }
+                    state_ui.request();
                 }
-            }
+                ReloadEvent::Prepared { generation, result } => {
+                    if generation != state_ui.generation.get() {
+                        return;
+                    }
+                    let result = result
+                        .map_err(|error| error.to_string())
+                        .and_then(|value| value.map_err(|error| error.to_string()));
+                    match result {
+                        Ok(prepared) => {
+                            state_ui.watch(prepared.source_paths());
+                            match Gds::current().appearance().theme().install(prepared) {
+                                Ok(_) => *state_ui.error.borrow_mut() = None,
+                                Err(error) => state_ui.report(error.to_string()),
+                            }
+                        }
+                        Err(error) => state_ui.report(error),
+                    }
+                }
+            },
+        ));
+
+        let cancel = state.scope.token();
+        drop(
+            state
+                .scope
+                .spawn_named("Watch appearance files", async move {
+                    loop {
+                        let notified = tokio::select! {
+                            _ = cancel.cancelled() => None,
+                            value = changes.recv() => value,
+                        };
+                        let Some(()) = notified else {
+                            break;
+                        };
+                        while changes.try_recv().is_ok() {}
+                        match events_tx.try_send(ReloadEvent::FilesChanged) {
+                            Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                            Err(mpsc::error::TrySendError::Closed(_)) => break,
+                        }
+                    }
+                }),
+        );
+        Self(state)
+    }
+
+    pub fn configure(&self, appearance: Appearance) {
+        let changed = *self.0.appearance.borrow() != appearance;
+        *self.0.appearance.borrow_mut() = appearance;
+        if changed {
+            self.0.watch(self.0.appearance.borrow().source_paths());
+            self.0.request();
+        }
+    }
+
+    pub fn refresh(&self) {
+        self.0.request();
+    }
+
+    pub fn refresh_for_portal(&self) {
+        let should_reload = {
+            let appearance = self.0.appearance.borrow();
+            appearance.mode == super::ModePreference::System
+                && appearance.source.uses_platform_mode()
+        };
+        if should_reload {
+            self.0.request();
+        }
+    }
+}
+
+impl State {
+    fn watch(&self, paths: Vec<PathBuf>) {
+        if let Err(error) = self.sources.borrow_mut().set_paths(paths) {
+            tracing::warn!(%error, "cannot watch appearance sources");
+        }
+    }
+
+    fn request(&self) {
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        let appearance = self.appearance.borrow().clone();
+        let mode = crate::app::appearance::Theme::platform_mode();
+        let task = self
+            .scope
+            .spawn_blocking_named("Read appearance palette", move || appearance.prepare(mode));
+        let events = self.events.clone();
+        drop(
+            self.scope
+                .spawn_named("Deliver appearance reload", async move {
+                    let result = task.await;
+                    let _ = events
+                        .send(ReloadEvent::Prepared { generation, result })
+                        .await;
+                }),
+        );
+    }
+
+    fn report(&self, message: String) {
+        if self.error.borrow().as_ref() != Some(&message) {
+            tracing::warn!(%message, "theme refresh failed; keeping the last palette");
+            *self.error.borrow_mut() = Some(message);
         }
     }
 }

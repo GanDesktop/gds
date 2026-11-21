@@ -208,23 +208,24 @@ impl Baloo {
         defaults: &[&str],
         search_path: &OsStr,
     ) -> Result<PathBuf, Error> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::resolve_in_path_with_cwd(configured, defaults, search_path, &cwd)
+    }
+
+    pub(super) fn resolve_in_path_with_cwd(
+        configured: Option<&Path>,
+        defaults: &[&str],
+        search_path: &OsStr,
+        cwd: &Path,
+    ) -> Result<PathBuf, Error> {
         let names: Vec<&OsStr> = configured.map_or_else(
             || defaults.iter().map(OsStr::new).collect(),
             |p| vec![p.as_os_str()],
         );
+        let paths = (!search_path.is_empty()).then_some(search_path);
         for name in names {
-            let path = Path::new(name);
-            let candidates = if path.components().count() > 1 || path.is_absolute() {
-                vec![path.to_owned()]
-            } else {
-                std::env::split_paths(search_path)
-                    .map(|dir| dir.join(path))
-                    .collect()
-            };
-            for candidate in candidates {
-                if Self::executable(&candidate) {
-                    return Ok(candidate);
-                }
+            if let Ok(found) = which::which_in(name, paths, cwd) {
+                return Ok(found);
             }
         }
         Err(Error::ExecutableNotFound(
@@ -232,24 +233,6 @@ impl Baloo {
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| defaults.join(" / ")),
         ))
-    }
-
-    fn executable(path: &Path) -> bool {
-        let Ok(metadata) = path.metadata() else {
-            return false;
-        };
-        if !metadata.is_file() {
-            return false;
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            metadata.permissions().mode() & 0o111 != 0
-        }
-        #[cfg(not(unix))]
-        {
-            false
-        }
     }
 
     async fn run(program: &Path, args: &[&str]) -> Result<String, Error> {

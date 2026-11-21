@@ -1,32 +1,52 @@
-use super::*;
-use gds_uim::el;
+use zgui::prelude::*;
+use zgui::reactive::LocalStorage;
+use zgui::{component, view};
 
-const PIN_BADGE_SIZE: f32 = 12.;
+use crate::appearance::tokens::{SIDEBAR_ICON_SIZE, SMALL_ICON_SIZE};
+use crate::ui::icon::{IconName, IconProps};
 
-/// A row's own icon, marked with a corner badge when the row is pinned.
-///
-/// The icon keeps its identity and its shared size whether or not the row is
-/// pinned: replacing it with a pin would drop what the row points at, and
-/// resizing it would shift the row's label between the two states.
-pub fn pinned_icon(icon: IconName, pinned: bool, cx: &App) -> AnyElement {
-    with_pin(Icon::new(icon).size(px(SIDEBAR_ICON_SIZE)), pinned, cx)
+/// Navigation icon paired with a corner pin badge when `pinned` is true.
+#[component]
+pub fn PinnedIcon(
+    #[prop(into)] icon: Signal<IconName, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(false))] pinned: Signal<bool, LocalStorage>,
+) -> impl IntoView {
+    view! {
+        WithPin(
+            icon = AnyView::new(view! { Icon(name = icon, size = SIDEBAR_ICON_SIZE) }),
+            pinned = pinned
+        )
+    }
 }
 
-/// Apply the same corner marker to an application-provided navigation icon.
-pub fn with_pin(icon: impl IntoElement, pinned: bool, _cx: &App) -> AnyElement {
-    el! {
-        .div { relative; flex_shrink_0; size: SIDEBAR_ICON_SIZE.px } [
-            icon,
-            @if (pinned)
-                .div {
-                    absolute; left: (-6.0).px; top: (-6.0).px;
-                    flex; items_center; justify_center;
-                    size: PIN_BADGE_SIZE.px;
-                } [
-                    IconName::Pin.Icon::new { size: PIN_BADGE_SIZE.px; },
-                ],
-            @end,
-        ]
+/// Convenience helper returning a [`PinnedIcon`] view.
+#[must_use]
+pub fn pinned_icon(icon: IconName, pinned: bool) -> AnyView {
+    AnyView::new(view! { PinnedIcon(icon = icon, pinned = pinned) })
+}
+
+/// Wraps an arbitrary navigation icon view with an optional corner pin marker.
+#[component]
+pub fn WithPin(
+    icon: AnyView,
+    #[prop(into, default = Signal::stored_local(false))] pinned: Signal<bool, LocalStorage>,
+) -> impl IntoView {
+    super::install_navigation_stylesheets();
+    view! {
+        box(class = "gds-pinned-icon") {
+            {icon}
+            if move || pinned.get() {
+                box(class = "gds-pinned-icon__badge") {
+                    Icon(name = IconName::Pin, size = SMALL_ICON_SIZE)
+                }
+            } else {}
+        }
     }
-    .into_any_element()
+}
+
+/// Convenience helper wrapping an icon element with [`WithPin`].
+#[must_use]
+pub fn with_pin(icon: impl IntoView, pinned: bool) -> AnyView {
+    let icon = AnyView::new(icon);
+    AnyView::new(view! { WithPin(icon = icon, pinned = pinned) })
 }

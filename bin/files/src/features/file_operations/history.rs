@@ -592,13 +592,6 @@ impl History {
         self.redo.clear();
     }
 
-    pub fn peek(&self, direction: Direction) -> Option<&Entry> {
-        match direction {
-            Direction::Undo => self.undo.last(),
-            Direction::Redo => self.redo.last(),
-        }
-    }
-
     pub fn take(&mut self, direction: Direction) -> Option<Entry> {
         self.stack(direction).pop()
     }

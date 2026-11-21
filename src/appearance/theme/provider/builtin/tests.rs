@@ -13,10 +13,10 @@ fn embedded_catalog_loads_both_modes_without_runtime_files() {
                 ..Default::default()
             };
             let prepared = appearance
-                .prepare(WindowAppearance::Dark)
+                .prepare(Mode::Dark)
                 .expect("complete embedded palette");
             assert!(prepared.source_paths().is_empty());
-            assert_eq!(prepared.loaded.mode, mode.resolve(WindowAppearance::Dark));
+            assert_eq!(prepared.loaded.mode, mode.resolve(Mode::Dark));
             let palette = prepared.loaded.palette;
             assert_eq!(palette.terminal.foreground, palette.foreground);
             assert_eq!(palette.terminal.background, palette.content);
@@ -48,7 +48,7 @@ fn embedded_choice_round_trips_and_keeps_system_mode_independent() {
         let saved = toml::to_string(&appearance).expect("serialize theme choice");
         let restored: Appearance = toml::from_str(&saved).expect("restore theme choice");
         assert_eq!(restored, appearance);
-        for platform in [WindowAppearance::Light, WindowAppearance::Dark] {
+        for platform in [Mode::Light, Mode::Dark] {
             let prepared = restored.prepare(platform).expect("resolve system mode");
             assert_eq!(
                 prepared.loaded.mode,

@@ -1,43 +1,59 @@
-//! Theme-aware secondary surfaces for floating controls inside an application.
+//! Theme-aware raised card and translucent glass panel surfaces.
 
-use crate::app::AppExt as _;
-use gpui_kit::{prelude::*, *};
+use zgui::prelude::*;
+use zgui::reactive::LocalStorage;
+use zgui::{component, view};
 
-const GLASS_RADIUS: f32 = 20.;
+use crate::app::Gds;
+use crate::appearance::theme::provider::color::color_css;
+
 const FACE_OPACITY: f32 = 0.7;
-const HIGHLIGHT_OPACITY: f32 = 0.12;
-const SHADOW_OPACITY: f32 = 0.28;
-const CONTACT_OPACITY: f32 = 0.12;
-const SHADOW_OFFSET: f32 = 12.;
-const SHADOW_BLUR: f32 = 36.;
-const SHADOW_SPREAD: f32 = -10.;
-const CONTACT_BLUR: f32 = 8.;
-const CONTACT_SPREAD: f32 = -2.;
 
-/// A translucent glass panel with an even tint and a raised rim.
-pub fn glass_panel(opacity: f32, cx: &App) -> Div {
-    let colors = cx.gds().appearance().theme().colors();
-    let highlight = colors.panel_foreground.opacity(HIGHLIGHT_OPACITY);
-    let face = colors.panel.opacity(opacity * FACE_OPACITY);
-    let shadows = vec![
-        BoxShadow::new(
-            px(0.),
-            px(SHADOW_OFFSET),
-            colors.shadow.opacity(SHADOW_OPACITY),
-        )
-        .blur_radius(px(SHADOW_BLUR))
-        .spread_radius(px(SHADOW_SPREAD)),
-        BoxShadow::new(px(0.), px(2.), colors.shadow.opacity(CONTACT_OPACITY))
-            .blur_radius(px(CONTACT_BLUR))
-            .spread_radius(px(CONTACT_SPREAD)),
-        BoxShadow::new(px(0.), px(1.), highlight).inset(),
-    ];
-    div()
-        .relative()
-        .rounded(px(GLASS_RADIUS))
-        .border_1()
-        .border_color(colors.border)
-        .text_color(colors.panel_foreground)
-        .bg(face)
-        .shadow(shadows)
+/// Bordered raised card container styled by `--gds-panel`.
+#[component]
+pub fn CardSurface(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    crate::ui::styles::install_ui_stylesheets();
+    view! {
+        box(class = "gds-card-surface", class = class, {..attrs}) {
+            {children.into_view_once()}
+        }
+    }
+}
+
+/// Translucent `20px`-rounded glass panel (`panel` at `opacity * 0.7`, `1px` border, ambient +
+/// contact drop shadows, and `1px` inset top rim highlight).
+#[component]
+pub fn GlassPanel(
+    #[prop(into, default = Signal::stored_local(1.0))] opacity: Signal<f32, LocalStorage>,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    crate::ui::styles::install_ui_stylesheets();
+    let glass_bg = move || {
+        let alpha_factor = opacity.get().clamp(0.0, 1.0) * FACE_OPACITY;
+        if let Some(gds) = Gds::try_current() {
+            let panel = gds.appearance().theme().colors().panel;
+            Some(color_css(panel.with_alpha(alpha_factor)))
+        } else {
+            Some(format!(
+                "color-mix(in srgb, var(--gds-panel) {:.1}%, transparent)",
+                alpha_factor * 100.0
+            ))
+        }
+    };
+    view! {
+        box(
+            class = "gds-glass-panel",
+            var:--gds-glass-bg = glass_bg,
+            class = class,
+            {..attrs}
+        ) {
+            {children.into_view_once()}
+        }
+    }
 }

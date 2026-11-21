@@ -1,90 +1,241 @@
-//! Composable sidebar anatomy. Applications own state and the content of each part.
+//! Composable collapsible sidebar shell and section layout parts.
 
 mod content;
 mod footer;
 mod header;
-mod presentation;
+pub mod presentation;
 mod section;
-
-#[cfg(all(test, feature = "gui-tests"))]
+#[cfg(test)]
 mod tests;
 
-use gds_uim::{component, el};
-use gpui_kit::component::StyledExt;
-use gpui_kit::{IntoElement, prelude::*, *};
-
-use super::container::container_traits;
-pub use content::SideBarContent;
-pub use footer::SideBarFooter;
-pub use header::SideBarHeader;
-pub use presentation::SidebarPresentation;
+pub use content::{SideBarContent, SideBarContentProps};
+pub use footer::{SideBarFooter, SideBarFooterProps};
+pub use header::{SideBarHeader, SideBarHeaderProps};
+pub use presentation::{
+    SidebarPresentation, SidebarState, use_sidebar_presentation, use_sidebar_presentation_widths,
+};
 pub use section::{
-    SideBarSection, SideBarSectionContent, SideBarSectionHeader, SideBarSectionTitle,
+    SideBarSection, SideBarSectionContent, SideBarSectionContentProps, SideBarSectionHeader,
+    SideBarSectionHeaderProps, SideBarSectionProps, SideBarSectionTitle, SideBarSectionTitleProps,
 };
 
-/// Controlled by the application so layout, shortcuts and persistence agree.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum SidebarState {
-    #[default]
-    Expanded,
-    Collapsed,
+use zgui::prelude::*;
+use zgui::reactive::{LocalStorage, provide_local_context, use_local_context};
+use zgui::{component, css, view};
+
+use crate::appearance::tokens;
+
+#[derive(Clone, Copy)]
+pub(crate) struct SidebarContext {
+    pub(crate) presentation: Signal<SidebarPresentation, LocalStorage>,
 }
 
-/// Root column containing headers, content, footers or other application elements.
-///
-/// Defaults to expanded. Static callers use state directly; animated hosts call
-/// `sample` once and pass that presentation to all column parts, including this root.
-/// Use `Frame::default().sidebar_width(sidebar.width())` to share the column boundary.
+impl SidebarContext {
+    pub(crate) fn current() -> Option<Self> {
+        zgui::reactive::is_ui_thread()
+            .then(use_local_context::<Self>)
+            .flatten()
+    }
+}
+
+const SIDEBAR_SHEET: &str = "gds-ui-sidebar";
+const NAV_ITEM_GAP: f32 = 8.0;
+
+const SIDEBAR_CSS: &str = css!(
+    ".gds-sidebar {
+        display: flex;
+        flex-direction: column;
+        flex: 0 0 auto;
+        height: 100%;
+        min-width: 0px;
+        min-height: 0px;
+        overflow: hidden;
+        color: var(--gds-sidebar-foreground);
+    }
+    .gds-sidebar__header,
+    .gds-sidebar__footer {
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+        width: 100%;
+        min-width: 0px;
+    }
+    .gds-sidebar__content {
+        display: block;
+        flex: 1 1 0px;
+        width: 100%;
+        min-width: 0px;
+        min-height: 0px;
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+    .gds-sidebar__content--static {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0px;
+        width: 100%;
+        min-width: 0px;
+        min-height: 0px;
+        overflow: hidden;
+    }
+    .gds-sidebar__content-inner {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0px;
+        min-height: 100%;
+    }
+    .gds-sidebar__section {
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+        width: 100%;
+        min-width: 0px;
+    }
+    .gds-sidebar__section-header {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        flex-shrink: 0;
+        width: 100%;
+        min-width: 0px;
+        min-height: 34px;
+        gap: 4px;
+    }
+    .gds-sidebar__section-title {
+        flex: 1 1 0px;
+        min-width: 0px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 0px var(--gds-sidebar-section-padding, 6px);
+        font-size: var(--gds-font-size-xs, 12px);
+        font-weight: 400;
+        color: color-mix(
+            in srgb,
+            var(--gds-muted-foreground) var(--gds-sidebar-label-pct, 100%),
+            transparent
+        );
+    }
+    .gds-sidebar:not([data-actions-visible=\"true\"]) .gds-sidebar__section-title {
+        pointer-events: none;
+    }
+    .gds-sidebar__section-content {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0px;
+        min-height: 0px;
+        gap: 2px;
+    }
+    .gds-sidebar__section-content--scrollable {
+        display: block;
+        flex: 1 1 0px;
+        width: 100%;
+        min-width: 0px;
+        min-height: 0px;
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+    .gds-sidebar__section-content-inner {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0px;
+        gap: 2px;
+    }"
+);
+
+pub(super) fn install_sidebar_stylesheets() {
+    crate::ui::styles::install_ui_stylesheets();
+    zgui::view::install_stylesheet(SIDEBAR_SHEET, SIDEBAR_CSS);
+}
+
+/// Composable vertical navigation column; the enclosing [`crate::ui::Frame`] paints the single
+/// sidebar surface material and vertical hairline divider.
+#[allow(clippy::too_many_arguments)]
 #[component]
-#[derive(IntoElement)]
-pub struct SideBar {
-    #[attr]
-    state: SidebarState,
-    #[attr(into)]
-    expanded_width: f32,
-    #[attr(into)]
-    collapsed_width: f32,
-    #[attr(option)]
-    presentation: Option<SidebarPresentation>,
-    base: Div,
-}
+pub fn SideBar(
+    #[prop(into, optional)] state: Option<Signal<SidebarState, LocalStorage>>,
+    #[prop(into, optional)] presentation: Option<Signal<SidebarPresentation, LocalStorage>>,
+    #[prop(into, optional)] collapsed: Option<Signal<bool, LocalStorage>>,
+    #[prop(default = tokens::SIDEBAR_WIDTH)] expanded_width: f32,
+    #[prop(default = tokens::COLLAPSED_SIDEBAR_WIDTH)] collapsed_width: f32,
+    #[prop(into, optional)] label: Option<String>,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    install_sidebar_stylesheets();
 
-impl Default for SideBar {
-    fn default() -> Self {
-        Self {
-            state: SidebarState::default(),
-            presentation: None,
-            expanded_width: crate::appearance::tokens::SIDEBAR_WIDTH,
-            collapsed_width: crate::appearance::tokens::COLLAPSED_SIDEBAR_WIDTH,
-            base: el! { .div {
-                flex; flex_col; flex_shrink_0;
-                h_full; min_w_0; min_h_0; overflow_hidden;
-            } },
+    let effective_presentation = if let Some(pres) = presentation {
+        pres
+    } else if let Some(state_sig) = state {
+        use_sidebar_presentation_widths(state_sig, expanded_width, collapsed_width)
+    } else if let Some(collapsed_sig) = collapsed {
+        let derived_state =
+            Signal::derive_local(move || SidebarState::from_collapsed(collapsed_sig.get()));
+        use_sidebar_presentation_widths(derived_state, expanded_width, collapsed_width)
+    } else {
+        Signal::stored_local(SidebarPresentation::from_width(
+            expanded_width,
+            expanded_width,
+            collapsed_width,
+        ))
+    };
+
+    provide_local_context(SidebarContext {
+        presentation: effective_presentation,
+    });
+
+    let collapsed_icon_inset =
+        (collapsed_width - 2.0 * tokens::SIDEBAR_PADDING - tokens::SIDEBAR_ICON_SIZE).max(0.0)
+            * 0.5;
+    let label = label.unwrap_or_else(|| "Sidebar".to_owned());
+    view! {
+        column(
+            class = "gds-sidebar",
+            style:width = move || Some(format!("{:.2}px", effective_presentation.get().width())),
+            var:--gds-sidebar-progress = move || {
+                Some(format!("{:.4}", effective_presentation.get().progress()))
+            },
+            var:--gds-sidebar-label-opacity = move || {
+                Some(format!("{:.3}", effective_presentation.get().label_opacity()))
+            },
+            var:--gds-sidebar-label-pct = move || {
+                Some(format!("{:.2}%", effective_presentation.get().label_opacity() * 100.0))
+            },
+            var:--gds-sidebar-selected-details-pct = move || {
+                Some(format!("{:.2}%", effective_presentation.get().label_opacity() * 85.0))
+            },
+            var:--gds-sidebar-actions-opacity = move || {
+                Some(format!("{:.3}", effective_presentation.get().actions_opacity()))
+            },
+            var:--gds-nav-item-pad-left = move || {
+                let inset = effective_presentation
+                    .get()
+                    .interpolate(NAV_ITEM_GAP, collapsed_icon_inset);
+                Some(format!("{inset:.2}px"))
+            },
+            var:--gds-nav-item-pad-right = move || {
+                let pad = effective_presentation.get().interpolate(NAV_ITEM_GAP, 0.0);
+                Some(format!("{pad:.2}px"))
+            },
+            var:--gds-nav-item-gap = move || {
+                let gap = effective_presentation.get().interpolate(NAV_ITEM_GAP, 0.0);
+                Some(format!("{gap:.2}px"))
+            },
+            attr:data-collapsed = move || effective_presentation.get().collapsed().then(|| "true".to_owned()),
+            attr:data-expanded = move || (!effective_presentation.get().collapsed()).then(|| "true".to_owned()),
+            attr:data-actions-visible = move || {
+                effective_presentation.get().actions_visible().then(|| "true".to_owned())
+            },
+            a11y:role = Role::Complementary,
+            a11y:label = label,
+            class = class,
+            {..attrs}
+        ) {
+            {children.into_view_once()}
         }
-    }
-}
-
-impl SideBar {
-    /// The presented width, or the immediate state width for static callers.
-    pub fn width(&self) -> f32 {
-        self.presentation
-            .map_or_else(|| self.target_width(), |value| value.width())
-    }
-
-    fn target_width(&self) -> f32 {
-        match self.state {
-            SidebarState::Expanded => self.expanded_width,
-            SidebarState::Collapsed => self.collapsed_width,
-        }
-    }
-}
-
-container_traits!(SideBar);
-
-impl RenderOnce for SideBar {
-    fn render(mut self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let width = self.width();
-        let style = std::mem::take(self.base.style());
-        el! { $(self.base) { w: width.px; refine_style: $&style; } }
     }
 }

@@ -1,6 +1,6 @@
 # Derived Configuration Editors (`ConfigEditor`)
 
-`#[derive(gds::ConfigEditor)]` (implemented in `macros/gds-settings-derive` over `gds::ui::settings::form`) generates native GPUI settings forms directly from typed Rust configuration structs and enums.
+`#[derive(gds::ConfigEditor)]` (implemented in `macros/gds-settings-derive` over `gds::ui::settings::form`) generates native `zgui` settings forms directly from typed Rust configuration structs and enums.
 
 ```rust,ignore
 #[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, gds::ConfigEditor)]
@@ -31,9 +31,9 @@ impl Preferences {
 
 ## Lifecycle & Event Wiring
 
-1. **Instantiate**: `#[derive(gds::ConfigEditor)]` implements `form::Model` and generates `<StructName>Editor` in the same module (`cx.new(|cx| PreferencesEditor::new(value, window, cx))`).
-2. **Observe**: Subscribe to `form::Changed<Preferences>` to receive the complete updated struct (`event.value`) and changed field ID (`event.field`), then run the application's apply and persistence pipeline.
-3. **Sync**: Call `editor.set_value(value, window, cx)` after external updates or rollbacks; programmatic sync suppresses change events. Generated editors never read or write files directly.
+1. **Instantiate**: `#[derive(gds::ConfigEditor)]` implements `form::Model` and defines `type <StructName>Editor = form::Editor<StructName>` in the same module (`PreferencesEditor::new(value)` accepting any `Into<Binding<Preferences>>`, such as `RwSignal<Preferences, LocalStorage>`).
+2. **Observe**: Wire `.on_change(UnsyncCallback::new(|event: form::Changed<Preferences>| ...))` to receive the complete updated struct (`event.value`) and changed field ID (`event.field`), then run the application's apply and persistence pipeline.
+3. **Sync**: Updating the bound `RwSignal<Preferences, LocalStorage>` after external reloads or rollbacks updates controls reactively without emitting `Changed` events. Generated editors never read or write files directly.
 
 ## Supported Field Types & Attributes
 

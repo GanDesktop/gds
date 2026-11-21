@@ -1,271 +1,204 @@
-//! Live, read-only view of the application's registered tasks.
-use crate::i18n::t;
-use crate::service::task_manager::{Execution, Inspector, Snapshot as TaskSnapshot};
-use gpui_kit::component::{
-    Sizable,
-    tag::{Tag as InlineTag, TagVariant},
-};
-use gpui_kit::{
-    AnyElement, App, Context, FocusHandle, Render, Task, TestSupportExt, UniformListScrollHandle,
-    Window, component::ActiveTheme, div, prelude::*, px, uniform_list,
-};
+//! Live, read-only view of the application's registered task scopes and tasks.
+
 use std::collections::HashSet;
+use std::path::Path;
 use std::time::Duration;
 
-pub(crate) const REFRESH: Duration = Duration::from_millis(250);
-const HEIGHT: f32 = 30.;
-const DETAIL_HEIGHT: f32 = 180.;
+use zgui::prelude::*;
+use zgui::reactive::{LocalStorage, Memo, RwSignal, Signal, StoredValue, on_cleanup_local};
+use zgui::view::install_stylesheet;
+use zgui::view::time::{IntervalHandle, set_interval};
+use zgui::{component, view};
+use zgui_ui::prelude::*;
 
+use crate::app::Gds;
+use crate::i18n;
+use crate::service::task_manager::{
+    Execution, Snapshot as TaskSnapshot, TaskSnapshot as TaskRecord,
+};
+use crate::ui::icon::{IconName, IconProps};
+use crate::ui::tooltip::wrap_tokens;
+
+pub(crate) const REFRESH: Duration = Duration::from_millis(250);
+const ROW_HEIGHT: f32 = 30.0;
+const SHEET: &str = "gds-task-manager";
+
+const TASK_MANAGER_CSS: &str = "
+.gds-tasks-root {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    background: transparent;
+}
+.gds-tasks-header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 12px 8px 12px;
+    background: transparent;
+    color: var(--gds-muted-foreground);
+    font-size: var(--gds-font-size-xs, 12px);
+}
+.gds-tasks-col-name {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.gds-tasks-col-exec {
+    width: 130px;
+    flex-shrink: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--gds-muted-foreground);
+}
+.gds-tasks-col-age {
+    width: 75px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    color: var(--gds-muted-foreground);
+}
+.gds-tasks-row--selected .gds-tasks-col-exec,
+.gds-tasks-row--selected .gds-tasks-col-age,
+.gds-tasks-row--selected .gds-tasks-row-id {
+    color: inherit;
+}
+.gds-tasks-body {
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.gds-tasks-list {
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    overflow-x: hidden;
+}
+.gds-tasks-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 30px;
+    padding-right: 12px;
+    font-size: 12px;
+    cursor: pointer;
+    box-sizing: border-box;
+}
+.gds-tasks-row--scope {
+    background-color: var(--zui-color-muted, var(--gds-surface));
+}
+.gds-tasks-row:hover {
+    background-color: var(--gds-hover);
+}
+.gds-tasks-row--selected,
+.gds-tasks-row--selected:hover {
+    background-color: var(--gds-selection);
+    color: var(--gds-selection-foreground);
+}
+.gds-tasks-row-name {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+}
+.gds-tasks-row-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.gds-tasks-row-id {
+    color: var(--gds-muted-foreground);
+    font-family: var(--gds-font-mono);
+    font-size: 10px;
+    flex-shrink: 0;
+}
+.gds-tasks-empty {
+    padding: 12px;
+    flex-shrink: 0;
+    font-size: var(--gds-font-size-small, 14px);
+    color: var(--gds-muted-foreground);
+}
+.gds-tasks-detail {
+    max-height: 180px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--gds-border);
+    background: transparent;
+    padding: 12px;
+    overflow-y: auto;
+    font-family: var(--gds-font-mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: text;
+}
+";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Row {
     Scope(usize, usize),
     Task(usize, usize),
 }
 
-pub struct View {
-    inspector: Inspector,
-    snapshot: TaskSnapshot,
-    rows: Vec<Row>,
-    collapsed: HashSet<u64>,
-    selected: Option<u64>,
-    scroll: UniformListScrollHandle,
-    pub(crate) focus: FocusHandle,
-    updates: Option<Task<()>>,
-}
-
-impl View {
-    pub fn new(inspector: Inspector, cx: &mut Context<Self>) -> Self {
-        Self {
-            inspector,
-            snapshot: TaskSnapshot::default(),
-            rows: Vec::new(),
-            collapsed: HashSet::new(),
-            selected: None,
-            scroll: UniformListScrollHandle::new(),
-            focus: cx.focus_handle(),
-            updates: None,
-        }
-    }
-
-    pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
-        self.updates = None;
-        if active {
-            self.refresh();
-            if let Some(index) = self.rows.iter().position(|row| {
-                matches!(row,
-                Row::Task(index, _) if Some(self.snapshot.tasks[*index].id) == self.selected)
-            }) {
-                self.scroll
-                    .scroll_to_item(index, gpui_kit::ScrollStrategy::Nearest);
+fn build_rows(snapshot: &TaskSnapshot, collapsed: &HashSet<u64>) -> Vec<Row> {
+    fn visit(
+        snapshot: &TaskSnapshot,
+        collapsed: &HashSet<u64>,
+        parent: Option<u64>,
+        depth: usize,
+        out: &mut Vec<Row>,
+    ) {
+        for (index, scope) in snapshot.scopes.iter().enumerate() {
+            if scope.parent != parent {
+                continue;
             }
-            self.updates = Some(cx.spawn(async move |view, cx| {
-                loop {
-                    cx.background_executor().timer(REFRESH).await;
-                    if view
-                        .update(cx, |view, cx| {
-                            view.refresh();
-                            cx.notify();
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
+            out.push(Row::Scope(index, depth));
+            if collapsed.contains(&scope.id) {
+                continue;
+            }
+            for (task_index, task) in snapshot.tasks.iter().enumerate() {
+                if task.scope == scope.id {
+                    out.push(Row::Task(task_index, depth + 1));
                 }
-            }));
-        }
-        cx.notify();
-    }
-
-    #[cfg(all(test, feature = "gui-tests"))]
-    pub(crate) fn is_active(&self) -> bool {
-        self.updates.is_some()
-    }
-
-    fn refresh(&mut self) {
-        self.snapshot = self.inspector.snapshot();
-        self.collapsed
-            .retain(|id| self.snapshot.scopes.iter().any(|scope| scope.id == *id));
-        if !self
-            .snapshot
-            .tasks
-            .iter()
-            .any(|task| Some(task.id) == self.selected)
-        {
-            self.selected = None;
-        }
-        self.rebuild();
-    }
-
-    fn rebuild(&mut self) {
-        fn visit(view: &mut View, parent: Option<u64>, depth: usize) {
-            let children: Vec<_> = view
-                .snapshot
-                .scopes
-                .iter()
-                .enumerate()
-                .filter(|(_, scope)| scope.parent == parent)
-                .map(|(index, scope)| (index, scope.id))
-                .collect();
-            for (index, id) in children {
-                view.rows.push(Row::Scope(index, depth));
-                if view.collapsed.contains(&id) {
-                    continue;
-                }
-                for (index, task) in view.snapshot.tasks.iter().enumerate() {
-                    if task.scope == id {
-                        view.rows.push(Row::Task(index, depth + 1));
-                    }
-                }
-                visit(view, Some(id), depth + 1);
             }
+            visit(snapshot, collapsed, Some(scope.id), depth + 1, out);
         }
-        self.rows.clear();
-        visit(self, None, 0);
     }
 
-    fn row(&self, row_index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let base = div()
-            .h(px(HEIGHT))
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_2()
-            .pr_3()
-            .text_size(px(12.));
-        match self.rows[row_index] {
-            Row::Scope(index, depth) => {
-                let scope = &self.snapshot.scopes[index];
-                let id = scope.id;
-                let collapsed = self.collapsed.contains(&id);
-                let status = if scope.cancelling {
-                    t!(@cx, "logs-tasks-scope-closing")
-                } else {
-                    t!(@cx, "logs-tasks-scope-open")
-                };
-                base.id(("task-scope", id))
-                    .test_support()
-                    .pl(px(12. + depth as f32 * 16.))
-                    .bg(cx.theme().muted)
-                    .cursor_pointer()
-                    .child(div().w(px(12.)).flex_shrink_0().child(if collapsed {
-                        "▸"
-                    } else {
-                        "▾"
-                    }))
-                    .child(name_with_tags(
-                        id,
-                        scope.name.clone(),
-                        status,
-                        if scope.cancelling {
-                            TagVariant::Warning
-                        } else {
-                            TagVariant::Secondary
-                        },
-                    ))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.focus.focus(window, cx);
-                        if !this.collapsed.remove(&id) {
-                            this.collapsed.insert(id);
-                        }
-                        this.rebuild();
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            }
-            Row::Task(index, depth) => {
-                let task = &self.snapshot.tasks[index];
-                let id = task.id;
-                let status = if task.cancelling {
-                    t!(@cx, "logs-tasks-cancelling")
-                } else {
-                    t!(@cx, "logs-tasks-active")
-                };
-                let variant = if task.cancelling {
-                    TagVariant::Warning
-                } else {
-                    TagVariant::Success
-                };
-                base.id(("task-entry", id))
-                    .aria_label(format!(
-                        "{}, {}, {status}",
-                        task_name(task),
-                        execution(task.execution, cx)
-                    ))
-                    .test_support()
-                    .pl(px(12. + depth as f32 * 16.))
-                    .cursor_pointer()
-                    .when(self.selected == Some(id), |row| row.bg(cx.theme().accent))
-                    .child(name_with_tags(id, task_name(task), status, variant))
-                    .child(
-                        div()
-                            .w(px(130.))
-                            .flex_shrink_0()
-                            .truncate()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(execution(task.execution, cx)),
-                    )
-                    .child(
-                        div()
-                            .w(px(75.))
-                            .flex_shrink_0()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("{:.1} s", task.age.as_secs_f64())),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.focus.focus(window, cx);
-                        this.selected = (this.selected != Some(id)).then_some(id);
-                        this.scroll
-                            .scroll_to_item(row_index, gpui_kit::ScrollStrategy::Nearest);
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            }
-        }
+    let mut rows = Vec::new();
+    visit(snapshot, collapsed, None, 0, &mut rows);
+    rows
+}
+
+fn execution_label(execution: Execution) -> String {
+    match execution {
+        Execution::Supervisor => i18n::text("logs-tasks-supervisor"),
+        Execution::GpuiBackground => i18n::text("logs-tasks-gpui-background"),
+        Execution::Tokio => i18n::text("logs-tasks-tokio"),
+        Execution::Blocking => i18n::text("logs-tasks-blocking"),
+        Execution::Thread => i18n::text("logs-tasks-thread"),
     }
 }
 
-fn name_with_tags(
-    id: u64,
-    name: String,
-    status: gpui_kit::SharedString,
-    variant: TagVariant,
-) -> AnyElement {
-    let tag = |label: gpui_kit::SharedString, variant| {
-        InlineTag::new()
-            .with_variant(variant)
-            .small()
-            .outline()
-            .flex_shrink_0()
-            .text_size(px(10.))
-            .child(label)
-    };
-    div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .items_center()
-        .gap_1()
-        .child(div().min_w_0().truncate().child(name))
-        .child(tag(format!("#{id}").into(), TagVariant::Secondary))
-        .child(tag(status, variant))
-        .into_any_element()
-}
-
-fn execution(kind: Execution, cx: &App) -> gpui_kit::SharedString {
-    crate::i18n::text(
-        match kind {
-            Execution::Supervisor => "logs-tasks-supervisor",
-            Execution::GpuiBackground => "logs-tasks-gpui-background",
-            Execution::Tokio => "logs-tasks-tokio",
-            Execution::Blocking => "logs-tasks-blocking",
-            Execution::Thread => "logs-tasks-thread",
-        },
-        cx,
-    )
-}
-
-fn task_name(task: &crate::service::task_manager::TaskSnapshot) -> String {
+#[must_use]
+pub(crate) fn task_name(task: &TaskRecord) -> String {
     if task.name.is_empty() {
-        std::path::Path::new(task.source.file())
+        Path::new(task.source.file())
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
@@ -275,86 +208,254 @@ fn task_name(task: &crate::service::task_manager::TaskSnapshot) -> String {
     }
 }
 
-impl Render for View {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let detail = self
-            .snapshot
-            .tasks
-            .iter()
-            .find(|task| Some(task.id) == self.selected);
-        div()
-            .id("tasks-panel")
-            .test_support()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .key_context("GdsTasks")
-            .track_focus(&self.focus)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .pt_3()
-                    .pb_2()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(div().flex_1().child(t!(@cx, "logs-tasks-name")))
-                    .child(
-                        div()
-                            .w(px(130.))
-                            .flex_shrink_0()
-                            .child(t!(@cx, "logs-tasks-execution")),
-                    )
-                    .child(
-                        div()
-                            .w(px(75.))
-                            .flex_shrink_0()
-                            .child(t!(@cx, "logs-tasks-age")),
-                    ),
+#[must_use]
+pub(crate) fn toggle_selected_id(current: Option<u64>, clicked: u64) -> Option<u64> {
+    (current != Some(clicked)).then_some(clicked)
+}
+
+#[cfg(test)]
+pub(crate) mod test_probe {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    pub(crate) struct TaskProbe {
+        pub snapshot: RwSignal<TaskSnapshot, LocalStorage>,
+        pub collapsed: RwSignal<HashSet<u64>, LocalStorage>,
+        pub selected: RwSignal<Option<u64>, LocalStorage>,
+        pub row_count: Signal<usize, LocalStorage>,
+        pub tasks_empty: Signal<bool, LocalStorage>,
+        pub active: Rc<Cell<bool>>,
+    }
+
+    thread_local! {
+        pub(crate) static PROBE: RefCell<Option<TaskProbe>> = const { RefCell::new(None) };
+    }
+}
+
+/// Live task and scope hierarchy inspector bound to the application task supervisor.
+#[component]
+pub fn TaskManagerView() -> impl IntoView {
+    crate::ui::styles::install_ui_stylesheets();
+    install_stylesheet(SHEET, TASK_MANAGER_CSS);
+
+    let inspector = Gds::try_current().and_then(|gds| gds.tasks().inspector());
+    let initial = inspector
+        .as_ref()
+        .map(crate::service::task_manager::Inspector::snapshot)
+        .unwrap_or_default();
+
+    let snapshot = RwSignal::new_local(initial);
+    let collapsed = RwSignal::new_local(HashSet::<u64>::new());
+    let selected = RwSignal::new_local(None::<u64>);
+
+    let rows: Memo<Vec<Row>> =
+        Memo::new(move |_| snapshot.with(|snap| collapsed.with(|hidden| build_rows(snap, hidden))));
+    let row_count: Signal<usize, LocalStorage> = Signal::derive_local(move || rows.with(Vec::len));
+    let tasks_empty: Signal<bool, LocalStorage> =
+        Signal::derive_local(move || snapshot.with(|snap| snap.tasks.is_empty()));
+
+    let refresh_handle: Option<IntervalHandle> = inspector.as_ref().map(|insp| {
+        let inspector = insp.clone();
+        set_interval(REFRESH, move || {
+            let next = inspector.snapshot();
+            collapsed.update(|hidden| {
+                hidden.retain(|id| next.scopes.iter().any(|scope| scope.id == *id));
+            });
+            if let Some(current_selected) = selected.get_untracked()
+                && !next.tasks.iter().any(|task| task.id == current_selected)
+            {
+                selected.set(None);
+            }
+            snapshot.set(next);
+        })
+    });
+    let handle_store = StoredValue::new_local(refresh_handle);
+    #[cfg(test)]
+    let probe_active = std::rc::Rc::new(std::cell::Cell::new(true));
+    #[cfg(test)]
+    {
+        let active_flag = std::rc::Rc::clone(&probe_active);
+        test_probe::PROBE.with(|slot| {
+            *slot.borrow_mut() = Some(test_probe::TaskProbe {
+                snapshot,
+                collapsed,
+                selected,
+                row_count,
+                tasks_empty,
+                active: active_flag,
+            });
+        });
+    }
+    on_cleanup_local(move || {
+        handle_store.update_value(|slot| {
+            *slot = None;
+        });
+        #[cfg(test)]
+        probe_active.set(false);
+    });
+
+    let list_view = move || {
+        if row_count.get() == 0 {
+            return AnyView::new(());
+        }
+
+        AnyView::new(view! {
+            VirtualList(
+                count = row_count,
+                row_size = ROW_HEIGHT,
+                overscan = 4,
+                label = "Tasks",
+                class = "gds-tasks-list",
+                row = move |index| {
+                    let row_content = move || {
+                        let row = rows.with(|items| items.get(index).copied())?;
+                        match row {
+                            Row::Scope(scope_idx, depth) => {
+                                let (id, name, cancelling) = snapshot.with(|snap| {
+                                    let scope = snap.scopes.get(scope_idx)?;
+                                    Some((scope.id, scope.name.clone(), scope.cancelling))
+                                })?;
+                                let is_collapsed = collapsed.with(|hidden| hidden.contains(&id));
+                                let indent_style = format!("padding-left: {}px;", 12.0 + depth as f32 * 16.0);
+                                let chevron = if is_collapsed {
+                                    IconName::ChevronRight
+                                } else {
+                                    IconName::ChevronDown
+                                };
+                                let badge_variant = if cancelling {
+                                    BadgeVariant::Destructive
+                                } else {
+                                    BadgeVariant::Secondary
+                                };
+                                let badge_label = if cancelling {
+                                    i18n::text("logs-tasks-scope-closing")
+                                } else {
+                                    i18n::text("logs-tasks-scope-open")
+                                };
+                                Some(AnyView::new(view! {
+                                    box(
+                                        class = "gds-tasks-row gds-tasks-row--scope",
+                                        style = indent_style,
+                                        attr:data-task-scope = {id.to_string()},
+                                        on:click = move |_| {
+                                            collapsed.update(|hidden| {
+                                                if !hidden.remove(&id) {
+                                                    hidden.insert(id);
+                                                }
+                                            });
+                                        },
+                                    ) {
+                                        box(class = "gds-tasks-row-name") {
+                                            Icon(name = chevron, size = 12.0)
+                                            text(class = "gds-tasks-row-title") {{name}}
+                                            text(class = "gds-tasks-row-id") {{format!("#{id}")}}
+                                            Badge(variant = badge_variant) {{badge_label}}
+                                        }
+                                    }
+                                }))
+                            }
+                            Row::Task(task_idx, depth) => {
+                                let (id, name, cancelling, exec, age_secs) = snapshot.with(|snap| {
+                                    let task = snap.tasks.get(task_idx)?;
+                                    Some((
+                                        task.id,
+                                        task_name(task),
+                                        task.cancelling,
+                                        task.execution,
+                                        task.age.as_secs_f64(),
+                                    ))
+                                })?;
+                                let is_selected = selected.get() == Some(id);
+                                let indent_style = format!("padding-left: {}px;", 12.0 + depth as f32 * 16.0);
+                                let badge_variant = if cancelling {
+                                    BadgeVariant::Destructive
+                                } else {
+                                    BadgeVariant::Default
+                                };
+                                let status_label = if cancelling {
+                                    i18n::text("logs-tasks-cancelling")
+                                } else {
+                                    i18n::text("logs-tasks-active")
+                                };
+                                let exec_text = execution_label(exec);
+                                let aria = format!("{name}, {exec_text}, {status_label}");
+                                Some(AnyView::new(view! {
+                                    box(
+                                        class = "gds-tasks-row",
+                                        class = if is_selected {
+                                            "gds-tasks-row--selected"
+                                        } else {
+                                            ""
+                                        },
+                                        style = indent_style,
+                                        a11y:label = aria,
+                                        attr:data-task-entry = {id.to_string()},
+                                        on:click = move |_| {
+                                            selected.update(|current| {
+                                                *current = toggle_selected_id(*current, id);
+                                            });
+                                        },
+                                    ) {
+                                        box(class = "gds-tasks-row-name") {
+                                            text(class = "gds-tasks-row-title") {{name}}
+                                            text(class = "gds-tasks-row-id") {{format!("#{id}")}}
+                                            Badge(variant = badge_variant) {{status_label}}
+                                        }
+                                        text(class = "gds-tasks-col-exec") {{exec_text}}
+                                        text(class = "gds-tasks-col-age") {{format!("{age_secs:.1} s")}}
+                                    }
+                                }))
+                            }
+                        }
+                    };
+                    view! { {row_content} }
+                },
             )
-            .child(
-                uniform_list(
-                    "tasks-list",
-                    self.rows.len(),
-                    cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                        range.map(|index| this.row(index, cx)).collect()
-                    }),
-                )
-                .track_scroll(&self.scroll)
-                .flex_1()
-                .min_h_0(),
-            )
-            .when(self.snapshot.tasks.is_empty(), |view| {
-                view.child(
-                    div()
-                        .id("logs-tasks-empty")
-                        .test_support()
-                        .p_3()
-                        .text_sm()
-                        .child(t!(@cx, "logs-tasks-empty")),
-                )
+        })
+    };
+
+    let empty_view = move || {
+        tasks_empty.get().then(|| {
+            view! {
+                box(class = "gds-tasks-empty", attr:data-testid = "logs-tasks-empty") {
+                    text {{move || i18n::text("logs-tasks-empty")}}
+                }
+            }
+        })
+    };
+
+    let detail_view = move || {
+        let sel = selected.get()?;
+        let detail_text = snapshot.with(|snap| {
+            snap.tasks.iter().find(|task| task.id == sel).map(|task| {
+                wrap_tokens(&format!(
+                    "{} · #{}\n{}",
+                    task_name(task),
+                    task.id,
+                    task.source
+                ))
             })
-            .children(detail.map(|task| {
-                div()
-                    .id("tasks-detail")
-                    .test_support()
-                    .p_3()
-                    .flex_shrink_0()
-                    .max_h(px(DETAIL_HEIGHT))
-                    .overflow_y_scroll()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .text_xs()
-                    .child(crate::ui::tooltip::wrap_tokens(&format!(
-                        "{} · #{}\n{}",
-                        task_name(task),
-                        task.id,
-                        task.source
-                    )))
-            }))
+        })?;
+        Some(view! {
+            box(class = "gds-tasks-detail", attr:data-testid = "tasks-detail") {
+                text {{detail_text}}
+            }
+        })
+    };
+
+    view! {
+        box(class = "gds-tasks-root", attr:data-testid = "tasks-panel") {
+            box(class = "gds-tasks-header") {
+                text(class = "gds-tasks-col-name") {{move || i18n::text("logs-tasks-name")}}
+                text(class = "gds-tasks-col-exec") {{move || i18n::text("logs-tasks-execution")}}
+                text(class = "gds-tasks-col-age") {{move || i18n::text("logs-tasks-age")}}
+            }
+            box(class = "gds-tasks-body") {
+                {list_view}
+                {empty_view}
+            }
+            {detail_view}
+        }
     }
 }

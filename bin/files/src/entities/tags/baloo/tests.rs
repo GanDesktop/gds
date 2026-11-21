@@ -67,6 +67,48 @@ mod command_tests {
         );
     }
 
+    #[test]
+    fn resolves_relative_candidates_and_rejects_non_executable_files() {
+        let root = tempfile::tempdir().expect("create temp dir");
+        let bin_dir = root.path().join("tools");
+        std::fs::create_dir_all(&bin_dir).expect("create tools dir");
+
+        let rel_exec = script(&bin_dir, "balooctl-custom", "exit 0");
+        let non_exec = root.path().join("balooctl6");
+        std::fs::write(&non_exec, "#!/bin/sh\nexit 0\n").expect("write non-executable");
+        std::fs::set_permissions(&non_exec, std::fs::Permissions::from_mode(0o600))
+            .expect("chmod 0600");
+
+        let resolved_rel = Baloo::resolve_in_path_with_cwd(
+            Some(Path::new("./tools/balooctl-custom")),
+            &["balooctl"],
+            OsStr::new(""),
+            root.path(),
+        )
+        .expect("resolve relative configured executable");
+        assert_eq!(resolved_rel, rel_exec);
+
+        let fallback = script(root.path(), "balooctl", "exit 0");
+        let resolved_default = Baloo::resolve_in_path_with_cwd(
+            None,
+            &["balooctl6", "balooctl"],
+            root.path().as_os_str(),
+            root.path(),
+        )
+        .expect("skip non-executable first candidate and pick second");
+        assert_eq!(resolved_default, fallback);
+
+        assert!(
+            Baloo::resolve_in_path_with_cwd(
+                Some(&non_exec),
+                &["balooctl"],
+                root.path().as_os_str(),
+                root.path(),
+            )
+            .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn resolves_virtual_folders_and_real_files_without_shell_interpolation() {
         let root = tempfile::tempdir().expect("create temp dir");

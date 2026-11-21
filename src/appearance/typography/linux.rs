@@ -1,14 +1,13 @@
-//! Linux Fontconfig resolution with a fingerprint-validated disk cache.
+//! Linux Fontconfig resolution with fingerprint-validated disk and memory caches.
 
 use std::{
     env, fs,
     os::unix::fs::MetadataExt as _,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
 };
 
 use directories::BaseDirs;
-use gpui_kit::SharedString;
 use serde::{Deserialize, Serialize};
 
 use super::{SYSTEM_FAMILY, SYSTEM_MONO_FAMILY};
@@ -25,12 +24,12 @@ const ENV_KEYS: [&str; 6] = [
 ];
 
 pub(super) struct SystemFamilies {
-    pub sans_serif: SharedString,
-    pub monospace: SharedString,
+    pub sans_serif: String,
+    pub monospace: String,
 }
 
 pub(super) struct CustomMatch {
-    pub family: SharedString,
+    pub family: String,
     pub confirmed_monospace: bool,
 }
 
@@ -38,6 +37,17 @@ pub(super) struct QueriedFamilies {
     pub sans_serif: String,
     pub monospace: String,
     pub watched: Vec<PathBuf>,
+}
+
+struct QueriedInstalled {
+    families: Vec<String>,
+    watched: Vec<PathBuf>,
+}
+
+struct InstalledCache {
+    env: Vec<(String, Option<String>)>,
+    watched: Vec<PathStamp>,
+    families: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -49,13 +59,13 @@ struct CacheEntry {
     watched: Vec<PathStamp>,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct PathStamp {
     path: PathBuf,
     state: PathState,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum PathState {
     Missing,
@@ -75,6 +85,41 @@ pub(super) fn system_families() -> &'static SystemFamilies {
         let cache_path = BaseDirs::new().map(|dirs| dirs.cache_dir().join(CACHE_SUBPATH));
         load_or_query_with(cache_path.as_deref(), current_env, query_system_families)
     })
+}
+
+pub(super) fn installed_families() -> Vec<String> {
+    static INSTALLED: Mutex<Option<InstalledCache>> = Mutex::new(None);
+    cached_installed_families_with(&INSTALLED, current_env, query_installed_families)
+}
+
+fn cached_installed_families_with(
+    slot: &Mutex<Option<InstalledCache>>,
+    read_env: impl FnOnce() -> Vec<(String, Option<String>)>,
+    query: impl FnOnce() -> QueriedInstalled,
+) -> Vec<String> {
+    let env_snapshot = read_env();
+    {
+        let guard = slot.lock().unwrap_or_else(|poison| poison.into_inner());
+        if let Some(cached) = guard.as_ref()
+            && !cached.watched.is_empty()
+            && cached.env == env_snapshot
+            && stamps_match(&cached.watched)
+        {
+            return cached.families.clone();
+        }
+    }
+
+    let queried = query();
+    if !queried.watched.is_empty() {
+        let watched = stamp_paths(&queried.watched);
+        let mut guard = slot.lock().unwrap_or_else(|poison| poison.into_inner());
+        *guard = Some(InstalledCache {
+            env: env_snapshot,
+            watched,
+            families: queried.families.clone(),
+        });
+    }
+    queried.families
 }
 
 pub(super) fn resolve_custom_monospace(requested: &str) -> Option<CustomMatch> {
@@ -113,8 +158,8 @@ pub(super) fn load_or_query_with(
     }
 
     SystemFamilies {
-        sans_serif: queried.sans_serif.into(),
-        monospace: queried.monospace.into(),
+        sans_serif: queried.sans_serif,
+        monospace: queried.monospace,
     }
 }
 
@@ -131,14 +176,10 @@ fn valid_cached_families(
     {
         return None;
     }
-    if entry
-        .watched
-        .iter()
-        .all(|item| stamp_path(&item.path) == item.state)
-    {
+    if stamps_match(&entry.watched) {
         Some(SystemFamilies {
-            sans_serif: entry.sans_serif.into(),
-            monospace: entry.monospace.into(),
+            sans_serif: entry.sans_serif,
+            monospace: entry.monospace,
         })
     } else {
         None
@@ -151,14 +192,7 @@ fn persist_cache(
     env_snapshot: &[(String, Option<String>)],
     queried: &QueriedFamilies,
 ) {
-    let watched = queried
-        .watched
-        .iter()
-        .map(|watched_path| PathStamp {
-            path: watched_path.clone(),
-            state: stamp_path(watched_path),
-        })
-        .collect();
+    let watched = stamp_paths(&queried.watched);
     let entry = CacheEntry {
         version: SCHEMA_VERSION,
         sans_serif: queried.sans_serif.clone(),
@@ -179,6 +213,22 @@ fn current_env() -> Vec<(String, Option<String>)> {
     ENV_KEYS
         .iter()
         .map(|key| ((*key).to_owned(), env::var(key).ok()))
+        .collect()
+}
+
+fn stamps_match(watched: &[PathStamp]) -> bool {
+    watched
+        .iter()
+        .all(|item| stamp_path(&item.path) == item.state)
+}
+
+fn stamp_paths(paths: &[PathBuf]) -> Vec<PathStamp> {
+    paths
+        .iter()
+        .map(|watched_path| PathStamp {
+            path: watched_path.clone(),
+            state: stamp_path(watched_path),
+        })
         .collect()
 }
 
@@ -213,6 +263,16 @@ fn query_system_families() -> QueriedFamilies {
         monospace: monospace.unwrap_or_else(|| SYSTEM_MONO_FAMILY.to_owned()),
         watched,
     }
+}
+
+fn query_installed_families() -> QueriedInstalled {
+    let (families, mut watched) = fc::installed_families();
+    if !families.is_empty() || !watched.is_empty() {
+        append_standard_paths(&mut watched);
+        watched.sort();
+        watched.dedup();
+    }
+    QueriedInstalled { families, watched }
 }
 
 fn append_standard_paths(paths: &mut Vec<PathBuf>) {
@@ -381,6 +441,36 @@ mod fc {
         }
     }
 
+    pub(super) fn installed_families() -> (Vec<String>, Vec<PathBuf>) {
+        let _guard = FC_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        let Some(config) = current_config() else {
+            return (Vec::new(), Vec::new());
+        };
+        let Some(pattern) = Pattern::new() else {
+            return (Vec::new(), Vec::new());
+        };
+        let Some(mut objects) = ObjectSet::new() else {
+            return (Vec::new(), Vec::new());
+        };
+        if !objects.add(FC_FAMILY) || !objects.add(FC_FAMILYLANG) {
+            return (Vec::new(), Vec::new());
+        }
+        // SAFETY: config, pattern, and object set remain alive for the call.
+        let Some(fonts) = FontSet::from_raw(unsafe { FcFontList(config, pattern.0, objects.0) })
+        else {
+            return (Vec::new(), Vec::new());
+        };
+        let mut names: Vec<_> = fonts
+            .patterns()
+            .iter()
+            .filter_map(|face| select_english_or_first_family(*face))
+            .collect();
+        names.sort();
+        names.dedup();
+        let watched = collect_watched_paths(config);
+        (names, watched)
+    }
+
     pub(super) fn resolve_defaults() -> (Option<String>, Option<String>, Vec<PathBuf>) {
         let _guard = FC_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         let Some(config) = current_config() else {
@@ -417,7 +507,7 @@ mod fc {
             status == FcResultMatch && matches!(spacing, FC_MONO | FC_DUAL | FC_CHARCELL)
         });
         Some(CustomMatch {
-            family: family.into(),
+            family,
             confirmed_monospace,
         })
     }
@@ -515,5 +605,142 @@ mod fc {
             || lang
                 .get(..3)
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case("en-"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, fs, os::unix::fs::symlink, sync::Mutex};
+
+    use super::{QueriedInstalled, cached_installed_families_with, installed_families};
+
+    fn sample_env(fc_path: &str) -> Vec<(String, Option<String>)> {
+        vec![("FONTCONFIG_PATH".to_owned(), Some(fc_path.to_owned()))]
+    }
+
+    #[test]
+    fn installed_families_memory_cache_hits_and_invalidates_on_stamp_or_env_change() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let watched_conf = temp.path().join("fonts.conf");
+        let target_a = temp.path().join("10-a.conf");
+        let target_b = temp.path().join("10-b.conf");
+        let watched_link = temp.path().join("10-active.conf");
+        let user_font_dir = temp.path().join("user-fonts");
+
+        fs::write(&watched_conf, b"<fontconfig/>").expect("write watched conf");
+        fs::write(&target_a, b"a").expect("write target a");
+        fs::write(&target_b, b"b").expect("write target b");
+        symlink(&target_a, &watched_link).expect("create watched symlink");
+
+        let watched = vec![
+            watched_conf.clone(),
+            watched_link.clone(),
+            user_font_dir.clone(),
+        ];
+        let cache = Mutex::new(None);
+        let queries = Cell::new(0_usize);
+
+        let cold = cached_installed_families_with(
+            &cache,
+            || sample_env("/etc/fonts"),
+            || {
+                queries.set(queries.get() + 1);
+                QueriedInstalled {
+                    families: vec!["Inter".to_owned(), "Sarasa UI SC".to_owned()],
+                    watched: watched.clone(),
+                }
+            },
+        );
+        assert_eq!(queries.get(), 1);
+        assert_eq!(cold, vec!["Inter".to_owned(), "Sarasa UI SC".to_owned()]);
+
+        let hit = cached_installed_families_with(
+            &cache,
+            || sample_env("/etc/fonts"),
+            || {
+                queries.set(queries.get() + 1);
+                QueriedInstalled {
+                    families: vec!["Unexpected".to_owned()],
+                    watched: watched.clone(),
+                }
+            },
+        );
+        assert_eq!(queries.get(), 1);
+        assert_eq!(hit, cold);
+
+        let env_miss = cached_installed_families_with(
+            &cache,
+            || sample_env("/custom/fonts"),
+            || {
+                queries.set(queries.get() + 1);
+                QueriedInstalled {
+                    families: vec!["Noto Sans".to_owned()],
+                    watched: watched.clone(),
+                }
+            },
+        );
+        assert_eq!(queries.get(), 2);
+        assert_eq!(env_miss, vec!["Noto Sans".to_owned()]);
+
+        fs::write(&watched_conf, b"<fontconfig><!-- changed --></fontconfig>")
+            .expect("modify watched conf");
+        let conf_miss = cached_installed_families_with(
+            &cache,
+            || sample_env("/custom/fonts"),
+            || {
+                queries.set(queries.get() + 1);
+                QueriedInstalled {
+                    families: vec!["IBM Plex Sans".to_owned(), "Noto Sans".to_owned()],
+                    watched: watched.clone(),
+                }
+            },
+        );
+        assert_eq!(queries.get(), 3);
+        assert_eq!(
+            conf_miss,
+            vec!["IBM Plex Sans".to_owned(), "Noto Sans".to_owned()]
+        );
+
+        fs::create_dir(&user_font_dir).expect("create watched font dir");
+        let dir_miss = cached_installed_families_with(
+            &cache,
+            || sample_env("/custom/fonts"),
+            || {
+                queries.set(queries.get() + 1);
+                QueriedInstalled {
+                    families: vec!["JetBrains Mono".to_owned()],
+                    watched: watched.clone(),
+                }
+            },
+        );
+        assert_eq!(queries.get(), 4);
+        assert_eq!(dir_miss, vec!["JetBrains Mono".to_owned()]);
+
+        fs::remove_file(&watched_link).expect("remove old symlink");
+        symlink(&target_b, &watched_link).expect("retarget symlink");
+        let link_miss = cached_installed_families_with(
+            &cache,
+            || sample_env("/custom/fonts"),
+            || {
+                queries.set(queries.get() + 1);
+                QueriedInstalled {
+                    families: vec!["Fira Code".to_owned()],
+                    watched: watched.clone(),
+                }
+            },
+        );
+        assert_eq!(queries.get(), 5);
+        assert_eq!(link_miss, vec!["Fira Code".to_owned()]);
+    }
+
+    #[test]
+    fn live_installed_families_cache_returns_identical_sorted_families() {
+        let first = installed_families();
+        let second = installed_families();
+        assert_eq!(first, second);
+        let mut sorted = first.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(first, sorted);
     }
 }

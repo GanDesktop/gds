@@ -1,53 +1,53 @@
-use super::*;
-use gpui_kit::{ScrollStrategy, point};
+//! Keyboard list-navigation arithmetic for visible log entries.
 
-impl Viewer {
-    pub(super) fn move_selection(&mut self, forward: bool, page: bool, cx: &mut Context<Self>) {
-        if self.tab != Tab::Logs {
-            return;
-        }
-        let Some(last) = self.visible.len().checked_sub(1) else {
-            return;
-        };
-        let handle = self.scroll.0.borrow().base_handle.clone();
-        let height = f32::from(handle.bounds().size.height);
-        let offset = handle.offset();
-        let top = f32::from(-offset.y).max(0.);
-        let first_visible = ((top / ROW_HEIGHT).floor() as usize).min(last);
-        let last_visible = (((top + height) / ROW_HEIGHT).ceil() as usize)
-            .saturating_sub(1)
-            .min(last);
-        let current = self
-            .visible
-            .iter()
-            .position(|&index| Some(self.snapshot.entries[index].id) == self.selected);
-        let step = if page {
-            (height / ROW_HEIGHT).floor().max(1.) as usize
-        } else {
-            1
-        };
-        let next = if !page && current.is_none() {
-            if forward { first_visible } else { last_visible }
-        } else {
-            let current = current.unwrap_or(first_visible);
-            if forward {
-                current.saturating_add(step).min(last)
-            } else {
-                current.saturating_sub(step)
-            }
-        };
-        self.selected = Some(self.snapshot.entries[self.visible[next]].id);
-        if page {
-            let distance = step as f32 * ROW_HEIGHT;
-            let next_top = if forward {
-                top + distance
-            } else {
-                (top - distance).max(0.)
-            };
-            handle.set_offset(point(offset.x, px(-next_top)));
-        }
-        // Deferred reveal uses the final viewport after the detail panel changes height.
-        self.scroll.scroll_to_item(next, ScrollStrategy::Nearest);
-        cx.notify();
+use crate::service::logs::Entry;
+
+/// Relative keyboard navigation step within the visible filtered log list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NavigationStep {
+    Previous,
+    Next,
+    PageUp,
+    PageDown,
+}
+
+#[must_use]
+pub(crate) fn step_index(
+    current: Option<usize>,
+    len: usize,
+    step: NavigationStep,
+    page_rows: usize,
+) -> Option<usize> {
+    if len == 0 {
+        return None;
     }
+    let last = len - 1;
+    let jump = page_rows.max(1);
+    Some(match (current, step) {
+        (None, NavigationStep::Previous | NavigationStep::PageUp) => last,
+        (None, NavigationStep::Next | NavigationStep::PageDown) => 0,
+        (Some(index), NavigationStep::Previous) => index.saturating_sub(1),
+        (Some(index), NavigationStep::Next) => (index + 1).min(last),
+        (Some(index), NavigationStep::PageUp) => index.saturating_sub(jump),
+        (Some(index), NavigationStep::PageDown) => (index + jump).min(last),
+    })
+}
+
+#[must_use]
+pub(crate) fn step_selection(
+    visible: &[usize],
+    entries: &[Entry],
+    selected: Option<u64>,
+    step: NavigationStep,
+    page_rows: usize,
+) -> Option<(usize, u64)> {
+    let current = selected.and_then(|id| {
+        visible
+            .iter()
+            .position(|&entry_idx| entries.get(entry_idx).is_some_and(|entry| entry.id == id))
+    });
+    let next_pos = step_index(current, visible.len(), step, page_rows)?;
+    let entry_idx = *visible.get(next_pos)?;
+    let entry = entries.get(entry_idx)?;
+    Some((next_pos, entry.id))
 }

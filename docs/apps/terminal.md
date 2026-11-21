@@ -1,6 +1,6 @@
 # Embedded Terminals
 
-GDS Files and GDS Agents share the local PTY terminal engine in `gds::service::terminal` and its GPUI view adapter in `gds::ui::terminal`. Terminals execute directly on the host running GDS (Linux local PTYs); there is no persistent background daemon, remote SSH terminal RPC, or implicit Agent shell-execution grant.
+GDS Files and GDS Agents share the local PTY terminal engine in `gds::service::terminal` and its `zgui` view adapter in `gds::ui::terminal`. Terminals execute directly on the host running GDS (Linux local PTYs); there is no persistent background daemon, remote SSH terminal RPC, or implicit Agent shell-execution grant.
 
 ## Architecture & Layering
 
@@ -8,7 +8,7 @@ GDS Files and GDS Agents share the local PTY terminal engine in `gds::service::t
 Files / Agents Host: session collection, tabs, dock split, cwd & shortcuts
                                   │
                                   ▼
-              gds::ui::terminal::Terminal (GPUI adapter)
+              gds::ui::terminal::Terminal (zgui adapter)
                focus, monospace shaping, grid paint, IME
                                   │  plain Rust input/state/events
                                   ▼
@@ -20,7 +20,7 @@ Files / Agents Host: session collection, tabs, dock split, cwd & shortcuts
                     portable-pty 0.9 + user shell
 ```
 
-- **Strict UI/service boundary**: `service::terminal` has zero GPUI, UI, Files, or BAS dependencies. `Terminal::prepare(scope, options)` returns a `Terminal` handle and blocking `Launch` task; callers run `launch.run()` off the UI thread, await `terminal.ready()`, and interact via `Session`.
+- **Strict UI/service boundary**: `service::terminal` has zero `zgui`, UI, Files, or BAS dependencies. `Terminal::prepare(scope, options)` returns a `Terminal` handle and blocking `Launch` task; callers run `launch.run()` off the UI thread, await `terminal.ready()`, and interact via `Session`.
 - **Dedicated session worker**: Each PTY runs a single Tokio current-thread worker combining `AsyncFd` readiness, `Notify` control wakes, `SIGCHLD` child-exit monitoring, byte-bounded input/reply queues (giving terminal OSC replies priority over queued keystrokes), and exact synchronized-update deadlines. For why GDS runs its own worker instead of upstream Alacritty's event loop, see [Terminal PTY Loop & Directory Policy](../decisions/terminal-pty-loop.md).
 - **Process-group cleanup**: Closing a terminal or window awaits actual cleanup (`shutdown()`), enumerating Linux process groups in the PTY session (`SIGHUP` + `SIGCONT`, grace period, `SIGKILL` fallback, and direct-child reaping) without prompting for confirmation.
 - **Security & isolation**: Ordinary PTYs run with the desktop user's permissions. Terminal output is untrusted: URLs never auto-execute, `OSC 52` never reads or writes the system clipboard, and terminal I/O is never auto-uploaded into Agent conversations.
@@ -44,5 +44,5 @@ Both applications place the terminal dock beneath the workspace across two colum
 
 ## Input & Shell Configuration
 
-- **Focus routing**: Inside the PTY input scope, `Ctrl+Shift+C/V` copy/paste, `Ctrl+N/W` open/close terminal tabs, `F6` returns focus to the workspace, and `Ctrl+,` / `Ctrl+\`` remain window-level; `Ctrl+C/D/B/L/R`, `Tab` (`NoAction` focus-traversal override), arrows, and `Esc` pass directly to the foreground process. See [Focus Scope Routing](../visual-language/shortcuts.md#4-focus-scope-routing).
+- **Focus routing**: Inside the PTY input scope, `Ctrl+Shift+C/V` copy/paste, `Ctrl+N/W` open/close terminal tabs, `F6` returns focus to the workspace, and `Ctrl+,` / `Ctrl+\`` remain window-level; `Ctrl+C/D/B/L/R`, `Tab` / `Shift+Tab` (bypassing window focus traversal), arrows, and `Esc` pass directly to the foreground process. See [Focus Scope Routing](../visual-language/shortcuts.md#4-focus-scope-routing).
 - **Shell resolution**: Uses explicit Terminal settings first, then the account's default shell, then `$SHELL` (interactive non-login by default, ignoring non-interactive Nix dev-shell `BASH` overrides). Nix packages ship `xterm-256color` terminfo while preserving `TERMINFO_DIRS`.

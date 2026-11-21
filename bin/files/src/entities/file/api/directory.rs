@@ -8,6 +8,8 @@ mod identity;
 mod inspection;
 
 pub use self::children::{ChildCount, DEFAULT_CHILD_COUNT_LIMIT};
+pub(crate) use self::content::descriptions as mime_descriptions;
+pub(crate) use self::content::matches_mime_filter;
 pub use self::details::*;
 pub use self::enrich::*;
 pub use self::watching::{DEFAULT_WATCH_DEBOUNCE_MS, DEFAULT_WATCH_INCREMENTAL_LIMIT};
@@ -633,10 +635,12 @@ impl Entry {
         let name = path.file_name().unwrap_or(path.as_os_str()).to_owned();
         let kind = EntryKind::from(metadata.file_type());
         let mut details = EntryDetails::from_metadata(metadata, identities);
-        if kind == EntryKind::File {
-            details.content = ContentType::from_filename(&name);
-        }
-        let content_probed = details.content.is_some();
+        let (content, content_probed) = if kind == EntryKind::File {
+            ContentType::classify_filename(&name).into_parts()
+        } else {
+            (None, false)
+        };
+        details.content = content;
         Self::from_parts(
             path.to_owned(),
             name,
@@ -683,9 +687,7 @@ impl LinkTarget {
                         if sniff_header {
                             (ContentType::detect(name, path), true)
                         } else {
-                            let content = ContentType::from_filename(name);
-                            let probed = content.is_some();
-                            (content, probed)
+                            ContentType::classify_filename(name).into_parts()
                         }
                     }
                     _ => (None, true),

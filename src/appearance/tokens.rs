@@ -4,9 +4,10 @@
 //! are defaults, not persisted suite-wide preferences. Application settings may
 //! override typography and surface opacity independently.
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
-use gpui_kit::{Rems, WindowBackgroundAppearance};
+use zgui::canvas::zgui_color::Color;
 
 pub const TOOLBAR_HEIGHT: f32 = 52.0;
 pub const NOTIFICATION_INSET: f32 = 12.0;
@@ -86,9 +87,9 @@ impl Default for SurfaceOpacity {
 pub const WINDOW_CORNER_RADIUS: f32 = 10.;
 
 /// An alpha-capable window lets per-surface opacity changes apply immediately.
-pub const WINDOW_BACKGROUND: WindowBackgroundAppearance = WindowBackgroundAppearance::Transparent;
+pub const WINDOW_BACKGROUND: Color = Color::TRANSPARENT;
 
-pub const SMALL: Rems = Rems(UI_TEXT_SCALE);
+pub const SMALL: f32 = FONT_SIZE * UI_TEXT_SCALE;
 pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);
 /// Shared density and hierarchy for content lists, separate from navigation rows.
 pub struct DataListStyle;
@@ -104,6 +105,42 @@ impl DataListStyle {
     pub const CELL_PADDING_X: f32 = CONTENT_PADDING;
     pub const CELL_PADDING_Y: f32 = 4.0;
     pub const SCROLLBAR_LANE: f32 = 16.0;
+}
+
+/// Write layout, icon, and list sizing `--gds-*` custom property declarations.
+pub(crate) fn write_css_declarations(out: &mut String) {
+    let pairs = [
+        ("--gds-toolbar-height", TOOLBAR_HEIGHT),
+        ("--gds-notification-inset", NOTIFICATION_INSET),
+        ("--gds-notification-top-gap", NOTIFICATION_TOP_GAP),
+        ("--gds-footer-height", FOOTER_HEIGHT),
+        ("--gds-sidebar-width", SIDEBAR_WIDTH),
+        ("--gds-collapsed-sidebar-width", COLLAPSED_SIDEBAR_WIDTH),
+        ("--gds-sidebar-padding", SIDEBAR_PADDING),
+        ("--gds-sidebar-section-padding", SIDEBAR_SECTION_PADDING),
+        ("--gds-sidebar-item-height", SIDEBAR_ITEM_HEIGHT),
+        ("--gds-content-padding", CONTENT_PADDING),
+        ("--gds-terminal-content-inset", TERMINAL_CONTENT_INSET),
+        ("--gds-icon-button-size", ICON_BUTTON_SIZE),
+        ("--gds-terminal-header-height", TERMINAL_HEADER_HEIGHT),
+        ("--gds-icon-size", ICON_SIZE),
+        ("--gds-app-menu-icon-size", APPLICATION_MENU_ICON_SIZE),
+        ("--gds-sidebar-icon-size", SIDEBAR_ICON_SIZE),
+        ("--gds-small-icon-size", SMALL_ICON_SIZE),
+        ("--gds-list-row-height", DataListStyle::ROW_HEIGHT),
+        ("--gds-list-header-height", DataListStyle::HEADER_HEIGHT),
+        ("--gds-list-row-radius", DataListStyle::ROW_RADIUS),
+        ("--gds-list-selection-inset", DataListStyle::SELECTION_INSET),
+        ("--gds-list-name-size", DataListStyle::NAME_SIZE),
+        ("--gds-list-meta-size", DataListStyle::META_SIZE),
+        ("--gds-list-header-size", DataListStyle::HEADER_SIZE),
+        ("--gds-list-cell-padding-x", DataListStyle::CELL_PADDING_X),
+        ("--gds-list-cell-padding-y", DataListStyle::CELL_PADDING_Y),
+        ("--gds-scrollbar-lane", DataListStyle::SCROLLBAR_LANE),
+    ];
+    for (name, value) in pairs {
+        let _ = writeln!(out, "    {name}: {value}px;");
+    }
 }
 
 #[cfg(test)]

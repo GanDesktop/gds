@@ -1,87 +1,174 @@
-//! The shared timestamp element used by tables and detail panels.
-
 use std::time::SystemTime;
 
-use fluent_bundle::FluentArgs;
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::{IntoElement, prelude::*, *};
+use zgui::prelude::*;
+use zgui::reactive::{LocalStorage, RenderEffect, RwSignal, on_cleanup_local};
+use zgui::{component, css, view};
+use zgui_ui::{TooltipContentProps, TooltipProps, TooltipTriggerProps};
 
-use crate::{
-    app::AppExt as _,
-    appearance::tokens::TOOLTIP_DELAY,
-    i18n,
-    ui::time::{self, Format, Presentation},
-};
+use super::{Format, Presentation, format, now, precise, tick_signal};
+use crate::app::Gds;
+use crate::i18n::FluentArgs;
+use crate::ui::tooltip::{TOOLTIP_DELAY, TooltipTextProps};
 
-/// A single line of timestamp text that inherits the surrounding text style.
-///
-/// `None` means the timestamp is unknown and renders as a placeholder;
-/// `Some(UNIX_EPOCH)` is a real value and renders as the epoch. Hovering a
-/// known value shows the exact local time with seconds and UTC offset.
-#[derive(IntoElement)]
+const TIME_SHEET: &str = "gds-ui-time";
+
+const TIME_CSS: &str = css!(
+    ".gds-timestamp.gds-timestamp {
+        min-width: 0px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+    }
+    .gds-clock.gds-clock {
+        font-variant-numeric: tabular-nums;
+    }"
+);
+
+pub(super) fn install_time_stylesheets() {
+    crate::ui::styles::install_ui_stylesheets();
+    zgui::view::install_stylesheet(TIME_SHEET, TIME_CSS);
+}
+
+/// Timestamp builder usable directly inside `view!` expressions or via [`TimestampView`].
+#[derive(Clone, Copy, Debug)]
 pub struct Timestamp {
-    id: ElementId,
     value: Option<SystemTime>,
-    format: Option<Format>,
+    override_format: Option<Format>,
 }
 
 impl Timestamp {
-    pub fn new(id: impl Into<ElementId>, value: Option<SystemTime>) -> Self {
+    #[must_use]
+    pub fn new(value: Option<SystemTime>) -> Self {
         Self {
-            id: id.into(),
             value,
-            format: None,
+            override_format: None,
         }
     }
 
-    /// Present this value in `format` instead of the shared application format.
+    #[must_use]
     pub fn format(mut self, format: Format) -> Self {
-        self.format = Some(format);
+        self.override_format = Some(format);
         self
     }
+
+    #[must_use]
+    pub fn render_text(self) -> String {
+        let fmt = self.override_format.unwrap_or_else(format);
+        format_presentation(fmt.presentation(self.value, now()))
+    }
 }
 
-impl RenderOnce for Timestamp {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let time = cx.gds().ui().time();
-        let format = self.format.unwrap_or_else(|| time.format());
-        let presentation = format.presentation(self.value, time.now());
-        let text = presentation.text(cx);
-        let element = div().id(self.id).min_w_0().truncate();
-        match self.value {
-            Some(value) => {
-                let precise: SharedString = time::precise(value).into();
-                element
-                    .tooltip_show_delay(TOOLTIP_DELAY)
-                    .tooltip(move |window, cx| Tooltip::new(precise.clone()).build(window, cx))
-                    .child(text)
-            }
-            None => element.child(text),
+impl IntoView for Timestamp {
+    type Output = AnyView;
+
+    fn into_view(self) -> Self::Output {
+        AnyView::new(view! {
+            TimestampView(value = self.value, override_format = self.override_format)
+        })
+    }
+}
+
+/// Reactive timestamp component rendering localized relative or absolute dates with a
+/// precise timestamp tooltip whenever the timestamp is known.
+#[component]
+pub fn TimestampView(
+    #[prop(into)] value: Signal<Option<SystemTime>, LocalStorage>,
+    #[prop(optional)] override_format: Option<Format>,
+    #[prop(optional)] node_ref: Option<NodeRef>,
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+) -> impl IntoView {
+    install_time_stylesheets();
+    let ticks = tick_signal();
+    let has_value = RwSignal::new_local(value.get_untracked().is_some());
+    let sync_has_value = RenderEffect::new(move |_| {
+        let next = value.get().is_some();
+        if has_value.get_untracked() != next {
+            has_value.set(next);
+        }
+    });
+    on_cleanup_local(move || drop(sync_has_value));
+    let tooltip_text = Signal::derive_local(move || value.get().map(precise).unwrap_or_default());
+    let label_ref = node_ref.unwrap_or_default();
+
+    move || {
+        let label_class = class.clone();
+        let label_attrs = attrs.clone();
+        let label = view! {
+            text(class = "gds-timestamp", node_ref = label_ref, class = label_class, {..label_attrs}) {{move || {
+                let fmt = override_format.unwrap_or_else(format);
+                if fmt == Format::Relative {
+                    let _ = ticks.get();
+                }
+                format_presentation(fmt.presentation(value.get(), now()))
+            }}}
+        };
+
+        if has_value.get() {
+            AnyView::new(view! {
+                Tooltip(delay = TOOLTIP_DELAY) {
+                    TooltipTrigger {{label}}
+                    TooltipContent {
+                        TooltipText(text = tooltip_text)
+                    }
+                }
+            })
+        } else {
+            AnyView::new(label)
         }
     }
 }
 
-impl Presentation {
-    /// Localized label for this presentation.
-    pub fn text(&self, cx: &App) -> SharedString {
-        match self {
-            Self::Missing => i18n::text("time-placeholder", cx),
-            Self::Epoch => i18n::text("time-epoch", cx),
-            Self::JustNow => i18n::text("time-just-now", cx),
-            Self::Minutes(count) => i18n::count("time-minutes-ago", *count as usize, cx),
-            Self::Today { time } => clock_text("time-today", time, cx),
-            Self::Yesterday { time } => clock_text("time-yesterday", time, cx),
-            Self::Days(count) => i18n::count("time-days-ago", *count as usize, cx),
-            Self::Weeks(count) => i18n::count("time-weeks-ago", *count as usize, cx),
-            Self::Months(count) => i18n::count("time-months-ago", *count as usize, cx),
-            Self::Years(count) => i18n::count("time-years-ago", *count as usize, cx),
-            Self::Absolute { text } => text.clone().into(),
-        }
+pub(super) fn format_presentation(presentation: Presentation) -> String {
+    let gds = Gds::try_current();
+    match presentation {
+        Presentation::Missing => gds.as_ref().map_or_else(
+            || "\u{2014}".to_owned(),
+            |g| g.i18n().text("time-placeholder"),
+        ),
+        Presentation::Epoch => gds
+            .as_ref()
+            .map_or_else(|| "Unix epoch".to_owned(), |g| g.i18n().text("time-epoch")),
+        Presentation::JustNow => gds
+            .as_ref()
+            .map_or_else(|| "Just now".to_owned(), |g| g.i18n().text("time-just-now")),
+        Presentation::Minutes(n) => gds.as_ref().map_or_else(
+            || format!("{n}m ago"),
+            |g| g.i18n().count("time-minutes-ago", n as usize),
+        ),
+        Presentation::Today { time } => gds.as_ref().map_or_else(
+            || time.clone(),
+            |g| {
+                let mut args = FluentArgs::new();
+                args.set("time", time.as_str());
+                g.i18n().format("time-today", Some(&args))
+            },
+        ),
+        Presentation::Yesterday { time } => gds.as_ref().map_or_else(
+            || format!("Yesterday {time}"),
+            |g| {
+                let mut args = FluentArgs::new();
+                args.set("time", time.as_str());
+                g.i18n().format("time-yesterday", Some(&args))
+            },
+        ),
+        Presentation::Days(n) => gds.as_ref().map_or_else(
+            || format!("{n}d ago"),
+            |g| g.i18n().count("time-days-ago", n as usize),
+        ),
+        Presentation::Weeks(n) => gds.as_ref().map_or_else(
+            || format!("{n}w ago"),
+            |g| g.i18n().count("time-weeks-ago", n as usize),
+        ),
+        Presentation::Months(n) => gds.as_ref().map_or_else(
+            || format!("{n}mo ago"),
+            |g| g.i18n().count("time-months-ago", n as usize),
+        ),
+        Presentation::Years(n) => gds.as_ref().map_or_else(
+            || format!("{n}y ago"),
+            |g| g.i18n().count("time-years-ago", n as usize),
+        ),
+        Presentation::Absolute { text } => text,
     }
-}
-
-fn clock_text(id: &str, time: &str, cx: &App) -> SharedString {
-    let mut arguments = FluentArgs::new();
-    arguments.set("time", time.to_owned());
-    i18n::format(id, Some(&arguments), cx)
 }

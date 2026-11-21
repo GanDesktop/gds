@@ -37,12 +37,6 @@ pub struct Sort {
 }
 
 impl Sort {
-    /// Whether the sort matches the canonical directories-first, ascending-name order
-    /// already maintained by [`super::super::directory::DirectorySnapshot`].
-    pub const fn is_canonical(self) -> bool {
-        matches!(self.key, Key::Name) && matches!(self.direction, Direction::Ascending)
-    }
-
     pub fn next(self, key: Key) -> Self {
         Self {
             key,
@@ -57,12 +51,42 @@ impl Sort {
     /// Reorder valid entry indices without changing entries or their path identities.
     /// Directories and available metadata retain their priority in both directions.
     pub fn sort_indices(&self, entries: &[Entry], visible: &mut [usize]) {
+        if self.key == Key::DetailedType {
+            let labels: Vec<Option<String>> = entries
+                .iter()
+                .map(super::super::ui::EntryPresentation::detailed_type_sort_key)
+                .collect();
+            visible.sort_by(|&left, &right| {
+                self.compare_detailed_type(
+                    &entries[left],
+                    &entries[right],
+                    &labels[left],
+                    &labels[right],
+                )
+            });
+            return;
+        }
         visible.sort_by(|&left, &right| self.compare(&entries[left], &entries[right]));
     }
 
-    /// Whether `entries` already satisfy this ordering without requiring a resort.
-    pub fn is_sorted(&self, entries: &[Entry]) -> bool {
-        entries.is_sorted_by(|left, right| self.compare(left, right) != Ordering::Greater)
+    fn compare_detailed_type(
+        &self,
+        left: &Entry,
+        right: &Entry,
+        left_label: &Option<String>,
+        right_label: &Option<String>,
+    ) -> Ordering {
+        let directories_first =
+            (right.kind == EntryKind::Directory).cmp(&(left.kind == EntryKind::Directory));
+        if directories_first != Ordering::Equal {
+            return directories_first;
+        }
+        self.optional(
+            left_label.as_deref().as_ref(),
+            right_label.as_deref().as_ref(),
+        )
+        .then_with(|| left.name.cmp(&right.name))
+        .then_with(|| left.path.as_os_str().cmp(right.path.as_os_str()))
     }
 
     fn compare(&self, left: &Entry, right: &Entry) -> Ordering {
@@ -95,10 +119,7 @@ impl Sort {
             Key::Owner => self.compare_owner(left, right),
             Key::Group => self.compare_group(left, right),
             Key::Type => self.compare_type(left, right),
-            Key::DetailedType => self.optional(
-                Self::format_name(left).as_ref(),
-                Self::format_name(right).as_ref(),
-            ),
+            Key::DetailedType => Ordering::Equal,
         };
         primary
             .then_with(|| left.name.cmp(&right.name))
@@ -249,10 +270,6 @@ impl Sort {
             EntryKind::File => Some(1 + Self::category_rank(entry)?),
             _ => None,
         }
-    }
-
-    fn format_name(entry: &Entry) -> Option<&str> {
-        entry.details.display_content()?.format.as_deref()
     }
 }
 

@@ -1,458 +1,417 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::{Duration, SystemTime};
+
+use zgui::app::app;
+use zgui::geom::{DevicePx, Point};
+use zgui::platform::{AppHandler, PlatformError, Surface, SurfaceEvent};
+use zgui::prelude::{GetUntracked, Set, WithUntracked};
+use zgui::view::{ScrollBehavior, ScrollTarget};
+use zgui::vocab::{Key, Modifiers};
+use zgui_platform_headless::Harness;
+
 use super::*;
-use gpui_kit::{TestAppContext, test::TestWindowExt};
-use gpui_kit::{WeakEntity, WindowHandle};
-use window::{HEIGHT, MIN_HEIGHT, MIN_WIDTH, OpenWindow};
+use crate::service::logs::Entry;
+use crate::service::task_manager::Supervisor;
 
 mod navigation;
 mod tasks;
 
-#[gpui_kit::test]
-fn disabled_logging_has_no_store_window_or_shortcut(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        cx.gds_mut().tasks().init_test(false);
-        let scope = cx.gds().tasks().scope();
-        cx.gds_mut().initialize(scope, None);
-        assert!(cx.gds().tasks().inspector().is_none());
-        cx.gds_mut()
-            .i18n()
-            .install(crate::i18n::Language::Chinese)
-            .expect("translations");
-        cx.gds_mut().ui().logs().init(Options::default());
-        assert!(!cx.gds().ui().logs().is_enabled());
-        assert!(cx.gds().ui().logs().store().is_none());
-        assert!(cx.gds_mut().ui().logs().open().is_err());
-        assert!(
-            cx.gds().ui().logs().store().is_none(),
-            "opening must not implicitly start collection"
-        );
-    });
-    let host = cx.open_window(size(px(800.), px(600.)), |_, _| gpui_kit::Empty);
-    let key = if cfg!(target_os = "macos") {
-        "cmd-shift-l"
-    } else {
-        "ctrl-shift-l"
-    };
-    cx.update_window(host.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.press(key, cx);
-    })
-    .expect("shortcut with logs disabled");
-    cx.run_until_parked();
-    cx.update(|cx| {
-        assert!(!cx.has_global::<OpenWindow>());
-        assert!(cx.gds().ui().logs().store().is_none());
-        cx.gds_mut().tasks().init_test(true);
-        cx.gds_mut().ui().logs().install(Store::new());
-        cx.gds_mut().ui().logs().init(Options::default());
-    });
-    cx.update_window(host.into(), |_, window, cx| window.press(key, cx))
-        .expect("shortcut with explicit collection");
-    cx.run_until_parked();
-    cx.update(|cx| assert!(cx.global::<OpenWindow>().viewer.upgrade().is_some()));
+#[derive(Default)]
+struct NullRenderer {
+    target: Option<zgui::render::RenderTarget>,
+    atlas: zgui::atlas::MemorySink,
 }
 
-pub(super) fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Root>, WeakEntity<Viewer>, Store) {
-    cx.update(|cx| {
-        cx.gds_mut().tasks().init_test(true);
-        let scope = cx.gds().tasks().scope();
-        cx.gds_mut().initialize(scope, Some(Store::new()));
-        cx.gds_mut()
-            .i18n()
-            .install(crate::i18n::Language::Chinese)
-            .expect("translations");
-        cx.gds_mut()
-            .appearance()
-            .theme()
-            .apply(&crate::appearance::theme::Appearance {
-                source: crate::appearance::theme::Source::Builtin,
-                ..Default::default()
-            })
-            .expect("theme");
-        cx.gds_mut().ui().logs().init(Options::default());
-        let store = cx.gds().ui().logs().store().expect("fixture collector");
-        let handle = cx.gds_mut().ui().logs().open().expect("log window");
-        (handle, cx.global::<OpenWindow>().viewer.clone(), store)
-    })
-}
+impl zgui::render::Renderer for NullRenderer {
+    fn capabilities(&self) -> zgui::render::RenderCapabilities {
+        zgui::render::RenderCapabilities::MINIMAL
+    }
 
-pub(super) fn deliver(cx: &mut TestAppContext) {
-    cx.run_until_parked();
-    cx.executor().advance_clock(UPDATE_INTERVAL);
-    cx.run_until_parked();
-}
+    fn configure(&mut self, target: zgui::render::RenderTarget) {
+        self.target = Some(target);
+    }
 
-#[gpui_kit::test]
-fn store_updates_live_view_and_clear_keeps_collecting(cx: &mut TestAppContext) {
-    let (handle, viewer, store) = fixture(cx);
-    store.record(Level::Info, "frontend", "first");
-    deliver(cx);
-    cx.update(|cx| {
-        viewer
-            .update(cx, |view, _| {
-                assert_eq!(view.snapshot.entries.len(), 1);
-                assert_eq!(view.snapshot.entries[0].message, "first");
-            })
-            .expect("viewer")
-    });
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.try_find("logs-pause").is_none());
-        assert_eq!(
-            window.find("logs-clear").label(),
-            Some(t!(@cx, "logs-clear").as_ref())
-        );
-        window.click("logs-clear", cx);
-    })
-    .expect("clear");
-    assert!(store.snapshot().entries.is_empty());
-    cx.update(|cx| {
-        viewer
-            .update(cx, |view, _| assert!(view.visible.is_empty()))
-            .expect("cleared viewer")
-    });
-    store.record(Level::Warn, "frontend", "after clearing");
-    deliver(cx);
-    cx.update(|cx| {
-        viewer
-            .update(cx, |view, _| {
-                assert_eq!(view.snapshot.entries.len(), 1);
-                assert_eq!(view.snapshot.entries[0].message, "after clearing");
-            })
-            .expect("collection continues")
-    });
-}
+    fn target(&self) -> Option<zgui::render::RenderTarget> {
+        self.target
+    }
 
-#[gpui_kit::test]
-fn toolbar_and_detail_actions_keep_geometry_with_large_ui_text(cx: &mut TestAppContext) {
-    let (handle, _, store) = fixture(cx);
-    let id = store.record(Level::Info, "frontend", "selected record");
-    deliver(cx);
-    for font_size in [15., 24.] {
-        cx.update(|cx| gpui_kit::component::Theme::global_mut(cx).font_size = px(font_size));
-        cx.update_window(handle.into(), |_, window, cx| {
-            window.resize(size(px(MIN_WIDTH), px(MIN_HEIGHT)));
-            window.bounds_changed(cx);
-            window.render_frame(cx);
-            assert!(window.try_find("logs-pause").is_none());
-            assert!(window.try_find("logs-copy-visible").is_none());
-            if window.try_find("logs-detail").is_none() {
-                window.click(("log-entry", id), cx);
-                window.render_frame(cx);
-            }
-            let clear = window.find("logs-clear").bounds();
-            let copy = window.find("logs-copy-selected").bounds();
-            assert_eq!(clear.size, copy.size);
-            assert_eq!(
-                clear.size,
-                size(
-                    px(crate::appearance::tokens::ICON_BUTTON_SIZE),
-                    px(crate::appearance::tokens::ICON_BUTTON_SIZE)
-                )
-            );
-            let toolbar = window.find("logs-toolbar").bounds();
-            for id in ["logs-level", "logs-target", "logs-clear"] {
-                let bounds = window.find(id).bounds();
-                assert!(bounds.left() >= toolbar.left() && bounds.right() <= toolbar.right());
-            }
-            assert!(window.find("logs-target").bounds().right() < clear.left());
-            assert_eq!(
-                window.find("logs-clear").label(),
-                Some(t!(@cx, "logs-clear").as_ref())
-            );
+    fn draw(
+        &mut self,
+        _scene: &zgui::scene::Scene,
+        _damage: &zgui::bits::DamageSet,
+    ) -> zgui::render::FrameOutcome {
+        zgui::render::FrameOutcome::Presented(zgui::render::FrameStats {
+            vector_passes: 0,
+            draw_calls: 0,
+            damage_px: 0,
+            bytes_uploaded: 0,
+            memory: zgui::render::MemoryReport::ZERO,
         })
-        .expect("scaled toolbar");
+    }
+
+    fn register_external(
+        &mut self,
+        _texture: zgui::render::ExternalTexture,
+    ) -> zgui::render::TextureHandle {
+        zgui::render::TextureHandle(0)
+    }
+
+    fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
+
+    fn memory(&self) -> zgui::render::MemoryReport {
+        zgui::render::MemoryReport::ZERO
+    }
+
+    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
+        &mut self.atlas
     }
 }
 
-#[gpui_kit::test]
-fn scrolling_up_stops_following_but_not_log_collection(cx: &mut TestAppContext) {
-    let (handle, viewer, store) = fixture(cx);
-    for index in 0..100 {
-        store.record(Level::Info, "frontend", format!("entry {index}"));
+pub(super) fn pump_frames(harness: &mut Harness<Box<dyn AppHandler>>) {
+    for _ in 0..4 {
+        harness.pump();
     }
-    deliver(cx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        viewer
-            .update(cx, |view, cx| {
-                assert_eq!(view.scroll.is_scrolled_to_end(), Some(true));
-                view.scroll.scroll_to_item(0, gpui_kit::ScrollStrategy::Top);
-                cx.notify();
-            })
-            .expect("scroll to earlier logs");
-        window.render_frame(cx);
-    })
-    .expect("view logs");
-    store.record(Level::Info, "frontend", "arrived while reading");
-    deliver(cx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        viewer
-            .update(cx, |view, cx| {
-                assert_eq!(view.snapshot.entries.len(), 101);
-                assert_eq!(view.scroll.is_scrolled_to_end(), Some(false));
-                assert_eq!(view.scroll.logical_scroll_top_index(), 0);
-                view.scroll.scroll_to_bottom();
-                cx.notify();
-            })
-            .expect("return to newest logs");
-        window.render_frame(cx);
-    })
-    .expect("retain scroll position");
-    store.record(Level::Info, "frontend", "follow again");
-    deliver(cx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        viewer
-            .update(cx, |view, _| {
-                assert_eq!(view.snapshot.entries.len(), 102);
-                assert_eq!(view.scroll.is_scrolled_to_end(), Some(true));
-            })
-            .expect("following resumes");
-    })
-    .expect("newest log remains visible");
 }
 
-#[gpui_kit::test]
-fn search_level_and_clipboard_preserve_retained_multiline_text(cx: &mut TestAppContext) {
-    let (handle, viewer, store) = fixture(cx);
-    let message = format!(
-        "first\r\nsecond\tline\n{}끝",
-        "界".repeat(PREVIEW_CHARS * 3)
+pub(super) fn deliver(harness: &mut Harness<Box<dyn AppHandler>>) {
+    harness.pump();
+    harness.advance(UPDATE_INTERVAL + Duration::from_millis(5));
+    pump_frames(harness);
+}
+
+pub(super) fn with_viewer_probe<R>(f: impl FnOnce(&test_probe::ViewerProbe) -> R) -> R {
+    test_probe::PROBE.with(|slot| {
+        let borrowed = slot.borrow();
+        let probe = borrowed.as_ref().expect("log viewer probe mounted");
+        f(probe)
+    })
+}
+
+pub(super) fn run_headless_logs(
+    inspect_tasks: bool,
+    store: Option<Store>,
+    assertions: impl FnOnce(&mut Harness<Box<dyn AppHandler>>, &Gds),
+) {
+    let supervisor = Supervisor::new(inspect_tasks).expect("test Tokio supervisor");
+    let scope = supervisor.scope();
+    let gds_slot: Rc<RefCell<Option<Gds>>> = Rc::new(RefCell::new(None));
+    let gds_for_ctx = Rc::clone(&gds_slot);
+    let store_slot = RefCell::new(store);
+
+    let handler = app()
+        .with_title("logs-test")
+        .with_application_id("dev.gds.LogsTest")
+        .with_size(800.0, 560.0)
+        .with_stylesheet(":root { display: flex; width: 100%; height: 100%; }")
+        .with_renderer(Box::new(
+            move |_surface: &std::sync::Arc<dyn Surface>, target: zgui::render::RenderTarget| {
+                let mut renderer = NullRenderer::default();
+                zgui::render::Renderer::configure(&mut renderer, target);
+                Ok::<_, zgui::Error>(Box::new(renderer) as Box<dyn zgui::render::Renderer>)
+            },
+        ))
+        .with_context(move || {
+            let log_store = store_slot.borrow_mut().take();
+            let gds = Gds::install_with_logs(scope.clone(), log_store);
+            gds.appearance()
+                .theme()
+                .apply(&crate::appearance::theme::Appearance {
+                    source: crate::appearance::theme::Source::Builtin,
+                    ..crate::appearance::theme::Appearance::default()
+                })
+                .expect("default test theme");
+            *gds_for_ctx.borrow_mut() = Some(gds);
+        })
+        .into_handler(|| view! { LogViewer() })
+        .expect("build headless logs test app");
+
+    handler
+        .drive(|app| -> Result<(), PlatformError> {
+            let mut harness = Harness::new(app);
+            pump_frames(&mut harness);
+            harness.deliver_to_first(SurfaceEvent::Focused(true));
+            pump_frames(&mut harness);
+            let borrowed = gds_slot.borrow();
+            let gds = borrowed.as_ref().expect("GDS installed");
+            assertions(&mut harness, gds);
+            drop(borrowed);
+            harness.shut_down();
+            Ok(())
+        })
+        .expect("run headless logs test app");
+}
+
+#[test]
+fn disabled_logging_has_no_store_window_or_shortcut() {
+    run_headless_logs(false, None, |_, gds| {
+        assert!(!gds.ui().logs().is_enabled());
+        assert!(gds.ui().logs().store().is_none());
+        assert!(gds.tasks().inspector().is_none());
+    });
+
+    assert!(window::is_open_shortcut(
+        &Key::Character("l".into()),
+        Modifiers::PRIMARY | Modifiers::SHIFT
+    ));
+    assert!(!window::is_open_shortcut(
+        &Key::Character("l".into()),
+        Modifiers::PRIMARY
+    ));
+}
+
+#[test]
+fn store_updates_live_view_and_clear_keeps_collecting() {
+    let store = Store::new();
+    run_headless_logs(true, Some(store.clone()), |harness, _| {
+        store.record(Level::Info, "frontend", "first");
+        deliver(harness);
+        with_viewer_probe(|probe| {
+            assert_eq!(probe.snapshot.with_untracked(|s| s.entries.len()), 1);
+            assert_eq!(
+                probe
+                    .snapshot
+                    .with_untracked(|s| s.entries[0].message.clone()),
+                "first"
+            );
+            assert_eq!(probe.visible.get_untracked().len(), 1);
+        });
+
+        store.clear();
+        deliver(harness);
+        assert!(store.snapshot().entries.is_empty());
+        with_viewer_probe(|probe| {
+            assert!(probe.visible.get_untracked().is_empty());
+        });
+
+        store.record(Level::Warn, "frontend", "after clearing");
+        deliver(harness);
+        with_viewer_probe(|probe| {
+            assert_eq!(probe.snapshot.with_untracked(|s| s.entries.len()), 1);
+            assert_eq!(
+                probe
+                    .snapshot
+                    .with_untracked(|s| s.entries[0].message.clone()),
+                "after clearing"
+            );
+        });
+    });
+}
+
+#[test]
+fn scrolling_up_stops_following_but_not_log_collection() {
+    let store = Store::new();
+    run_headless_logs(true, Some(store.clone()), |harness, _| {
+        for index in 0..100 {
+            store.record(Level::Info, "frontend", format!("entry {index}"));
+        }
+        deliver(harness);
+        with_viewer_probe(|probe| {
+            let pos = probe.list_ref.scroll_position();
+            assert!(
+                pos.is_at_end_vertically(),
+                "initial log viewer should tail the newest entries"
+            );
+            probe.list_ref.scroll_to(
+                ScrollTarget::Offset(Point::new(DevicePx(0.0), DevicePx(0.0))),
+                ScrollBehavior::Instant,
+            );
+        });
+        pump_frames(harness);
+
+        store.record(Level::Info, "frontend", "arrived while reading");
+        deliver(harness);
+        with_viewer_probe(|probe| {
+            assert_eq!(probe.snapshot.with_untracked(|s| s.entries.len()), 101);
+            let pos = probe.list_ref.scroll_position();
+            assert!(
+                !pos.is_at_end_vertically(),
+                "scrolled-up log view must stay pinned to earlier entries"
+            );
+            let scale = probe.list_ref.scale().max(1.0);
+            let bottom = (pos.content_size.height.0 - pos.scrollport.height.0)
+                .max(101.0 * ROW_HEIGHT * scale);
+            probe.list_ref.scroll_to(
+                ScrollTarget::Offset(Point::new(DevicePx(0.0), DevicePx(bottom))),
+                ScrollBehavior::Instant,
+            );
+        });
+        pump_frames(harness);
+
+        store.record(Level::Info, "frontend", "follow again");
+        deliver(harness);
+        with_viewer_probe(|probe| {
+            assert_eq!(probe.snapshot.with_untracked(|s| s.entries.len()), 102);
+            assert!(
+                probe.list_ref.scroll_position().is_at_end_vertically(),
+                "returning to bottom must resume auto-tailing"
+            );
+        });
+    });
+}
+
+#[test]
+fn search_level_and_target_filters_preserve_retained_multiline_text() {
+    let store = Store::new();
+    run_headless_logs(true, Some(store.clone()), |harness, _| {
+        let message = format!(
+            "first\r\nsecond\tline\n{}끝",
+            "界".repeat(PREVIEW_CHARS * 3)
+        );
+        let warn_id = store.record(Level::Warn, "Frontend.Network", message.clone());
+        store.record(Level::Info, "Frontend.Network", "other");
+        store.record(Level::Warn, "other", "unrelated");
+        deliver(harness);
+
+        let expected = store.snapshot().entries[0].text();
+        assert_eq!(expected.lines().count(), 3);
+        assert!(preview_text(&message).ends_with('…'));
+        assert!(!preview_text(&message).contains('\n'));
+
+        with_viewer_probe(|probe| {
+            probe.query.set("NETWORK".to_owned());
+            probe
+                .level_key
+                .set(filters::level_to_key(Some(Level::Warn)).to_owned());
+            probe.selected.set(Some(warn_id));
+        });
+        pump_frames(harness);
+
+        with_viewer_probe(|probe| {
+            let visible = probe.visible.get_untracked();
+            assert_eq!(visible, vec![0]);
+            assert_eq!(probe.selected.get_untracked(), Some(warn_id));
+            probe.target_key.set("other".to_owned());
+        });
+        pump_frames(harness);
+
+        with_viewer_probe(|probe| {
+            assert!(probe.visible.get_untracked().is_empty());
+        });
+    });
+
+    let sample = Entry {
+        id: 1,
+        time: SystemTime::UNIX_EPOCH,
+        level: Level::Error,
+        target: "core".to_owned(),
+        message: "boom".to_owned(),
+    };
+    assert!(
+        FilterState {
+            level: Some(Level::Error),
+            target: Some("core".to_owned()),
+            query: "BOOM".to_owned(),
+        }
+        .matches(&sample)
     );
-    let selected = store.record(Level::Warn, "Frontend.Network", message.clone());
-    store.record(Level::Info, "Frontend.Network", "other");
-    store.record(Level::Warn, "other", "unrelated");
-    deliver(cx);
-    let expected = store.snapshot().entries[0].text();
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.input("NETWORK", cx);
-        window.click("logs-level", cx);
-        for _ in 0..5 {
-            window.press("down", cx);
+}
+
+#[test]
+fn secondary_log_window_opens_focuses_singleton_and_closes_cleanly() {
+    assert_eq!(window::INITIAL_WIDTH, 1_000.0);
+    assert_eq!(window::INITIAL_HEIGHT, 720.0);
+    assert_eq!(
+        window::format_window_title("GDS Files", "Debug"),
+        "GDS Files · Debug"
+    );
+    assert_eq!(window::format_window_title("", "Debug"), "GDS · Debug");
+    assert_eq!(toggle_selected_id(None, 42), Some(42));
+    assert_eq!(toggle_selected_id(Some(42), 42), None);
+    assert_eq!(toggle_selected_id(Some(42), 99), Some(99));
+
+    init(Options::default());
+    assert!(is_enabled());
+    let shared_store = store().expect("global logs store enabled");
+    shared_store.record(Level::Info, "window-test", "boot log");
+
+    let opened_count = Rc::new(std::cell::Cell::new(0usize));
+    let opened_for_view = Rc::clone(&opened_count);
+    let supervisor = Supervisor::new(false).expect("test Tokio supervisor");
+    let scope = supervisor.scope();
+
+    let handler = app()
+        .with_title("host-app")
+        .with_application_id("dev.gds.LogsWindowTest")
+        .with_size(640.0, 480.0)
+        .with_stylesheet(":root { display: flex; width: 100%; height: 100%; }")
+        .with_renderer(Box::new(
+            move |_surface: &std::sync::Arc<dyn Surface>, target: zgui::render::RenderTarget| {
+                let mut renderer = NullRenderer::default();
+                zgui::render::Renderer::configure(&mut renderer, target);
+                Ok::<_, zgui::Error>(Box::new(renderer) as Box<dyn zgui::render::Renderer>)
+            },
+        ))
+        .with_context(move || {
+            let _ = Gds::install_with_logs(scope.clone(), Some(shared_store.clone()));
+        })
+        .into_handler(move || {
+            open();
+            open();
+            opened_for_view.set(opened_for_view.get() + 1);
+            view! { box() }
+        })
+        .expect("build secondary logs window test app");
+
+    handler
+        .drive(|app| -> Result<(), PlatformError> {
+            let mut harness = Harness::new(app);
+            pump_frames(&mut harness);
+            assert_eq!(opened_count.get(), 1);
+            window::close_active();
+            pump_frames(&mut harness);
+            harness.shut_down();
+            Ok(())
+        })
+        .expect("drive secondary logs window test");
+}
+
+#[test]
+fn clicking_selected_log_row_toggles_selection_off() {
+    use zgui::geom::CssPx;
+    use zgui::vocab::{PointerAction, PointerButton, PointerEvent, Timestamp};
+
+    let store = Store::new();
+    run_headless_logs(false, Some(store.clone()), |harness, _| {
+        let id = store.record(Level::Info, "frontend", "clickable log entry");
+        deliver(harness);
+
+        let row_pos = with_viewer_probe(|probe| {
+            let bounds = probe.list_ref.window_bounds().expect("list bounds");
+            let scale = probe.list_ref.scale().max(1.0);
+            zgui::geom::Point::new(
+                CssPx(bounds.origin.x.0 / scale + 40.0),
+                CssPx(bounds.origin.y.0 / scale + ROW_HEIGHT * 0.5),
+            )
+        });
+
+        for ms in [10_u64, 40_u64] {
+            harness.deliver_to_first(SurfaceEvent::Pointer {
+                action: PointerAction::Pressed,
+                event: PointerEvent::mouse(row_pos).with_button(PointerButton::Primary),
+                modifiers: Modifiers::NONE,
+                timestamp: Timestamp::from_origin(Duration::from_millis(ms)),
+            });
+            harness.deliver_to_first(SurfaceEvent::Pointer {
+                action: PointerAction::Released,
+                event: PointerEvent::mouse(row_pos).with_button(PointerButton::Primary),
+                modifiers: Modifiers::NONE,
+                timestamp: Timestamp::from_origin(Duration::from_millis(ms + 5)),
+            });
+            pump_frames(harness);
+            if ms == 10 {
+                with_viewer_probe(|probe| {
+                    assert_eq!(probe.selected.get_untracked(), Some(id));
+                });
+            } else {
+                with_viewer_probe(|probe| {
+                    assert_eq!(
+                        probe.selected.get_untracked(),
+                        None,
+                        "re-clicking an already-selected log row must toggle selection off"
+                    );
+                });
+            }
         }
-        window.press("enter", cx);
-    })
-    .expect("search window");
-    cx.run_until_parked();
-    cx.update(|cx| {
-        viewer
-            .update(cx, |view, cx| {
-                assert_eq!(view.visible.len(), 1);
-                view.selected = Some(selected);
-                assert_eq!(view.selected_entry().expect("selected").text(), expected);
-                cx.notify();
-                assert!(preview(&message).len() < message.len());
-                view.copy_selected(cx);
-                assert_eq!(
-                    cx.read_from_clipboard().and_then(|item| item.text()),
-                    Some(expected.clone())
-                );
-            })
-            .expect("copy")
     });
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.find("logs-detail").visible());
-        window.click("logs-copy-selected", cx);
-        assert_eq!(
-            cx.read_from_clipboard().and_then(|item| item.text()),
-            Some(expected.clone())
-        );
-    })
-    .expect("copy button");
-    let next = store.record(Level::Warn, "Frontend.Network", "next\nentry");
-    deliver(cx);
-    let entries = store.snapshot().entries;
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.try_find("logs-copy-visible").is_none());
-        window.click(("log-entry", next), cx);
-        window.render_frame(cx);
-        window.click("logs-copy-selected", cx);
-        assert_eq!(
-            cx.read_from_clipboard().and_then(|item| item.text()),
-            Some(entries[3].text())
-        );
-    })
-    .expect("copy the newly selected filtered entry");
-}
-
-#[gpui_kit::test]
-fn target_dropdown_and_details_fit_minimum_width(cx: &mut TestAppContext) {
-    let (handle, viewer, store) = fixture(cx);
-    let target = "a::very_long_target".repeat(20);
-    let id = store.record(Level::Warn, target.clone(), "long message\n".repeat(300));
-    store.record(Level::Warn, "z::other", "other");
-    deliver(cx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.resize(size(px(MIN_WIDTH), px(MIN_HEIGHT)));
-        window.bounds_changed(cx);
-        window.render_frame(cx);
-        assert!(window.try_find("logs-detail").is_none());
-        window.click("logs-target", cx);
-        window.press("down", cx); // All targets
-        window.press("down", cx); // First (sorted) tracing target
-        window.press("enter", cx);
-    })
-    .expect("target dropdown");
-    cx.update(|cx| {
-        viewer
-            .update(cx, |view, _| {
-                assert_eq!(view.target.as_deref(), Some(target.as_str()));
-                assert_eq!(view.visible.len(), 1);
-            })
-            .expect("filtered target");
-    });
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        let toolbar = window.find("logs-toolbar").bounds();
-        for control in ["logs-level", "logs-target", "logs-clear"] {
-            let bounds = window.find(control).bounds();
-            assert!(bounds.left() >= toolbar.left());
-            assert!(bounds.right() <= toolbar.right());
-            assert!(bounds.top() >= toolbar.top());
-            assert!(bounds.bottom() <= toolbar.bottom());
-        }
-        assert!(toolbar.size.height <= px(52.));
-        window.click(("log-entry", id), cx);
-        window.render_frame(cx);
-        let detail = window.find("logs-detail").bounds();
-        assert!(detail.size.height <= px(DETAIL_HEIGHT));
-        assert!(
-            detail.right() <= px(MIN_WIDTH),
-            "{detail:?}; toolbar {toolbar:?}"
-        );
-        window.click("logs-copy-selected", cx);
-        assert_eq!(
-            cx.read_from_clipboard().and_then(|item| item.text()),
-            Some(store.snapshot().entries[0].text())
-        );
-        window.click("logs-close-detail", cx);
-        window.render_frame(cx);
-        assert!(window.try_find("logs-detail").is_none());
-    })
-    .expect("minimum width layout and full detail copy");
-}
-
-#[gpui_kit::test]
-fn shift_l_opens_logs_but_shift_d_does_not(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        gpui_kit::init(cx);
-        cx.gds_mut()
-            .i18n()
-            .install(crate::i18n::Language::Chinese)
-            .expect("translations");
-        cx.gds_mut()
-            .appearance()
-            .theme()
-            .apply(&crate::appearance::theme::Appearance {
-                source: crate::appearance::theme::Source::Builtin,
-                ..Default::default()
-            })
-            .expect("theme");
-        cx.gds_mut().tasks().init_test(true);
-        cx.gds_mut().ui().logs().install(Store::new());
-        cx.gds_mut().ui().logs().init(Options::default());
-    });
-    let host = cx.open_window(size(px(800.), px(600.)), |_, _| gpui_kit::Empty);
-    cx.update_window(host.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.press(
-            if cfg!(target_os = "macos") {
-                "cmd-shift-d"
-            } else {
-                "ctrl-shift-d"
-            },
-            cx,
-        );
-    })
-    .expect("old shortcut");
-    cx.run_until_parked();
-    cx.update(|cx| assert!(!cx.has_global::<OpenWindow>()));
-    cx.update_window(host.into(), |_, window, cx| {
-        window.press(
-            if cfg!(target_os = "macos") {
-                "cmd-shift-l"
-            } else {
-                "ctrl-shift-l"
-            },
-            cx,
-        );
-    })
-    .expect("logs shortcut");
-    cx.run_until_parked();
-    cx.update(|cx| assert!(cx.global::<OpenWindow>().viewer.upgrade().is_some()));
-}
-
-#[gpui_kit::test]
-fn singleton_close_reopen_retains_store_and_releases_viewer(cx: &mut TestAppContext) {
-    let (first, viewer, store) = fixture(cx);
-    let again = cx.update(|cx| cx.gds_mut().ui().logs().open().expect("existing window"));
-    assert_eq!(first.window_id(), again.window_id());
-    store.record(Level::Error, "frontend", "retained across close");
-    cx.update_window(first.into(), |_, window, cx| {
-        window.press(
-            if cfg!(target_os = "macos") {
-                "cmd-shift-l"
-            } else {
-                "ctrl-shift-l"
-            },
-            cx,
-        );
-    })
-    .expect("reveal shortcut");
-    cx.run_until_parked();
-    cx.update(|cx| {
-        assert_eq!(
-            cx.global::<OpenWindow>().handle.window_id(),
-            first.window_id()
-        )
-    });
-    cx.update_window(first.into(), |_, window, cx| {
-        window.press(
-            if cfg!(target_os = "macos") {
-                "cmd-w"
-            } else {
-                "ctrl-w"
-            },
-            cx,
-        );
-    })
-    .expect("close");
-    cx.run_until_parked();
-    cx.update(|_| {
-        assert!(
-            viewer.upgrade().is_none(),
-            "closing drops the view and watch task"
-        )
-    });
-    store.record(Level::Debug, "frontend", "recorded without a window");
-    let second = cx.update(|cx| cx.gds_mut().ui().logs().open().expect("reopened window"));
-    assert_ne!(first.window_id(), second.window_id());
-    cx.update(|cx| {
-        let viewer = cx.global::<OpenWindow>().viewer.clone();
-        viewer
-            .update(cx, |view, _| assert_eq!(view.snapshot.entries.len(), 2))
-            .expect("new viewer");
-    });
-}
-
-#[gpui_kit::test]
-fn log_viewer_does_not_enable_task_inspection(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.gds_mut().tasks().init_test(false));
-    let (handle, viewer, _) = fixture(cx);
-    let root = cx.update(|cx| cx.gds().tasks().scope());
-    let completion = root.register().unwrap();
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.try_find("tasks-panel").is_none());
-        assert!(window.try_find(1usize).is_none());
-        assert!(viewer.upgrade().unwrap().read(cx).tasks.is_none());
-        assert!(cx.gds().tasks().inspector().is_none());
-    })
-    .unwrap();
-    assert!(root.snapshot().tasks.is_empty());
-    drop(completion);
 }
