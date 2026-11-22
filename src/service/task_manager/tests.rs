@@ -88,6 +88,7 @@ fn cancelled_child_is_killed_and_reaped_before_completion() {
         .arg("30")
         .spawn()
         .expect("sleep process");
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     let pid = child.id();
     let cancel = CancellationToken::new();
     cancel.cancel();
@@ -130,6 +131,7 @@ async fn async_process_captures_output_and_reaps_cancelled_child() {
     let task = root.spawn(async move {
         process::output(&mut command, &cancel, std::time::Duration::from_secs(5)).await
     });
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     let pid = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if let Ok(text) = std::fs::read_to_string(directory.path().join("pid"))

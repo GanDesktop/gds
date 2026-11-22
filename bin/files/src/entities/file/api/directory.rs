@@ -398,6 +398,27 @@ impl Entry {
         }
     }
 
+    /// Match the start of `display_name` against a pre-lowercased prefix without
+    /// per-keystroke allocations.
+    pub fn matches_prefix(&self, lowercase_prefix: &str) -> bool {
+        if lowercase_prefix.is_empty() {
+            return false;
+        }
+        if self.display_name.is_ascii() {
+            lowercase_prefix.is_ascii()
+                && self
+                    .display_name
+                    .as_bytes()
+                    .get(..lowercase_prefix.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(lowercase_prefix.as_bytes()))
+        } else {
+            self.search_name
+                .as_deref()
+                .unwrap_or(&self.display_name)
+                .starts_with(lowercase_prefix)
+        }
+    }
+
     pub(super) fn canonical_order(left: &Self, right: &Self) -> std::cmp::Ordering {
         (right.kind == EntryKind::Directory)
             .cmp(&(left.kind == EntryKind::Directory))

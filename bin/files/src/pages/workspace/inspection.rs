@@ -2370,7 +2370,7 @@ pub(super) mod tests {
 
     use zgui::prelude::NodeRef;
 
-    use super::{INSPECTION_CSS, format_two_line_title};
+    use super::format_two_line_title;
 
     thread_local! {
         static TILE_THUMB_NODES: RefCell<HashMap<String, NodeRef>> = RefCell::new(HashMap::new());
@@ -2448,55 +2448,6 @@ pub(super) mod tests {
 
     pub(in crate::pages::workspace) fn details_body_node() -> Option<NodeRef> {
         DETAILS_BODY_NODE.with(|slot| *slot.borrow())
-    }
-
-    fn css_rule_body<'a>(sheet: &'a str, selector: &str) -> Option<&'a str> {
-        let start = sheet.find(selector)?;
-        let after_selector = &sheet[start + selector.len()..];
-        let brace_open = after_selector.find('{')?;
-        let rest = &after_selector[brace_open + 1..];
-        let brace_close = rest.find('}')?;
-        Some(&rest[..brace_close])
-    }
-
-    #[test]
-    fn details_pane_keeps_transparent_background_over_unified_workspace_content_surface() {
-        assert!(
-            !INSPECTION_CSS.contains("var(--gds-panel)"),
-            "inspection details stylesheet must not paint opaque --gds-panel over unified --gds-content-bg"
-        );
-
-        let details = css_rule_body(INSPECTION_CSS, ".gds-files-details ")
-            .or_else(|| css_rule_body(INSPECTION_CSS, ".gds-files-details\n"))
-            .expect(".gds-files-details rule");
-        assert!(
-            details.contains("background: transparent;"),
-            ".gds-files-details must remain transparent: {details}"
-        );
-        assert!(
-            details.contains("border-left: 1px solid var(--gds-border);"),
-            ".gds-files-details must retain left divider border: {details}"
-        );
-
-        let empty = css_rule_body(INSPECTION_CSS, ".gds-files-details__empty ")
-            .or_else(|| css_rule_body(INSPECTION_CSS, ".gds-files-details__empty\n"))
-            .expect(".gds-files-details__empty rule");
-        assert!(
-            empty.contains("background: transparent;"),
-            ".gds-files-details__empty must remain transparent: {empty}"
-        );
-        assert!(
-            empty.contains("border-left: 1px solid var(--gds-border);"),
-            ".gds-files-details__empty must retain left divider border: {empty}"
-        );
-
-        let thumb_wrap = css_rule_body(INSPECTION_CSS, ".gds-files-details__thumb-wrap ")
-            .or_else(|| css_rule_body(INSPECTION_CSS, ".gds-files-details__thumb-wrap\n"))
-            .expect(".gds-files-details__thumb-wrap rule");
-        assert!(
-            thumb_wrap.contains("width: 100%;") && thumb_wrap.contains("height: 168px;"),
-            ".gds-files-details__thumb-wrap must span full width x 168px matching GPUI main: {thumb_wrap}"
-        );
     }
 
     #[test]

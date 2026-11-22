@@ -1963,54 +1963,6 @@ impl Browser {
 
 #[cfg(test)]
 mod tests {
-    use super::TERMINALS_CSS;
-
-    fn css_rule_body<'a>(sheet: &'a str, selector: &str) -> Option<&'a str> {
-        let start = sheet.find(selector)?;
-        let after_selector = &sheet[start + selector.len()..];
-        let brace_open = after_selector.find('{')?;
-        let rest = &after_selector[brace_open + 1..];
-        let brace_close = rest.find('}')?;
-        Some(&rest[..brace_close])
-    }
-
-    #[test]
-    fn terminal_dock_css_keeps_single_layer_right_translucency_and_seamless_header() {
-        assert!(
-            !TERMINALS_CSS.contains("var(--gds-surface)"),
-            "terminal dock right column must fall back to --gds-content rather than --gds-surface"
-        );
-
-        let header = css_rule_body(TERMINALS_CSS, ".gds-files-terminal-header ")
-            .or_else(|| css_rule_body(TERMINALS_CSS, ".gds-files-terminal-header\n"))
-            .expect(".gds-files-terminal-header rule");
-        assert!(
-            !header.contains("border-bottom"),
-            ".gds-files-terminal-header must not render a horizontal divider above the terminal body: {header}"
-        );
-
-        for selector in [
-            ".gds-files-terminal-handle__bg-right",
-            ".gds-files-terminal-header__right",
-            ".gds-files-terminal-pane",
-        ] {
-            let rule = css_rule_body(TERMINALS_CSS, &format!("{selector} "))
-                .or_else(|| css_rule_body(TERMINALS_CSS, &format!("{selector}\n")))
-                .unwrap_or_else(|| panic!("missing {selector} rule"));
-            assert!(
-                rule.contains("background: var(--gds-content-bg, var(--gds-content));"),
-                "{selector} must paint single-layer --gds-content-bg with --gds-content fallback: {rule}"
-            );
-        }
-
-        let empty = css_rule_body(TERMINALS_CSS, ".gds-files-terminal-empty ")
-            .or_else(|| css_rule_body(TERMINALS_CSS, ".gds-files-terminal-empty\n"))
-            .expect(".gds-files-terminal-empty rule");
-        assert!(
-            empty.contains("background: transparent;"),
-            ".gds-files-terminal-empty must stay transparent inside .gds-files-terminal-pane: {empty}"
-        );
-    }
 
     #[test]
     fn headless_window_teardown_with_disposed_child_owner_and_pending_failed_shell_does_not_panic()

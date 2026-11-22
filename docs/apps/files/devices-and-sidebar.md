@@ -1,6 +1,6 @@
 # Volumes & Sidebar
 
-GDS Files uses UDisks2 on Linux to discover storage volumes, monitor capacity, and execute explicit mount, unmount, and filesystem-label operations.
+GDS Files uses `org.freedesktop.UDisks2` (`udisksd` on Linux, `bsdisks` on FreeBSD) to discover storage volumes, monitor capacity, and execute explicit mount, unmount, and filesystem-label operations.
 
 ## Sidebar Layout
 

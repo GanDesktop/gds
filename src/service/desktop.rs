@@ -13,9 +13,9 @@ mod error;
 pub use client::{Desktop, OpenMode, OpenOutcome};
 #[cfg(feature = "desktop")]
 pub use error::Error;
-#[cfg(all(feature = "desktop", target_os = "linux"))]
+#[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
 pub mod file_manager;
-#[cfg(all(feature = "desktop", target_os = "linux"))]
+#[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
 mod portal;
-#[cfg(all(feature = "desktop", target_os = "linux"))]
+#[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
 pub use portal::Error as PortalError;

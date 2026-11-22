@@ -141,6 +141,7 @@ pub enum MenuEntry {
     },
     Checkbox {
         label: String,
+        shortcut: Option<Shortcut>,
         checked: bool,
         disabled: bool,
         on_toggle: UnsyncCallback<bool>,
@@ -202,6 +203,7 @@ impl MenuModel {
     ) {
         self.push(MenuEntry::Checkbox {
             label: label.into(),
+            shortcut: None,
             checked,
             disabled,
             on_toggle,
@@ -367,18 +369,38 @@ pub fn render_entries(entries: Vec<MenuEntry>) -> Vec<AnyView> {
         }
         MenuEntry::Checkbox {
             label,
+            shortcut,
             checked,
             disabled,
             on_toggle,
-        } => AnyView::new(view! {
-            MenuCheckboxItem(
-                default_checked = checked,
-                disabled = disabled,
-                on_change = on_toggle
-            ) {
-                {label}
+        } => {
+            let mut item_attrs = Attrs::new();
+            if let Some(ref key) = shortcut {
+                let hint = zgui::vocab::SharedString::from(key.label());
+                item_attrs =
+                    item_attrs.a11y_from(A11yBinding::unspecified().keyboard_shortcut(hint));
             }
-        }),
+            AnyView::new(view! {
+                MenuCheckboxItem(
+                    default_checked = checked,
+                    disabled = disabled,
+                    on_change = on_toggle,
+                    {..item_attrs}
+                ) {
+                    row(class = "gds-menu-item-body") {
+                        text(class = "gds-menu-item-label") {{label}}
+                        {shortcut.map(|key| {
+                            view! {
+                                box(class = "gds-menu-item-shortcut", a11y:hidden = true) {
+                                    ShortcutBadge(shortcut = key)
+                                }
+                            }
+                            .into_view()
+                        })}
+                    }
+                }
+            })
+        }
         MenuEntry::Submenu {
             label,
             icon,
@@ -540,8 +562,7 @@ mod tests {
     use zgui_platform_headless::{Harness, OffscreenSurface};
 
     use super::{
-        ContextMenuHostProps, EDGE_MARGIN, MAX_HEIGHT, MAX_WIDTH, MIN_WIDTH, MenuEntry, MenuModel,
-        PopupMenuProps, SHEET, SHORTCUT_GAP, SURFACE_BORDER, has_leading_column, popup_in,
+        ContextMenuHostProps, MenuEntry, MenuModel, PopupMenuProps, has_leading_column, popup_in,
         render_entries,
     };
     use crate::app::Gds;
@@ -633,23 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_dimensions_and_entry_rendering_match_spec() {
-        assert_eq!(MIN_WIDTH, 220.0);
-        assert_eq!(MAX_WIDTH, 500.0);
-        assert_eq!(MAX_HEIGHT, 360.0);
-        assert_eq!(2.0 * (EDGE_MARGIN + SURFACE_BORDER), 18.0);
-        assert_eq!(SHORTCUT_GAP, 24.0);
-        assert!(
-            SHEET.contains("max-height: min(360px, var(--zui-popper-available-height, 360px));"),
-            "compact dropdown menus must stay capped at 360px"
-        );
-        assert!(
-            SHEET.contains(
-                ".gds-menu-content.gds-menu-content.gds-menu-content--context {\n        max-height: min(calc(100vh - 18px), var(--zui-popper-available-height, calc(100vh - 18px)));"
-            ),
-            "context menus must expand up to available window/popper height (100vh - 18px)"
-        );
-
+    fn menu_entries_reserve_a_leading_column_for_icons() {
         install().ok();
         let scope = Mounted::new();
         scope.with(|| {

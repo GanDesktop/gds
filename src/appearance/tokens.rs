@@ -71,7 +71,7 @@ impl SurfaceOpacity {
 
 impl Default for SurfaceOpacity {
     fn default() -> Self {
-        if cfg!(target_os = "linux") {
+        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
             let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
             let has_tiling_socket = ["NIRI_SOCKET", "SWAYSOCK", "HYPRLAND_INSTANCE_SIGNATURE"]
                 .iter()

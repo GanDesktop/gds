@@ -430,7 +430,7 @@ impl View {
                     )}
                     {self.toggle(
                         "auto-focus-search",
-                        "",
+                        "auto-focus-search-help",
                         |p| p.files.auto_focus_search,
                         |p, v| p.files.auto_focus_search = v,
                     )}

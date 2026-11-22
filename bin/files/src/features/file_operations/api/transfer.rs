@@ -8,7 +8,7 @@ use std::{
 
 use super::names::{self, NamedTarget};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use rustix::{
     fs::{
         AtFlags, CWD, Dir, FileType, OFlags, RenameFlags, Stat, Timespec, Timestamps, UTIME_OMIT,
@@ -16,7 +16,7 @@ use rustix::{
     },
     io::Errno,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
@@ -92,8 +92,8 @@ pub enum Error {
         source: io::Error,
         operation: Option<Box<Error>>,
     },
-    #[error("atomic no-replace file transfers are currently supported only on Linux")]
-    #[cfg(not(target_os = "linux"))]
+    #[error("atomic no-replace file transfers are currently supported only on Linux and FreeBSD")]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     UnsupportedPlatform,
 }
 
@@ -198,18 +198,13 @@ impl Batch {
     }
 
     pub fn execute(self) -> Report {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             self.execute_local()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
-            let Batch {
-                request,
-                names,
-                cancel,
-                buffer_size: _,
-            } = self;
+            let Batch { request, names, .. } = self;
             let mode = request.mode;
             let items = request
                 .paths
@@ -231,7 +226,7 @@ impl Batch {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn execute_local(self) -> Report {
         let Batch {
             request,
@@ -282,7 +277,7 @@ pub struct Report {
     pub items: Vec<Item>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 struct Prepared {
     source: PathBuf,
     destination: PathBuf,
@@ -290,7 +285,7 @@ struct Prepared {
     metadata: fs::Metadata,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 impl Prepared {
     /// # Errors
     /// Reports unavailable paths, unsupported entries and a resolved destination within the source.
@@ -394,7 +389,7 @@ impl Prepared {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 impl Item {
     /// # Errors
     /// Retains the source on copy/commit failure; a post-commit failure is accompanied by `destination_committed`.
@@ -457,7 +452,7 @@ impl Item {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 struct Node {
     cancel: tokio_util::sync::CancellationToken,
     source: PathBuf,
@@ -465,7 +460,7 @@ struct Node {
     buffer_size: usize,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 impl Node {
     /// # Errors
     /// Reports source-parent access or recursive-copy errors.
@@ -532,7 +527,7 @@ impl Node {
                 path: self.source.clone(),
             });
         }
-        let permissions = fs::Permissions::from_mode(opened.st_mode);
+        let permissions = Self::permissions_from_stat(&opened);
         let mut destination = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -584,7 +579,7 @@ impl Node {
         let opened = rustix::fs::fstat(&source)
             .map_err(|error| Error::filesystem("inspect open directory", &self.source, error))?;
         Copied::check(expected, &opened, &self.source)?;
-        let permissions = fs::Permissions::from_mode(opened.st_mode);
+        let permissions = Self::permissions_from_stat(&opened);
         fs::create_dir(&self.destination).map_err(|error| {
             Error::filesystem("create staged directory", &self.destination, error)
         })?;
@@ -622,6 +617,11 @@ impl Node {
             .map_err(|error| Error::filesystem("recheck open directory", &self.source, error))?;
         Copied::check(expected, &after, &self.source)?;
         Ok(children)
+    }
+
+    #[allow(clippy::useless_conversion)]
+    fn permissions_from_stat(source: &Stat) -> fs::Permissions {
+        fs::Permissions::from_mode(u32::from(source.st_mode))
     }
 
     fn source_timestamps(source: &Stat) -> Timestamps {
@@ -670,20 +670,20 @@ impl Node {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 struct CopiedChild {
     name: OsString,
     copied: Copied,
 }
 
 /// Only entries actually copied may be removed. Never enumerate the live tree during cleanup.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 struct Copied {
     metadata: Stat,
     children: Vec<CopiedChild>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 impl Copied {
     fn same_identity(expected: &Stat, current: &Stat) -> bool {
         expected.st_dev == current.st_dev
@@ -757,12 +757,12 @@ impl Copied {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 struct Staging {
     directory: tempfile::TempDir,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 impl Staging {
     /// # Errors
     /// Reports an unwritable or unavailable destination directory.
@@ -813,5 +813,5 @@ impl Staging {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "freebsd")))]
 mod tests;

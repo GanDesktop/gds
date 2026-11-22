@@ -17,6 +17,7 @@ mod picker;
 mod status;
 mod surfaces;
 mod terminals;
+mod typeahead;
 mod ui;
 mod view;
 

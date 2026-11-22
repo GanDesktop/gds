@@ -34,6 +34,7 @@ place-location = Location
 place-favorite-add = Bookmark selected location
 place-favorite-remove = Remove bookmark
 auto-focus-search = Auto-focus search
+auto-focus-search-help = When enabled, typing focuses the filter field. When disabled, typing selects matching items directly.
 show-hidden = Show hidden files
 sidebar-show-volumes = Show volumes in the sidebar
 probe-budget = Off-screen metadata probe limit

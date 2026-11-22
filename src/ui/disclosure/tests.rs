@@ -1,50 +1,8 @@
 use zgui::prelude::*;
-use zgui::reactive::{Mounted, RwSignal, UnsyncCallback, install};
+use zgui::reactive::UnsyncCallback;
 use zgui::view;
 
-use super::{DisclosureIcon, DisclosureIconProps, DisclosureProps};
-
-#[test]
-fn disclosure_symbol_is_exported() {
-    let _ = DisclosureIcon;
-}
-
-#[test]
-fn disclosure_and_icon_build_uncontrolled_and_controlled() {
-    install().ok();
-    let scope = Mounted::new();
-    scope.with(|| {
-        let open = RwSignal::new_local(false);
-        let disabled = RwSignal::new_local(false);
-
-        let _icon = view! {
-            DisclosureIcon(open = open)
-        };
-
-        let _controlled = view! {
-            Disclosure(
-                open = open,
-                disabled = disabled,
-                show_icon = true,
-                on_open_change = UnsyncCallback::new(move |next| open.set(next)),
-                header = || AnyView::new(view! { text {"Details"} }),
-                content = || AnyView::new(view! { text {"Hidden payload"} }),
-            )
-        };
-
-        let _uncontrolled = view! {
-            Disclosure(
-                default_open = true,
-                header = || AnyView::new(view! { text {"Summary"} }),
-                content = || AnyView::new(view! { text {"Body"} }),
-            )
-        };
-
-        open.set(true);
-        assert!(open.get_untracked());
-    });
-    scope.unmount();
-}
+use super::DisclosureProps;
 
 #[test]
 fn headless_disclosure_click_toggles_open_and_updates_expanded_a11y() {

@@ -1,11 +1,11 @@
 //! GDS desktop portal backend.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod chooser;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod protocol;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[derive(clap::Parser)]
 #[command(
     name = "xdg-desktop-portal-gds",
@@ -22,7 +22,7 @@ struct Args {
 /// Reports unavailable D-Bus connections, name ownership or signal handling.
 // Standalone headless D-Bus daemon (does not run GPUI or `Supervisor`).
 #[allow(clippy::disallowed_methods)]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     use anyhow::Context as _;
@@ -48,8 +48,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn main() {
-    eprintln!("GDS Portal is only available on Linux.");
+    eprintln!("GDS Portal is only available on Linux and FreeBSD.");
     std::process::exit(1);
 }

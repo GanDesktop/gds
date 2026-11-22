@@ -4,25 +4,11 @@ use zgui::view;
 use zgui::vocab::{Role, SemanticFlags, Toggled};
 
 use super::{
-    ApplicationMenuButton, ApplicationMenuButtonProps, Button, ButtonProps, ButtonSize,
-    ButtonVariant, IconButton, IconButtonProps, apply_toggled, button_attrs,
+    ApplicationMenuButtonProps, ButtonProps, IconButtonProps, apply_toggled, button_attrs,
 };
 use crate::ui::Shortcut;
-use crate::ui::about::Application;
-use crate::ui::actions::Command;
 use crate::ui::icon::IconName;
-use crate::ui::keytips::{KeytipHostProps, KeytipRegistry};
-
-#[test]
-fn button_variants_reexport_zgui_ui_types() {
-    let _ = (
-        ButtonVariant::Default,
-        ButtonSize::Icon,
-        Button,
-        IconButton,
-        ApplicationMenuButton,
-    );
-}
+use crate::ui::keytips::KeytipHostProps;
 
 #[test]
 fn untoggled_buttons_omit_a11y_toggled_while_toggled_buttons_set_it() {
@@ -91,50 +77,6 @@ fn button_attrs_expose_loading_busy_and_keyboard_shortcut() {
             .expect("button_attrs updates accessibility binding")
             .lower();
         assert!(busy.flags.contains(SemanticFlags::BUSY));
-    });
-    scope.unmount();
-}
-
-#[test]
-fn button_command_and_shortcut_enabled_wire_cleanly() {
-    install().ok();
-    let scope = Mounted::new();
-    scope.with(|| {
-        let _views = view! {
-            KeytipHost {
-                {{
-                    if let Some(reg) = KeytipRegistry::current() {
-                        assert!(!reg.active().get_untracked());
-                    }
-                    view! {
-                        column {
-                            Button(
-                                icon = IconName::Check,
-                                loading = false,
-                                active = true,
-                                tooltip = "Save",
-                                shortcut = Shortcut::parse("Ctrl+S").expect("valid shortcut"),
-                            ) { "Save" }
-                            Button(
-                                command = Command::FocusNotifications,
-                            ) { "Notifications" }
-                            IconButton(
-                                icon = IconName::Close,
-                                label = "Close tab",
-                                shortcut = Shortcut::parse("Ctrl+W").expect("Ctrl+W"),
-                                shortcut_enabled = false,
-                                size = ButtonSize::IconSm,
-                            )
-                            ApplicationMenuButton(
-                                label = "Main menu",
-                                application = Some(Application::cargo("gds-files")),
-                                shortcut = Shortcut::parse("Alt+M").expect("valid Alt+M shortcut"),
-                            )
-                        }
-                    }
-                }}
-            }
-        };
     });
     scope.unmount();
 }

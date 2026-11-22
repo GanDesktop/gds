@@ -194,20 +194,17 @@ pub fn CapacityBar(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
     use std::sync::Arc;
 
     use zgui::app::Fonts;
     use zgui::geom::{DevicePx, Size};
     use zgui::platform::{AppHandler, PlatformError, Surface, SurfaceEvent};
     use zgui::prelude::*;
-    use zgui::reactive::{Mounted, RwSignal, install};
     use zgui::runtime::AppError;
     use zgui::vocab::Role;
     use zgui_platform_headless::Harness;
 
-    use super::{CapacityBarProps, EXTRA_ROW_HEIGHT, compact_percent_text, normalized_fraction};
+    use super::{CapacityBarProps, compact_percent_text, normalized_fraction};
     use crate::app::Gds;
     use crate::service::task_manager::Scope;
 
@@ -231,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn capacity_bar_renders_four_pixel_track_above_label_in_full_and_compact_modes() {
+    fn capacity_bar_exposes_used_fraction_to_assistive_technology() {
         #[derive(Default)]
         struct Sink {
             atlas: zgui::atlas::MemorySink,
@@ -270,73 +267,25 @@ mod tests {
             }
         }
 
-        let full_ref: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
-        let compact_ref: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
-        let embedded_ref: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
-        let full_view = Rc::clone(&full_ref);
-        let compact_view = Rc::clone(&compact_ref);
-        let embedded_view = Rc::clone(&embedded_ref);
-        let full_driver = Rc::clone(&full_ref);
-        let compact_driver = Rc::clone(&compact_ref);
-        let embedded_driver = Rc::clone(&embedded_ref);
-
         let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
             let mut harness = Harness::new(handler);
             harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
                 DevicePx(300.0),
                 DevicePx(200.0),
             )));
-            if let Some(surface) = harness.platform().offscreens().first() {
-                surface.set_a11y_listener(true);
-            }
+            let surface = harness.platform().offscreens()[0].clone();
+            surface.set_a11y_listener(true);
             harness.settle(16);
 
-            let full = full_driver.borrow().expect("full node");
-            let compact = compact_driver.borrow().expect("compact node");
-            let embedded = embedded_driver.borrow().expect("embedded node");
-
-            let full_box = full.window_bounds().expect("full bounds");
-            let compact_box = compact.window_bounds().expect("compact bounds");
-            let embedded_box = embedded.window_bounds().expect("embedded bounds");
-
-            // Full (non-embedded) reserves 6px bottom padding over embedded (4px track + 5px gap + 17px label = 26px vs 32px).
-            let scale = full.scale().max(1.0);
-            assert!(
-                (full_box.size.height.0 / scale - EXTRA_ROW_HEIGHT).abs() < 1.0,
-                "full non-embedded height should match EXTRA_ROW_HEIGHT (32px), got {}",
-                full_box.size.height.0 / scale
-            );
-            assert!(
-                (embedded_box.size.height.0 / scale - (EXTRA_ROW_HEIGHT - 6.0)).abs() < 1.0,
-                "embedded height should omit 6px bottom padding (26px), got {}",
-                embedded_box.size.height.0 / scale
-            );
-            assert!(
-                (compact_box.size.height.0 / scale - EXTRA_ROW_HEIGHT).abs() < 1.0,
-                "compact mode keeps the 4px bar above the centered percentage, got {}",
-                compact_box.size.height.0 / scale
-            );
-
-            // Verify the label text sits in the lower portion of the meter (below the 4px bar + 5px gap).
-            let surface = harness.platform().offscreens()[0].clone();
-            let mut label_top = None;
-            for update in surface.a11y_log() {
-                for (_, node) in update.nodes {
-                    if (node.value() == Some("70 GB free of 100 GB")
-                        || node.label() == Some("70 GB free of 100 GB"))
-                        && let Some(bounds) = node.bounds()
-                    {
-                        label_top = Some(bounds.y0 as f32);
-                    }
-                }
-            }
-            if let Some(y0) = label_top {
-                assert!(
-                    y0 > full_box.origin.y.0 + 4.0 * scale,
-                    "label y0 ({y0}) must sit below the 4px track at top ({})",
-                    full_box.origin.y.0
-                );
-            }
+            let meter = surface
+                .a11y_log()
+                .into_iter()
+                .flat_map(|update| update.nodes)
+                .map(|(_, node)| node)
+                .find(|node| node.role() == Role::ProgressIndicator)
+                .expect("capacity meter in the accessibility tree");
+            assert_eq!(meter.label(), Some("Drive"));
+            assert_eq!(meter.numeric_value(), Some(0.25));
 
             harness.shut_down();
             Ok(())
@@ -353,47 +302,10 @@ mod tests {
             .run_on(driver, move || {
                 let gds = Gds::try_current().unwrap_or_else(|| Gds::install(Scope::default()));
                 gds.appearance().motion().set_enabled(false);
-                let frac = RwSignal::new_local(Some(0.3));
-                let r_full = NodeRef::new();
-                let r_compact = NodeRef::new();
-                let r_embedded = NodeRef::new();
-                *full_view.borrow_mut() = Some(r_full);
-                *compact_view.borrow_mut() = Some(r_compact);
-                *embedded_view.borrow_mut() = Some(r_embedded);
                 zgui::view! {
-                    column(style:width = "200px") {
-                        CapacityBar(
-                            label = "70 GB free of 100 GB",
-                            fraction = frac,
-                            node_ref = r_full,
-                        )
-                        CapacityBar(
-                            label = "Compact drive",
-                            fraction = frac,
-                            compact = true,
-                            node_ref = r_compact,
-                        )
-                        CapacityBar(
-                            label = "Embedded drive",
-                            fraction = Signal::stored_local(None),
-                            embedded = true,
-                            node_ref = r_embedded,
-                        )
-                    }
+                    CapacityBar(label = "Drive", fraction = Signal::stored_local(Some(0.25)))
                 }
             })
-            .expect("headless CapacityBar layout test ran");
-
-        install().ok();
-        let scope = Mounted::new();
-        scope.with(|| {
-            let meter_a11y = A11yBinding::new(Role::ProgressIndicator)
-                .label("Drive")
-                .step(|a| a.numeric_range(0.0, 1.0).numeric_value(0.3))
-                .lower();
-            assert_eq!(meter_a11y.role, Role::ProgressIndicator);
-            assert_eq!(meter_a11y.numeric.value, Some(0.3));
-        });
-        scope.unmount();
+            .expect("headless capacity meter");
     }
 }

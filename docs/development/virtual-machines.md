@@ -9,6 +9,7 @@ just vm fedora
 just vm ubuntu
 just vm cachyos
 just vm noctalia
+just vm freebsd
 ```
 
 These commands start a stopped guest and open its SPICE console in Virt Viewer.
@@ -21,6 +22,7 @@ Choose GNOME or Plasma at the Fedora login screen to test both environments.
 | `ubuntu-dev` | Ubuntu 26.04.1 LTS, GNOME | 8 vCPUs, 8 GiB RAM, 80 GiB disk | `192.168.122.120` |
 | `cachyos-dev` | CachyOS rolling, KDE Plasma | 8 vCPUs, 8 GiB RAM, 80 GiB disk | `192.168.122.121` |
 | `arch-noctalia` | Arch Linux, Umbriel + Noctalia | 8 vCPUs, 8 GiB RAM | DHCP (`192.168.122.63`) |
+| `freebsd-dev` | FreeBSD 15.1, KDE Plasma 6 Wayland | 8 vCPUs, 8 GiB RAM, 80 GiB disk | DHCP |
 
 Guests use UEFI, virtio storage/network, and virtio graphics with SPICE.
 SPICE OpenGL is disabled because the host's NVIDIA display path does not import
@@ -30,7 +32,18 @@ All four guests log in automatically as `atlas` on the desktop (Fedora preserves
 existing desktop login), accept the host's Ed25519 key over SSH with password
 authentication disabled, and allow passwordless `sudo` (`NOPASSWD: ALL`) for automated
 package testing. Local desktop/sudo credentials are stored only on this host in
-`~/.local/share/gds-vms/credentials` (mode `0600`).
+`~/.local/share/gds-vms/credentials` (mode `0600`). FreeBSD also uses the
+`atlas` desktop account, key-only SSH and passwordless sudo.
+
+FreeBSD uses fullscreen KWin Wayland nested in the guest's `scfb` Xorg session.
+SDDM starts it automatically. Plasma needs the `plasma6-kactivitymanagerd`
+package to load its wallpaper and panel. After restoring the original FreeBSD
+`clean-base` snapshot, run `just e2e-prepare freebsd` and log in again to load
+the desktop shell. Files connects to KWin over Wayland and uses Mesa
+software Vulkan. This setup covers application behavior under KWin. Direct
+DRM session startup and GPU acceleration are outside its coverage.
+The guest mounts `fdescfs` on `/dev/fd` with `rdlnk` for the embedded terminal's
+working directory.
 
 > [!IMPORTANT]
 > `arch-noctalia` runs on a libvirt external disk snapshot (`clean-base`). Start
@@ -39,7 +52,8 @@ package testing. Local desktop/sudo credentials are stored only on this host in
 
 ## Shared clipboard
 
-Use the **GDS Test** launcher or `just vm` console for bidirectional text copying.
+On the Linux guests, use the **GDS Test** launcher or `just vm` console for
+bidirectional text copying.
 On a Wayland host, the launcher explicitly uses native GTK Wayland support.
 The existing Virtual Machine Manager console on this workstation did not reliably
 transfer clipboard contents through the host's X11/Wayland bridge. Both guest
@@ -61,7 +75,7 @@ The host needs `virt-viewer`. On this NixOS workstation it is retained at
 
 ## Clean test baselines (`clean-base`)
 
-All four guests have an offline libvirt external disk snapshot named `clean-base`
+All five guests have an offline libvirt external disk snapshot named `clean-base`
 containing a clean desktop with `sshd`, `qemu-guest-agent`, and `~/Downloads`, and
 **no** pre-installed `gds*` / `xdg-desktop-portal-gds` packages or GDS user configuration,
 cache, or desktop overrides.
@@ -70,9 +84,9 @@ Before running a packaging or installer regression test, revert a guest (or all 
 to the clean baseline:
 
 ```sh
-just vm                 # List state, IP, and active snapshot for all 4 VMs
+just vm                 # List state, IP, and active snapshot for all test VMs
 just vm ubuntu reset    # Revert ubuntu-dev back to clean-base
-just vm all reset       # Revert all 4 VMs back to clean-base
+just vm all reset       # Revert all guests back to clean-base
 ```
 
 ## Terminal access and packages
@@ -132,3 +146,6 @@ Ubuntu was provisioned from the official cloud image with Ubuntu's GNOME desktop
 packages; CachyOS was installed from its signed repositories using the official
 live environment. Both downloaded images were checked against their published
 SHA-256 checksums.
+FreeBSD was provisioned from the official
+[15.1 amd64 cloud image](https://download.freebsd.org/releases/VM-IMAGES/15.1-RELEASE/amd64/Latest/)
+after checking its published SHA-256 checksum.

@@ -1,5 +1,6 @@
-//! UDisks2's ObjectManager is the source of truth; no shell commands or
-//! application-owned mount table. See https://storaged.org/doc/udisks2-api/.
+//! UDisks2 (`udisksd` on Linux, `bsdisks` on FreeBSD) ObjectManager discovery
+//! and operations; no shell commands or application-owned mount table.
+//! See https://storaged.org/doc/udisks2-api/.
 
 use std::{
     collections::HashMap,
@@ -31,9 +32,9 @@ const RETRY_DELAY: Duration = Duration::from_secs(3);
 const RESYNC_INTERVAL: Duration = Duration::from_secs(10);
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(120);
 
-type Properties = HashMap<String, OwnedValue>;
-type Interfaces = HashMap<String, Properties>;
-type Objects = HashMap<OwnedObjectPath, Interfaces>;
+pub(super) type Properties = HashMap<String, OwnedValue>;
+pub(super) type Interfaces = HashMap<String, Properties>;
+pub(super) type Objects = HashMap<OwnedObjectPath, Interfaces>;
 
 fn text(properties: &Properties, key: &str) -> String {
     properties
@@ -85,7 +86,48 @@ fn nonempty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-async fn parse(objects: &Objects) -> Snapshot {
+fn is_usb_drive(drive: &Properties) -> bool {
+    text(drive, "ConnectionBus") == "usb" || text(drive, "bsdisks_ConnectionBus") == "usb"
+}
+
+async fn device_kernel_identity(block: &Properties, device_number: u64) -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = block;
+        let sysfs = format!(
+            "/sys/dev/block/{}:{}",
+            rustix::fs::major(device_number),
+            rustix::fs::minor(device_number)
+        );
+        // kernfs gives a newly attached block object a new inode even if Linux
+        // reuses its major/minor pair. This also covers devices without a Drive.
+        tokio::fs::metadata(sysfs)
+            .await
+            .map(|metadata| metadata.ino())
+            .unwrap_or_default()
+    }
+    #[cfg(target_os = "freebsd")]
+    {
+        let _ = device_number;
+        let Some(mut bytes) = block
+            .get("Device")
+            .and_then(|value| value.try_clone().ok())
+            .and_then(|value| Vec::<u8>::try_from(value).ok())
+        else {
+            return 0;
+        };
+        if bytes.last() == Some(&0) {
+            bytes.pop();
+        }
+        let dev_path = PathBuf::from(OsString::from_vec(bytes));
+        tokio::fs::metadata(dev_path)
+            .await
+            .map(|metadata| metadata.ino())
+            .unwrap_or_default()
+    }
+}
+
+pub(super) async fn parse(objects: &Objects) -> Snapshot {
     let mut snapshot = Snapshot::default();
     for (path, interfaces) in objects {
         let Some(drive) = interfaces.get(DRIVE) else {
@@ -100,7 +142,7 @@ async fn parse(objects: &Objects) -> Snapshot {
                 .to_owned(),
             kind: if optical {
                 DeviceKind::Optical
-            } else if text(drive, "ConnectionBus") == "usb" {
+            } else if is_usb_drive(drive) {
                 DeviceKind::Usb
             } else {
                 DeviceKind::Disk
@@ -136,16 +178,28 @@ async fn parse(objects: &Objects) -> Snapshot {
         }
         let mount_points = filesystem.map(mounts).unwrap_or_default();
         let removable = drive_properties.is_some_and(|drive| {
-            flag(drive, "Removable")
-                || flag(drive, "MediaRemovable")
-                || text(drive, "ConnectionBus") == "usb"
+            if drive.contains_key("bsdisks_IsHotpluggable") {
+                flag(drive, "bsdisks_IsHotpluggable") || is_usb_drive(drive)
+            } else {
+                flag(drive, "Removable") || flag(drive, "MediaRemovable") || is_usb_drive(drive)
+            }
         });
         let empty_optical = drive.is_some_and(|drive| drive.kind == DeviceKind::Optical)
             && drive_properties.is_some_and(|drive| !flag(drive, "MediaAvailable"));
         let system_location = mount_points.iter().any(|path| {
             matches!(
                 path.to_str(),
-                Some("/" | "/boot" | "/boot/efi" | "/nix" | "/home" | "/usr" | "/var" | "/efi")
+                Some(
+                    "/" | "/boot"
+                        | "/boot/efi"
+                        | "/nix"
+                        | "/home"
+                        | "/usr"
+                        | "/usr/home"
+                        | "/var"
+                        | "/tmp"
+                        | "/efi"
+                )
             )
         });
         let already_mounted = !mount_points.is_empty();
@@ -179,17 +233,7 @@ async fn parse(objects: &Objects) -> Snapshot {
             .map(|drive| number(drive, "TimeMediaDetected"))
             .unwrap_or_default();
         let device_number = number(block, "DeviceNumber");
-        let sysfs = format!(
-            "/sys/dev/block/{}:{}",
-            rustix::fs::major(device_number),
-            rustix::fs::minor(device_number)
-        );
-        // kernfs gives a newly attached block object a new inode even if Linux
-        // reuses its major/minor pair. This also covers devices without a Drive.
-        let kernel_identity = tokio::fs::metadata(sysfs)
-            .await
-            .map(|metadata| metadata.ino())
-            .unwrap_or_default();
+        let kernel_identity = device_kernel_identity(block, device_number).await;
         let attachment = format!("{detected}:{media}:{device_number}:{kernel_identity}");
         snapshot.volumes.push(Volume {
             id: VolumeId { stable, attachment },

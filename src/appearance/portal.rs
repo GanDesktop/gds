@@ -1,4 +1,4 @@
-//! Shared Linux XDG Settings Portal snapshot and change stream.
+//! Shared XDG Settings Portal snapshot and change stream.
 use super::theme::Mode;
 use futures_lite::StreamExt as _;
 use std::{

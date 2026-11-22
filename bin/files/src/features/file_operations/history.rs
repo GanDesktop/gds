@@ -147,7 +147,7 @@ impl Snapshot {
     /// Reports replaced directories as [`Error::TargetChanged`], occupied directories as
     /// [`Error::DirectoryNotEmpty`], and I/O failures.
     fn verify_empty_directory(&self, path: &Path) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             use rustix::{
                 fs::{CWD, Dir, Mode, OFlags, fstat, openat},
@@ -163,6 +163,10 @@ impl Snapshot {
             )
             .map_err(|error| match error {
                 Errno::NOENT | Errno::NOTDIR | Errno::LOOP => Error::TargetChanged {
+                    path: path.to_owned(),
+                },
+                #[cfg(target_os = "freebsd")]
+                Errno::MLINK => Error::TargetChanged {
                     path: path.to_owned(),
                 },
                 other => Error::TargetInspection {
@@ -201,7 +205,7 @@ impl Snapshot {
             }
             Ok(())
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
             if self.kind != TargetKind::Directory {
                 return Err(Error::TargetChanged {

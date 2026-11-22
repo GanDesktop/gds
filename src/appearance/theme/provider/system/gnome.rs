@@ -15,10 +15,10 @@ use super::super::{
     Error, Loaded, Mode, ModePreference, builtin,
     color::{ColorExt as _, rgb},
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use crate::appearance::portal::Snapshot as PortalSnapshot;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct PortalSnapshot {
     color_scheme: Option<Mode>,
@@ -171,9 +171,9 @@ pub(super) fn load(
     platform: Mode,
     dirs: &BaseDirs,
 ) -> Result<Loaded, Error> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let portal = crate::appearance::portal::snapshot();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     let portal = PortalSnapshot::default();
     resolve(preference, platform, portal, dirs.config_dir())
 }

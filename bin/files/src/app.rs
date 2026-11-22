@@ -2,7 +2,7 @@
 
 mod cli;
 mod config;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod desktop;
 mod ui;
 mod windows;
@@ -76,7 +76,7 @@ impl Bootstrap {
     }
 
     async fn prepare_io(mut config: Config, tasks: Scope) -> anyhow::Result<Option<PreparedIo>> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         let desktop =
             match desktop::DesktopIntegration::acquire(&config.mode, &mut config.notices).await? {
                 desktop::Acquire::Delegated => return Ok(None),
@@ -97,7 +97,7 @@ impl Bootstrap {
             config,
             storage,
             places,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             desktop,
         }))
     }
@@ -211,7 +211,7 @@ struct PreparedIo {
     config: Config,
     storage: Arc<Storage>,
     places: Option<Result<Places, PlacesError>>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     desktop: Option<desktop::DesktopIntegration>,
 }
 
@@ -221,7 +221,7 @@ impl PreparedIo {
             mut config,
             storage,
             places,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             desktop,
         } = self;
         ui::Initializer::new(Gds::current()).run(tasks, config.preferences, &mut config.notices)?;
@@ -239,7 +239,7 @@ impl PreparedIo {
             }
             _ => {}
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         if let Some(desktop) = desktop {
             desktop.listen(tasks, windows.clone());
         }

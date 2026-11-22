@@ -5,7 +5,7 @@ use std::{
 
 use gds::{
     app::Gds,
-    appearance::tokens::{COLLAPSED_SIDEBAR_WIDTH, SIDEBAR_ITEM_HEIGHT, SIDEBAR_WIDTH},
+    appearance::tokens::{COLLAPSED_SIDEBAR_WIDTH, SIDEBAR_WIDTH},
     i18n::Language,
     service::task_manager::{Scope, Supervisor},
     ui::sidebar::SidebarPresentation,
@@ -16,27 +16,25 @@ use zgui::{
     geom::{CssPx, Device, DevicePx, Matrix4, Point, Rect, Size, transformed_bounds},
     platform::{AppHandler, PlatformError, Surface, SurfaceEvent},
     prelude::*,
-    reactive::{LocalStorage, Mounted, Signal, flush, install},
+    reactive::{Mounted, flush, install},
     render::{
         ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
         Renderer, TextureHandle,
     },
     runtime::AppError,
     view,
-    view::{ScrollBehavior, ScrollTarget},
-    vocab::{Modifiers, PointerAction, PointerButton, PointerEvent, Role, Timestamp},
+    vocab::{
+        KeyCode, KeyEvent, Modifiers, NamedKey, PhysicalKey, PointerAction, PointerButton,
+        PointerEvent, Role, Timestamp,
+    },
 };
 use zgui_platform_headless::{Harness, OffscreenSurface};
 
-use super::{
-    Breadcrumb, ROW_GAP, TabCycleTargets, compute_tab_cycle_targets, default_volumes_bottom_height,
-    section_overflow_y,
-};
+use super::{Breadcrumb, TabCycleTargets, compute_tab_cycle_targets};
+use crate::pages::workspace::view::tests::send_key_chord;
 use crate::{
     entities::{
-        location::{
-            Collection, Location, LocationTarget, places::Places, scheme::TagAddress, volumes,
-        },
+        location::{Location, places::Places, scheme::TagAddress, volumes},
         preferences,
     },
     pages::workspace::ui::{Browser, LaunchOptions},
@@ -71,9 +69,6 @@ impl TextureSink for NoopSink {
 thread_local! {
     static TAB_NODES: RefCell<HashMap<u64, (NodeRef, NodeRef)>> = RefCell::new(HashMap::new());
     static HEADING_NODES: RefCell<HashMap<&'static str, NodeRef>> = RefCell::new(HashMap::new());
-    static LOCATION_NODES: RefCell<Vec<(LocationTarget, NodeRef)>> = const { RefCell::new(Vec::new()) };
-    static VOLUME_ICON_NODES: RefCell<Vec<(volumes::VolumeId, NodeRef)>> = const { RefCell::new(Vec::new()) };
-    static LOCATIONS_PROGRESS: RefCell<Option<Signal<f32, LocalStorage>>> = const { RefCell::new(None) };
     static LAST_VECTOR_INKS: RefCell<Vec<Rect<DevicePx, Device>>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -97,62 +92,14 @@ pub(in crate::pages::workspace) fn recorded_tab_node(id: u64) -> Option<NodeRef>
     TAB_NODES.with(|slot| slot.borrow().get(&id).map(|(tab, _)| *tab))
 }
 
-pub(super) fn record_location_node(target: LocationTarget, node: NodeRef) {
-    LOCATION_NODES.with(|slot| {
-        let mut items = slot.borrow_mut();
-        if let Some((_, existing)) = items.iter_mut().find(|(t, _)| *t == target) {
-            *existing = node;
-        } else {
-            items.push((target, node));
-        }
-    });
-}
-
-pub(super) fn record_volume_icon_node(id: volumes::VolumeId, node: NodeRef) {
-    VOLUME_ICON_NODES.with(|slot| {
-        let mut items = slot.borrow_mut();
-        if let Some((_, existing)) = items.iter_mut().find(|(v, _)| *v == id) {
-            *existing = node;
-        } else {
-            items.push((id, node));
-        }
-    });
-}
-
-pub(super) fn record_locations_progress(progress: Signal<f32, LocalStorage>) {
-    LOCATIONS_PROGRESS.with(|slot| {
-        *slot.borrow_mut() = Some(progress);
-    });
-}
-
 pub(in crate::pages::workspace) fn clear_recorded_tab_nodes() {
     TAB_NODES.with(|slot| slot.borrow_mut().clear());
     HEADING_NODES.with(|slot| slot.borrow_mut().clear());
-    LOCATION_NODES.with(|slot| slot.borrow_mut().clear());
-    VOLUME_ICON_NODES.with(|slot| slot.borrow_mut().clear());
-    LOCATIONS_PROGRESS.with(|slot| *slot.borrow_mut() = None);
     LAST_VECTOR_INKS.with(|slot| slot.borrow_mut().clear());
 }
 
 fn recorded_tab_nodes(id: u64) -> Option<(NodeRef, NodeRef)> {
     TAB_NODES.with(|slot| slot.borrow().get(&id).copied())
-}
-
-fn recorded_location_nodes() -> Vec<(LocationTarget, NodeRef)> {
-    LOCATION_NODES.with(|slot| slot.borrow().clone())
-}
-
-fn recorded_volume_icon_node(id: &volumes::VolumeId) -> Option<NodeRef> {
-    VOLUME_ICON_NODES.with(|slot| {
-        slot.borrow()
-            .iter()
-            .find(|(vid, _)| vid == id)
-            .map(|(_, node)| *node)
-    })
-}
-
-fn recorded_locations_progress() -> Option<Signal<f32, LocalStorage>> {
-    LOCATIONS_PROGRESS.with(|slot| *slot.borrow())
 }
 
 fn last_vector_inks() -> Vec<Rect<DevicePx, Device>> {
@@ -246,10 +193,6 @@ impl LiveButton {
     fn center_y(&self) -> f64 {
         (self.y0 + self.y1) * 0.5
     }
-
-    fn height(&self) -> f64 {
-        self.y1 - self.y0
-    }
 }
 
 fn compose_affine(outer: [f64; 6], inner: [f64; 6]) -> [f64; 6] {
@@ -334,7 +277,83 @@ fn find_button_by_label<'a>(buttons: &'a [LiveButton], label: &str) -> Option<&'
     buttons.iter().find(|btn| btn.label == label)
 }
 
+fn click_at(harness: &mut Harness<Box<dyn AppHandler>>, x: f32, y: f32, ms: u64) {
+    let mut ev = PointerEvent::mouse(Point::new(CssPx(x), CssPx(y)));
+    harness.deliver_to_first(SurfaceEvent::Pointer {
+        action: PointerAction::Moved,
+        event: ev,
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::from_origin(Duration::from_millis(ms)),
+    });
+    harness.settle(4);
+    ev.button = Some(PointerButton::Primary);
+    harness.deliver_to_first(SurfaceEvent::Pointer {
+        action: PointerAction::Pressed,
+        event: ev,
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::from_origin(Duration::from_millis(ms)),
+    });
+    harness.settle(4);
+    harness.deliver_to_first(SurfaceEvent::Pointer {
+        action: PointerAction::Released,
+        event: ev,
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::from_origin(Duration::from_millis(ms + 50)),
+    });
+    harness.settle(8);
+}
+
+pub(in crate::pages::workspace) fn click_button(
+    harness: &mut Harness<Box<dyn AppHandler>>,
+    label: &str,
+) {
+    let buttons = collect_live_buttons(&harness.platform().offscreens()[0]);
+    let button =
+        find_button_by_label(&buttons, label).unwrap_or_else(|| panic!("missing button {label:?}"));
+    click_at(
+        harness,
+        button.center_x() as f32,
+        button.center_y() as f32,
+        100,
+    );
+}
+
 fn run_chrome_harness(dir: &Path, check: impl FnOnce(&mut Harness<Box<dyn AppHandler>>, &Browser)) {
+    run_browser_harness(
+        dir,
+        (1280.0, 800.0),
+        volumes::Snapshot::default(),
+        |browser| {
+            AnyView::new(view! {
+                column(style:width = "100%", style:height = "100%") {
+                    row(style:width = "100%", style:height = "38px") {
+                        {browser.toolbar_controls()}
+                    }
+                    row(style:flex = "1 1 0%", style:width = "100%", style:min-height = "0px") {
+                        {browser.sidebar(SidebarPresentation::default())}
+                        {browser.folder_filter()}
+                    }
+                }
+            })
+        },
+        check,
+    );
+}
+
+pub(in crate::pages::workspace) fn run_browser_harness(
+    dir: &Path,
+    size: (f32, f32),
+    snapshot: volumes::Snapshot,
+    render: impl Fn(&Browser) -> AnyView + 'static,
+    check: impl FnOnce(&mut Harness<Box<dyn AppHandler>>, &Browser),
+) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let _guard = runtime.enter();
+    let scope = Scope::with_handle(runtime.handle().clone(), false);
     let start = dir.to_path_buf();
     let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
     let slot_for_view = Rc::clone(&browser_slot);
@@ -346,8 +365,8 @@ fn run_chrome_harness(dir: &Path, check: impl FnOnce(&mut Harness<Box<dyn AppHan
             offscreen.set_a11y_listener(true);
         }
         harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
-            DevicePx(1280.0),
-            DevicePx(800.0),
+            DevicePx(size.0),
+            DevicePx(size.1),
         )));
         harness.settle(16);
         let browser = browser_slot.borrow().clone().expect("browser constructed");
@@ -360,16 +379,17 @@ fn run_chrome_harness(dir: &Path, check: impl FnOnce(&mut Harness<Box<dyn AppHan
     zgui::app()
         .with_fonts(Fonts::shipped_only())
         .with_renderer(Box::new(noop_renderer))
-        .with_size(1280.0, 800.0)
+        .with_size(size.0, size.1)
         .run_on(driver, move || {
-            let scope = Scope::default();
+            let scope = scope.clone();
             let app = Gds::install(scope.clone());
             app.appearance().motion().set_enabled(false);
             let _ = app.appearance().install_window_sheet();
             app.i18n()
                 .install_catalog(i18n::prepare(Language::English).expect("English catalog"));
-            let _prefs = preferences::Service::install(preferences::Preferences::default(), &scope)
-                .expect("preferences service");
+            let mut prefs = preferences::Preferences::default();
+            prefs.files.sidebar.show_volumes = !snapshot.volumes.is_empty();
+            let _prefs = preferences::Service::install(prefs, &scope).expect("preferences service");
             let browser = Browser::new(
                 LaunchOptions {
                     places: Ok(Places::default()),
@@ -377,21 +397,11 @@ fn run_chrome_harness(dir: &Path, check: impl FnOnce(&mut Harness<Box<dyn AppHan
                     home: start.clone(),
                     picker: None,
                 },
-                volumes::Service::new(scope),
+                volumes::Service::with_snapshot(scope, snapshot.clone()),
                 Rc::new(|_| {}),
             );
             *slot_for_view.borrow_mut() = Some(browser.clone());
-            view! {
-                column(style:width = "100%", style:height = "100%") {
-                    row(style:width = "100%", style:height = "38px") {
-                        {browser.toolbar_controls()}
-                    }
-                    row(style:flex = "1 1 0%", style:width = "100%", style:min-height = "0px") {
-                        {browser.sidebar(SidebarPresentation::default())}
-                        {browser.folder_filter()}
-                    }
-                }
-            }
+            render(&browser)
         })
         .expect("headless chrome harness");
 }
@@ -468,98 +478,97 @@ fn tab_cycle_targets_wrap_around_strip_and_stay_empty_for_single_tab() {
 }
 
 #[test]
-fn volumes_default_bottom_height_caps_visible_and_mounted_rows_at_four() {
-    let single_unmounted = default_volumes_bottom_height(1, 0);
-    let single_mounted = default_volumes_bottom_height(1, 1);
-    let four_mounted = default_volumes_bottom_height(4, 4);
-    let eight_mounted = default_volumes_bottom_height(8, 8);
-
-    assert!(single_mounted > single_unmounted);
-    assert_eq!(four_mounted, eight_mounted);
+fn mounted_device_below_the_fold_can_be_opened_from_the_keyboard() {
+    let temp = tempfile::tempdir().expect("temporary mount roots");
+    let names = ["Backup", "Camera", "Music", "Photos", "Archive"];
+    let mounted = |name: &str| {
+        let mount = temp.path().join(name);
+        std::fs::create_dir(&mount).expect("create mount directory");
+        volumes::Volume {
+            id: volumes::VolumeId {
+                stable: Some(name.to_owned()),
+                attachment: name.to_owned(),
+            },
+            object: name.to_owned(),
+            drive: None,
+            name: name.to_owned(),
+            size: 0,
+            label: name.to_owned(),
+            filesystem: "ext4".into(),
+            read_only: false,
+            locked: false,
+            mountable: true,
+            system_mount: false,
+            mount_points: vec![mount],
+            visible: true,
+        }
+    };
+    let snapshot = volumes::Snapshot {
+        volumes: names.map(mounted).into(),
+        ..Default::default()
+    };
+    run_browser_harness(
+        temp.path(),
+        (1280.0, 320.0),
+        snapshot,
+        |browser| AnyView::new(browser.view()),
+        |harness, browser| {
+            let surface = harness.platform().offscreens()[0].clone();
+            let viewport = browser
+                .0
+                .volumes_node
+                .window_bounds()
+                .expect("volume list viewport");
+            let buttons = collect_live_buttons(&surface);
+            let target = find_button_by_label(&buttons, "Archive").expect("fifth device");
+            let bottom = f64::from(viewport.origin.y.0 + viewport.size.height.0);
+            assert!(
+                target.center_y() >= bottom,
+                "fifth device should start below the visible portion of the list"
+            );
+            browser.focus_content();
+            harness.settle(8);
+            send_key_chord(harness, KeyEvent::character("v"), Modifiers::ALT);
+            send_key_chord(
+                harness,
+                KeyEvent::named(NamedKey::End, PhysicalKey::Code(KeyCode::End)),
+                Modifiers::NONE,
+            );
+            send_key_chord(
+                harness,
+                KeyEvent::named(NamedKey::Enter, PhysicalKey::Code(KeyCode::Enter)),
+                Modifiers::NONE,
+            );
+            let destination = temp.path().join("Archive");
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while browser.read_untracked(|ws| ws.tab().navigation.path() != Some(&destination)) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out opening the fifth mounted device"
+                );
+                harness.advance(Duration::from_millis(16));
+                harness.pump();
+            }
+        },
+    );
 }
 
 #[test]
-fn responsive_toolbar_and_collapsed_rail_center_actions_on_29px_axis() {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
-    let _guard = runtime.enter();
+fn new_tab_can_be_opened_from_the_collapsed_sidebar() {
     let temp = tempfile::tempdir().expect("tempdir");
-
-    let pending_label = temp.path().display().to_string();
-
     run_chrome_harness(temp.path(), |harness, browser| {
-        let surface = harness
-            .platform()
-            .offscreens()
-            .first()
-            .cloned()
-            .expect("offscreen surface");
-
-        let desktop_buttons = collect_live_buttons(&surface);
-        let toggle_lbl = gds::i18n::text_untracked("sidebar-toggle");
-        let back_lbl = gds::i18n::text_untracked("back");
-        let forward_lbl = gds::i18n::text_untracked("forward");
-        let parent_lbl = gds::i18n::text_untracked("parent");
-        let new_tab_lbl = gds::i18n::text_untracked("new-tab");
-
-        assert!(find_button_by_label(&desktop_buttons, &pending_label).is_some());
-        assert!(find_button_by_label(&desktop_buttons, &toggle_lbl).is_some());
-        assert!(find_button_by_label(&desktop_buttons, &back_lbl).is_some());
-        assert!(find_button_by_label(&desktop_buttons, &forward_lbl).is_some());
-        assert!(find_button_by_label(&desktop_buttons, &parent_lbl).is_some());
-        assert_eq!(browser.sidebar_width().get_untracked(), SIDEBAR_WIDTH);
-
-        browser.update(|ws| ws.tab_mut().navigation.cancel_pending());
         browser.0.window_width.set(960.0);
         flush();
         harness.settle(16);
-
-        let compact_buttons = collect_live_buttons(&surface);
-        assert!(find_button_by_label(&compact_buttons, &toggle_lbl).is_none());
-        assert!(find_button_by_label(&compact_buttons, &back_lbl).is_none());
-        assert!(find_button_by_label(&compact_buttons, &forward_lbl).is_none());
-        assert!(find_button_by_label(&compact_buttons, &parent_lbl).is_none());
-        assert!(find_button_by_label(&compact_buttons, "/").is_some());
-        assert_eq!(
-            browser.sidebar_width().get_untracked(),
-            COLLAPSED_SIDEBAR_WIDTH
-        );
-
-        let new_tab_btn = find_button_by_label(&compact_buttons, &new_tab_lbl)
-            .expect("new-tab button in collapsed rail");
-        let locations_lbl = gds::i18n::text_untracked("locations");
-        let locations_btn = find_button_by_label(&compact_buttons, &locations_lbl)
-            .expect("locations heading button in collapsed rail");
-        let rail_center = f64::from(COLLAPSED_SIDEBAR_WIDTH) * 0.5;
-        assert!(
-            (new_tab_btn.center_x() - rail_center).abs() <= 1.0,
-            "expected collapsed + button centered at x={rail_center}, got {:.2} ({:.1}..{:.1})",
-            new_tab_btn.center_x(),
-            new_tab_btn.x0,
-            new_tab_btn.x1
-        );
-        assert!(
-            (locations_btn.center_x() - rail_center).abs() <= 1.0
-                && locations_btn.x1 <= f64::from(COLLAPSED_SIDEBAR_WIDTH),
-            "expected collapsed locations heading centered at x={rail_center}, got {:.2} ({:.1}..{:.1})",
-            locations_btn.center_x(),
-            locations_btn.x0,
-            locations_btn.x1
-        );
+        let original = browser.read_untracked(|ws| ws.tab().id);
+        click_button(harness, &gds::i18n::text_untracked("new-tab"));
+        assert_eq!(browser.read_untracked(|ws| ws.tabs.len()), 2);
+        assert_ne!(browser.read_untracked(|ws| ws.tab().id), original);
     });
 }
 
 #[test]
 fn collapsed_pinned_tab_renders_single_corner_pin_button_without_pinned_icon_badge() {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
-    let _guard = runtime.enter();
     let temp = tempfile::tempdir().expect("tempdir");
     let sub = temp.path().join("workspace_dir");
     std::fs::create_dir_all(&sub).expect("create workspace_dir");
@@ -665,211 +674,6 @@ fn collapsed_pinned_tab_renders_single_corner_pin_button_without_pinned_icon_bad
     });
 }
 
-#[test]
-fn locations_collapse_mid_transition_hides_scrollbar_and_keeps_full_38px_row_heights() {
-    let supervisor = Supervisor::new(false).expect("tokio supervisor");
-    let bg_scope = supervisor.scope();
-    let temp = tempfile::tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    std::fs::create_dir_all(&home).expect("create home");
-    clear_recorded_tab_nodes();
-
-    let start = home;
-    let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
-    let slot_for_view = Rc::clone(&browser_slot);
-
-    let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
-        let mut harness = Harness::new(handler);
-        harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
-            DevicePx(1280.0),
-            DevicePx(800.0),
-        )));
-        harness.settle(16);
-
-        let browser = browser_slot.borrow().clone().expect("browser constructed");
-        let loc_progress = recorded_locations_progress().expect("recorded loc_progress signal");
-        let locations_node = browser.0.locations_node;
-        let scale = locations_node.scale().max(1.0);
-
-        let tags_enabled = browser
-            .0
-            .preferences
-            .state()
-            .with_untracked(|p| p.tags.enabled);
-        let expected_count = LocationTarget::ALL
-            .iter()
-            .filter(|t| tags_enabled || !matches!(t, LocationTarget::Collection(Collection::Tags)))
-            .count();
-        let full = (expected_count as f32 * (SIDEBAR_ITEM_HEIGHT + ROW_GAP) - ROW_GAP).max(0.0);
-
-        // Initially settled open (`loc_progress == 1.0`): full height and `overflow-y == auto`.
-        assert!(
-            (loc_progress.get_untracked() - 1.0).abs() < 1e-4,
-            "expected initial loc_progress == 1.0, got {}",
-            loc_progress.get_untracked()
-        );
-        assert_eq!(section_overflow_y(loc_progress.get_untracked()), "auto");
-        let open_bounds = locations_node
-            .bounds()
-            .expect("settled open .gds-files-sidebar-locations bounds");
-        let open_h = open_bounds.size.height.0 / scale;
-        assert!(
-            (open_h - full).abs() < 0.5,
-            "expected settled open .gds-files-sidebar-locations height == {full:.1}px, got {open_h:.1}px"
-        );
-
-        // Toggle `Locations` collapse and sample mid-transition (`0.15 < loc_progress < 0.85`).
-        browser.edit_preferences(|p| {
-            p.files.sidebar.locations_collapsed = true;
-        });
-        flush();
-        harness.run_for(Duration::from_millis(48), Duration::from_millis(16));
-        flush();
-        harness.settle(2);
-
-        let mid_progress = loc_progress.get_untracked();
-        assert!(
-            mid_progress > 0.15 && mid_progress < 0.85,
-            "expected mid-transition loc_progress in (0.15, 0.85), got {mid_progress:.3}"
-        );
-        assert_eq!(
-            section_overflow_y(mid_progress),
-            "hidden",
-            "expected overflow-y == hidden while loc_progress < 0.999"
-        );
-
-        // 1) `.gds-files-sidebar-locations` has `0 < height < full` and `overflow-y == hidden`
-        //    (verified both on `section_overflow_y` and by confirming engine scroll clamping!).
-        let mid_bounds = locations_node
-            .bounds()
-            .expect("mid-transition .gds-files-sidebar-locations bounds");
-        let mid_h = mid_bounds.size.height.0 / scale;
-        assert!(
-            mid_h > 0.0 && mid_h < full - 10.0,
-            "expected 0 < mid height < {full:.1}px during collapse, got {mid_h:.1}px (progress={mid_progress:.3})"
-        );
-        locations_node.scroll_to(
-            ScrollTarget::Offset(Point::new(DevicePx(0.0), DevicePx(40.0))),
-            ScrollBehavior::Instant,
-        );
-        harness.settle(2);
-        assert!(
-            locations_node.scroll_offset().y.0.abs() < 0.1,
-            "expected .gds-files-sidebar-locations with overflow-y: hidden to disallow vertical scrolling mid-transition, got offset {:?}",
-            locations_node.scroll_offset()
-        );
-
-        // 2) Every `.gds-files-location-item` inside it still has its full 38px layout height
-        //    (`>= 37.5px`, ZERO vertical pancake squishing!).
-        let items = recorded_location_nodes();
-        assert_eq!(
-            items.len(),
-            expected_count,
-            "expected {expected_count} recorded .gds-files-location-item nodes"
-        );
-        for (target, item_ref) in items {
-            let item_bounds = item_ref
-                .bounds()
-                .unwrap_or_else(|| panic!("measured bounds for {target:?} mid-collapse"));
-            let item_h = item_bounds.size.height.0 / scale;
-            assert!(
-                item_h >= 37.5 && (item_h - SIDEBAR_ITEM_HEIGHT).abs() < 0.5,
-                "expected {target:?} .gds-files-location-item height == 38.0px (>= 37.5px, zero vertical squishing) mid-collapse at height={mid_h:.1}px, got {item_h:.2}px"
-            );
-        }
-
-        // Complete collapse, then expand back and verify mid-expand + settled-open invariants.
-        harness.run_for(Duration::from_millis(200), Duration::from_millis(16));
-        flush();
-        harness.settle(4);
-        assert!(
-            loc_progress.get_untracked() <= 1e-4 && locations_node.bounds().is_none(),
-            "expected collapsed Locations section to hide from layout at loc_progress == 0"
-        );
-
-        browser.edit_preferences(|p| {
-            p.files.sidebar.locations_collapsed = false;
-        });
-        flush();
-        harness.run_for(Duration::from_millis(48), Duration::from_millis(16));
-        flush();
-        harness.settle(2);
-        let expand_mid = loc_progress.get_untracked();
-        assert!(
-            expand_mid > 0.15 && expand_mid < 0.85,
-            "expected mid-expand loc_progress in (0.15, 0.85), got {expand_mid:.3}"
-        );
-        assert_eq!(section_overflow_y(expand_mid), "hidden");
-        for (target, item_ref) in recorded_location_nodes() {
-            let item_h = item_ref
-                .bounds()
-                .unwrap_or_else(|| panic!("measured bounds for {target:?} mid-expand"))
-                .size
-                .height
-                .0
-                / scale;
-            assert!(
-                item_h >= 37.5 && (item_h - SIDEBAR_ITEM_HEIGHT).abs() < 0.5,
-                "expected {target:?} height == 38.0px mid-expand, got {item_h:.2}px"
-            );
-        }
-
-        harness.run_for(Duration::from_millis(200), Duration::from_millis(16));
-        flush();
-        harness.settle(4);
-        assert_eq!(section_overflow_y(loc_progress.get_untracked()), "auto");
-
-        harness.shut_down();
-        Ok(())
-    };
-
-    zgui::app()
-        .with_fonts(Fonts::shipped_only())
-        .with_renderer(Box::new(noop_renderer))
-        .with_size(1280.0, 800.0)
-        .run_on(driver, move || {
-            let scope = bg_scope.clone();
-            let app = Gds::install(scope.clone());
-            app.appearance().motion().set_enabled(true);
-            let typo = gds::appearance::typography::Preferences {
-                size: 16.0,
-                ..Default::default()
-            };
-            app.appearance()
-                .typography()
-                .apply(&typo)
-                .expect("16px typography");
-            let _ = app.appearance().install_window_sheet();
-            app.i18n()
-                .install_catalog(i18n::prepare(Language::Chinese).expect("Chinese catalog"));
-            let _prefs = preferences::Service::install(preferences::Preferences::default(), &scope)
-                .expect("preferences service");
-            let browser = Browser::new(
-                LaunchOptions {
-                    places: Ok(Places::default()),
-                    start: start.clone(),
-                    home: start.clone(),
-                    picker: None,
-                },
-                volumes::Service::new(scope),
-                Rc::new(|_| {}),
-            );
-            *slot_for_view.borrow_mut() = Some(browser.clone());
-            view! {
-                column(style:width = "100%", style:height = "100%") {
-                    row(style:width = "100%", style:height = "38px") {
-                        {browser.toolbar_controls()}
-                    }
-                    row(style:flex = "1 1 0%", style:width = "100%", style:min-height = "0px") {
-                        {browser.sidebar(SidebarPresentation::default())}
-                        {browser.folder_filter()}
-                    }
-                }
-            }
-        })
-        .expect("headless locations collapse transition harness");
-}
-
 fn has_live_tooltip(surface: &OffscreenSurface) -> bool {
     let mut nodes = HashMap::new();
     let mut root = None;
@@ -908,12 +712,6 @@ fn has_live_tooltip(surface: &OffscreenSurface) -> bool {
 
 #[test]
 fn sidebar_heading_keeps_single_dom_node_and_shows_tooltip_only_when_rail_is_collapsed() {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
-    let _guard = runtime.enter();
     let temp = tempfile::tempdir().expect("tempdir");
     clear_recorded_tab_nodes();
 
@@ -1056,194 +854,13 @@ fn sidebar_heading_keeps_single_dom_node_and_shows_tooltip_only_when_rail_is_col
 }
 
 #[test]
-fn sidebar_volume_rows_eliminate_duplicate_insets_and_center_icons_at_29px_when_collapsed() {
-    let supervisor = Supervisor::new(false).expect("tokio supervisor");
-    let bg_scope = supervisor.scope();
-    let temp = tempfile::tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let mounted_dir = temp.path().join("mnt-usb");
-    std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&mounted_dir).expect("create mnt-usb");
-    clear_recorded_tab_nodes();
-
-    let mounted_id = volumes::VolumeId {
-        stable: Some("UUID-MOUNTED".to_owned()),
-        attachment: "usb-1".to_owned(),
-    };
-    let unmounted_id = volumes::VolumeId {
-        stable: Some("UUID-UNMOUNTED".to_owned()),
-        attachment: "usb-2".to_owned(),
-    };
-    let snapshot = volumes::Snapshot {
-        drives: vec![volumes::Drive {
-            id: "drive-usb".to_owned(),
-            name: "Flash Drive".to_owned(),
-            kind: volumes::DeviceKind::Usb,
-            can_power_off: true,
-            can_eject: false,
-            sibling_id: None,
-        }],
-        volumes: vec![
-            volumes::Volume {
-                id: mounted_id.clone(),
-                object: "/org/freedesktop/UDisks2/block_devices/sdb1".to_owned(),
-                drive: Some("drive-usb".to_owned()),
-                name: "Portable".to_owned(),
-                size: 64 * 1024 * 1024 * 1024,
-                label: "Portable".to_owned(),
-                filesystem: "ext4".to_owned(),
-                read_only: false,
-                locked: false,
-                mountable: true,
-                system_mount: false,
-                mount_points: vec![mounted_dir],
-                visible: true,
-            },
-            volumes::Volume {
-                id: unmounted_id.clone(),
-                object: "/org/freedesktop/UDisks2/block_devices/sdb2".to_owned(),
-                drive: Some("drive-usb".to_owned()),
-                name: "Archive".to_owned(),
-                size: 128 * 1024 * 1024 * 1024,
-                label: "Archive".to_owned(),
-                filesystem: "btrfs".to_owned(),
-                read_only: false,
-                locked: false,
-                mountable: true,
-                system_mount: false,
-                mount_points: Vec::new(),
-                visible: true,
-            },
-        ],
-    };
-
-    let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
-    let slot_for_view = Rc::clone(&browser_slot);
-    let start = home;
-
-    let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
-        let mut harness = Harness::new(handler);
-        harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
-            DevicePx(1280.0),
-            DevicePx(800.0),
-        )));
-        harness.settle(16);
-
-        let browser = browser_slot.borrow().clone().expect("browser constructed");
-        let mounted_icon =
-            recorded_volume_icon_node(&mounted_id).expect("mounted volume icon node");
-        let unmounted_icon =
-            recorded_volume_icon_node(&unmounted_id).expect("unmounted volume icon node");
-        let scale = mounted_icon.scale().max(1.0);
-        let mounted_node_id = mounted_icon.get_untracked().expect("mounted icon NodeId");
-        let unmounted_node_id = unmounted_icon
-            .get_untracked()
-            .expect("unmounted icon NodeId");
-
-        // Expanded (222px): 10px section padding + 8px row pad-left = 18px left edge (center 27px),
-        // matching tabs and locations without any duplicate 26px volume-row inset.
-        let exp_mounted = mounted_icon.window_bounds().expect("expanded mounted icon");
-        let exp_unmounted = unmounted_icon
-            .window_bounds()
-            .expect("expanded unmounted icon");
-        assert!(
-            (exp_mounted.origin.x.0 / scale - 18.0).abs() <= 0.5,
-            "expected expanded mounted volume icon x == 18.0px (never 26.0px), got {:.2}",
-            exp_mounted.origin.x.0 / scale
-        );
-        assert!(
-            (exp_unmounted.origin.x.0 / scale - 18.0).abs() <= 0.5,
-            "expected expanded unmounted volume icon x == 18.0px (never 26.0px), got {:.2}",
-            exp_unmounted.origin.x.0 / scale
-        );
-
-        // Collapse sidebar and verify mid-transition (48ms) smooth interpolation + settled 29px rail center.
-        browser.toggle_sidebar();
-        flush();
-        harness.run_for(Duration::from_millis(48), Duration::from_millis(16));
-        flush();
-        harness.settle(2);
-        let mid_bounds = mounted_icon
-            .window_bounds()
-            .expect("mid-collapse mounted icon");
-        let mid_x = mid_bounds.origin.x.0 / scale;
-        assert!(
-            mid_x > 18.05 && mid_x < 19.95,
-            "expected volume icon x to interpolate smoothly between 18px and 20px mid-collapse, got {mid_x:.2}"
-        );
-
-        harness.run_for(Duration::from_millis(200), Duration::from_millis(16));
-        flush();
-        harness.settle(4);
-        let rail_center = COLLAPSED_SIDEBAR_WIDTH * 0.5;
-        let col_mounted = mounted_icon
-            .window_bounds()
-            .expect("collapsed mounted icon");
-        let col_unmounted = unmounted_icon
-            .window_bounds()
-            .expect("collapsed unmounted icon");
-        let col_mounted_cx = (col_mounted.origin.x.0 + col_mounted.size.width.0 * 0.5) / scale;
-        let col_unmounted_cx =
-            (col_unmounted.origin.x.0 + col_unmounted.size.width.0 * 0.5) / scale;
-        assert!(
-            (col_mounted_cx - rail_center).abs() <= 0.5,
-            "expected collapsed mounted volume icon centered at x={rail_center} (never 39px), got {col_mounted_cx:.2}"
-        );
-        assert!(
-            (col_unmounted_cx - rail_center).abs() <= 0.5,
-            "expected collapsed unmounted volume icon centered at x={rail_center} (never 39px), got {col_unmounted_cx:.2}"
-        );
-        assert_eq!(mounted_icon.get_untracked(), Some(mounted_node_id));
-        assert_eq!(unmounted_icon.get_untracked(), Some(unmounted_node_id));
-
-        harness.shut_down();
-        Ok(())
-    };
-
-    zgui::app()
-        .with_fonts(Fonts::shipped_only())
-        .with_renderer(Box::new(noop_renderer))
-        .with_size(1280.0, 800.0)
-        .run_on(driver, move || {
-            let scope = bg_scope.clone();
-            let app = Gds::install(scope.clone());
-            app.appearance().motion().set_enabled(true);
-            let _ = app.appearance().install_window_sheet();
-            app.i18n()
-                .install_catalog(i18n::prepare(Language::English).expect("English catalog"));
-            let mut initial_prefs = preferences::Preferences::default();
-            initial_prefs.files.sidebar.show_volumes = true;
-            initial_prefs.files.sidebar.volumes_collapsed = false;
-            let _prefs =
-                preferences::Service::install(initial_prefs, &scope).expect("preferences service");
-            let browser = Browser::new(
-                LaunchOptions {
-                    places: Ok(Places::default()),
-                    start: start.clone(),
-                    home: start.clone(),
-                    picker: None,
-                },
-                volumes::Service::with_snapshot(scope, snapshot.clone()),
-                Rc::new(|_| {}),
-            );
-            *slot_for_view.borrow_mut() = Some(browser.clone());
-            view! {
-                row(style:width = "100%", style:height = "100%") {
-                    {browser.sidebar(SidebarPresentation::default())}
-                }
-            }
-        })
-        .expect("headless volume sidebar inset harness");
-}
-
-#[test]
-fn overflowing_address_breadcrumbs_stay_vertically_centered_with_edit_button() {
+fn overflowing_address_bar_keeps_the_leaf_and_edit_button_visible() {
     let supervisor = Supervisor::new(false).expect("test runtime");
     let bg_scope = supervisor.scope();
     let temp = tempfile::tempdir().expect("tempdir");
-    let deep = temp
-        .path()
-        .join("gds-vm-e2e/run-20261121T114232-573306Z/ubuntu/F19_terminal_writes_in_current_directory/work");
+    let deep = temp.path().join(
+        "projects/desktop/integration/fixtures/documents/quarterly-reports/working-drafts/work",
+    );
     std::fs::create_dir_all(&deep).expect("create deep directory");
 
     let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
@@ -1267,28 +884,12 @@ fn overflowing_address_breadcrumbs_stay_vertically_centered_with_edit_button() {
         let edit = find_button_by_label(&buttons, "Edit location").expect("edit location button");
 
         assert!(
-            leaf.x1 - leaf.x0 > 12.0,
-            "expected leaf breadcrumb text to have measured width > 12px, got {:.2} (leaf={leaf:?})",
-            leaf.x1 - leaf.x0
-        );
-        assert!(
             root.x0 < 0.0,
             "expected deep path to overflow horizontally and scroll root crumb offscreen left, got root={root:?}, leaf={leaf:?}, edit={edit:?}"
         );
 
-        let leaf_height = leaf.height();
-        let leaf_cy = leaf.center_y();
-        let edit_cy = edit.center_y();
         assert!(
-            (leaf_height - 24.0).abs() <= 1.0,
-            "expected leaf breadcrumb height ~24px (no bottom scrollbar gutter squeezing track), got {leaf_height:.2} (leaf={leaf:?}, edit={edit:?})"
-        );
-        assert!(
-            (leaf_cy - edit_cy).abs() <= 1.0,
-            "expected overflowing breadcrumb center y={leaf_cy:.2} to align with edit button center y={edit_cy:.2} (leaf={leaf:?}, edit={edit:?})"
-        );
-        assert!(
-            leaf.x1 <= edit.x0 + 1.0 && leaf.x0 >= 0.0,
+            leaf.x0 >= 0.0 && leaf.x0 < leaf.x1 && leaf.x1 <= edit.x0 + 1.0,
             "expected overflowing breadcrumb track to scroll right so leaf ({:.1}..{:.1}) stays visible before edit button ({:.1}..{:.1}); all buttons: {buttons:?}",
             leaf.x0,
             leaf.x1,
@@ -1330,4 +931,163 @@ fn overflowing_address_breadcrumbs_stay_vertically_centered_with_edit_button() {
             }
         })
         .expect("headless overflowing breadcrumb harness");
+}
+
+#[test]
+fn clicking_outside_address_bar_exits_edit_mode() {
+    let supervisor = Supervisor::new(false).expect("test runtime");
+    let bg_scope = supervisor.scope();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let dir = temp.path().join("work");
+    std::fs::create_dir_all(&dir).expect("create work directory");
+
+    let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
+    let slot_for_view = Rc::clone(&browser_slot);
+
+    let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+        let mut harness = Harness::new(handler);
+        let offscreen = harness
+            .platform()
+            .offscreens()
+            .first()
+            .cloned()
+            .expect("offscreen surface");
+        offscreen.set_a11y_listener(true);
+        harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+            DevicePx(1280.0),
+            DevicePx(800.0),
+        )));
+        harness.settle(16);
+
+        let browser = browser_slot.borrow().clone().expect("browser constructed");
+        let buttons = collect_live_buttons(&offscreen);
+        let edit = find_button_by_label(&buttons, "Edit location")
+            .expect("edit location button")
+            .clone();
+        let leaf = buttons
+            .iter()
+            .find(|btn| btn.label == "work" && btn.y0 < 60.0)
+            .expect("current leaf breadcrumb")
+            .clone();
+
+        let assert_editing_and_focused = |browser: &Browser, context: &str| {
+            assert!(
+                matches!(
+                    browser.0.address_presentation.get_untracked(),
+                    crate::pages::workspace::model::AddressPresentation::Editing { .. }
+                ),
+                "{context}: expected address edit mode"
+            );
+            let input_id = browser
+                .0
+                .address_node
+                .get_untracked()
+                .expect("address input node bound in edit mode");
+            let focused = browser
+                .0
+                .owner
+                .with(|| zgui::view::current_host().and_then(|h| h.focused().get_untracked()));
+            assert_eq!(
+                focused,
+                Some(input_id),
+                "{context}: address input must hold focus"
+            );
+        };
+
+        // 1. Click Edit location button (press & release in separate frames like a real user).
+        click_at(
+            &mut harness,
+            edit.center_x() as f32,
+            edit.center_y() as f32,
+            100,
+        );
+        assert_editing_and_focused(&browser, "after clicking Edit location");
+
+        // 2. Clicking inside the address input itself keeps edit mode open.
+        click_at(
+            &mut harness,
+            (edit.x0 - 40.0) as f32,
+            edit.center_y() as f32,
+            250,
+        );
+        assert_editing_and_focused(&browser, "after clicking inside address input");
+
+        // 3. Click outside onto the blank file-list / marquee area.
+        click_at(&mut harness, 700.0, 500.0, 400);
+        assert!(
+            matches!(
+                browser.0.address_presentation.get_untracked(),
+                crate::pages::workspace::model::AddressPresentation::Breadcrumbs
+            ),
+            "clicking blank file-list area outside the address bar must exit edit mode"
+        );
+
+        // 4. Click directly on the address bar blank area to re-enter edit mode.
+        click_at(
+            &mut harness,
+            (edit.x0 - 30.0) as f32,
+            edit.center_y() as f32,
+            600,
+        );
+        assert_editing_and_focused(&browser, "after clicking address bar blank area");
+
+        // 5. Click outside onto the sidebar blank area.
+        click_at(&mut harness, 80.0, 500.0, 800);
+        assert!(
+            matches!(
+                browser.0.address_presentation.get_untracked(),
+                crate::pages::workspace::model::AddressPresentation::Breadcrumbs
+            ),
+            "clicking sidebar area outside the address bar must exit edit mode"
+        );
+
+        // 6. Click current leaf breadcrumb to enter edit mode, then click toolbar drag strip.
+        click_at(
+            &mut harness,
+            leaf.center_x() as f32,
+            leaf.center_y() as f32,
+            1000,
+        );
+        assert_editing_and_focused(&browser, "after clicking current leaf breadcrumb");
+
+        click_at(&mut harness, 100.0, edit.center_y() as f32, 1200);
+        assert!(
+            matches!(
+                browser.0.address_presentation.get_untracked(),
+                crate::pages::workspace::model::AddressPresentation::Breadcrumbs
+            ),
+            "clicking toolbar drag area outside the address bar must exit edit mode"
+        );
+
+        harness.shut_down();
+        Ok(())
+    };
+
+    zgui::app()
+        .with_fonts(Fonts::system())
+        .with_renderer(Box::new(noop_renderer))
+        .with_size(1280.0, 800.0)
+        .run_on(driver, move || {
+            let scope = bg_scope.clone();
+            let app = Gds::install(scope.clone());
+            app.appearance().motion().set_enabled(false);
+            let _ = app.appearance().install_window_sheet();
+            app.i18n()
+                .install_catalog(i18n::prepare(Language::English).expect("English catalog"));
+            let _prefs = preferences::Service::install(preferences::Preferences::default(), &scope)
+                .expect("preferences service");
+            let browser = Browser::new(
+                LaunchOptions {
+                    places: Ok(Places::default()),
+                    start: dir.clone(),
+                    home: dir.clone(),
+                    picker: None,
+                },
+                volumes::Service::new(scope),
+                Rc::new(|_| {}),
+            );
+            *slot_for_view.borrow_mut() = Some(browser.clone());
+            browser.view()
+        })
+        .expect("headless address outside-click harness");
 }

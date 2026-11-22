@@ -118,7 +118,7 @@ async fn open_file_rejects_non_files_and_launchers_off_async_worker() {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[test]
 fn opened_document_does_not_retain_nonblock_flag() {
     use rustix::fs::{OFlags, fcntl_getfl};

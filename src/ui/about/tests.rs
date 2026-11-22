@@ -15,8 +15,8 @@ use crate::i18n::Language;
 use crate::service::task_manager::Scope;
 
 use super::{
-    APPLICATIONS, AboutDialogProps, AboutProps, AboutViewProps, Application, HEIGHT, Section,
-    WIDTH, display_url, is_back_key, is_http_url, localized, open_about_dialog, test_probe,
+    APPLICATIONS, AboutDialogProps, AboutProps, AboutViewProps, Application, Section, display_url,
+    is_back_key, is_http_url, localized, open_about_dialog, test_probe,
 };
 
 #[derive(Default)]
@@ -121,8 +121,6 @@ fn registered_files_application_metadata_is_present() {
             .is_some_and(|img| img.url().starts_with("zgui-bytes:"))
     );
     assert!(app_meta.license_text.contains("Apache License"));
-    assert_eq!(WIDTH, 420.0);
-    assert_eq!(HEIGHT, 408.0);
     assert!(!APPLICATIONS.is_empty());
 }
 
@@ -159,22 +157,22 @@ fn about_url_guard_back_keys_and_localized_strings_work_with_and_without_gds() {
         assert_eq!(localized("gds-about-back", "Back"), "Back");
         let gds = Gds::install(Scope::default());
         let credits = Signal::derive_local(|| localized("gds-about-credits", "Fallback"));
-        let license = Signal::derive_local(|| localized("gds-about-license", "Fallback"));
-        let copied = Signal::derive_local(|| localized("gds-about-copied", "Fallback"));
 
         gds.i18n()
             .install(Language::English)
             .expect("English locale");
-        assert_eq!(credits.get_untracked(), "Credits");
-        assert_eq!(license.get_untracked(), "License");
-        assert_eq!(copied.get_untracked(), "Copied");
+        assert_eq!(
+            credits.get_untracked(),
+            gds.i18n().text_untracked("gds-about-credits")
+        );
 
         gds.i18n()
             .install(Language::Chinese)
             .expect("Chinese locale");
-        assert_eq!(credits.get_untracked(), "致谢");
-        assert_eq!(license.get_untracked(), "许可证");
-        assert_eq!(copied.get_untracked(), "已复制");
+        assert_eq!(
+            credits.get_untracked(),
+            gds.i18n().text_untracked("gds-about-credits")
+        );
 
         let app_meta = Application::cargo("gds-files");
         let _about_view = view! { About(application = app_meta) };

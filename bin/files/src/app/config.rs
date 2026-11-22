@@ -14,7 +14,7 @@ pub(super) enum Mode {
         start: PathBuf,
         options: picker::Options,
     },
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     Service,
 }
 
@@ -22,7 +22,7 @@ impl Mode {
     pub fn keep_alive(&self) -> bool {
         match self {
             Self::Browser { .. } | Self::Picker { .. } => false,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             Self::Service => true,
         }
     }
@@ -35,7 +35,7 @@ impl Mode {
     /// Returns an error if a `--portal-request` payload on stdin cannot be parsed or the starting
     /// directory cannot be resolved against the current working directory.
     fn resolve(arguments: cli::Arguments, home: &Path) -> anyhow::Result<Self> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         if arguments.dbus_service {
             return Ok(Self::Service);
         }

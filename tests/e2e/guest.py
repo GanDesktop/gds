@@ -12,8 +12,21 @@ import sys
 import time
 
 
+FREEBSD = sys.platform.startswith('freebsd')
+
+
 def desktop_environment():
     env = os.environ.copy()
+    if FREEBSD:
+        pid = subprocess.check_output(['pgrep', '-u', str(os.getuid()), '-x', 'plasmashell'],
+                                      text=True).strip()
+        info = json.loads(subprocess.check_output(['procstat', '--libxo', 'json', '-e', pid]))
+        session = dict(value.split('=', 1)
+                       for value in info['procstat']['environment'][pid]['environment'])
+        keys = ('DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR',
+                'XDG_CURRENT_DESKTOP', 'XDG_SESSION_TYPE', 'DBUS_SESSION_BUS_ADDRESS')
+        env.update({key: session[key] for key in keys if key in session})
+        return env
     for line in subprocess.check_output(['systemctl', '--user', 'show-environment'], text=True).splitlines():
         key, _, value = line.partition('=')
         env[key] = value
@@ -91,6 +104,22 @@ def initialize(root):
         (root / name).mkdir(parents=True, exist_ok=True)
 
 
+def process_stat(pid):
+    if FREEBSD:
+        result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart=', '-o', 'stat='],
+                                text=True, capture_output=True)
+        if result.returncode == 1 and not result.stdout and not result.stderr:
+            return None
+        result.check_returncode()
+        start, status = result.stdout.strip().rsplit(None, 1)
+        return start, status
+    try:
+        stat = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+    except FileNotFoundError:
+        return None
+    return stat[19], stat[0]
+
+
 def supervise(args):
     root = Path(args['root'])
     initialize(root)
@@ -107,7 +136,8 @@ def supervise(args):
     with stem.with_suffix('.stdout').open('wb') as out, stem.with_suffix('.stderr').open('wb') as err:
         process = subprocess.Popen(args['argv'], env=env, cwd=root / 'work', stdin=stdin,
                                    stdout=out, stderr=err, start_new_session=True)
-    identity = {'pid': process.pid, 'start': Path(f'/proc/{process.pid}/stat').read_text().split()[21]}
+    stat = process_stat(process.pid)
+    identity = {'pid': process.pid, 'start': stat[0] if stat else None}
     temporary = stem.with_suffix('.pid.tmp')
     temporary.write_text(json.dumps(identity))
     temporary.replace(stem.with_suffix('.pid.json'))
@@ -135,8 +165,8 @@ def launch(args):
 
 def stop(args):
     pid = args['pid']
-    stat = Path(f'/proc/{pid}/stat')
-    if stat.exists() and stat.read_text().split()[21] == args['start']:
+    stat = process_stat(pid)
+    if stat and stat[0] == args['start']:
         os.killpg(pid, signal.SIGTERM)
     return True
 
@@ -165,8 +195,9 @@ def image_info(path):
 def execute(op, args):
     if op == 'environment':
         from PIL import __version__ as pillow_version
-        spi = atspi()
         env = desktop_environment()
+        os.environ.update(env)
+        spi = atspi()
         import gi
         gi.require_version('Gio', '2.0')
         from gi.repository import Gio, GLib
@@ -194,7 +225,7 @@ def execute(op, args):
         bus.call_sync('org.a11y.Bus', '/org/a11y/bus', 'org.freedesktop.DBus.Properties',
                       'Set', GLib.Variant('(ssv)', ('org.a11y.Status', 'IsEnabled', GLib.Variant('b', enabled))),
                       None, Gio.DBusCallFlags.NONE, 5000, None)
-        if enabled:
+        if enabled and not FREEBSD:
             subprocess.run(['sudo', '-n', 'loginctl', 'unlock-sessions'], check=True, capture_output=True)
             if shutil.which('umbriel'):
                 subprocess.run(['umbriel', 'msg', 'overview-close'], env=env, capture_output=True)
@@ -207,11 +238,13 @@ def execute(op, args):
     if op == 'stop':
         return stop(args)
     if op == 'alive':
-        stat = Path(f'/proc/{args["pid"]}/stat')
-        return stat.exists() and stat.read_text().split()[2] != 'Z'
+        stat = process_stat(args['pid'])
+        return bool(stat and not stat[1].startswith('Z'))
     if op == 'snapshot':
+        os.environ.update(desktop_environment())
         return snapshot(args['pid'])
     if op == 'action':
+        os.environ.update(desktop_environment())
         return action(args)
     if op == 'write':
         path = Path(args['path'])
@@ -223,6 +256,9 @@ def execute(op, args):
         return True
     if op == 'read':
         return base64.b64encode(Path(args['path']).read_bytes()).decode()
+    if op == 'sha256':
+        with Path(args['path']).open('rb') as source:
+            return hashlib.file_digest(source, 'sha256').hexdigest()
     if op == 'exists':
         return Path(args['path']).exists()
     if op == 'is_dir':

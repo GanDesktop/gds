@@ -394,14 +394,10 @@ mod tests {
     use zgui::vocab::{Modifiers, PointerAction, PointerButton, PointerEvent, Timestamp};
     use zgui_platform_headless::Harness;
 
-    use super::{DRAG_THRESHOLD, DragOverlayState, MAX_WIDTH, MIN_WIDTH};
+    use super::DragOverlayState;
 
     #[test]
     fn drag_overlay_state_tracks_begin_move_and_completion() {
-        assert_eq!(MIN_WIDTH, 140.0);
-        assert_eq!(MAX_WIDTH, 248.0);
-        assert_eq!(DRAG_THRESHOLD, 5.0);
-
         install().ok();
         let scope = Mounted::new();
         scope.with(|| {

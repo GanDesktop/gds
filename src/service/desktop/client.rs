@@ -1,7 +1,7 @@
 //! Native desktop document and terminal operations.
 
 use super::Error;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use super::portal;
 
 use std::{
@@ -95,7 +95,7 @@ impl Drop for TempOutput {
 
 #[derive(Clone, Default)]
 pub struct Desktop {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     portal: std::sync::Arc<tokio::sync::OnceCell<portal::Portal>>,
 }
 
@@ -116,15 +116,15 @@ impl Desktop {
     ///
     /// Executable permissions on recognised media do not turn them into programs.
     /// Other executable files and desktop launchers require the application chooser.
-    /// Symbolic links are resolved before checking the target. On Linux, execute
-    /// this future on Tokio so the Portal connection uses its I/O backend.
+    /// Symbolic links are resolved before checking the target. On Linux and FreeBSD,
+    /// execute this future on Tokio so the Portal connection uses its I/O backend.
     ///
     /// # Errors
     /// Returns an error for inaccessible/non-regular files, executables opened without
     /// a chooser, an unavailable chooser, or failures reported by the desktop opener.
     pub async fn open_file(&self, path: &Path, mode: OpenMode) -> Result<OpenOutcome, Error> {
         let path_owned = path.to_owned();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             let (resolved, file) =
                 tokio::task::spawn_blocking(move || Self::open_document(&path_owned, mode))
@@ -140,7 +140,7 @@ impl Desktop {
                 .await
                 .map_err(Error::from)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
             tokio::task::spawn_blocking(move || {
                 let (resolved, file) = Self::open_document(&path_owned, mode)?;
@@ -183,7 +183,7 @@ impl Desktop {
         if !metadata.is_file() {
             return Err(Error::NotFile(path.to_owned()));
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         Self::clear_nonblock(&file).map_err(|source| Error::Io {
             path: resolved.clone(),
             source,
@@ -206,7 +206,7 @@ impl Desktop {
     }
 
     fn open_readonly(path: &Path) -> std::io::Result<fs::File> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             use rustix::{
                 fs::{CWD, Mode, OFlags, openat},
@@ -225,14 +225,14 @@ impl Desktop {
                 }
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
             // std::fs::File::open sets O_CLOEXEC on Unix platforms.
             fs::File::open(path)
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn clear_nonblock(file: &fs::File) -> std::io::Result<()> {
         use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 

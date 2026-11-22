@@ -139,7 +139,7 @@ impl FileIcon {
         }
     }
 
-    fn category_icon(category: Option<ContentCategory>) -> IconName {
+    pub(crate) fn category_icon(category: Option<ContentCategory>) -> IconName {
         match category {
             Some(ContentCategory::Text) => IconName::FileText,
             Some(ContentCategory::Code) => IconName::FileCode,

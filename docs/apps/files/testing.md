@@ -6,6 +6,13 @@ and `just e2e-build` first. The VM tests exercise normal `gds-files` binaries
 through QEMU input and AccessKit/AT-SPI and preserve per-case UI and filesystem
 evidence.
 
+The [FreeBSD test report](freebsd-testing.md) summarizes the 13 passing KDE
+Plasma Wayland workflows, the FreeBSD file-operation and `kqueue` backends they
+exercise, and the remaining Linux-only integration boundaries.
+
+For the shared library's Redox guest tests and the dependencies that block
+Files on Orbital, see the [Redox compatibility report](redox-compatibility.md).
+
 ## Supplementary Weston runner
 
 Run the isolated native workflow with `just test-files-native`. It builds the

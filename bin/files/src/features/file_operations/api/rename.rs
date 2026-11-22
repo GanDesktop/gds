@@ -80,7 +80,7 @@ pub(crate) enum Error {
         #[source]
         source: io::Error,
     },
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     #[error("safe no-replace rename is not available on this platform: {path}")]
     Unsupported { path: PathBuf },
 }
@@ -154,7 +154,7 @@ impl Request {
 
     /// # Errors
     /// Reports target conflicts or kernel rename errors.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn rename_no_replace(source: &Path, destination: &Path) -> Result<(), Error> {
         use rustix::fs::{CWD, RenameFlags, renameat_with};
 
@@ -172,7 +172,7 @@ impl Request {
 
     /// # Errors
     /// Always refuses when atomic no-replace rename is unavailable.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     fn rename_no_replace(source: &Path, _destination: &Path) -> Result<(), Error> {
         // No portable no-replace rename is wired on this target. A plain rename
         // could overwrite an existing entry, so refuse explicitly until a native

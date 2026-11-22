@@ -28,7 +28,7 @@ use zgui_ui_primitives::Binding;
 
 use crate::entities::file::{
     columns::Column,
-    directory::{ContentCategory, ContentType, EntryKind},
+    directory::{ContentType, EntryKind},
     sorting::Direction,
     ui::{EntryPresentation, FileIcon, UNKNOWN_VALUE},
 };
@@ -42,7 +42,7 @@ use super::{
 const SURFACES_SHEET: &str = "gds-files-workspace-surfaces";
 pub(super) const COLLECTION_MAX_COLUMNS: usize = 5;
 
-const fn collection_column_class(index: usize) -> &'static str {
+pub(super) const fn collection_column_class(index: usize) -> &'static str {
     match index {
         0 => "gds-files-col-0",
         1 => "gds-files-col-1",
@@ -511,12 +511,9 @@ fn name_cell_view(
 ) -> AnyView {
     let tip = tooltip.unwrap_or_else(|| wrap_tokens(&label));
     let name_label = collection_name_label(label, selected);
-    let cell_ref = NodeRef::new();
-    #[cfg(test)]
-    super::view::tests::record_collection_row_cell_node(0, cell_ref);
+
     let inner = AnyView::new(view! {
         row(
-            node_ref = cell_ref,
             class = format!("gds-files-collection-cell {col_class}"),
         ) {
             {artwork}
@@ -546,12 +543,9 @@ fn meta_text_cell(
     };
     let align_attr = right_aligned.then(|| "end".to_owned());
     let col_class = collection_column_class(col_index);
-    let cell_ref = NodeRef::new();
-    #[cfg(test)]
-    super::view::tests::record_collection_row_cell_node(col_index, cell_ref);
+
     let cell = AnyView::new(view! {
         row(
-            node_ref = cell_ref,
             class = format!("gds-files-collection-cell gds-files-collection-cell--meta {col_class}"),
             attr:data-align = align_attr,
         ) {
@@ -571,48 +565,14 @@ fn meta_text_cell(
 fn timestamp_cell(value: Option<SystemTime>, col_index: usize) -> AnyView {
     let ts_view = view! { {Timestamp::new(value)} };
     let col_class = collection_column_class(col_index);
-    let cell_ref = NodeRef::new();
-    #[cfg(test)]
-    super::view::tests::record_collection_row_cell_node(col_index, cell_ref);
+
     AnyView::new(view! {
         row(
-            node_ref = cell_ref,
             class = format!("gds-files-collection-cell gds-files-collection-cell--meta {col_class}"),
         ) {
             {ts_view}
         }
     })
-}
-
-fn category_icon_name(category: Option<ContentCategory>) -> IconName {
-    match category {
-        Some(ContentCategory::Text) => IconName::FileText,
-        Some(ContentCategory::Code) => IconName::FileCode,
-        Some(ContentCategory::Document) => IconName::FileType,
-        Some(ContentCategory::Image) => IconName::FileImage,
-        Some(ContentCategory::Audio) => IconName::FileMusic,
-        Some(ContentCategory::Video) => IconName::FileVideoCamera,
-        Some(ContentCategory::Archive) => IconName::FileArchive,
-        Some(ContentCategory::Executable) => IconName::FileTerminal,
-        Some(ContentCategory::Font) => IconName::Type,
-        Some(ContentCategory::Binary) | None => IconName::File,
-    }
-}
-
-fn category_type_label(category: ContentCategory) -> String {
-    let id = match category {
-        ContentCategory::Text => "content-text",
-        ContentCategory::Code => "content-code",
-        ContentCategory::Document => "content-document",
-        ContentCategory::Image => "content-image",
-        ContentCategory::Audio => "content-audio",
-        ContentCategory::Video => "content-video",
-        ContentCategory::Archive => "content-archive",
-        ContentCategory::Executable => "content-executable",
-        ContentCategory::Font => "content-font",
-        ContentCategory::Binary => "content-binary",
-    };
-    i18n::text(id)
 }
 
 fn remote_entry_artwork(entry: &remote::Entry) -> (IconName, Option<IconName>, bool) {
@@ -621,12 +581,12 @@ fn remote_entry_artwork(entry: &remote::Entry) -> (IconName, Option<IconName>, b
         remote::EntryKind::File => {
             let category =
                 ContentType::from_filename(OsStr::new(&entry.name)).map(|ct| ct.category);
-            (category_icon_name(category), None, false)
+            (FileIcon::category_icon(category), None, false)
         }
         remote::EntryKind::SymbolicLink => {
             if let Some(ct) = ContentType::from_filename(OsStr::new(&entry.name)) {
                 (
-                    category_icon_name(Some(ct.category)),
+                    FileIcon::category_icon(Some(ct.category)),
                     Some(IconName::Link),
                     false,
                 )
@@ -643,7 +603,7 @@ fn remote_entry_type_label(entry: &remote::Entry) -> String {
         remote::EntryKind::Directory => i18n::text("kind-directory"),
         remote::EntryKind::File => ContentType::from_filename(OsStr::new(&entry.name)).map_or_else(
             || i18n::text("kind-file"),
-            |ct| category_type_label(ct.category),
+            |ct| EntryPresentation::category_label(ct.category),
         ),
         remote::EntryKind::SymbolicLink => i18n::text("kind-link"),
         remote::EntryKind::Other => i18n::text("kind-other"),
@@ -671,7 +631,7 @@ fn trash_entry_artwork(
         EntryKind::SymbolicLink => (IconName::Link, None, false),
         EntryKind::File => {
             let category = ContentType::from_filename(&entry.name).map(|ct| ct.category);
-            (category_icon_name(category), None, false)
+            (FileIcon::category_icon(category), None, false)
         }
         EntryKind::Other | EntryKind::Unknown => (IconName::File, None, false),
     }
@@ -750,13 +710,9 @@ fn volume_capacity_cell(
     };
 
     let col_class = collection_column_class(col_index);
-    let cell_ref = NodeRef::new();
-    #[cfg(test)]
-    super::view::tests::record_collection_row_cell_node(col_index, cell_ref);
 
     AnyView::new(view! {
         row(
-            node_ref = cell_ref,
             class = format!("gds-files-collection-cell {col_class}"),
         ) {
             CapacityBar(
@@ -900,13 +856,9 @@ fn volume_mount_point_cell(
     };
 
     let col_class = collection_column_class(col_index);
-    let cell_ref = NodeRef::new();
-    #[cfg(test)]
-    super::view::tests::record_collection_row_cell_node(col_index, cell_ref);
 
     AnyView::new(view! {
         row(
-            node_ref = cell_ref,
             class = format!("gds-files-collection-cell gds-files-collection-cell--split {col_class}"),
         ) {
             {lead_view}
@@ -1165,28 +1117,8 @@ impl Browser {
     }
 
     pub(super) fn collection_columns(&self) -> Option<Vec<(&'static str, f32)>> {
-        self.collection_columns_with(true)
-    }
-
-    #[cfg(test)]
-    pub(super) fn collection_columns_untracked(&self) -> Option<Vec<(&'static str, f32)>> {
-        self.collection_columns_with(false)
-    }
-
-    fn collection_columns_with(&self, tracked: bool) -> Option<Vec<(&'static str, f32)>> {
-        let dimensions = || {
-            if tracked {
-                (self.table_viewport_width().max(240.0), self.compact())
-            } else {
-                (
-                    self.table_viewport_width_untracked().max(240.0),
-                    self.compact_untracked(),
-                )
-            }
-        };
-        if tracked {
-            let _ = self.0.revision.get();
-        }
+        let dimensions = || (self.table_viewport_width().max(240.0), self.compact());
+        let _ = self.0.revision.get();
         let state = self.0.state.borrow();
         let tab = state.tab();
         match &tab.contents {
@@ -1268,9 +1200,7 @@ impl Browser {
                 let label = i18n::text(label_id);
                 let column = Column::from_id(label_id).filter(|col| sortable.contains(col));
                 let col_class = collection_column_class(idx);
-                let header_cell_ref = NodeRef::new();
-                #[cfg(test)]
-                super::view::tests::record_collection_header_cell_node(idx, header_cell_ref);
+
 
                 if let Some(col) = column {
                     let active = sort.key == col;
@@ -1304,7 +1234,6 @@ impl Browser {
                     });
                     AnyView::new(view! {
                         row(
-                            node_ref = header_cell_ref,
                             class = format!("gds-files-collection-header__cell {col_class}"),
                         ) {
                             control(
@@ -1334,7 +1263,6 @@ impl Browser {
                 } else {
                     AnyView::new(view! {
                         row(
-                            node_ref = header_cell_ref,
                             class = format!("gds-files-collection-header__cell {col_class}"),
                         ) {
                             row(
@@ -1562,12 +1490,9 @@ impl Browser {
                     }
                     .into_view()
                 });
-                let name_cell_ref = NodeRef::new();
-                #[cfg(test)]
-                super::view::tests::record_collection_row_cell_node(0, name_cell_ref);
+
                 let name_cell = AnyView::new(view! {
                     row(
-                        node_ref = name_cell_ref,
                         class = format!("gds-files-collection-cell {}", collection_column_class(0)),
                     ) {
                         {artwork}

@@ -229,7 +229,7 @@ impl EntryPresentation {
         }
     }
 
-    fn category_label(category: ContentCategory) -> String {
+    pub(crate) fn category_label(category: ContentCategory) -> String {
         i18n::text(category_message_id(category))
     }
 

@@ -3,8 +3,8 @@
 //! The base size drives `--gds-font-size` and scales both `--gds-font-*` and
 //! `zgui-ui-tokens` (`--zui-type-*`) typography properties cleanly.
 
-#[cfg(target_os = "linux")]
-mod linux;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+mod fontconfig;
 #[cfg(test)]
 mod tests;
 
@@ -19,9 +19,9 @@ pub const MAX_SIZE: f32 = 24.0;
 /// GDS's default base UI text size; matches `tokens::FONT_SIZE * tokens::UI_TEXT_SCALE` (`14.0` px)
 /// or `DEFAULT_SIZE = 16.0` rem base scaled via `scale()`.
 pub const DEFAULT_SIZE: f32 = crate::appearance::tokens::FONT_SIZE;
-/// Native UI alias, also used if Linux font discovery fails.
+/// Native UI alias, also used if Fontconfig font discovery fails.
 const SYSTEM_FAMILY: &str = ".SystemUIFont";
-/// Virtual monospace alias used when Linux Fontconfig discovery fails or on non-Linux hosts.
+/// Virtual monospace alias used when Fontconfig discovery fails or on hosts without Fontconfig.
 const SYSTEM_MONO_FAMILY: &str = ".ZedMono";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -186,23 +186,23 @@ impl ResolvedFamily {
 
 /// Installed font family names reported by the platform font system.
 pub fn installed_families() -> Vec<String> {
-    #[cfg(target_os = "linux")]
-    return linux::installed_families();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    return fontconfig::installed_families();
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     Vec::new()
 }
 
 pub fn system_family() -> String {
-    #[cfg(target_os = "linux")]
-    return linux::system_families().sans_serif.clone();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    return fontconfig::system_families().sans_serif.clone();
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     SYSTEM_FAMILY.into()
 }
 
 pub fn system_mono_family() -> String {
-    #[cfg(target_os = "linux")]
-    return linux::system_families().monospace.clone();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    return fontconfig::system_families().monospace.clone();
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     SYSTEM_MONO_FAMILY.into()
 }
 
@@ -214,8 +214,8 @@ pub fn resolve_monospace_family(requested: &str) -> String {
         return system_mono_family();
     }
 
-    #[cfg(target_os = "linux")]
-    if let Some(matched) = linux::resolve_custom_monospace(trimmed)
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    if let Some(matched) = fontconfig::resolve_custom_monospace(trimmed)
         && matched.confirmed_monospace
     {
         return matched.family;

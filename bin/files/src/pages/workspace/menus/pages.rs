@@ -372,17 +372,23 @@ impl Browser {
                             browser.0.owner.with(|| run(&browser));
                         }
                     });
-                    if action.checked {
+                    if action.checked && action.command != Some(Command::Favorite) {
                         MenuEntry::Checkbox {
                             label: i18n::text(action.label),
+                            shortcut: action.command.map(Command::shortcut),
                             checked: true,
                             disabled: !action.enabled,
                             on_toggle: UnsyncCallback::new(move |_| on_select.run(())),
                         }
                     } else {
+                        let icon = if action.checked && action.command == Some(Command::Favorite) {
+                            IconName::StarOff
+                        } else {
+                            action.icon
+                        };
                         MenuEntry::Item {
                             label: i18n::text(action.label),
-                            icon: Some(action.icon),
+                            icon: Some(icon),
                             shortcut: action.command.map(Command::shortcut),
                             disabled: !action.enabled,
                             destructive: false,

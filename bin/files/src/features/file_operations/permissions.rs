@@ -122,11 +122,13 @@ fn save_preserving(path: &Path, access: u32, preserve_mask: u32) -> Result<(), E
     #[cfg(target_os = "linux")]
     let open_flags = OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     #[cfg(not(target_os = "linux"))]
-    let open_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let open_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK;
 
     let fd = match openat(CWD, path, open_flags, Mode::empty()) {
         Ok(fd) => fd,
         Err(Errno::LOOP) => return Err(Error::Symlink),
+        #[cfg(target_os = "freebsd")]
+        Err(Errno::MLINK) => return Err(Error::Symlink),
         Err(error) => return Err(io::Error::from(error).into()),
     };
     let stat = fstat(&fd).map_err(io::Error::from)?;
@@ -134,21 +136,21 @@ fn save_preserving(path: &Path, access: u32, preserve_mask: u32) -> Result<(), E
         return Err(Error::Symlink);
     }
     let writable_mask = ACCESS_BITS & !preserve_mask;
-    let mode = (stat.st_mode & preserve_mask) | (access & writable_mask);
+    let mode = (Mode::from_raw_mode(stat.st_mode) & Mode::from_raw_mode(preserve_mask as _))
+        | Mode::from_raw_mode((access & writable_mask) as _);
     #[cfg(target_os = "linux")]
     {
         use rustix::fs::{AtFlags, chmodat};
         use std::os::fd::AsRawFd;
 
         let fd_path = format!("/proc/self/fd/{}", fd.as_raw_fd());
-        chmodat(CWD, fd_path, Mode::from_raw_mode(mode), AtFlags::empty())
-            .map_err(io::Error::from)?;
+        chmodat(CWD, fd_path, mode, AtFlags::empty()).map_err(io::Error::from)?;
     }
     #[cfg(not(target_os = "linux"))]
     {
         use rustix::fs::fchmod;
 
-        fchmod(&fd, Mode::from_raw_mode(mode)).map_err(io::Error::from)?;
+        fchmod(&fd, mode).map_err(io::Error::from)?;
     }
     Ok(())
 }

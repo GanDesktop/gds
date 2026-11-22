@@ -62,16 +62,6 @@ impl ProbeBudget {
             (Self::Bounded(needed), Self::Bounded(done)) => needed <= done,
         }
     }
-
-    #[cfg(test)]
-    pub const fn union(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Full, _) | (_, Self::Full) => Self::Full,
-            (Self::Bounded(left), Self::Bounded(right)) => {
-                Self::Bounded(if left > right { left } else { right })
-            }
-        }
-    }
 }
 
 /// Secondary metadata dimensions required by the active view, visible columns,
@@ -104,16 +94,6 @@ impl EnrichmentNeed {
             && (!self.symlinks || covered.symlinks)
             && self.budget.is_satisfied_by(covered.budget)
     }
-
-    #[cfg(test)]
-    pub const fn union(self, other: Self) -> Self {
-        Self {
-            children: self.children || other.children,
-            content: self.content || other.content,
-            symlinks: self.symlinks || other.symlinks,
-            budget: self.budget.union(other.budget),
-        }
-    }
 }
 
 impl Entry {
@@ -129,47 +109,6 @@ impl Entry {
             EntryKind::Other | EntryKind::Unknown => false,
         }
     }
-}
-
-/// Select entries from `snapshot` that still require `need`.
-///
-/// Entries in `priority_paths` (typically the visible viewport) are scheduled first
-/// without a cap; remaining entries in `snapshot.entries` follow in canonical order
-/// according to `need.budget`.
-#[cfg(test)]
-pub fn plan_enrichment(
-    snapshot: &DirectorySnapshot,
-    priority_paths: &[std::path::PathBuf],
-    need: EnrichmentNeed,
-) -> Vec<Entry> {
-    if need.is_empty() {
-        return Vec::new();
-    }
-    let mut planned = Vec::new();
-    let mut seen = std::collections::HashSet::with_capacity(priority_paths.len());
-    for path in priority_paths {
-        if let Some(entry) = snapshot.entry_for_path(path)
-            && entry.needs_enrichment(need)
-            && seen.insert(entry.path.as_path())
-        {
-            planned.push(entry.clone());
-        }
-    }
-
-    let mut offscreen = 0usize;
-    for entry in snapshot.entries.iter() {
-        if let ProbeBudget::Bounded(limit) = need.budget
-            && offscreen >= limit
-        {
-            break;
-        }
-        if !entry.needs_enrichment(need) || seen.contains(entry.path.as_path()) {
-            continue;
-        }
-        planned.push(entry.clone());
-        offscreen += 1;
-    }
-    planned
 }
 
 /// Run secondary filesystem probes for a batch of entries using default child count limits.

@@ -34,6 +34,7 @@ place-location = 位置
 place-favorite-add = 收藏所选位置
 place-favorite-remove = 取消收藏
 auto-focus-search = 自动聚焦检索
+auto-focus-search-help = 开启时键入字符将聚焦检索框筛选；关闭时连续按键将直接匹配并选中对应项目。
 show-hidden = 显示隐藏文件
 sidebar-show-volumes = 在侧边栏显示卷列表
 probe-budget = 视口外元数据预取上限

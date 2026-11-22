@@ -7,7 +7,7 @@
 
 use std::{ffi::OsString, io, path::PathBuf, time::SystemTime};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsStr,
@@ -19,7 +19,7 @@ use std::{
 use crate::entities::file::directory::EntryKind;
 use crate::features::file_operations::transfer;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use crate::features::file_operations::{
     names::{self, NamedTarget},
     transfer::{Batch, Mode, Request},
@@ -27,7 +27,7 @@ use crate::features::file_operations::{
 
 /// Whether this build can browse and act on the platform trash store.
 pub fn supported() -> bool {
-    cfg!(target_os = "linux")
+    cfg!(any(target_os = "linux", target_os = "freebsd"))
 }
 
 /// One record currently in the trash.
@@ -47,14 +47,14 @@ pub struct Entry {
     pub items: Option<usize>,
     /// Entry type captured with `lstat`; a link is never reported as its target.
     pub kind: EntryKind,
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     info: PathBuf,
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     payload: PathBuf,
     /// Parent of the original location, validated absolute at listing time.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     original_parent: PathBuf,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     snapshot: Snapshot,
 }
 
@@ -81,8 +81,8 @@ pub enum Error {
         "the file was moved to trash, but its unique recovery record could not be identified: {path}"
     )]
     MissingReceipt { path: PathBuf },
-    #[error("the recycle bin is only supported on Linux")]
-    #[cfg(not(target_os = "linux"))]
+    #[error("the recycle bin is only supported on Linux and FreeBSD")]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     Unsupported,
     #[error(transparent)]
     Trash(#[from] trash::Error),
@@ -128,7 +128,7 @@ pub struct Receipt {
 /// the batch instead of $2N$ times.
 #[derive(Default)]
 pub(crate) struct Tracker {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     before: Option<HashSet<OsString>>,
 }
 
@@ -151,7 +151,7 @@ impl Tracker {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             if self.before.is_none() {
                 let ids = trash::os_limited::list()?
@@ -164,7 +164,7 @@ impl Tracker {
             trash::delete(path)?;
             Ok(original)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
             let _ = path;
             Err(Error::Unsupported)
@@ -177,7 +177,7 @@ impl Tracker {
         if originals.is_empty() {
             return Vec::new();
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             let Some(before) = self.before else {
                 return originals
@@ -230,7 +230,7 @@ impl Tracker {
                 })
                 .collect()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
             originals
                 .into_iter()
@@ -239,7 +239,7 @@ impl Tracker {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn resolve_original(path: &Path) -> Result<PathBuf, Error> {
         Ok(path
             .parent()
@@ -286,11 +286,11 @@ pub fn trash_cancellable(
 /// Reports a platform that has no supported trash backend, a failure to
 /// enumerate the trash folders, or a listing where every record was rejected.
 pub fn list() -> Result<Vec<Entry>, Error> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         Entry::collect(trash::os_limited::list()?)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     {
         Err(Error::Unsupported)
     }
@@ -338,7 +338,7 @@ impl Entry {
     ///
     /// # Errors
     /// Reports [`Error::Unreadable`] when items exist but every single one is invalid.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn collect(items: impl IntoIterator<Item = trash::TrashItem>) -> Result<Vec<Self>, Error> {
         let mut entries = Vec::new();
         let mut failures = 0;
@@ -363,7 +363,7 @@ impl Entry {
     }
 
     fn apply(&self, action: Action, cancel: &tokio_util::sync::CancellationToken) -> Applied {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             match action {
                 Action::Restore => self.restore(cancel),
@@ -373,7 +373,7 @@ impl Entry {
                 },
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
             let _ = (action, cancel);
             Applied {
@@ -387,7 +387,7 @@ impl Entry {
     ///
     /// When the payload commits on disk before `.trashinfo` cleanup fails, `restored`
     /// still carries its committed [`super::history::Snapshot`] alongside `RestoreIncomplete`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn restore(&self, cancel: &tokio_util::sync::CancellationToken) -> Applied {
         if let Err(error) = self.verify() {
             return Applied {
@@ -458,7 +458,7 @@ impl Entry {
     /// Refuses stale records and reports removal failures. A payload is only
     /// removed after the action starts, and its info file is only removed once
     /// the payload is gone.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn purge(&self) -> Result<(), Error> {
         let metadata = self.verify()?;
         let removal = if metadata.is_dir() {
@@ -480,7 +480,7 @@ impl Entry {
     ///
     /// # Errors
     /// Reports missing/replaced records as [`Error::Stale`] and I/O failures.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn verify(&self) -> Result<fs::Metadata, Error> {
         let info = Self::inspect(&self.info)?;
         if Identity::of(&info) != self.snapshot.info {
@@ -501,7 +501,7 @@ impl Entry {
     /// Rejects ids that are not absolute `.trashinfo` leaves under an `info`
     /// directory, a relative original parent, a missing payload or info file,
     /// and a non-file info leaf.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn from_item(item: trash::TrashItem) -> Result<Self, Error> {
         let paths = RecordPaths::parse(&item.id)?;
         if !item.original_parent.is_absolute() || names::validate(&item.name).is_err() {
@@ -534,7 +534,7 @@ impl Entry {
 
     /// # Errors
     /// Maps `NotFound` to [`Error::Stale`] and other errors to [`Error::Io`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn inspect(path: &Path) -> Result<fs::Metadata, Error> {
         fs::symlink_metadata(path).map_err(|source| {
             if source.kind() == io::ErrorKind::NotFound {
@@ -550,7 +550,7 @@ impl Entry {
         })
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn deleted_at(seconds: i64) -> Option<SystemTime> {
         u64::try_from(seconds)
             .ok()
@@ -559,13 +559,13 @@ impl Entry {
 }
 
 /// Info and payload locations derived from one raw trash id.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 struct RecordPaths {
     info: PathBuf,
     payload: PathBuf,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 impl RecordPaths {
     /// # Errors
     /// Rejects non-absolute paths, non-`.trashinfo` extensions, invalid stems,
@@ -608,7 +608,7 @@ impl RecordPaths {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Identity {
     device: u64,
@@ -618,7 +618,7 @@ struct Identity {
     modified_nanos: i64,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 impl Identity {
     fn of(metadata: &fs::Metadata) -> Self {
         use std::os::unix::fs::MetadataExt as _;
@@ -633,7 +633,7 @@ impl Identity {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[derive(Clone, Copy, Debug)]
 struct Snapshot {
     info: Identity,

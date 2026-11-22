@@ -1002,35 +1002,49 @@ impl Browser {
                         let cp = Rc::clone(&composing_preedit);
                         let cc = Rc::clone(&composing_commit);
                         let ce = Rc::clone(&composing_end);
-                        AnyView::new(view! {
-                            Input(
-                                node_ref = address_node,
-                                value = Binding::from(address_sig),
-                                placeholder = i18n::text("path-placeholder"),
-                                label = i18n::text("place-location"),
-                                class = "gds-files-address-input",
-                                on:ime_start = move |_| cs.set(true),
-                                on:ime_preedit = move |ev: &mut EventCx<'_, events::ImePreedit>| cp.set(ev.is_composing()),
-                                on:ime_commit = move |_| cc.set(false),
-                                on:ime_end = move |_| ce.set(false),
-                                on:focus_out = move |_| blur_out.finish_address_edit(),
-                                on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
-                                    if composing_key.get() {
-                                        return;
+                        AnyView::new(Scoped::new(move || {
+                            let focus_effect =
+                                RenderEffect::new(move |mounted_before: Option<bool>| {
+                                    let mounted = address_node.get().is_some();
+                                    if mounted && mounted_before != Some(true) {
+                                        let current = address_sig.get_untracked();
+                                        address_node.set_value(&current);
+                                        address_node.focus();
+                                        address_node.select_all();
                                     }
-                                    if ev.key == Key::Named(NamedKey::Enter) && ev.modifiers == Modifiers::NONE {
-                                        ev.prevent_default();
-                                        ev.stop_propagation();
-                                        submit_key.open_address();
-                                    } else if ev.key == Key::Named(NamedKey::Escape) && ev.modifiers == Modifiers::NONE {
-                                        ev.prevent_default();
-                                        ev.stop_propagation();
-                                        cancel_key.finish_address_edit();
-                                        cancel_key.focus_content_after_mount();
+                                    mounted
+                                });
+                            on_cleanup_local(move || drop(focus_effect));
+                            view! {
+                                Input(
+                                    node_ref = address_node,
+                                    value = Binding::from(address_sig),
+                                    placeholder = i18n::text("path-placeholder"),
+                                    label = i18n::text("place-location"),
+                                    class = "gds-files-address-input",
+                                    on:ime_start = move |_| cs.set(true),
+                                    on:ime_preedit = move |ev: &mut EventCx<'_, events::ImePreedit>| cp.set(ev.is_composing()),
+                                    on:ime_commit = move |_| cc.set(false),
+                                    on:ime_end = move |_| ce.set(false),
+                                    on:focus_out = move |_| blur_out.finish_address_edit(),
+                                    on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
+                                        if composing_key.get() {
+                                            return;
+                                        }
+                                        if ev.key == Key::Named(NamedKey::Enter) && ev.modifiers == Modifiers::NONE {
+                                            ev.prevent_default();
+                                            ev.stop_propagation();
+                                            submit_key.open_address();
+                                        } else if ev.key == Key::Named(NamedKey::Escape) && ev.modifiers == Modifiers::NONE {
+                                            ev.prevent_default();
+                                            ev.stop_propagation();
+                                            cancel_key.finish_address_edit();
+                                            cancel_key.focus_content_after_mount();
+                                        }
                                     }
-                                }
-                            )
-                        })
+                                )
+                            }
+                        }))
                     } else {
                         let (location, path, is_pending) = destination.get();
                         let b_click = edit_btn.clone();
@@ -1260,18 +1274,11 @@ impl Browser {
                 original: value.clone(),
             });
         let node = self.0.address_node;
-        let weak = self.downgrade();
-        let val = value;
-        let handle = self.0.owner.with(|| {
-            request_frame(move |_| {
-                if weak.upgrade().is_some() && node.is_bound() {
-                    node.set_value(&val);
-                    node.focus();
-                    node.select_all();
-                }
-            })
-        });
-        *self.0.pending_focus.borrow_mut() = Some(handle);
+        if node.is_bound() {
+            node.set_value(&value);
+            node.focus();
+            node.select_all();
+        }
     }
 
     pub(super) fn finish_address_edit(&self) {
@@ -1405,8 +1412,6 @@ impl Browser {
             Signal::derive_local(move || if loc_expanded.get() { 1.0 } else { 0.0 }),
             WORKSPACE_DURATION_MS,
         );
-        #[cfg(test)]
-        tests::record_locations_progress(loc_progress);
 
         let tabs_region_ref = NodeRef::new();
         let volumes_region_ref = NodeRef::new();
@@ -2081,9 +2086,6 @@ impl Browser {
         let name = volume.name.clone();
         let a11y_label = volume.name.clone();
         let tooltip_text = wrap_tokens(&hint.join("\n"));
-        let volume_icon_ref = NodeRef::new();
-        #[cfg(test)]
-        tests::record_volume_icon_node(volume.id.clone(), volume_icon_ref);
 
         let item = AnyView::new(view! {
             NavItem(
@@ -2099,7 +2101,6 @@ impl Browser {
                 column(class = "gds-files-volume-col") {
                     row(class = "gds-files-volume-row") {
                         Icon(
-                            node_ref = volume_icon_ref,
                             name = icon,
                             size = SIDEBAR_ICON_SIZE,
                             class = "gds-files-nav-icon"
@@ -2153,14 +2154,9 @@ impl Browser {
                 && cursor.with(|row| row.as_ref() == Some(&SidebarRow::Location(target)))
         });
 
-        let loc_ref = NodeRef::new();
-        #[cfg(test)]
-        tests::record_location_node(target, loc_ref);
-
         AnyView::new(view! {
             box(class = "gds-files-sidebar-row-wrap") {
                 NavItem(
-                    node_ref = loc_ref,
                     selected = selected,
                     tooltip = label,
                     class = "gds-files-location-item",

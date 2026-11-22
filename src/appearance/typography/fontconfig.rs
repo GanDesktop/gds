@@ -1,4 +1,4 @@
-//! Linux Fontconfig resolution with fingerprint-validated disk and memory caches.
+//! Fontconfig resolution with fingerprint-validated disk and memory caches.
 
 use std::{
     env, fs,
@@ -276,11 +276,15 @@ fn query_installed_families() -> QueriedInstalled {
 }
 
 fn append_standard_paths(paths: &mut Vec<PathBuf>) {
-    const SYSTEM_PATHS: [&str; 6] = [
+    const SYSTEM_PATHS: [&str; 10] = [
         "/etc/fonts",
         "/etc/fonts/fonts.conf",
         "/etc/fonts/local.conf",
         "/etc/fonts/conf.d",
+        "/usr/local/etc/fonts",
+        "/usr/local/etc/fonts/fonts.conf",
+        "/usr/local/etc/fonts/local.conf",
+        "/usr/local/etc/fonts/conf.d",
         "/usr/share/fonts",
         "/usr/local/share/fonts",
     ];
@@ -288,6 +292,7 @@ fn append_standard_paths(paths: &mut Vec<PathBuf>) {
         paths.push(PathBuf::from(path));
     }
     append_dir_entries(Path::new("/etc/fonts/conf.d"), paths);
+    append_dir_entries(Path::new("/usr/local/etc/fonts/conf.d"), paths);
 
     if let Some(dirs) = BaseDirs::new() {
         let user_fc = dirs.config_dir().join("fontconfig");

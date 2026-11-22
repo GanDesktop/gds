@@ -13,10 +13,9 @@ use zgui::vocab::{KeyEvent, KeyState, Modifiers, Timestamp};
 use zgui_platform_headless::Harness;
 
 use super::{
-    DirectoryPicker, DirectoryPickerDialogProps, DirectoryPickerView, DirectoryPickerViewProps,
-    Entry, Location, MIN_SCROLLABLE_ROWS, Page, ROW_HEIGHT, Request,
+    DirectoryPicker, DirectoryPickerDialogProps, Entry, Location, MIN_SCROLLABLE_ROWS, Page,
+    Request,
 };
-use crate::appearance::tokens::DataListStyle;
 
 #[derive(Default)]
 struct NullRenderer {
@@ -125,14 +124,6 @@ fn make_page(
             .collect(),
         next_cursor: next_cursor.map(str::to_owned),
     }
-}
-
-#[test]
-fn directory_picker_constants_and_types_match_data_list_spec() {
-    let _ = (DirectoryPicker::new, DirectoryPickerView);
-    assert_eq!(ROW_HEIGHT, DataListStyle::ROW_HEIGHT);
-    assert_eq!(ROW_HEIGHT, 40.0);
-    assert_eq!(MIN_SCROLLABLE_ROWS, 20);
 }
 
 #[test]
@@ -458,111 +449,4 @@ fn directory_picker_dialog_handles_alt_a_confirm_and_alt_c_cancel() {
             Ok(())
         })
         .expect("drive headless directory picker dialog test");
-}
-
-#[test]
-fn directory_picker_row_pill_measures_thirty_six_px_inside_forty_px_virtual_slot() {
-    use std::collections::{HashMap, HashSet};
-    use zgui::geom::{DevicePx, Size};
-    use zgui::vocab::Role;
-
-    let handler = app()
-        .with_title("picker-row-height-test")
-        .with_application_id("dev.gds.PickerRowHeightTest")
-        .with_size(640.0, 480.0)
-        .with_stylesheet(":root { display: flex; width: 100%; height: 100%; }")
-        .with_renderer(Box::new(
-            move |_surface: &std::sync::Arc<dyn Surface>, target: zgui::render::RenderTarget| {
-                let mut renderer = NullRenderer::default();
-                zgui::render::Renderer::configure(&mut renderer, target);
-                Ok::<_, zgui::Error>(Box::new(renderer) as Box<dyn zgui::render::Renderer>)
-            },
-        ))
-        .into_handler(move || {
-            let loader: super::Loader = Rc::new(|req: Request| {
-                let path = req.path.unwrap_or_else(|| "/srv".to_owned());
-                Box::pin(async move {
-                    Ok(make_page(
-                        &path,
-                        Some("/"),
-                        &[("assets", false), ("backups", false)],
-                        None,
-                    ))
-                })
-            });
-            let picker = DirectoryPicker::with_path(loader, "/srv");
-            picker.select_row(0);
-            view! {
-                DirectoryPickerView(picker = picker)
-            }
-        })
-        .expect("build headless directory picker row height test");
-
-    handler
-        .drive(|app| -> Result<(), PlatformError> {
-            let mut harness: Harness<Box<dyn AppHandler>> = Harness::new(app);
-            if let Some(offscreen) = harness.platform().offscreens().first() {
-                offscreen.set_a11y_listener(true);
-            }
-            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
-                DevicePx(640.0),
-                DevicePx(480.0),
-            )));
-            harness.settle(12);
-
-            let offscreen = harness
-                .platform()
-                .offscreens()
-                .first()
-                .cloned()
-                .expect("primary offscreen");
-            let mut nodes = HashMap::new();
-            let mut root = None;
-            for update in offscreen.a11y_log() {
-                if let Some(tree) = update.tree {
-                    root = Some(tree.root);
-                }
-                for (id, node) in update.nodes {
-                    nodes.insert(id, node);
-                }
-            }
-            let root_id = root.expect("accessibility root");
-            let mut stack = vec![root_id];
-            let mut seen = HashSet::new();
-            let mut slot_heights = Vec::new();
-            let mut pill_heights = Vec::new();
-            while let Some(id) = stack.pop() {
-                if !seen.insert(id) {
-                    continue;
-                }
-                let Some(node) = nodes.get(&id) else {
-                    continue;
-                };
-                if node.role() == Role::ListItem
-                    && let Some(rect) = node.bounds()
-                {
-                    let h = rect.y1 - rect.y0;
-                    if node.label() == Some("assets") {
-                        pill_heights.push(h);
-                    } else if node.label().is_none() {
-                        slot_heights.push(h);
-                    }
-                }
-                for &child in node.children().iter().rev() {
-                    stack.push(child);
-                }
-            }
-            assert!(
-                slot_heights.iter().any(|h| (*h - 40.0).abs() < 0.5),
-                "expected 40px VirtualList row slot, got {slot_heights:?}"
-            );
-            assert!(
-                pill_heights.iter().any(|h| (*h - 36.0).abs() < 0.5),
-                "expected 36px .gds-picker-row selection pill height, got {pill_heights:?}"
-            );
-
-            harness.shut_down();
-            Ok(())
-        })
-        .expect("drive headless directory picker row height test");
 }

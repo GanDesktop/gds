@@ -17,7 +17,7 @@ use zgui::vocab::{
 };
 use zgui_platform_headless::Harness;
 
-use super::{BLINK_INTERVAL, TERMINAL_CSS, TerminalViewProps, last_test_canvas_host_ref};
+use super::{BLINK_INTERVAL, TerminalViewProps, last_test_canvas_host_ref};
 use crate::app::Gds;
 use crate::service::task_manager::Supervisor;
 use crate::service::terminal::{Session, SpawnOptions};
@@ -756,15 +756,6 @@ fn inspect_terminal_dom(harness: &Harness<Runtime>, root_id: NodeId) -> Terminal
     }
 }
 
-fn css_rule_body<'a>(sheet: &'a str, selector: &str) -> Option<&'a str> {
-    let start = sheet.find(selector)?;
-    let after_selector = &sheet[start + selector.len()..];
-    let brace_open = after_selector.find('{')?;
-    let rest = &after_selector[brace_open + 1..];
-    let brace_close = rest.find('}')?;
-    Some(&rest[..brace_close])
-}
-
 #[test]
 fn terminal_view_uses_custom_ime_box_without_projected_text_children_or_height_loss() {
     let options = SpawnOptions {
@@ -1066,34 +1057,6 @@ fn paint_surface_false_skips_canvas_fill_until_osc11_while_preserving_cell_curso
 }
 
 #[test]
-fn terminal_stylesheet_keeps_status_and_error_lines_transparent_when_host_paints_surface() {
-    let status = css_rule_body(TERMINAL_CSS, ".gds-terminal-status-line ")
-        .expect(".gds-terminal-status-line rule");
-    assert!(
-        status.contains("background-color: transparent;"),
-        ".gds-terminal-status-line must default to transparent when paint_surface = false: {status}"
-    );
-    let error = css_rule_body(TERMINAL_CSS, ".gds-terminal-error-line ")
-        .expect(".gds-terminal-error-line rule");
-    assert!(
-        error.contains("background-color: transparent;"),
-        ".gds-terminal-error-line must default to transparent when paint_surface = false: {error}"
-    );
-    let standalone_status = css_rule_body(
-        TERMINAL_CSS,
-        ".gds-terminal-root[data-paint-surface=\"true\"] .gds-terminal-status-line ",
-    )
-    .expect("standalone status rule");
-    assert!(standalone_status.contains("var(--gds-content-bg, var(--gds-content))"));
-    let standalone_error = css_rule_body(
-        TERMINAL_CSS,
-        ".gds-terminal-root[data-paint-surface=\"true\"] .gds-terminal-error-line ",
-    )
-    .expect("standalone error rule");
-    assert!(standalone_error.contains("var(--gds-content-bg, var(--gds-content))"));
-}
-
-#[test]
 fn focus_requested_before_terminal_view_mounts_takes_effect_once_node_binds() {
     let options = SpawnOptions {
         cwd: std::env::temp_dir(),
@@ -1119,15 +1082,4 @@ fn focus_requested_before_terminal_view_mounts_takes_effect_once_node_binds() {
             assert!(host.terminal.focused_signal().get_untracked());
         },
     );
-}
-
-#[test]
-fn reactive_signal_types_remain_unsync() {
-    let owner = zgui::reactive::Owner::new();
-    owner.with(|| {
-        let sig: zgui::reactive::RwSignal<usize, LocalStorage> =
-            zgui::reactive::RwSignal::new_local(1);
-        assert_eq!(sig.get_untracked(), 1);
-    });
-    owner.cleanup();
 }

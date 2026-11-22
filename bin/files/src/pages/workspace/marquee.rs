@@ -256,6 +256,7 @@ impl Browser {
                         && !ev.modifiers.primary()
                         && origin_matches(&up_browser, &drag.origin)
                     {
+                        up_browser.reset_typeahead();
                         let cleared = up_browser.update_selection(|state| {
                             let view = state.tab_mut().navigation.view_mut();
                             let had_state = !view.selection.is_empty() || view.anchor.is_some();

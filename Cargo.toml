@@ -132,7 +132,7 @@ ui = [
 ]
 files = [
     "ui", "desktop", "file-tags", "storage", "remote", "dep:clap", "dep:globset",
-    "dep:memmap2", "dep:mime_guess", "dep:roxmltree", "dep:xdg-mime", "dep:trash",
+    "dep:memmap2", "dep:mime_guess", "dep:nix", "dep:roxmltree", "dep:xdg-mime", "dep:trash",
     "dep:tokio-util", "dep:walkdir", "dep:which",
 ]
 image-engine = [
@@ -207,7 +207,7 @@ html5ever = { version = "=0.27.0", optional = true }
 markup5ever_rcdom = { version = "=0.3.0", optional = true }
 
 # Desktop integration and filesystem watching.
-notify = { version = "8", optional = true }
+notify = { git = "https://github.com/GanDesktop/notify", branch = "gds-8.2.0", optional = true }
 open = { version = "5", optional = true }
 infer = { version = "0.19", default-features = false, optional = true }
 
@@ -299,7 +299,7 @@ which = { version = "8", optional = true }
 # Command-line entry points (Files, Agents and Portal).
 clap = { version = "4", features = ["derive", "env"], optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "open_uri"], optional = true }
 fontconfig-sys = { package = "yeslogic-fontconfig-sys", version = "6.0", optional = true }
 zbus = { version = "5.19", default-features = false, features = ["tokio"], optional = true }
@@ -337,7 +337,7 @@ tonic-prost = "0.14"
 # terminal tests; production code does not need nix's term feature.
 nix = { version = "0.31", features = ["process", "term"] }
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dev-dependencies]
 zbus = { version = "5.19", default-features = false, features = ["tokio", "p2p"] }
 
 [profile.dev]
@@ -355,3 +355,6 @@ codegen-units = 16
 debug = 0
 strip = "symbols"
 incremental = false
+
+[patch.crates-io]
+rustix = { git = "https://github.com/GanDesktop/rustix", branch = "gds-1.1.5" }

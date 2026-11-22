@@ -236,14 +236,19 @@ fn headless_notifications_alt_n_toggles_focus_restoration_and_alt_x_dismisses() 
             "Esc inside notifications must restore prior focus target"
         );
 
-        // Verify outer AT-SPI Role::Alert ('notification') is emitted for both Info and Error.
+        // Verify outer AT-SPI Role::Alert ('notification') is emitted for both Info and Error,
+        // and single-line notifications have equal top and bottom padding.
         let offscreen = harness.platform().offscreens()[0].clone();
-        let a11y_alerts: Vec<Option<String>> = offscreen
-            .a11y_log()
-            .iter()
-            .flat_map(|u| u.nodes.iter())
-            .filter(|(_, n)| format!("{:?}", n.role()) == "Alert")
-            .map(|(_, n)| n.label().map(str::to_owned))
+        let mut nodes = std::collections::HashMap::new();
+        for update in offscreen.a11y_log() {
+            for (id, node) in update.nodes {
+                nodes.insert(id, node);
+            }
+        }
+        let a11y_alerts: Vec<Option<String>> = nodes
+            .values()
+            .filter(|n| format!("{:?}", n.role()) == "Alert")
+            .map(|n| n.label().map(str::to_owned))
             .collect();
         assert!(
             a11y_alerts
@@ -257,6 +262,57 @@ fn headless_notifications_alt_n_toggles_focus_restoration_and_alt_x_dismisses() 
                 .any(|l| l.as_deref() == Some("Second error")),
             "Error toast must project Role::Alert ('notification') in {a11y_alerts:?}"
         );
+
+        let (&single_card_id, single_card) = nodes
+            .iter()
+            .find(|(_, n)| format!("{:?}", n.role()) == "Alert" && n.label() == Some("First info"))
+            .expect("First info card node");
+        let card_rect = single_card.bounds().expect("First info card bounds");
+        let card_h = card_rect.y1 - card_rect.y0;
+
+        // Walk descendants of `single_card` accumulating local Y translations relative to card top.
+        let mut stack = vec![(single_card_id, 0.0_f64, true)];
+        let mut content_y: Option<(f64, f64)> = None;
+        let mut button_ys: Vec<(f64, f64)> = Vec::new();
+        while let Some((id, parent_y, is_card_root)) = stack.pop() {
+            let Some(node) = nodes.get(&id) else {
+                continue;
+            };
+            let local_dy = if is_card_root {
+                0.0
+            } else {
+                node.transform().map_or(0.0, |t| t.as_coeffs()[5])
+            };
+            let y_base = parent_y + local_dy;
+            if !is_card_root && let Some(rect) = node.bounds() {
+                let role_name = format!("{:?}", node.role());
+                if role_name == "Status" && node.label() == Some("First info") {
+                    content_y = Some((y_base + rect.y0, y_base + rect.y1));
+                } else if role_name == "Button" {
+                    button_ys.push((y_base + rect.y0, y_base + rect.y1));
+                }
+            }
+            for &child in node.children() {
+                stack.push((child, y_base, false));
+            }
+        }
+
+        let (content_y0, content_y1) = content_y.expect("First info content bounds in card");
+        let content_top_pad = content_y0;
+        let content_bottom_pad = card_h - content_y1;
+        assert!(
+            (content_top_pad - content_bottom_pad).abs() < 0.5,
+            "single-line toast content must have equal top ({content_top_pad}) and bottom ({content_bottom_pad}) padding inside card_h={card_h}"
+        );
+        assert_eq!(button_ys.len(), 2, "expected Copy and Close IconButtons");
+        for (btn_y0, btn_y1) in button_ys {
+            let btn_top_pad = btn_y0;
+            let btn_bottom_pad = card_h - btn_y1;
+            assert!(
+                (btn_top_pad - btn_bottom_pad).abs() < 0.5,
+                "single-line toast action button must have equal top ({btn_top_pad}) and bottom ({btn_bottom_pad}) padding inside card_h={card_h}"
+            );
+        }
 
         // Alt+X dismisses newest notification; Alt+Shift+X dismisses all remaining.
         harness.deliver_to_first(SurfaceEvent::Key {

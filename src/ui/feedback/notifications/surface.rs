@@ -68,8 +68,10 @@ pub(super) const SHEET: &str = css!(
     .gds-notification-content {
         display: flex;
         flex-direction: column;
+        justify-content: center;
         flex: 1 1 auto;
         min-width: 0;
+        min-height: 20px;
         gap: 4px;
         overflow-y: auto;
     }
@@ -93,7 +95,8 @@ pub(super) const SHEET: &str = css!(
         align-items: center;
         gap: 2px;
         flex-shrink: 0;
-        margin-top: -4px;
+        margin-top: -6px;
+        margin-bottom: -6px;
         margin-right: -4px;
     }
 

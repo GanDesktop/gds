@@ -13,14 +13,15 @@ from driver import Blocked, Desktop, ROOT, Workflow, vm
 
 def pytest_addoption(parser):
     group = parser.getgroup('GDS desktop VMs')
-    group.addoption('--vm', default='all', help='Comma-separated machine aliases, or all')
+    group.addoption('--vm', default='all', help='Comma-separated machine aliases, or all Linux guests')
     group.addoption('--bundle', type=Path, default=ROOT / 'target/vm-e2e/build.tar.gz')
     group.addoption('--guest-bin-dir', help='Test already installed guest executables instead of a bundle')
     group.addoption('--artifacts', type=Path, help='Fresh artifact directory (defaults to target/vm-e2e/run-*)')
 
 
 def pytest_configure(config):
-    names = list(vm.MACHINES) if config.getoption('--vm') == 'all' else config.getoption('--vm').split(',')
+    selection = config.getoption('--vm')
+    names = [name for name in vm.MACHINES if name != 'freebsd'] if selection == 'all' else selection.split(',')
     if not names or any(name not in vm.MACHINES for name in names) or len(set(names)) != len(names):
         raise pytest.UsageError(f'--vm must select unique names from {list(vm.MACHINES)}')
     config.vm_names = names

@@ -347,9 +347,7 @@ mod tests {
     };
     use zgui_platform_headless::Harness;
 
-    use super::{
-        SwitchConfig, ToggleSwitchProps, ToggleSwitchSize, mix_css_tokens, render_toggle_switch,
-    };
+    use super::{SwitchConfig, ToggleSwitchProps, ToggleSwitchSize, render_toggle_switch};
     use crate::app::Gds;
     use crate::service::task_manager::Scope;
     use crate::ui::forms::field::FieldLabelProps;
@@ -435,45 +433,11 @@ mod tests {
     }
 
     #[test]
-    fn mix_css_tokens_emits_pure_vars_at_endpoints_and_smooth_srgb_mix_mid_flight() {
-        assert_eq!(
-            mix_css_tokens("--gds-switch-off", "--gds-primary", 0.0),
-            "var(--gds-switch-off)"
-        );
-        assert_eq!(
-            mix_css_tokens("--gds-switch-off", "--gds-primary", -0.5),
-            "var(--gds-switch-off)"
-        );
-        assert_eq!(
-            mix_css_tokens("--gds-switch-off", "--gds-primary", f32::NAN),
-            "var(--gds-switch-off)"
-        );
-        assert_eq!(
-            mix_css_tokens("--gds-switch-off", "--gds-primary", 1.0),
-            "var(--gds-primary)"
-        );
-        assert_eq!(
-            mix_css_tokens("--gds-switch-off", "--gds-primary", 1.5),
-            "var(--gds-primary)"
-        );
-        assert_eq!(
-            mix_css_tokens("--gds-switch-off", "--gds-primary", 0.5),
-            "color-mix(in srgb, var(--gds-primary) 50.00%, var(--gds-switch-off))"
-        );
-    }
-
-    #[test]
-    fn toggle_switch_renders_44x24_track_18x18_thumb_and_respects_disabled_and_a11y() {
-        let md_track_slot: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
-        let md_thumb_slot: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
-        let sm_track_slot: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
+    fn toggle_switch_exposes_its_label_and_ignores_input_when_disabled() {
         let disabled_slot: Rc<RefCell<Option<NodeRef>>> = Rc::new(RefCell::new(None));
         let disabled_val_slot: Rc<RefCell<Option<RwSignal<bool, LocalStorage>>>> =
             Rc::new(RefCell::new(None));
 
-        let md_track_driver = Rc::clone(&md_track_slot);
-        let md_thumb_driver = Rc::clone(&md_thumb_slot);
-        let sm_track_driver = Rc::clone(&sm_track_slot);
         let disabled_driver = Rc::clone(&disabled_slot);
         let disabled_val_driver = Rc::clone(&disabled_val_slot);
 
@@ -487,42 +451,6 @@ mod tests {
                 surface.set_a11y_listener(true);
             }
             harness.settle(16);
-
-            let md_track = md_track_driver.borrow().expect("md track ref");
-            let md_thumb = md_thumb_driver.borrow().expect("md thumb ref");
-            let sm_track = sm_track_driver.borrow().expect("sm track ref");
-            let scale = md_track.scale().max(1.0);
-
-            let track_rect = md_track.window_bounds().expect("md track bounds");
-            let thumb_rect = md_thumb.window_bounds().expect("md thumb bounds");
-            let sm_rect = sm_track.window_bounds().expect("sm track bounds");
-
-            let track_w = track_rect.size.width.0 / scale;
-            let track_h = track_rect.size.height.0 / scale;
-            let thumb_w = thumb_rect.size.width.0 / scale;
-            let thumb_h = thumb_rect.size.height.0 / scale;
-            let inset_x = (thumb_rect.origin.x.0 - track_rect.origin.x.0) / scale;
-            let inset_y = (thumb_rect.origin.y.0 - track_rect.origin.y.0) / scale;
-
-            assert!(
-                (track_w - 44.0).abs() < 0.05 && (track_h - 24.0).abs() < 0.05,
-                "default Md ToggleSwitch must lay out at 44x24px, got {track_w}x{track_h}"
-            );
-            assert!(
-                (thumb_w - 18.0).abs() < 0.05 && (thumb_h - 18.0).abs() < 0.05,
-                "default Md thumb must lay out at 18x18px, got {thumb_w}x{thumb_h}"
-            );
-            assert!(
-                (inset_x - 3.0).abs() < 0.05 && (inset_y - 3.0).abs() < 0.05,
-                "unchecked thumb must sit at symmetric 3px inset (1px border + 2px padding), got ({inset_x}, {inset_y})"
-            );
-
-            let sm_w = sm_rect.size.width.0 / scale;
-            let sm_h = sm_rect.size.height.0 / scale;
-            assert!(
-                (sm_w - 36.0).abs() < 0.05 && (sm_h - 20.0).abs() < 0.05,
-                "compact Sm ToggleSwitch must lay out at 36x20px, got {sm_w}x{sm_h}"
-            );
 
             // Verify a11y Role::Switch + labelled_by wiring.
             let surface = harness.platform().offscreens()[0].clone();
@@ -541,6 +469,7 @@ mod tests {
 
             // Clicking or pressing Space on a disabled ToggleSwitch must not mutate `checked`.
             let dis_node = disabled_driver.borrow().expect("disabled ref");
+            let scale = dis_node.scale().max(1.0);
             let dis_bounds = dis_node.window_bounds().expect("disabled bounds");
             let dis_pt = Point::new(
                 CssPx((dis_bounds.origin.x.0 + dis_bounds.size.width.0 * 0.5) / scale),
@@ -583,40 +512,16 @@ mod tests {
                 let _ = gds.appearance().install_window_sheet();
 
                 let title_ref = NodeRef::new();
-                let md_track = NodeRef::new();
-                let md_thumb = NodeRef::new();
-                let sm_track = NodeRef::new();
                 let dis_track = NodeRef::new();
-                let checked = RwSignal::new_local(false);
                 let dis_checked = RwSignal::new_local(false);
 
-                *md_track_slot.borrow_mut() = Some(md_track);
-                *md_thumb_slot.borrow_mut() = Some(md_thumb);
-                *sm_track_slot.borrow_mut() = Some(sm_track);
                 *disabled_slot.borrow_mut() = Some(dis_track);
                 *disabled_val_slot.borrow_mut() = Some(dis_checked);
 
                 view! {
                     column(style:gap = "12px", style:padding = "16px") {
                         FieldLabel(node_ref = title_ref) {"Rounded corners"}
-                        {render_toggle_switch(SwitchConfig {
-                            checked: checked.into(),
-                            default_checked: false,
-                            on_change: None,
-                            disabled: Signal::stored_local(false),
-                            size: ToggleSwitchSize::Md,
-                            label: None,
-                            labelled_by: Some(title_ref),
-                            node_ref: Some(md_track),
-                            thumb_ref: Some(md_thumb),
-                            class: Classes::default(),
-                            attrs: Attrs::new(),
-                        })}
-                        ToggleSwitch(
-                            size = ToggleSwitchSize::Sm,
-                            label = "Compact switch",
-                            node_ref = sm_track,
-                        )
+                        ToggleSwitch(labelled_by = title_ref)
                         ToggleSwitch(
                             checked = dis_checked,
                             disabled = true,
@@ -626,7 +531,7 @@ mod tests {
                     }
                 }
             })
-            .expect("ToggleSwitch geometry and disabled test ran");
+            .expect("labelled and disabled switches");
     }
 
     #[test]

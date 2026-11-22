@@ -203,6 +203,10 @@ impl Browser {
         }
 
         self.save_active_scroll_if(id);
+        if self.read_untracked(|state| state.tabs.get(state.active).is_some_and(|tab| tab.id == id))
+        {
+            self.reset_typeahead();
+        }
         self.0
             .address_presentation
             .set(AddressPresentation::Breadcrumbs);
@@ -410,6 +414,10 @@ impl Browser {
         }
 
         self.save_active_scroll_if(id);
+        if self.read_untracked(|state| state.tabs.get(state.active).is_some_and(|tab| tab.id == id))
+        {
+            self.reset_typeahead();
+        }
         self.0
             .address_presentation
             .set(AddressPresentation::Breadcrumbs);
@@ -922,6 +930,7 @@ impl Browser {
     }
 
     pub(super) fn filter(&self, value: String) {
+        self.reset_typeahead();
         let id = {
             let mut state = self.0.state.borrow_mut();
             let tab = state.tab_mut();
@@ -1038,6 +1047,7 @@ impl Browser {
     }
 
     fn sync_active_chrome(&self) {
+        self.reset_typeahead();
         let (address, filter, details, widths) = self.read_untracked(|state| {
             let tab = state.tab();
             let loc = tab.navigation.location();

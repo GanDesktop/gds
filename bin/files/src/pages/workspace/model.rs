@@ -106,6 +106,25 @@ impl Row {
         }
     }
 
+    pub fn matches_prefix(&self, lowercase_prefix: &str) -> bool {
+        if lowercase_prefix.is_empty() {
+            return false;
+        }
+        match self {
+            Self::File(entry) => entry.matches_prefix(lowercase_prefix),
+            Self::Place(location) => str_starts_with_lowercase(&location.label(), lowercase_prefix),
+            Self::Trash(entry) => {
+                str_starts_with_lowercase(&entry.name.to_string_lossy(), lowercase_prefix)
+            }
+            Self::Tag(tag) => {
+                let leaf = tag.rsplit('/').next().unwrap_or(tag);
+                str_starts_with_lowercase(leaf, lowercase_prefix)
+            }
+            Self::Remote(entry) => str_starts_with_lowercase(&entry.name, lowercase_prefix),
+            Self::Volume(volume) => str_starts_with_lowercase(&volume.name, lowercase_prefix),
+        }
+    }
+
     pub fn icon(&self) -> gds::ui::IconName {
         use gds::ui::IconName;
         match self {
@@ -133,6 +152,18 @@ impl Row {
             }
             Self::Volume(_) => IconName::HardDrive,
         }
+    }
+}
+
+fn str_starts_with_lowercase(haystack: &str, lowercase_prefix: &str) -> bool {
+    if haystack.is_ascii() {
+        lowercase_prefix.is_ascii()
+            && haystack
+                .as_bytes()
+                .get(..lowercase_prefix.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(lowercase_prefix.as_bytes()))
+    } else {
+        haystack.to_lowercase().starts_with(lowercase_prefix)
     }
 }
 

@@ -100,7 +100,7 @@ impl RichSettings {
 }
 
 #[test]
-fn derived_model_and_choices_work_without_gpui() {
+fn derived_settings_validate_and_localize_choices() {
     install().ok();
     let root = Mounted::new();
     root.with(|| {
@@ -108,8 +108,24 @@ fn derived_model_and_choices_work_without_gpui() {
         gds.i18n().install(Language::English).expect("en-US");
         let fields = SampleSettings::fields();
         assert_eq!(fields.len(), 3);
-        let choices = Mode::choices();
-        assert_eq!(choices.len(), 2);
+        let expected_choices = || {
+            [
+                (json!("auto"), gds.i18n().text_untracked("form-default")),
+                (
+                    json!("manual"),
+                    gds.i18n().text_untracked("form-time-absolute"),
+                ),
+            ]
+        };
+        let choices = || {
+            Mode::choices()
+                .into_iter()
+                .map(|choice| (choice.value, choice.title))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(choices(), expected_choices());
+        gds.i18n().install(Language::Chinese).expect("zh-CN");
+        assert_eq!(choices(), expected_choices());
         assert!(
             SampleSettings {
                 enabled: true,
@@ -222,52 +238,95 @@ fn rich_settings_editor_builds_all_control_kinds_and_supports_filtering() {
     root.unmount();
 }
 
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize, crate::ConfigEditor)]
+struct NumericSettings {
+    #[setting(label = "signed8")]
+    signed8: i8,
+    #[setting(label = "signed16")]
+    signed16: i16,
+    #[setting(label = "signed32")]
+    signed32: i32,
+    #[setting(label = "signed64")]
+    signed64: i64,
+    #[setting(label = "signed-word")]
+    signed_word: isize,
+    #[setting(label = "unsigned8")]
+    unsigned8: Option<u8>,
+    #[setting(label = "unsigned16")]
+    unsigned16: u16,
+    #[setting(label = "unsigned32")]
+    unsigned32: u32,
+    #[setting(label = "unsigned64")]
+    unsigned64: u64,
+    #[setting(label = "unsigned-word")]
+    unsigned_word: usize,
+    #[setting(
+        label = "fraction",
+        min = 0,
+        max = 1,
+        step = 0.1,
+        scale = 100,
+        unit = "%"
+    )]
+    fraction: f32,
+}
+
 #[test]
-fn numeric_bounds_validate_and_localize_in_english_and_chinese() {
+fn derived_numeric_fields_enforce_their_types_range_and_localize_errors() {
     install().ok();
     let root = Mounted::new();
     root.with(|| {
         let gds = Gds::install(Scope::default());
         gds.i18n().install(Language::English).expect("en-US");
 
-        let integer_variants = [
-            (Integer::I8, -128.0, 127.0, 200.0),
-            (Integer::I16, -32768.0, 32767.0, 40000.0),
-            (Integer::I32, -1000.0, 1000.0, 3_000_000_000.0),
-            (Integer::I64, -100.0, 100.0, 1e25),
-            (Integer::Isize, -50.0, 50.0, 1e25),
-            (Integer::U8, 0.0, 255.0, 256.0),
-            (Integer::U16, 0.0, 65535.0, -1.0),
-            (Integer::U32, 0.0, 1000.0, -5.0),
-            (Integer::U64, 0.0, 100.0, -1.0),
-            (Integer::Usize, 0.0, 100.0, -1.0),
-        ];
-
-        for (kind, min, max, bad) in integer_variants {
-            let num = Number {
-                min,
-                max,
-                step: 1.0,
-                scale: 1.0,
-                unit: "",
-                integer: kind,
+        let fields = NumericSettings::fields();
+        let number = |id: &str| {
+            let field = fields
+                .iter()
+                .find(|field| field.id == id)
+                .expect("derived field");
+            let Kind::Number(number) = field.kind else {
+                panic!("{id} requires a numeric editor")
             };
-            assert!(num.value(min).is_ok(), "{kind:?} min failed");
-            assert!(num.value(max).is_ok(), "{kind:?} max failed");
-            let err_en = num.value(bad).expect_err("out-of-range expected");
-            assert_eq!(err_en, "Number is outside the field's representable range");
-            let nan_en = num.value(f64::NAN).expect_err("NaN expected");
-            assert_eq!(nan_en, "Number must be finite");
-        }
-
-        let float_num = Number {
-            min: 0.0,
-            max: 1.0,
-            step: 0.1,
-            scale: 100.0,
-            unit: "%",
-            integer: Integer::Float,
+            number
         };
+        let check_range = |id: &str, min, max, overflow| {
+            let number = number(id);
+            assert!(number.value(min).is_ok(), "{id} minimum");
+            assert!(number.value(max).is_ok(), "{id} maximum");
+            assert_eq!(
+                number.value(overflow),
+                Err(gds.i18n().text_untracked("form-number-out-of-range")),
+                "{id} overflow"
+            );
+        };
+        check_range("signed8", -128.0, 127.0, 128.0);
+        check_range("signed16", -32768.0, 32767.0, 32768.0);
+        check_range(
+            "signed32",
+            i32::MIN.into(),
+            i32::MAX.into(),
+            f64::from(i32::MAX) + 1.0,
+        );
+        check_range("signed64", i64::MIN as f64, (1_i64 << 62) as f64, 1e25);
+        check_range(
+            "signed_word",
+            isize::MIN as f64,
+            (isize::MAX / 2) as f64,
+            1e25,
+        );
+        check_range("unsigned8", 0.0, 255.0, 256.0);
+        check_range("unsigned16", 0.0, 65535.0, 65536.0);
+        check_range(
+            "unsigned32",
+            0.0,
+            u32::MAX.into(),
+            f64::from(u32::MAX) + 1.0,
+        );
+        check_range("unsigned64", 0.0, (1_u64 << 63) as f64, -1.0);
+        check_range("unsigned_word", 0.0, (usize::MAX / 2) as f64, -1.0);
+
+        let float_num = number("fraction");
         assert_eq!(float_num.value(50.0), Ok(json!(0.5)));
         assert_eq!(float_num.label(50.0), "50%");
         assert!(float_num.value(f64::INFINITY).is_err());
@@ -275,21 +334,14 @@ fn numeric_bounds_validate_and_localize_in_english_and_chinese() {
         gds.i18n()
             .install(Language::Chinese)
             .expect("switch to Chinese");
-        let u8_num = Number {
-            min: 0.0,
-            max: 255.0,
-            step: 1.0,
-            scale: 1.0,
-            unit: "",
-            integer: Integer::U8,
-        };
+        let u8_num = number("unsigned8");
         assert_eq!(
-            u8_num.value(300.0).expect_err("overflow expected"),
-            "数值超出此字段可表示的范围"
+            u8_num.value(300.0),
+            Err(gds.i18n().text_untracked("form-number-out-of-range"))
         );
         assert_eq!(
-            u8_num.value(f64::NAN).expect_err("NaN expected"),
-            "数值必须为有限数"
+            u8_num.value(f64::NAN),
+            Err(gds.i18n().text_untracked("form-number-not-finite"))
         );
     });
     root.unmount();

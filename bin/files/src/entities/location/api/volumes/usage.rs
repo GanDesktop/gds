@@ -58,7 +58,7 @@ pub(super) enum ReadError {
     InvalidBlockSize,
     #[error("the filesystem capacity exceeds the supported range")]
     Overflow,
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     #[error("filesystem capacity is not supported on this platform")]
     Unsupported,
 }
@@ -74,13 +74,13 @@ impl ReadRequest {
     /// # Errors
     /// Reports an inaccessible/disconnected mount, unsupported statistics, or overflow.
     pub fn read(&self) -> Result<Capacity, ReadError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             let directory = std::fs::File::open(&self.root)?;
             let stats = rustix::fs::fstatvfs(&directory).map_err(std::io::Error::from)?;
             Capacity::from_blocks(stats.f_frsize, stats.f_blocks, stats.f_bavail)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
             Err(ReadError::Unsupported)
         }

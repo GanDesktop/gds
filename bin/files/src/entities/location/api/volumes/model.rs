@@ -149,8 +149,17 @@ impl DeviceAction {
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
-    #[error(
-        "UDisks2 is unavailable. Enable services.udisks2 and a polkit authentication agent: {0}"
+    #[cfg_attr(
+        target_os = "freebsd",
+        error(
+            "UDisks2 is unavailable. Enable dbus and bsdisks with a polkit authentication agent: {0}"
+        )
+    )]
+    #[cfg_attr(
+        not(target_os = "freebsd"),
+        error(
+            "UDisks2 is unavailable. Enable services.udisks2 and a polkit authentication agent: {0}"
+        )
     )]
     Unavailable(String),
     #[error("this device is no longer connected, or its identity changed")]

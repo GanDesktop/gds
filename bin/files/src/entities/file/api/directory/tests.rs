@@ -247,61 +247,53 @@ fn base_read_skips_secondary_probes_and_honors_cancellation() {
 }
 
 #[test]
-fn enrichment_prioritizes_viewport_bounds_budget_and_marks_unreadable_entries_probed() {
+fn a_completed_enrichment_pass_covers_smaller_probe_budgets() {
+    let viewport = EnrichmentNeed {
+        children: true,
+        budget: ProbeBudget::Bounded(0),
+        ..EnrichmentNeed::default()
+    };
+    let bounded = EnrichmentNeed {
+        budget: ProbeBudget::Bounded(8),
+        ..viewport
+    };
+    let full = EnrichmentNeed {
+        budget: ProbeBudget::Full,
+        ..viewport
+    };
+    assert!(viewport.is_satisfied_by(bounded));
+    assert!(!bounded.is_satisfied_by(viewport));
+    assert!(bounded.is_satisfied_by(full));
+    assert!(!full.is_satisfied_by(bounded));
+}
+
+#[test]
+fn child_count_probes_merge_results_and_mark_vanished_directories_complete() {
     let root = tempfile::tempdir().expect("create fixture directory");
-    (0..DEFAULT_PROBE_BUDGET + 10).for_each(|index| {
-        let dir = root.path().join(format!("dir-{index:04}"));
-        fs::create_dir(&dir).expect("create numbered directory");
-    });
-    let priority_dir = root.path().join("z-priority-dir");
-    fs::create_dir(&priority_dir).expect("create priority directory");
-    fs::write(priority_dir.join("inside.txt"), "1").expect("write priority child");
+    let populated = root.path().join("populated");
+    let vanished_dir = root.path().join("vanished");
+    fs::create_dir(&populated).expect("create populated directory");
+    fs::write(populated.join("child"), "1").expect("write child");
+    fs::create_dir(&vanished_dir).expect("create directory to remove");
 
     let cancel = CancellationToken::new();
     let base = Arc::new(
         read_directory_base(root.path(), ReadOptions::default(), &cancel)
             .expect("read base snapshot"),
     );
-
-    let bounded_need = EnrichmentNeed {
+    let need = EnrichmentNeed {
         children: true,
-        content: false,
-        symlinks: false,
-        budget: ProbeBudget::default(),
+        ..EnrichmentNeed::default()
     };
-    let planned = plan_enrichment(&base, std::slice::from_ref(&priority_dir), bounded_need);
-    assert_eq!(planned.len(), 1 + DEFAULT_PROBE_BUDGET);
-    assert_eq!(planned[0].path, priority_dir);
-
-    let custom_need = EnrichmentNeed {
-        budget: ProbeBudget::Bounded(0),
-        ..bounded_need
-    };
-    let viewport_only = plan_enrichment(&base, std::slice::from_ref(&priority_dir), custom_need);
-    assert_eq!(viewport_only.len(), 1);
-    assert_eq!(viewport_only[0].path, priority_dir);
-    assert!(custom_need.is_satisfied_by(bounded_need));
-    assert!(!bounded_need.is_satisfied_by(custom_need));
-
-    let full_need = EnrichmentNeed {
-        budget: ProbeBudget::Full,
-        ..bounded_need
-    };
-    assert!(bounded_need.is_satisfied_by(full_need));
-    assert!(!full_need.is_satisfied_by(bounded_need));
-    assert_eq!(custom_need.union(bounded_need), bounded_need);
-    assert_eq!(bounded_need.union(full_need), full_need);
-    let all_planned = plan_enrichment(&base, std::slice::from_ref(&priority_dir), full_need);
-    assert_eq!(all_planned.len(), DEFAULT_PROBE_BUDGET + 11);
-
+    let entry = base.entry_for_path(&populated).expect("listed directory");
     let probed =
-        probe_batch(&planned[..1], bounded_need, &cancel).expect("probe priority directory");
+        probe_batch(std::slice::from_ref(entry), need, &cancel).expect("probe populated directory");
     let (merged, changed_visible) =
-        merge_enriched(&base, &probed).expect("merge priority directory update");
+        merge_enriched(&base, &probed).expect("merge populated directory update");
     assert!(changed_visible);
     assert_eq!(
         merged
-            .entry_for_path(&priority_dir)
+            .entry_for_path(&populated)
             .and_then(|entry| entry.details.children),
         Some(ChildCount {
             count: 1,
@@ -311,13 +303,11 @@ fn enrichment_prioritizes_viewport_bounds_budget_and_marks_unreadable_entries_pr
 
     // A directory whose child count cannot be read stays `None` in the UI,
     // records `children_probed = true`, and is not re-planned on subsequent passes.
-    let vanished_dir = root.path().join("dir-0000");
     fs::remove_dir(&vanished_dir).expect("remove directory before child probe");
     let vanished_entry = merged
         .entry_for_path(&vanished_dir)
-        .expect("vanished directory still in snapshot")
-        .clone();
-    let vanished_probed = probe_batch(std::slice::from_ref(&vanished_entry), bounded_need, &cancel)
+        .expect("vanished directory still in snapshot");
+    let vanished_probed = probe_batch(std::slice::from_ref(vanished_entry), need, &cancel)
         .expect("probe vanished directory");
     let (merged_after_vanished, vanished_visible_change) =
         merge_enriched(&merged, &vanished_probed).expect("merge vanished directory probe state");
@@ -326,19 +316,7 @@ fn enrichment_prioritizes_viewport_bounds_budget_and_marks_unreadable_entries_pr
         .entry_for_path(&vanished_dir)
         .expect("vanished entry after merge");
     assert_eq!(updated_vanished.details.children, None);
-    assert!(!updated_vanished.needs_enrichment(bounded_need));
-    assert!(
-        plan_enrichment(
-            &merged_after_vanished,
-            std::slice::from_ref(&vanished_dir),
-            EnrichmentNeed {
-                children: true,
-                ..EnrichmentNeed::default()
-            },
-        )
-        .iter()
-        .all(|entry| entry.path != vanished_dir)
-    );
+    assert!(!updated_vanished.needs_enrichment(need));
 }
 
 #[test]

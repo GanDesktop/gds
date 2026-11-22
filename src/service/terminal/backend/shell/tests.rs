@@ -1,10 +1,13 @@
-use std::{io::Read, path::PathBuf};
+use std::path::PathBuf;
 
-use super::{Command, Error, SpawnOptions, default_shell, login_argument, resolve_shell};
+use super::{Error, default_shell, login_argument, resolve_shell};
 
 #[cfg(target_os = "linux")]
 #[test]
 fn renamed_cwd_remains_pinned_instead_of_falling_back_to_home() {
+    use std::io::Read;
+
+    use super::{Command, SpawnOptions};
     let directory = tempfile::tempdir().expect("test directory");
     let original = directory.path().join("original");
     let moved = directory.path().join("moved");

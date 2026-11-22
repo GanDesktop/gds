@@ -283,7 +283,7 @@ impl Appearance {
     /// Prime asynchronous desktop session state (such as the XDG Settings Portal on GNOME)
     /// before resolving the initial theme synchronously on the UI thread.
     pub async fn prime_session(&self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         if self.source == Source::System || self.mode == ModePreference::System {
             super::portal::prime().await;
         }

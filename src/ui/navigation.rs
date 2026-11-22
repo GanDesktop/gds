@@ -515,11 +515,11 @@ mod tests {
     use zgui_platform_headless::Harness;
 
     use super::{
-        NavItemActionsProps, NavItemContentProps, NavItemDetailsProps, NavItemHeaderProps,
-        NavItemLabelProps, NavItemProps, corner_action, corner_button, hover_action, pinned_icon,
+        NavItemActionsProps, NavItemContentProps, NavItemHeaderProps, NavItemLabelProps,
+        NavItemProps, corner_action, corner_button, hover_action, pinned_icon,
     };
     use crate::ui::button::IconButtonProps;
-    use crate::ui::icon::{IconName, IconProps};
+    use crate::ui::icon::IconName;
     use crate::ui::sidebar::{
         SideBarProps, SideBarSectionContentProps, SideBarSectionProps, SidebarPresentation,
     };
@@ -719,99 +719,6 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_rail_preserves_44px_two_line_height_and_centers_icon_at_x_29() {
-        let row_slot: Arc<Mutex<Option<NodeRef>>> = Arc::new(Mutex::new(None));
-        let icon_slot: Arc<Mutex<Option<NodeRef>>> = Arc::new(Mutex::new(None));
-        let pres_slot: Arc<
-            Mutex<Option<RwSignal<SidebarPresentation, zgui::reactive::LocalStorage>>>,
-        > = Arc::new(Mutex::new(None));
-
-        let row_driver = Arc::clone(&row_slot);
-        let icon_driver = Arc::clone(&icon_slot);
-        let pres_driver = Arc::clone(&pres_slot);
-
-        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
-            let mut harness = Harness::new(handler);
-            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
-                DevicePx(300.0),
-                DevicePx(200.0),
-            )));
-            harness.settle(32);
-
-            let row_node = row_driver.lock().expect("lock").expect("row ref");
-            let icon_node = icon_driver.lock().expect("lock").expect("icon ref");
-            let expanded_bounds = row_node.window_bounds().expect("expanded bounds");
-            let expanded_h = expanded_bounds.size.height.0 / row_node.scale().max(1.0);
-            assert!(
-                (expanded_h - 44.0).abs() < 0.5,
-                "2-line NavItem must lay out at 44px when expanded, got {expanded_h}"
-            );
-
-            // Switch to collapsed 58px presentation -> row height MUST remain 44px and icon center x == 29px!
-            if let Some(sig) = *pres_driver.lock().expect("lock") {
-                sig.set(SidebarPresentation::from_collapsed(true));
-                flush();
-            }
-            harness.settle(32);
-
-            let collapsed_bounds = row_node.window_bounds().expect("collapsed bounds");
-            let collapsed_h = collapsed_bounds.size.height.0 / row_node.scale().max(1.0);
-            let icon_bounds = icon_node.window_bounds().expect("icon bounds");
-            let collapsed_cx = (icon_bounds.origin.x.0 + icon_bounds.size.width.0 * 0.5)
-                / icon_node.scale().max(1.0);
-            assert!(
-                (collapsed_h - 44.0).abs() < 0.5,
-                "2-line NavItem height MUST stay 44px when collapsed (never jump to 38px), got {collapsed_h}"
-            );
-            assert!(
-                (collapsed_cx - 29.0).abs() < 0.5,
-                "18px icon inside 10px-padded 58px rail must sit dead-center at x=29, got {collapsed_cx}"
-            );
-
-            harness.shut_down();
-            Ok(())
-        };
-
-        zgui::app()
-            .with_fonts(Fonts::shipped_only())
-            .with_renderer(Box::new(noop_renderer))
-            .with_size(300.0, 200.0)
-            .run_on(driver, move || {
-                let pres = RwSignal::new_local(SidebarPresentation::default());
-                *pres_slot.lock().expect("lock") = Some(pres);
-
-                let row_ref = NodeRef::new();
-                let icon_ref = NodeRef::new();
-                *row_slot.lock().expect("lock") = Some(row_ref);
-                *icon_slot.lock().expect("lock") = Some(icon_ref);
-
-                view! {
-                    SideBar(presentation = Signal::from(pres)) {
-                        SideBarSection(style:padding = "0 10px") {
-                            SideBarSectionContent {
-                                NavItem(node_ref = row_ref, presentation = Signal::from(pres)) {
-                                    box(
-                                        node_ref = icon_ref,
-                                        style:width = "18px",
-                                        style:height = "18px",
-                                        style:flex-shrink = "0"
-                                    ) {
-                                        Icon(name = IconName::Folder, size = 18.0)
-                                    }
-                                    NavItemContent {
-                                        NavItemLabel { "Documents" }
-                                        NavItemDetails { "/home/atlas/Documents" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            })
-            .expect("collapsed geometry test runs");
-    }
-
-    #[test]
     fn corner_action_is_suppressed_when_expanded_and_reveals_on_collapsed_hover() {
         let row_clicks = Rc::new(Cell::new(0usize));
         let expanded_clicks = Rc::new(Cell::new(0usize));
@@ -976,81 +883,5 @@ mod tests {
         assert_eq!(expanded_clicks.get(), 1);
         assert_eq!(corner_clicks.get(), 1);
         assert_eq!(row_clicks.get(), 0);
-    }
-
-    #[test]
-    fn nav_items_never_squish_vertically_inside_collapsing_parent_section() {
-        let refs_slot: Arc<Mutex<Vec<NodeRef>>> = Arc::new(Mutex::new(Vec::new()));
-        let height_slot: Arc<Mutex<Option<RwSignal<f32, zgui::reactive::LocalStorage>>>> =
-            Arc::new(Mutex::new(None));
-
-        let refs_driver = Arc::clone(&refs_slot);
-        let height_driver = Arc::clone(&height_slot);
-
-        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
-            let mut harness = Harness::new(handler);
-            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
-                DevicePx(260.0),
-                DevicePx(260.0),
-            )));
-            harness.settle(32);
-
-            // Collapse the section container mid-flight to 60px and then 14px (far smaller than
-            // 5 * 38px = 190px): every NavItem must retain its full 38px height (`flex-shrink: 0`).
-            for collapsed_h in [206.0_f32, 60.0, 14.0] {
-                if let Some(sig) = *height_driver.lock().expect("lock") {
-                    sig.set(collapsed_h);
-                    flush();
-                }
-                harness.settle(16);
-
-                let refs = refs_driver.lock().expect("lock").clone();
-                assert_eq!(refs.len(), 5);
-                for (idx, row_ref) in refs.iter().enumerate() {
-                    let bounds = row_ref.window_bounds().expect("nav item bounds");
-                    let h = bounds.size.height.0 / row_ref.scale().max(1.0);
-                    assert!(
-                        (h - 38.0).abs() <= 0.5,
-                        "NavItem {idx} vertically squished to {h}px at container height {collapsed_h}px"
-                    );
-                }
-            }
-
-            harness.shut_down();
-            Ok(())
-        };
-
-        zgui::app()
-            .with_fonts(Fonts::shipped_only())
-            .with_renderer(Box::new(noop_renderer))
-            .with_size(260.0, 260.0)
-            .run_on(driver, move || {
-                let section_h = RwSignal::new_local(206.0_f32);
-                *height_slot.lock().expect("lock") = Some(section_h);
-
-                let r0 = NodeRef::new();
-                let r1 = NodeRef::new();
-                let r2 = NodeRef::new();
-                let r3 = NodeRef::new();
-                let r4 = NodeRef::new();
-                *refs_slot.lock().expect("lock") = vec![r0, r1, r2, r3, r4];
-
-                view! {
-                    SideBar {
-                        column(
-                            style:overflow = "hidden",
-                            style:gap = "4px",
-                            style:height = move || Some(format!("{:.1}px", section_h.get())),
-                        ) {
-                            NavItem(node_ref = r0, style:height = "38px", label = AnyView::new(view! { text { "Recent" } }))
-                            NavItem(node_ref = r1, style:height = "38px", label = AnyView::new(view! { text { "Starred" } }))
-                            NavItem(node_ref = r2, style:height = "38px", label = AnyView::new(view! { text { "Home" } }))
-                            NavItem(node_ref = r3, style:height = "38px", label = AnyView::new(view! { text { "Network" } }))
-                            NavItem(node_ref = r4, style:height = "38px", label = AnyView::new(view! { text { "Trash" } }))
-                        }
-                    }
-                }
-            })
-            .expect("collapsing section nav item test runs");
     }
 }

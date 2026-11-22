@@ -92,6 +92,8 @@ elif command -v dnf >/dev/null; then
   sudo dnf install -y python3-gobject at-spi2-core python3-pillow wl-clipboard
 elif command -v pacman >/dev/null; then
   sudo pacman -S --needed --noconfirm python-gobject at-spi2-core python-pillow wl-clipboard grim vulkan-swrast
+elif [ "$(uname -s)" = FreeBSD ]; then
+  sudo pkg install -y plasma6-kactivitymanagerd python3 py312-pygobject at-spi2-core py312-pillow wl-clipboard
 else
   echo 'Unsupported guest package manager' >&2
   exit 1

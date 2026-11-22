@@ -45,6 +45,8 @@ def eventually(observe, accept, description, timeout=15):
 
 class Desktop:
     def __init__(self, name, artifacts, bundle, guest_bin_dir=None):
+        if name == 'freebsd' and not guest_bin_dir:
+            raise Blocked('FreeBSD needs a native Files build and --guest-bin-dir')
         self.name = name
         self.domain = vm.MACHINES[name]
         self.artifacts = artifacts
@@ -76,7 +78,8 @@ class Desktop:
             if guest_bin_dir:
                 self.bin = guest_bin_dir
                 self.build = {'kind': 'installed', 'directory': self.bin}
-                apps = ('files', 'images')
+                apps = ('files',) if name == 'freebsd' else ('files', 'images')
+                suffix = ''
             else:
                 if not bundle.is_file():
                     raise Blocked(f'Missing {bundle}; run just e2e-build')
@@ -97,14 +100,13 @@ class Desktop:
                              f'touch {shlex.quote(parent + "/ready")}'], timeout=180)
                 self.build = json.loads(self.read(parent + '/manifest.json'))
                 apps = self.build['binaries']
-                for app, expected in self.build['binaries'].items():
-                    actual = command([*self.ssh, shlex.join(['sha256sum', self.bin + f'/gds-{app}.elf'])]).split()[0]
-                    if actual != expected:
-                        raise Blocked(f'{app}: deployed binary hash differs from build manifest')
+                suffix = '.elf'
             self.environment['binaries'] = {
-                app: command([*self.ssh, shlex.join(['sha256sum', self.bin + f'/gds-{app}'])]).split()[0]
+                app: self.call('sha256', path=f'{self.bin}/gds-{app}{suffix}')
                 for app in apps
             }
+            if not guest_bin_dir and self.environment['binaries'] != self.build['binaries']:
+                raise Blocked('Deployed binary hashes differ from build manifest')
             (artifacts / 'environment.json').write_text(json.dumps(self.environment, indent=2))
             (artifacts / 'build.json').write_text(json.dumps(self.build, indent=2))
         except Exception as error:

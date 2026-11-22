@@ -22,10 +22,33 @@ just test-e2e --collect-only          # Inspect the matrix without touching a VM
 ```
 
 `--guest-bin-dir /usr/bin` selects installed binaries instead of the development
-bundle. Both applications must be present. This is the packaging acceptance
-mode; the development bundle does not verify package installation.
+bundle. The Linux installed mode expects both applications. The FreeBSD profile
+uses the native Files executable. This mode can also verify a package install.
 `--bundle PATH` selects another bundle. Do not interact with a test desktop or
 run concurrent suites against the same guest during execution.
+
+### FreeBSD Files
+
+Build `gds-files` for `x86_64-unknown-freebsd` using Rust 1.100 and a FreeBSD
+toolchain, or run `cargo build --locked --bin gds-files --features files` on
+FreeBSD with Rust, Python 3, pkg-config, Fontconfig and libxkbcommon installed.
+The default E2E selection uses the four Linux guests and the Linux build bundle.
+Select FreeBSD explicitly and point the runner at a directory containing the
+native executable.
+
+```sh
+just e2e-prepare freebsd
+just vm freebsd copy /path/to/gds-files
+just test-files --vm freebsd --guest-bin-dir /home/atlas/Downloads
+```
+
+The runner reads the Wayland session from `plasmashell` and sends input using
+the same libvirt and AT-SPI interfaces as in the Linux guests.
+See the [FreeBSD Files test report](../apps/files/freebsd-testing.md) for
+verified workflow coverage, FreeBSD backend mechanisms, and remaining
+Linux-only desktop boundaries.
+
+### Guest state
 
 Preparation installs Python, AT-SPI introspection, Pillow and `wl-clipboard`.
 The runner temporarily enables accessibility and unlocks test desktops. Noctalia

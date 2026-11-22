@@ -15,6 +15,7 @@ MACHINES = {
     'ubuntu': 'ubuntu-dev',
     'cachyos': 'cachyos-dev',
     'noctalia': 'arch-noctalia',
+    'freebsd': 'freebsd-dev',
 }
 ACTIONS = ['open', 'start', 'stop', 'status', 'reset', 'ssh', 'copy']
 SNAPSHOT = 'clean-base'

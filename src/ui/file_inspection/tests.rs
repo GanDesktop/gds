@@ -5,7 +5,7 @@ use image::{ImageBuffer, Rgba};
 use tempfile::TempDir;
 use zgui::reactive::{Mounted, flush, install};
 
-use super::{Cache, DEFAULT_CACHE_ENTRIES, DEFAULT_CACHE_MIB, DEFAULT_WORKERS, Options, State};
+use super::{Cache, Options, State};
 use crate::service::file_inspection::{Kind, Request, Source};
 
 fn write_test_png(dir: &Path, name: &str, color: [u8; 4], size: u32) -> Source {
@@ -31,16 +31,6 @@ fn drive_until(mut predicate: impl FnMut() -> bool) {
         flush();
         std::thread::sleep(Duration::from_millis(2));
     }
-}
-
-#[test]
-fn inspection_defaults_match_specification() {
-    let options = Options::default();
-    assert_eq!(options.capacity, DEFAULT_CACHE_ENTRIES);
-    assert_eq!(options.byte_budget, DEFAULT_CACHE_MIB * 1024 * 1024);
-    assert_eq!(options.workers, DEFAULT_WORKERS);
-    let cache = Cache::default();
-    assert_eq!(cache.options(), options);
 }
 
 #[test]

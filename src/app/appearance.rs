@@ -186,7 +186,7 @@ impl Theme {
     }
 
     pub fn platform_mode() -> theme::Mode {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         if let Some(mode) = crate::appearance::portal::snapshot().color_scheme {
             return mode;
         }
@@ -276,6 +276,7 @@ impl Theme {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub(crate) fn refresh_for_portal(&self) {
         if let Some(reload) = self.reload.borrow().as_ref() {
             reload.refresh_for_portal();
@@ -384,10 +385,11 @@ impl Motion {
             return;
         }
         self.following.set(true);
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         super::Gds::current().with(crate::appearance::portal::follow);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub(crate) fn system_changed(&self, reduced: bool) {
         self.policy.update(|policy| policy.system_reduced = reduced);
     }

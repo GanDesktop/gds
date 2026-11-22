@@ -626,7 +626,7 @@ fn enqueue_lifo(pending: &mut Vec<PendingJob>, source: Source, request: Request)
 }
 
 fn encode_thumbnail_png(thumbnail: &Thumbnail) -> Result<Vec<u8>, String> {
-    let rgba = thumbnail.clone().into_rgba();
+    let rgba = thumbnail.as_rgba();
     let mut encoded = Vec::new();
     let encoder =
         PngEncoder::new_with_quality(&mut encoded, CompressionType::Fast, FilterType::Sub);

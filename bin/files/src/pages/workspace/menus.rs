@@ -763,23 +763,21 @@ impl Browser {
             destructive: false,
             on_select: self.menu_action("view-toggle", Browser::toggle_view),
         }];
-        entries.push(MenuEntry::Checkbox {
-            label: i18n::text_untracked(if favorite {
+        entries.push(self.menu_item_entry(
+            if favorite {
                 "favorite-remove"
             } else {
                 "favorite-add"
-            }),
-            checked: favorite,
-            disabled: false,
-            on_toggle: {
-                let weak = self.downgrade();
-                UnsyncCallback::new(move |_| {
-                    if let Some(browser) = weak.upgrade() {
-                        browser.0.owner.with(|| browser.favorite());
-                    }
-                })
             },
-        });
+            Some(if favorite {
+                IconName::StarOff
+            } else {
+                IconName::Star
+            }),
+            Some(Command::Favorite),
+            false,
+            Browser::favorite,
+        ));
         entries.push(self.menu_item_entry(
             "columns-configure",
             Some(IconName::Columns3Cog),
@@ -787,24 +785,37 @@ impl Browser {
             grid || !columns,
             Browser::configure_columns,
         ));
-        entries.push(MenuEntry::Checkbox {
-            label: i18n::text_untracked(Command::Hidden.label_id()),
-            checked: show_hidden,
-            disabled: false,
-            on_toggle: {
-                let weak = self.downgrade();
-                UnsyncCallback::new(move |_| {
-                    if let Some(browser) = weak.upgrade() {
-                        browser.0.owner.with(|| {
-                            let visible = browser.0.preferences.snapshot().files.show_hidden;
-                            browser.edit_preferences(|preferences| {
-                                preferences.files.show_hidden = !visible;
-                            });
-                            browser.refresh();
+        let toggle_hidden = {
+            let weak = self.downgrade();
+            move || {
+                if let Some(browser) = weak.upgrade() {
+                    browser.0.owner.with(|| {
+                        let visible = browser.0.preferences.snapshot().files.show_hidden;
+                        browser.edit_preferences(|preferences| {
+                            preferences.files.show_hidden = !visible;
                         });
-                    }
-                })
-            },
+                        browser.refresh();
+                    });
+                }
+            }
+        };
+        entries.push(if show_hidden {
+            MenuEntry::Checkbox {
+                label: i18n::text_untracked(Command::Hidden.label_id()),
+                shortcut: Some(Command::Hidden.shortcut()),
+                checked: true,
+                disabled: false,
+                on_toggle: UnsyncCallback::new(move |_| toggle_hidden()),
+            }
+        } else {
+            MenuEntry::Item {
+                label: i18n::text_untracked(Command::Hidden.label_id()),
+                icon: Some(IconName::Eye),
+                shortcut: Some(Command::Hidden.shortcut()),
+                disabled: false,
+                destructive: false,
+                on_select: UnsyncCallback::new(move |()| toggle_hidden()),
+            }
         });
         entries.push(self.menu_item_entry(
             Command::Details.label_id(),
@@ -1582,7 +1593,8 @@ impl Browser {
                 Command::Rename,
                 "rename",
                 Browser::rename,
-                busy || !cfg!(target_os = "linux") || entry.path.file_name().is_none(),
+                busy || !cfg!(any(target_os = "linux", target_os = "freebsd"))
+                    || entry.path.file_name().is_none(),
             ));
             if self.tags_enabled_untracked() {
                 entries.push(self.menu_item_entry(
@@ -1886,6 +1898,7 @@ impl Browser {
                 let weak = self.downgrade();
                 MenuEntry::Checkbox {
                     label: i18n::text_untracked(column.label_id()),
+                    shortcut: None,
                     checked: current_sort.key == column,
                     disabled: false,
                     on_toggle: UnsyncCallback::new(move |_| {
@@ -1901,6 +1914,7 @@ impl Browser {
         let weak = self.downgrade();
         entries.push(MenuEntry::Checkbox {
             label: i18n::text_untracked("sort-descending"),
+            shortcut: None,
             checked: current_sort.direction == Direction::Descending,
             disabled: false,
             on_toggle: UnsyncCallback::new(move |_| {
@@ -1965,6 +1979,7 @@ impl Browser {
     }
 
     fn apply_tab_sort(&self, update_sort: impl FnOnce(Sort) -> Sort) {
+        self.reset_typeahead();
         let id = self.update(|state| {
             let tab = state.tab_mut();
             tab.sort = update_sort(tab.sort);

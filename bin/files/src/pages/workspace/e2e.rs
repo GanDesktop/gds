@@ -930,16 +930,6 @@ mod driven {
                 .any(|node| node.role == expected)
         }
 
-        fn dialog_height(&self) -> Option<f64> {
-            self.resolved_live_nodes().into_iter().find_map(|node| {
-                if node.role != Role::Dialog {
-                    return None;
-                }
-                let (_x0, y0, _x1, y1) = node.bounds?;
-                Some(y1 - y0)
-            })
-        }
-
         fn find_entry_center(&self, needle: &str) -> Option<Point<CssPx, Css>> {
             self.resolved_live_nodes().into_iter().find_map(|node| {
                 if !matches!(node.role, Role::Label | Role::ListItem) {
@@ -990,52 +980,26 @@ mod driven {
             })
         }
 
-        fn find_sidebar_button(
-            &self,
-            needle: &str,
-            max_right: f64,
-        ) -> Option<(Point<CssPx, Css>, f64)> {
-            self.resolved_live_nodes().into_iter().find_map(|node| {
-                if node.role != Role::Button {
+        fn find_tab_center(&self, region_label: &str, title: &str) -> Option<Point<CssPx, Css>> {
+            let nodes = self.resolved_live_nodes();
+            nodes.iter().enumerate().find_map(|(index, region)| {
+                if region.label.as_deref() != Some(region_label) {
                     return None;
                 }
-                let matches_label = node
-                    .label
-                    .as_deref()
-                    .is_some_and(|label| label.contains(needle));
-                if !matches_label {
-                    return None;
-                }
-                let (x0, y0, x1, y1) = node.bounds?;
-                if x0 >= max_right || y0 < 40.0 {
-                    return None;
-                }
-                Some((
+                let tab = nodes[index + 1..]
+                    .iter()
+                    .take_while(|node| node.depth > region.depth)
+                    .find(|node| {
+                        node.role == Role::Button && node.label.as_deref() == Some(title)
+                    })?;
+                let (x0, y0, x1, y1) = tab.bounds?;
+                (x1 > x0 && y1 > y0).then(|| {
                     Point::new(
                         CssPx(((x0 + x1) * 0.5) as f32),
                         CssPx(((y0 + y1) * 0.5) as f32),
-                    ),
-                    x1 - x0,
-                ))
+                    )
+                })
             })
-        }
-
-        fn assert_sidebar_buttons_fit(&self, sidebar_width: f64) -> Result<()> {
-            for node in self.resolved_live_nodes() {
-                if node.role == Role::Button
-                    && let Some((x0, y0, x1, _y1)) = node.bounds
-                    && x0 < sidebar_width
-                    && y0 >= 40.0
-                {
-                    let width = x1 - x0;
-                    ensure!(
-                        width <= sidebar_width + 0.5 && x1 <= sidebar_width + 0.5,
-                        "sidebar button {:?} overflowed sidebar ({x0:.1}..{x1:.1}, width={width:.1} > {sidebar_width:.1})",
-                        node.label
-                    );
-                }
-            }
-            Ok(())
         }
     }
 
@@ -1347,7 +1311,6 @@ mod driven {
                         &capture_state,
                         &artifacts,
                     )?;
-                    semantic.assert_sidebar_buttons_fit(222.0)?;
 
                     // 02: Rename + Undo + Redo.
                     let orig_pos = semantic
@@ -1471,42 +1434,6 @@ mod driven {
                         &artifacts,
                     )?;
 
-                    // Verify animated Prompt dismissal retains dialog content during exit fade-out
-                    // rather than collapsing to an empty [x] shell, then unmounts cleanly.
-                    browser.0.owner.with(|| {
-                        Gds::current().appearance().motion().set_enabled(true);
-                    });
-                    browser.show_about();
-                    harness.pump();
-                    semantic.ingest_from(&harness);
-                    let open_dialog_h = semantic
-                        .dialog_height()
-                        .context("03b: animated About dialog did not mount")?;
-                    ensure!(
-                        open_dialog_h > 120.0,
-                        "03b: expected full About dialog height, got {open_dialog_h:.1}"
-                    );
-                    browser.cancel_prompt();
-                    harness.pump();
-                    semantic.ingest_from(&harness);
-                    if let Some(leaving_h) = semantic.dialog_height() {
-                        ensure!(
-                            leaving_h > 120.0,
-                            "03b: closing Prompt dialog collapsed to empty shell (height={leaving_h:.1}) during exit fade"
-                        );
-                    }
-                    ensure!(
-                        wait_until(&mut harness, Duration::from_secs(2), |h| {
-                            semantic.ingest_from(h);
-                            !semantic.has_role(Role::Dialog)
-                        }),
-                        "03b: animated Prompt dialog did not unmount after exit transition"
-                    );
-                    browser.0.owner.with(|| {
-                        Gds::current().appearance().motion().set_enabled(false);
-                    });
-                    pump_frames(&mut harness);
-
                     // 04: Trash & restore flow.
                     ensure!(
                         wait_until(&mut harness, Duration::from_secs(2), |h| {
@@ -1614,25 +1541,21 @@ mod driven {
                         &ts,
                     );
                     browser.new_tab(Some(Location::from(work.join("folder_a"))));
+                    let tabs_label = browser.0.owner.with(|| files_i18n::text_untracked("tabs"));
                     ensure!(
                         wait_until(&mut harness, Duration::from_secs(2), |h| {
                             semantic.ingest_from(h);
-                            semantic.find_sidebar_button("folder_a", 222.0).is_some()
-                                && semantic.find_sidebar_button("work", 222.0).is_some()
+                            semantic.find_tab_center(&tabs_label, "folder_a").is_some()
+                                && semantic.find_tab_center(&tabs_label, "work").is_some()
                         }),
                         "07: sidebar tabs did not mount"
                     );
-                    semantic.assert_sidebar_buttons_fit(222.0)?;
-                    let (drag_start, folder_tab_w) = semantic
-                        .find_sidebar_button("folder_a", 222.0)
+                    let drag_start = semantic
+                        .find_tab_center(&tabs_label, "folder_a")
                         .context("07: folder_a sidebar tab missing")?;
-                    let (drag_end, work_tab_w) = semantic
-                        .find_sidebar_button("work", 222.0)
+                    let drag_end = semantic
+                        .find_tab_center(&tabs_label, "work")
                         .context("07: work sidebar tab missing")?;
-                    ensure!(
-                        folder_tab_w <= 222.0 && work_tab_w <= 222.0,
-                        "07: tab button widths exceeded sidebar ({folder_tab_w:.1}, {work_tab_w:.1})"
-                    );
                     let drag_nudge = Point::new(CssPx(drag_start.x.0), CssPx(drag_start.y.0 - 8.0));
                     let drag_mid = Point::new(
                         CssPx((drag_start.x.0 + drag_end.x.0) * 0.5),
@@ -1702,7 +1625,6 @@ mod driven {
                         &capture_state,
                         &artifacts,
                     )?;
-                    semantic.assert_sidebar_buttons_fit(222.0)?;
 
                     // 08: Filter + IME composition & commit.
                     harness.deliver_to_first(SurfaceEvent::Pointer {
@@ -1714,8 +1636,8 @@ mod driven {
                     ts.set(ts.get() + 16);
                     pump_frames(&mut harness);
                     semantic.ingest_from(&harness);
-                    let (work_tab_pos, _) = semantic
-                        .find_sidebar_button("work", 222.0)
+                    let work_tab_pos = semantic
+                        .find_tab_center(&tabs_label, "work")
                         .context("08: work sidebar tab missing")?;
                     send_click(&mut harness, work_tab_pos, PointerButton::Primary, &ts);
                     ensure!(

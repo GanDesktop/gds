@@ -587,7 +587,7 @@ fn is_activate_key(ev: &EventCx<'_, events::KeyDown>) -> bool {
 }
 
 fn spawn_url_command(url: &str) {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let result = Command::new("xdg-open")
         .arg(url)
         .stdin(Stdio::null())

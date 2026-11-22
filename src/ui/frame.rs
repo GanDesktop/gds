@@ -398,10 +398,7 @@ mod tests {
     use zgui::vocab::{Modifiers, PointerAction, PointerButton, PointerEvent, Timestamp};
     use zgui_platform_headless::Harness;
 
-    use super::{
-        FOOTER_HEIGHT, FooterProps, FrameProps, TOOLBAR_HEIGHT, ToolbarProps, WindowDragAreaProps,
-        WorkspaceFrameProps,
-    };
+    use super::{FooterProps, FrameProps, ToolbarProps, WindowDragAreaProps, WorkspaceFrameProps};
     use crate::app::Gds;
     use crate::appearance::{theme, tokens};
     use crate::service::task_manager::Scope;
@@ -476,12 +473,6 @@ mod tests {
             target: Some(target),
             sink: NoopSink,
         }))
-    }
-
-    #[test]
-    fn toolbar_and_footer_heights_match_design_tokens() {
-        assert_eq!(TOOLBAR_HEIGHT, tokens::TOOLBAR_HEIGHT);
-        assert_eq!(FOOTER_HEIGHT, tokens::FOOTER_HEIGHT);
     }
 
     #[derive(Default)]

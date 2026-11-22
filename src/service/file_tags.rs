@@ -232,6 +232,15 @@ pub fn copy_from(source: &std::fs::File, destination: &Path) -> io::Result<()> {
     }
 }
 
+/// Copy from the same descriptor whose contents the transfer has validated.
+///
+/// # Errors
+/// Returns attribute I/O errors other than an absent or unsupported source attribute.
+#[cfg(not(target_os = "linux"))]
+pub fn copy_from(_source: &std::fs::File, _destination: &Path) -> io::Result<()> {
+    Ok(())
+}
+
 /// Preserve raw bytes during a copy; files with no xattr support have no tags to copy.
 ///
 /// # Errors

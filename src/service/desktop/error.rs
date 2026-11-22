@@ -14,13 +14,13 @@ pub enum Error {
     NotDirectory(PathBuf),
     #[error("an application must be selected to open this file: {0}")]
     RequiresApplication(PathBuf),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     #[error(transparent)]
     Portal(#[from] super::PortalError),
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     #[error("choosing an application is not supported on this platform")]
     UnsupportedChooser,
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     #[error("cannot open file {path} with the default application: {source}")]
     OpenFile {
         path: PathBuf,

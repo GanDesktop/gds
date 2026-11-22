@@ -4,11 +4,11 @@ use std::{path::Path, sync::Arc};
 
 use gds::ui::{Shortcut, logs, notifications};
 use zgui::prelude::*;
-use zgui::view::EventCx;
-use zgui::vocab::{Key, KeyEvent, Modifiers, NamedKey};
+use zgui::view::{EventCx, events};
+use zgui::vocab::{Key, KeyEvent, Modifiers, NamedKey, Timestamp};
 
 use super::{
-    model::{AddressPresentation, Pane, Prompt, Row},
+    model::{AddressPresentation, Contents, Pane, Prompt, Row, Tab},
     ui::Browser,
 };
 use crate::{
@@ -38,6 +38,7 @@ pub(super) enum SidebarRow {
 
 impl Browser {
     pub(super) fn dispatch(&self, command: Command) {
+        self.reset_typeahead();
         match command {
             Command::Menu => self.show_app_menu(),
             Command::Settings => self.toggle_settings(),
@@ -513,6 +514,17 @@ impl Browser {
     }
 
     pub(super) fn select_row(&self, index: usize, modifiers: Modifiers) {
+        self.reset_typeahead();
+        self.select_row_inner(index, modifiers);
+    }
+
+    fn select_row_from_typeahead(&self, index: usize) {
+        self.select_row_inner(index, Modifiers::NONE);
+        self.0.list_focus_visible.set(true);
+        self.scroll_row_into_view(index);
+    }
+
+    fn select_row_inner(&self, index: usize, modifiers: Modifiers) {
         let changed = self.update(|state| {
             let allows_multiple = state.allows_multiple();
             let tab = state.tab_mut();
@@ -814,27 +826,125 @@ impl Browser {
         }
     }
 
-    fn handle_content_key(&self, event: &KeyEvent, modifiers: Modifiers) -> bool {
+    fn content_surface_focused(&self) -> bool {
+        if zgui::view::focus_is_text_entry() {
+            return false;
+        }
+        let Some(active) = zgui::view::current_host()
+            .and_then(|host| host.focused().try_get_untracked().flatten())
+        else {
+            return false;
+        };
+        let content_id = self.0.content_focus.get_untracked();
+        let list_id = self.0.list.get_untracked();
+        content_id == Some(active) || list_id == Some(active) || self.0.list.contains(active)
+    }
+
+    fn can_handle_content_text_input(&self) -> bool {
+        self.pane_untracked() == Pane::Files
+            && !self.0.menus.is_open()
+            && !self.has_open_inspection_dialog()
+            && matches!(self.0.prompt.get_untracked(), Prompt::Closed)
+            && !self.0.connector.is_connecting_untracked()
+            && !gds::ui::keytips::has_active_modal_scope()
+            && !self.terminal_focused()
+            && self.focused_sidebar_region().is_none()
+            && self.content_surface_focused()
+    }
+
+    pub(super) fn handle_content_text_input(&self, inserted: &str, now: Timestamp) -> bool {
+        if inserted.is_empty()
+            || inserted.chars().all(char::is_control)
+            || !self.can_handle_content_text_input()
+        {
+            return false;
+        }
+        if self.0.preferences.snapshot().files.auto_focus_search {
+            self.reset_typeahead();
+            if inserted.chars().all(char::is_whitespace) || !self.filter_available_untracked() {
+                return false;
+            }
+            let mut next = self.0.filter.get_untracked();
+            next.push_str(inserted);
+            self.filter(next.clone());
+            self.0.filter_node.focus();
+            self.0.filter_node.set_value(&next);
+            self.0.filter_node.set_selection(next.len()..next.len());
+            return true;
+        }
+        self.typeahead_input(inserted, now)
+    }
+
+    fn typeahead_input(&self, inserted: &str, now: Timestamp) -> bool {
+        let matched = {
+            let state = self.0.state.borrow();
+            let tab = state.tab();
+            if matches!(tab.contents, Contents::Network { .. })
+                || tab.navigation.is_loading()
+                || tab.rows.is_empty()
+            {
+                return false;
+            }
+            let current = current_row_index(tab);
+            let mut ta = self.0.typeahead.borrow_mut();
+            let before_active = ta.is_active(now);
+            let hit = ta.push_and_match(inserted, now, tab.rows.len(), current, |idx, prefix| {
+                tab.rows[idx].matches_prefix(prefix)
+            });
+            let after_active = ta.is_active(now);
+            if hit.is_none() && !before_active && !after_active {
+                return false;
+            }
+            hit
+        };
+
+        if let Some(target) = matched {
+            self.select_row_from_typeahead(target);
+        }
+        true
+    }
+
+    fn typeahead_backspace(&self, now: Timestamp) -> bool {
+        let outcome = {
+            let state = self.0.state.borrow();
+            let tab = state.tab();
+            if matches!(tab.contents, Contents::Network { .. })
+                || tab.navigation.is_loading()
+                || tab.rows.is_empty()
+            {
+                self.0.typeahead.borrow_mut().reset();
+                return false;
+            }
+            let current = current_row_index(tab);
+            self.0.typeahead.borrow_mut().pop_and_match(
+                now,
+                tab.rows.len(),
+                current,
+                |idx, prefix| tab.rows[idx].matches_prefix(prefix),
+            )
+        };
+
+        let Some(matched) = outcome else {
+            return false;
+        };
+        if let Some(target) = matched {
+            self.select_row_from_typeahead(target);
+        }
+        true
+    }
+
+    fn handle_content_key(
+        &self,
+        event: &EventCx<'_, events::KeyDown>,
+        modifiers: Modifiers,
+    ) -> bool {
         let (count, mode, current_idx) = self.read_untracked(|state| {
             let tab = state.tab();
-            let cursor_idx = tab
-                .navigation
-                .view()
-                .cursor
-                .as_ref()
-                .and_then(|key| tab.backing.position(key))
-                .or_else(|| {
-                    tab.navigation
-                        .view()
-                        .selection
-                        .as_slice()
-                        .first()
-                        .and_then(|key| tab.backing.position(key))
-                });
-            (tab.rows.len(), tab.mode, cursor_idx)
+            (tab.rows.len(), tab.mode, current_row_index(tab))
         });
 
         if event.key == Key::Named(NamedKey::Enter) {
+            self.reset_typeahead();
             if modifiers.shift() || modifiers.control() {
                 self.open_selected_tab();
             } else {
@@ -843,11 +953,28 @@ impl Browser {
             return true;
         }
 
-        if count == 0 {
-            return false;
+        let no_command_mods = !modifiers.control() && !modifiers.alt() && !modifiers.meta();
+
+        if event.key == Key::Named(NamedKey::Backspace)
+            && no_command_mods
+            && !self.0.preferences.snapshot().files.auto_focus_search
+            && self.content_surface_focused()
+            && self.typeahead_backspace(event.timestamp)
+        {
+            return true;
         }
 
         if event.key == Key::Named(NamedKey::Space) || event.key == Key::character(" ") {
+            if no_command_mods
+                && !self.0.preferences.snapshot().files.auto_focus_search
+                && self.content_surface_focused()
+                && self.0.typeahead.borrow().is_active(event.timestamp)
+            {
+                return self.typeahead_input(" ", event.timestamp);
+            }
+            if count == 0 {
+                return false;
+            }
             let idx = current_idx.unwrap_or(0);
             if modifiers.primary() {
                 self.select_row(idx, Modifiers::PRIMARY);
@@ -856,6 +983,14 @@ impl Browser {
             }
             self.0.list_focus_visible.set(true);
             return true;
+        }
+
+        if no_command_mods && let Key::Character(text) = &event.key {
+            return self.handle_content_text_input(text.as_str(), event.timestamp);
+        }
+
+        if count == 0 {
+            return false;
         }
 
         let columns = match mode {
@@ -897,6 +1032,7 @@ impl Browser {
             return false;
         };
         if modifiers.primary() && !modifiers.shift() {
+            self.reset_typeahead();
             let moved = self.update(|state| {
                 let tab = state.tab_mut();
                 let Some(key) = tab.rows.get(target).map(Row::key) else {
@@ -933,6 +1069,22 @@ impl Browser {
             ViewMode::Grid => visible_rows * columns,
         }
     }
+}
+
+fn current_row_index(tab: &Tab) -> Option<usize> {
+    tab.navigation
+        .view()
+        .cursor
+        .as_ref()
+        .and_then(|key| tab.backing.position(key))
+        .or_else(|| {
+            tab.navigation
+                .view()
+                .selection
+                .as_slice()
+                .first()
+                .and_then(|key| tab.backing.position(key))
+        })
 }
 
 fn resolve_shortcut(event: &KeyEvent, modifiers: Modifiers) -> Option<Command> {

@@ -215,6 +215,7 @@ pub(super) struct Workspace {
     pub menus: super::menus::Menus,
     pub picker_result: Option<Rc<dyn Fn(Vec<PathBuf>)>>,
     pub pending_focus: RefCell<Option<zgui::view::time::FrameHandle>>,
+    pub typeahead: RefCell<super::typeahead::TypeAhead>,
 }
 
 impl Browser {
@@ -388,6 +389,7 @@ impl Browser {
             menus: super::menus::Menus::new(),
             picker_result,
             pending_focus: RefCell::new(None),
+            typeahead: RefCell::new(Default::default()),
             owner,
             window: window.clone(),
             volumes,
@@ -493,6 +495,10 @@ impl Browser {
         } else {
             self.0.root_focus.focus();
         }
+    }
+
+    pub(super) fn reset_typeahead(&self) {
+        self.0.typeahead.borrow_mut().reset();
     }
 
     pub(super) fn pane(&self) -> Pane {

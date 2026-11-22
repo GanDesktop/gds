@@ -58,7 +58,7 @@ impl Changes {
     ///
     /// # Errors
     /// Reports directory open or read failures when a full rescan is required.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub fn apply(
         self,
         snapshot: directory::DirectorySnapshot,

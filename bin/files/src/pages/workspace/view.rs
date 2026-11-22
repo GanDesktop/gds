@@ -39,9 +39,7 @@ use zgui::reactive::{
     on_cleanup_local,
 };
 use zgui::view::time::{FrameHandle, Timers};
-use zgui::view::{
-    CustomPropertyName, Scoped, current_host, events, focus_is_text_entry, install_stylesheet,
-};
+use zgui::view::{CustomPropertyName, Scoped, current_host, events, install_stylesheet};
 use zgui::vocab::{Key, NamedKey, PointerButton, Role, SharedString, Timestamp};
 use zgui::{css, view};
 use zgui_ui::{ButtonProps, ButtonVariant, SpinnerProps, VirtualListProps, Virtualize};
@@ -1467,12 +1465,10 @@ impl Browser {
 
     pub(super) fn subpage_toolbar_title(label_key: &'static str) -> AnyView {
         super::chrome::install_chrome_stylesheets();
-        let text_ref = NodeRef::new();
-        #[cfg(test)]
-        tests::record_toolbar_title_text_node(label_key, text_ref);
+
         AnyView::new(view! {
             WindowDragArea(class = "gds-files-toolbar-title") {
-                text(node_ref = text_ref, class = "gds-files-toolbar-title-text") {
+                text(class = "gds-files-toolbar-title-text") {
                     {move || i18n::text(label_key)}
                 }
             }
@@ -1482,13 +1478,10 @@ impl Browser {
     fn help_view(&self) -> AnyView {
         let root_ref = self.0.settings_node;
         let back_click = self.clone();
-        let back_ref = NodeRef::new();
-        #[cfg(test)]
-        tests::record_help_back_node(back_ref);
+
         let back_button = AnyView::new(view! {
             row(class = "gds-files-menu-controls") {
                 IconButton(
-                    node_ref = back_ref,
                     icon = IconName::ArrowLeft,
                     label = Signal::derive_local(|| i18n::text("page-return")),
                     shortcut = Some(Command::Cancel.shortcut()),
@@ -1802,6 +1795,7 @@ impl Browser {
         let visible_sig = self.0.list_focus_visible;
         {
             let sync_browser = focus_browser.clone();
+            let list_ref = self.0.list;
             let focus_sync_fx = RenderEffect::new(move |_| {
                 let direct_ring = is_focus_visible(content_ref);
                 let is_kbd = keyboard_modality.get();
@@ -1812,6 +1806,13 @@ impl Browser {
                     let inside =
                         active.is_some_and(|id| self_id == Some(id) || content_ref.contains(id));
                     sync_browser.0.list_focused.set(inside);
+                    let on_surface = direct
+                        || active.is_some_and(|id| {
+                            list_ref.get_untracked() == Some(id) || list_ref.contains(id)
+                        });
+                    if !on_surface {
+                        sync_browser.reset_typeahead();
+                    }
                     if direct_ring {
                         if !visible_sig.get_untracked() {
                             visible_sig.set(true);
@@ -1878,27 +1879,6 @@ impl Browser {
         });
         on_cleanup_local(move || drop(size_fx));
 
-        let filter_node = self.0.filter_node;
-        let filter_sig = self.0.filter;
-        let append_search = move |browser: &Browser, inserted: &str| {
-            if inserted.is_empty()
-                || inserted.chars().all(char::is_control)
-                || !browser.filter_available_untracked()
-                || !browser.0.preferences.snapshot().files.auto_focus_search
-                || focus_is_text_entry()
-            {
-                return false;
-            }
-            let mut next = filter_sig.get_untracked();
-            next.push_str(inserted);
-            filter_sig.set(next.clone());
-            browser.filter(next.clone());
-            filter_node.focus();
-            filter_node.set_value(&next);
-            true
-        };
-        let append_ime = append_search;
-
         AnyView::new(view! {
             row(class = "gds-files-content-shell") {
                 box(
@@ -1911,14 +1891,14 @@ impl Browser {
                     },
                     {..region_attrs},
                     on:text = move |ev: &mut EventCx<'_, events::Text>| {
-                        if append_search(&search_text_browser, ev.text.as_str()) {
+                        if search_text_browser.handle_content_text_input(ev.text.as_str(), ev.timestamp) {
                             ev.prevent_default();
                             ev.stop_propagation();
                         }
                     },
                     on:ime_commit = move |ev: &mut EventCx<'_, events::ImeCommit>| {
                         if let zgui::vocab::ImeEvent::Commit(committed) = &**ev
-                            && append_ime(&search_ime_browser, committed.as_str())
+                            && search_ime_browser.handle_content_text_input(committed.as_str(), ev.timestamp)
                         {
                             ev.prevent_default();
                             ev.stop_propagation();
@@ -2126,16 +2106,6 @@ impl Browser {
         }
     }
 
-    const fn collection_column_custom_property(index: usize) -> &'static str {
-        match index {
-            0 => "gds-files-col-0",
-            1 => "gds-files-col-1",
-            2 => "gds-files-col-2",
-            3 => "gds-files-col-3",
-            _ => "gds-files-col-4",
-        }
-    }
-
     fn table_column_attrs(&self) -> Attrs {
         let mut attrs = Attrs::new();
         for column in Column::ALL {
@@ -2156,7 +2126,7 @@ impl Browser {
                 })
             });
             attrs = attrs.custom_property(
-                CustomPropertyName::new(Self::collection_column_custom_property(index)),
+                CustomPropertyName::new(super::surfaces::collection_column_class(index)),
                 move || width.get().map(|w| format!("{w:.2}px")),
             );
         }
@@ -2440,6 +2410,7 @@ impl Browser {
     }
 
     fn clear_blank_selection(&self) {
+        self.reset_typeahead();
         self.update_selection(|state| {
             let view = state.tab_mut().navigation.view_mut();
             view.selection.clear();
@@ -2986,13 +2957,8 @@ impl Browser {
                     .collect()
             };
 
-        let row_content_ref = NodeRef::new();
-        #[cfg(test)]
-        tests::record_row_content_node(index, row_content_ref);
-
         let target = AnyView::new(view! {
             row(
-                node_ref = row_content_ref,
                 class = "gds-files-row-content",
                 attr:data-selected = move || selected_sig.get().then(|| "true".to_owned()),
                 attr:data-cursor = move || cursor_sig.get().then(|| "true".to_owned()),
@@ -3406,31 +3372,20 @@ pub(super) mod tests {
         KeyCode, KeyEvent, KeyState, Modifiers, NamedKey, PhysicalKey, PointerAction,
         PointerButton, PointerEvent, Role, Timestamp,
     };
-    use zgui_platform_headless::{Harness, OffscreenSurface};
+    use zgui_platform_headless::Harness;
 
-    use super::{Browser, CONFIRM_PREVIEW_LIMIT, Column, Location, WORKSPACE_CSS};
+    use super::{Browser, Column, Location};
     use crate::entities::location::{places::Places, volumes};
     use crate::entities::preferences;
     use crate::pages::workspace::ui::LaunchOptions;
     use crate::shared::i18n as files_i18n;
 
     thread_local! {
-        static ROW_CONTENT_NODES: RefCell<HashMap<usize, NodeRef>> = RefCell::new(HashMap::new());
         static HEADER_CELL_NODES: RefCell<HashMap<Column, NodeRef>> = RefCell::new(HashMap::new());
         static ROW_CELL_NODES: RefCell<HashMap<(usize, Column), NodeRef>> = RefCell::new(HashMap::new());
-        static COLLECTION_HEADER_CELL_NODES: RefCell<HashMap<usize, NodeRef>> = RefCell::new(HashMap::new());
-        static COLLECTION_ROW_CELL_NODES: RefCell<HashMap<usize, NodeRef>> = RefCell::new(HashMap::new());
         static HEADER_RESIZE_NODES: RefCell<HashMap<Column, NodeRef>> = RefCell::new(HashMap::new());
-        static TOOLBAR_TITLE_TEXT_NODES: RefCell<HashMap<&'static str, NodeRef>> = RefCell::new(HashMap::new());
-        static HELP_BACK_NODE: RefCell<Option<NodeRef>> = const { RefCell::new(None) };
         static FOOTER_TERMINAL_NODE: RefCell<Option<NodeRef>> = const { RefCell::new(None) };
         static LAST_COLOR_SPRITES: RefCell<Vec<(f32, f32)>> = const { RefCell::new(Vec::new()) };
-    }
-
-    pub(super) fn record_row_content_node(index: usize, node: NodeRef) {
-        ROW_CONTENT_NODES.with(|slot| {
-            slot.borrow_mut().insert(index, node);
-        });
     }
 
     pub(super) fn record_header_cell_node(column: Column, node: NodeRef) {
@@ -3445,39 +3400,9 @@ pub(super) mod tests {
         });
     }
 
-    pub(in crate::pages::workspace) fn record_collection_header_cell_node(
-        index: usize,
-        node: NodeRef,
-    ) {
-        COLLECTION_HEADER_CELL_NODES.with(|slot| {
-            slot.borrow_mut().insert(index, node);
-        });
-    }
-
-    pub(in crate::pages::workspace) fn record_collection_row_cell_node(
-        index: usize,
-        node: NodeRef,
-    ) {
-        COLLECTION_ROW_CELL_NODES.with(|slot| {
-            slot.borrow_mut().insert(index, node);
-        });
-    }
-
     pub(super) fn record_header_resize_node(column: Column, node: NodeRef) {
         HEADER_RESIZE_NODES.with(|slot| {
             slot.borrow_mut().insert(column, node);
-        });
-    }
-
-    pub(super) fn record_toolbar_title_text_node(key: &'static str, node: NodeRef) {
-        TOOLBAR_TITLE_TEXT_NODES.with(|slot| {
-            slot.borrow_mut().insert(key, node);
-        });
-    }
-
-    pub(super) fn record_help_back_node(node: NodeRef) {
-        HELP_BACK_NODE.with(|slot| {
-            *slot.borrow_mut() = Some(node);
         });
     }
 
@@ -3487,25 +3412,12 @@ pub(super) mod tests {
         });
     }
 
-    fn clear_row_content_nodes() {
-        ROW_CONTENT_NODES.with(|slot| slot.borrow_mut().clear());
+    fn clear_view_probes() {
         HEADER_CELL_NODES.with(|slot| slot.borrow_mut().clear());
         ROW_CELL_NODES.with(|slot| slot.borrow_mut().clear());
-        COLLECTION_HEADER_CELL_NODES.with(|slot| slot.borrow_mut().clear());
-        COLLECTION_ROW_CELL_NODES.with(|slot| slot.borrow_mut().clear());
         HEADER_RESIZE_NODES.with(|slot| slot.borrow_mut().clear());
-        TOOLBAR_TITLE_TEXT_NODES.with(|slot| slot.borrow_mut().clear());
-        HELP_BACK_NODE.with(|slot| *slot.borrow_mut() = None);
         FOOTER_TERMINAL_NODE.with(|slot| *slot.borrow_mut() = None);
         LAST_COLOR_SPRITES.with(|slot| slot.borrow_mut().clear());
-    }
-
-    fn toolbar_title_text_node(key: &'static str) -> Option<NodeRef> {
-        TOOLBAR_TITLE_TEXT_NODES.with(|slot| slot.borrow().get(key).copied())
-    }
-
-    fn help_back_node() -> Option<NodeRef> {
-        HELP_BACK_NODE.with(|slot| *slot.borrow())
     }
 
     fn footer_terminal_node() -> Option<NodeRef> {
@@ -3527,24 +3439,12 @@ pub(super) mod tests {
         LAST_COLOR_SPRITES.with(|slot| slot.borrow().clone())
     }
 
-    fn row_content_node(index: usize) -> Option<NodeRef> {
-        ROW_CONTENT_NODES.with(|slot| slot.borrow().get(&index).copied())
-    }
-
     fn header_cell_node(column: Column) -> Option<NodeRef> {
         HEADER_CELL_NODES.with(|slot| slot.borrow().get(&column).copied())
     }
 
     fn row_cell_node(index: usize, column: Column) -> Option<NodeRef> {
         ROW_CELL_NODES.with(|slot| slot.borrow().get(&(index, column)).copied())
-    }
-
-    fn collection_header_cell_node(index: usize) -> Option<NodeRef> {
-        COLLECTION_HEADER_CELL_NODES.with(|slot| slot.borrow().get(&index).copied())
-    }
-
-    fn collection_row_cell_node(index: usize) -> Option<NodeRef> {
-        COLLECTION_ROW_CELL_NODES.with(|slot| slot.borrow().get(&index).copied())
     }
 
     fn header_resize_node(column: Column) -> Option<NodeRef> {
@@ -3581,37 +3481,6 @@ pub(super) mod tests {
                     "expected exact 0.0px header/row parity for {column:?} on row {row_idx}: header=({header_x:.2}, {header_w:.2}) vs row=({cell_x:.2}, {cell_w:.2})"
                 );
             }
-        }
-    }
-
-    fn assert_collection_header_and_row_cell_parity(browser: &Browser) {
-        let columns = browser
-            .collection_columns_untracked()
-            .expect("active collection table columns");
-        for (idx, (label_id, expected_w)) in columns.into_iter().enumerate() {
-            let header_node = collection_header_cell_node(idx)
-                .unwrap_or_else(|| panic!("recorded collection header cell {idx} ({label_id})"));
-            let row_node = collection_row_cell_node(idx)
-                .unwrap_or_else(|| panic!("recorded collection row cell {idx} ({label_id})"));
-            let scale = header_node.scale().max(1.0);
-            let header_bounds = header_node
-                .window_bounds()
-                .unwrap_or_else(|| panic!("measured collection header cell {idx} ({label_id})"));
-            let row_bounds = row_node
-                .window_bounds()
-                .unwrap_or_else(|| panic!("measured collection row cell {idx} ({label_id})"));
-            let header_x = header_bounds.origin.x.0 / scale;
-            let header_w = header_bounds.size.width.0 / scale;
-            let row_x = row_bounds.origin.x.0 / scale;
-            let row_w = row_bounds.size.width.0 / scale;
-            assert!(
-                (header_bounds.size.width.0 - expected_w * scale).abs() <= 1.0,
-                "expected collection col {idx} ({label_id}) width ~= {expected_w:.2}px, got {header_w:.2}px"
-            );
-            assert!(
-                (header_w - row_w).abs() == 0.0 && (header_x - row_x).abs() == 0.0,
-                "expected exact 0.0px collection header/row parity for col {idx} ({label_id}): header=({header_x:.2}, {header_w:.2}) vs row=({row_x:.2}, {row_w:.2})"
-            );
         }
     }
 
@@ -3674,294 +3543,13 @@ pub(super) mod tests {
         Ok(Box::new(renderer))
     }
 
-    fn virtual_list_slot_heights(surface: &OffscreenSurface) -> Vec<f64> {
-        let mut nodes = HashMap::new();
-        let mut root = None;
-        for update in surface.a11y_log() {
-            if let Some(tree) = update.tree {
-                root = Some(tree.root);
-            }
-            for (id, node) in update.nodes {
-                nodes.insert(id, node);
-            }
-        }
-        let Some(root_id) = root else {
-            return Vec::new();
-        };
-        let mut stack = vec![root_id];
-        let mut seen = HashSet::new();
-        let mut out = Vec::new();
-        while let Some(id) = stack.pop() {
-            if !seen.insert(id) {
-                continue;
-            }
-            let Some(node) = nodes.get(&id) else {
-                continue;
-            };
-            if node.role() == Role::ListItem
-                && let Some(rect) = node.bounds()
-            {
-                out.push(rect.y1 - rect.y0);
-            }
-            for &child in node.children().iter().rev() {
-                stack.push(child);
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn workspace_css_drops_resting_table_border_and_toolbar_spacer_and_prioritizes_ghosted_opacity()
-    {
-        assert!(
-            !WORKSPACE_CSS.contains(".gds-files-table-surface"),
-            "data table must remain borderless at rest"
-        );
-        assert!(
-            !WORKSPACE_CSS.contains(".gds-files-toolbar-spacer"),
-            "toolbar spacer must be removed so address bar stretches to WindowControls"
-        );
-        assert!(
-            super::super::chrome::CHROME_CSS.contains("overflow-x: hidden;"),
-            "breadcrumb track must avoid reserving a horizontal scrollbar gutter so crumbs stay vertically centered"
-        );
-        assert!(
-            !super::super::chrome::CHROME_CSS.contains("scrollbar-width"),
-            "chrome stylesheet must not emit unsupported scrollbar-width CSS declarations"
-        );
-        assert!(
-            WORKSPACE_CSS.contains(
-                ".gds-files-row-content[data-cursor=\"true\"]:not([data-selected=\"true\"])"
-            ),
-            "selected list rows must never draw a 1px outline; only detached unselected cursor rows draw 1px primary outline"
-        );
-        assert!(
-            !WORKSPACE_CSS.contains(".gds-files-row-content[data-hidden-entry=\"true\"] {"),
-            "hidden opacity must target inner cells, never .gds-files-row-content pill background"
-        );
-        assert!(
-            !WORKSPACE_CSS.contains(".gds-files-tile[data-hidden-entry=\"true\"] {"),
-            "hidden opacity must target inner tile slots, never .gds-files-tile selection background/border"
-        );
-
-        let row_hidden = WORKSPACE_CSS
-            .find(".gds-files-row-content[data-hidden-entry=\"true\"] .gds-files-name-cell")
-            .expect("row inner hidden rule");
-        let row_ghosted = WORKSPACE_CSS
-            .find(".gds-files-row-content[data-ghosted=\"true\"] .gds-files-name-cell")
-            .expect("row inner ghosted rule");
-        assert!(
-            row_ghosted > row_hidden,
-            "ghosted row rule (0.35) must follow hidden rule (0.65) so cut/dragged dotfiles render at 35%"
-        );
-
-        let tile_hidden = WORKSPACE_CSS
-            .find(".gds-files-tile[data-hidden-entry=\"true\"] .gds-files-tile-artwork")
-            .expect("tile inner hidden rule");
-        let tile_ghosted = WORKSPACE_CSS
-            .find(".gds-files-tile[data-ghosted=\"true\"] .gds-files-tile-artwork")
-            .expect("tile inner ghosted rule");
-        assert!(
-            tile_ghosted > tile_hidden,
-            "ghosted tile rule (0.35) must follow hidden rule (0.65) so cut/dragged dotfiles render at 35%"
-        );
-
-        assert!(
-            WORKSPACE_CSS.contains(
-                ".gds-menu-content.gds-menu-content.gds-files-menu-content {\n        min-width: 160px;\n        max-width: 340px;\n        max-height: min(calc(100vh - 18px), var(--zui-popper-available-height, calc(100vh - 18px)));"
-            ),
-            "workspace menus must override .gds-menu-content with viewport/popper height instead of 360px/440px"
-        );
-        assert!(
-            !WORKSPACE_CSS.contains("max-height: 440px"),
-            "workspace menus must not hardcode 440px max-height"
-        );
-        assert!(
-            !super::super::inspection::INSPECTION_CSS.contains("var(--gds-panel)"),
-            "details pane must remain transparent over unified right-side --gds-content-bg"
-        );
-    }
-
-    #[test]
-    fn list_row_content_pill_measures_thirty_six_px_inside_forty_px_virtual_row_and_matches_main_column_widths()
-     {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let home = temp.path().join("home");
-        std::fs::create_dir_all(home.join("Desktop")).expect("create Desktop");
-        std::fs::create_dir_all(home.join("Documents")).expect("create Documents");
-        clear_row_content_nodes();
-
-        let supervisor = Supervisor::new(false).expect("tokio supervisor");
-        let bg_scope = supervisor.scope();
-        let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
-        let slot_for_view = Rc::clone(&browser_slot);
-        let start = home.clone();
-        let driver_start = home;
-
-        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
-            let mut harness = Harness::new(handler);
-            if let Some(offscreen) = harness.platform().offscreens().first() {
-                offscreen.set_a11y_listener(true);
-            }
-            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
-                DevicePx(1280.0),
-                DevicePx(800.0),
-            )));
-            harness.settle(16);
-
-            let browser = browser_slot.borrow().clone().expect("browser constructed");
-            let deadline = Instant::now() + Duration::from_secs(3);
-            while browser.read_untracked(|state| state.tab().rows.is_empty()) {
-                assert!(
-                    Instant::now() < deadline,
-                    "timed out waiting for Home directory rows to load"
-                );
-                harness.advance(Duration::from_millis(25));
-                harness.pump();
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            harness.settle(8);
-
-            // Default column widths match GPUI `main:table.rs:42-60, 500-520` while full-width
-            // `.gds-files-row-content` spans `table_viewport_width()`.
-            let viewport_w = browser.table_viewport_width();
-            let expected_name_w = (viewport_w * 0.45).clamp(180.0, 500.0);
-            assert!((browser.column_width(Column::Name) - expected_name_w).abs() < 0.5);
-            assert!((browser.column_width(Column::Modified) - 160.0).abs() < 0.5);
-            assert!((browser.column_width(Column::Type) - 110.0).abs() < 0.5);
-            assert!((browser.column_width(Column::Size) - 100.0).abs() < 0.5);
-            assert!((browser.column_width(Column::Owner) - 130.0).abs() < 0.5);
-            assert!((browser.column_width(Column::Permissions) - 96.0).abs() < 0.5);
-
-            let offscreen = harness
-                .platform()
-                .offscreens()
-                .first()
-                .cloned()
-                .expect("primary offscreen");
-            let slot_heights = virtual_list_slot_heights(&offscreen);
-            assert!(
-                slot_heights.iter().any(|h| (*h - 40.0).abs() < 0.5),
-                "expected 40.0px VirtualList row slot, got {slot_heights:?}"
-            );
-
-            let file_row_node =
-                row_content_node(0).expect("rendered Row::File .gds-files-row-content");
-            let scale = file_row_node.scale().max(1.0);
-            let file_bounds = file_row_node
-                .window_bounds()
-                .expect("measured bounds for Row::File .gds-files-row-content");
-            let file_h = file_bounds.size.height.0 / scale;
-            let file_w = file_bounds.size.width.0 / scale;
-            assert!(
-                (file_h - 36.0).abs() < 0.5,
-                "expected Row::File .gds-files-row-content height == 36.0px inside 40.0px slot, got {file_h}"
-            );
-            assert!(
-                (file_w - viewport_w).abs() < 1.0,
-                "expected .gds-files-row-content width ({file_w}) to span full table viewport ({viewport_w})"
-            );
-            assert_directory_header_and_row_cell_parity(&browser, &[0, 1]);
-
-            // Enable all 9 configurable columns and verify 0.0px header/row width parity across every column.
-            browser.update(|state| {
-                for column in Column::ALL {
-                    state.tab_mut().columns.show(column);
-                }
-            });
-            zgui::reactive::flush();
-            harness.settle(8);
-            assert_directory_header_and_row_cell_parity(&browser, &[0, 1]);
-
-            // Also verify collection rows (`Row::Place` on `Recent`, which mount directly under
-            // `.gds-files-menu-wrap` without `.gds-files-drag-row-host`) measure `height == 36.0`
-            // and keep 0.0px live header/row parity across window resizes without rebuilding DOM nodes.
-            clear_row_content_nodes();
-            browser.update(|state| {
-                state
-                    .places
-                    .record(Location::from(driver_start.join("Documents")));
-            });
-            browser.open(Location::Recent);
-            harness.settle(12);
-
-            let place_row_node =
-                row_content_node(0).expect("rendered Row::Place .gds-files-row-content");
-            let place_bounds = place_row_node
-                .window_bounds()
-                .expect("measured bounds for Row::Place .gds-files-row-content");
-            let place_h = place_bounds.size.height.0 / place_row_node.scale().max(1.0);
-            assert!(
-                (place_h - 36.0).abs() < 0.5,
-                "expected Row::Place .gds-files-row-content height == 36.0px on Recent, got {place_h}"
-            );
-            assert_collection_header_and_row_cell_parity(&browser);
-            let initial_col_header_0 = collection_header_cell_node(0)
-                .and_then(|n| n.get_untracked())
-                .expect("bound collection header cell 0");
-            let initial_col_row_0 = collection_row_cell_node(0)
-                .and_then(|n| n.get_untracked())
-                .expect("bound collection row cell 0");
-
-            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
-                DevicePx(960.0),
-                DevicePx(800.0),
-            )));
-            harness.settle(12);
-            assert_collection_header_and_row_cell_parity(&browser);
-            assert_eq!(
-                collection_header_cell_node(0).and_then(|n| n.get_untracked()),
-                Some(initial_col_header_0),
-                "collection header cell DOM node must remain stable across window resize"
-            );
-            assert_eq!(
-                collection_row_cell_node(0).and_then(|n| n.get_untracked()),
-                Some(initial_col_row_0),
-                "collection row cell DOM node must remain stable across window resize"
-            );
-
-            harness.shut_down();
-            Ok(())
-        };
-
-        zgui::app()
-            .with_fonts(Fonts::shipped_only())
-            .with_renderer(Box::new(noop_renderer))
-            .with_size(1280.0, 800.0)
-            .run_on(driver, move || {
-                let scope: Scope = bg_scope.clone();
-                let app = Gds::install(scope.clone());
-                app.appearance().motion().set_enabled(false);
-                let _ = app.appearance().install_window_sheet();
-                app.i18n().install_catalog(
-                    files_i18n::prepare(Language::English).expect("English catalog"),
-                );
-                let _prefs =
-                    preferences::Service::install(preferences::Preferences::default(), &scope)
-                        .expect("preferences service");
-                let browser = Browser::new(
-                    LaunchOptions {
-                        places: Ok(Places::default()),
-                        start: start.clone(),
-                        home: start.clone(),
-                        picker: None,
-                    },
-                    volumes::Service::new(scope),
-                    Rc::new(|_| {}),
-                );
-                *slot_for_view.borrow_mut() = Some(browser.clone());
-                browser.view()
-            })
-            .expect("row height layout harness");
-    }
-
     #[test]
     fn column_header_resize_drag_tracks_continuous_pointer_moves_without_losing_capture() {
         let temp = tempfile::tempdir().expect("tempdir");
         let home = temp.path().join("home");
         std::fs::create_dir_all(home.join("Desktop")).expect("create Desktop");
         std::fs::write(home.join("notes.txt"), b"hello\n").expect("create notes.txt");
-        clear_row_content_nodes();
+        clear_view_probes();
 
         let supervisor = Supervisor::new(false).expect("tokio supervisor");
         let bg_scope = supervisor.scope();
@@ -3971,13 +3559,6 @@ pub(super) mod tests {
 
         let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
             let mut harness = Harness::new(handler);
-            let offscreen = harness
-                .platform()
-                .offscreens()
-                .first()
-                .cloned()
-                .expect("primary offscreen");
-            offscreen.set_a11y_listener(true);
             harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
                 DevicePx(1280.0),
                 DevicePx(800.0),
@@ -4122,63 +3703,6 @@ pub(super) mod tests {
             );
             assert_directory_header_and_row_cell_parity(&browser, &[0, 1]);
 
-            // 2. Also verify workspace file context menu at 16px font size renders full height (> 360px)
-            // without premature clipping!
-            let row_node = row_content_node(0).expect("row 0 content node");
-            let row_bounds = row_node.window_bounds().expect("row 0 bounds");
-            let row_x = (row_bounds.origin.x.0 + 80.0) / scale;
-            let row_y = (row_bounds.origin.y.0 + row_bounds.size.height.0 * 0.5) / scale;
-            let ctx_pos = Point::new(CssPx(row_x), CssPx(row_y));
-            harness.deliver_to_first(SurfaceEvent::Pointer {
-                action: PointerAction::Pressed,
-                event: PointerEvent::mouse(ctx_pos).with_button(PointerButton::Secondary),
-                modifiers: Modifiers::NONE,
-                timestamp: Timestamp::ORIGIN,
-            });
-            harness.deliver_to_first(SurfaceEvent::Pointer {
-                action: PointerAction::Released,
-                event: PointerEvent::mouse(ctx_pos).with_button(PointerButton::Secondary),
-                modifiers: Modifiers::NONE,
-                timestamp: Timestamp::ORIGIN,
-            });
-            harness.settle(16);
-
-            let mut a11y_nodes = HashMap::new();
-            let mut root_id = None;
-            for update in offscreen.a11y_log() {
-                if let Some(tree) = update.tree {
-                    root_id = Some(tree.root);
-                }
-                for (id, node) in update.nodes {
-                    a11y_nodes.insert(id, node);
-                }
-            }
-            let mut menu_heights = Vec::new();
-            if let Some(root) = root_id {
-                let mut stack = vec![root];
-                let mut seen = HashSet::new();
-                while let Some(id) = stack.pop() {
-                    if !seen.insert(id) {
-                        continue;
-                    }
-                    let Some(node) = a11y_nodes.get(&id) else {
-                        continue;
-                    };
-                    if node.role() == Role::Menu
-                        && let Some(rect) = node.bounds()
-                    {
-                        menu_heights.push(rect.y1 - rect.y0);
-                    }
-                    for &child in node.children().iter().rev() {
-                        stack.push(child);
-                    }
-                }
-            }
-            assert!(
-                menu_heights.iter().any(|h| *h > 360.0),
-                "expected 10-item file context menu at 16px font to exceed 360px without clipping, got {menu_heights:?}"
-            );
-
             harness.shut_down();
             Ok(())
         };
@@ -4191,14 +3715,6 @@ pub(super) mod tests {
                 let scope: Scope = bg_scope.clone();
                 let app = Gds::install(scope.clone());
                 app.appearance().motion().set_enabled(false);
-                let typo = gds::appearance::typography::Preferences {
-                    size: 16.0,
-                    ..Default::default()
-                };
-                app.appearance()
-                    .typography()
-                    .apply(&typo)
-                    .expect("16px typography");
                 let _ = app.appearance().install_window_sheet();
                 app.i18n().install_catalog(
                     files_i18n::prepare(Language::Chinese).expect("Chinese catalog"),
@@ -4219,16 +3735,7 @@ pub(super) mod tests {
                 *slot_for_view.borrow_mut() = Some(browser.clone());
                 browser.view()
             })
-            .expect("column header resize and context menu harness");
-    }
-
-    #[test]
-    fn confirm_preview_caps_at_five_items_and_accumulates_overflow() {
-        let items: Vec<String> = (1..=8).map(|i| format!("item-{i}.txt")).collect();
-        let shown: Vec<String> = items.iter().take(CONFIRM_PREVIEW_LIMIT).cloned().collect();
-        let extra = items.len().saturating_sub(CONFIRM_PREVIEW_LIMIT);
-        assert_eq!(shown.len(), 5);
-        assert_eq!(extra, 3);
+            .expect("column header resize harness");
     }
 
     #[test]
@@ -4255,7 +3762,7 @@ pub(super) mod tests {
         let expected_multi_size =
             crate::entities::file::ui::EntryPresentation::format_size(png_len + 5 + 4096);
 
-        clear_row_content_nodes();
+        clear_view_probes();
         super::super::inspection::tests::clear_recorded_artwork_nodes();
 
         let supervisor = Supervisor::new(false).expect("tokio supervisor");
@@ -4668,7 +4175,7 @@ pub(super) mod tests {
         let home = temp.path().join("home");
         std::fs::create_dir_all(home.join("Desktop")).expect("create Desktop");
         std::fs::write(home.join("notes.txt"), b"hello\n").expect("create notes.txt");
-        clear_row_content_nodes();
+        clear_view_probes();
         super::super::chrome::tests::clear_recorded_tab_nodes();
 
         let supervisor = Supervisor::new(false).expect("tokio supervisor");
@@ -4872,134 +4379,12 @@ pub(super) mod tests {
             .expect("fresh-launch repeated Ctrl+B harness");
     }
 
-    fn css_rule_body<'a>(sheet: &'a str, selector: &str) -> Option<&'a str> {
-        let start = sheet.find(selector)?;
-        let after_selector = &sheet[start + selector.len()..];
-        let brace_open = after_selector.find('{')?;
-        let rest = &after_selector[brace_open + 1..];
-        let brace_close = rest.find('}')?;
-        Some(&rest[..brace_close])
-    }
-
-    #[test]
-    fn help_subpage_toolbar_title_centers_vertically_with_back_button_and_uses_regular_weight() {
-        let title_box_rule = css_rule_body(WORKSPACE_CSS, ".gds-files-toolbar-title ")
-            .expect(".gds-files-toolbar-title rule");
-        assert!(
-            title_box_rule.contains("height: 100%;") && !title_box_rule.contains("height: 32px;"),
-            "expected .gds-files-toolbar-title to span full 100% toolbar height: {title_box_rule}"
-        );
-        let title_text_rule = css_rule_body(WORKSPACE_CSS, ".gds-files-toolbar-title-text ")
-            .expect(".gds-files-toolbar-title-text rule");
-        assert!(
-            title_text_rule.contains("font-weight: 400;")
-                && !title_text_rule.contains("font-weight: 600;"),
-            "expected .gds-files-toolbar-title-text to use regular font-weight: 400: {title_text_rule}"
-        );
-
-        let temp = tempfile::tempdir().expect("tempdir");
-        let home = temp.path().join("home");
-        std::fs::create_dir_all(&home).expect("create home");
-        clear_row_content_nodes();
-
-        let supervisor = Supervisor::new(false).expect("tokio supervisor");
-        let bg_scope = supervisor.scope();
-        let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
-        let slot_for_view = Rc::clone(&browser_slot);
-        let start = home;
-
-        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
-            let mut harness = Harness::new(handler);
-            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
-                DevicePx(1280.0),
-                DevicePx(800.0),
-            )));
-            harness.settle(16);
-
-            let browser = browser_slot.borrow().clone().expect("browser constructed");
-            browser.show_help();
-            zgui::reactive::flush();
-            harness.settle(16);
-
-            let back_node = help_back_node().expect("recorded Help ArrowLeft back button");
-            let title_node = toolbar_title_text_node("help")
-                .expect("recorded Help .gds-files-toolbar-title-text node");
-            let scale = back_node.scale().max(1.0);
-            let back_bounds = back_node
-                .window_bounds()
-                .expect("measured Help ArrowLeft window_bounds");
-            let title_bounds = title_node
-                .window_bounds()
-                .expect("measured Help title text window_bounds");
-
-            let back_mid_y = (back_bounds.origin.y.0 + back_bounds.size.height.0 * 0.5) / scale;
-            let title_mid_y = (title_bounds.origin.y.0 + title_bounds.size.height.0 * 0.5) / scale;
-            assert!(
-                (back_mid_y - title_mid_y).abs() <= 1.0,
-                "expected Help ArrowLeft midline ({back_mid_y:.2}px) and '帮助' title midline ({title_mid_y:.2}px) to match within 1.0px"
-            );
-            assert!(
-                (title_mid_y - 26.0).abs() <= 1.5,
-                "expected '帮助' title to center vertically inside 52px toolbar (~26px, never 16px), got {title_mid_y:.2}px"
-            );
-
-            // Also verify Settings subpage toolbar title shares the exact same 26px midline.
-            browser.show_settings();
-            zgui::reactive::flush();
-            harness.settle(16);
-            let settings_title_node = toolbar_title_text_node("settings")
-                .expect("recorded Settings .gds-files-toolbar-title-text node");
-            let settings_bounds = settings_title_node
-                .window_bounds()
-                .expect("measured Settings title text window_bounds");
-            let settings_mid_y =
-                (settings_bounds.origin.y.0 + settings_bounds.size.height.0 * 0.5) / scale;
-            assert!(
-                (settings_mid_y - 26.0).abs() <= 1.5,
-                "expected '设置' title to center vertically inside 52px toolbar (~26px), got {settings_mid_y:.2}px"
-            );
-
-            harness.shut_down();
-            Ok(())
-        };
-
-        zgui::app()
-            .with_fonts(Fonts::shipped_only())
-            .with_renderer(Box::new(noop_renderer))
-            .with_size(1280.0, 800.0)
-            .run_on(driver, move || {
-                let scope: Scope = bg_scope.clone();
-                let app = Gds::install(scope.clone());
-                app.appearance().motion().set_enabled(false);
-                let _ = app.appearance().install_window_sheet();
-                app.i18n().install_catalog(
-                    files_i18n::prepare(Language::Chinese).expect("Chinese catalog"),
-                );
-                let _prefs =
-                    preferences::Service::install(preferences::Preferences::default(), &scope)
-                        .expect("preferences service");
-                let browser = Browser::new(
-                    LaunchOptions {
-                        places: Ok(Places::default()),
-                        start: start.clone(),
-                        home: start.clone(),
-                        picker: None,
-                    },
-                    volumes::Service::new(scope),
-                    Rc::new(|_| {}),
-                );
-                *slot_for_view.borrow_mut() = Some(browser.clone());
-                browser.view()
-            })
-            .expect("help subpage toolbar title alignment harness");
-    }
-
     #[test]
     fn footer_terminal_icon_button_pointer_clicks_open_on_first_click_and_close_on_second_click() {
         let temp = tempfile::tempdir().expect("tempdir");
         let home = temp.path().join("home");
         std::fs::create_dir_all(&home).expect("create home");
-        clear_row_content_nodes();
+        clear_view_probes();
 
         let supervisor = Supervisor::new(false).expect("tokio supervisor");
         let bg_scope = supervisor.scope();
@@ -5070,7 +4455,7 @@ pub(super) mod tests {
             .expect("footer terminal button click toggle harness");
     }
 
-    fn send_key_chord(
+    pub(in crate::pages::workspace) fn send_key_chord(
         harness: &mut Harness<Box<dyn AppHandler>>,
         event: KeyEvent,
         modifiers: Modifiers,
@@ -5100,7 +4485,7 @@ pub(super) mod tests {
         std::fs::write(home.join("alpha.txt"), b"a\n").expect("write alpha.txt");
         std::fs::write(home.join("beta.txt"), b"b\n").expect("write beta.txt");
         std::fs::write(home.join("gamma.txt"), b"c\n").expect("write gamma.txt");
-        clear_row_content_nodes();
+        clear_view_probes();
 
         let supervisor = Supervisor::new(false).expect("tokio supervisor");
         let bg_scope = supervisor.scope();
@@ -5310,7 +4695,7 @@ pub(super) mod tests {
         let home = temp.path().join("home");
         std::fs::create_dir_all(&home).expect("create home");
         std::fs::write(home.join("victim.txt"), b"bye\n").expect("write victim.txt");
-        clear_row_content_nodes();
+        clear_view_probes();
 
         let supervisor = Supervisor::new(false).expect("tokio supervisor");
         let bg_scope = supervisor.scope();
@@ -5643,5 +5028,231 @@ pub(super) mod tests {
                 browser.view()
             })
             .expect("context menu, modal scope cleanup, and Shift+Delete Alt mnemonics harness");
+    }
+
+    #[test]
+    fn typeahead_filename_matching_and_auto_focus_search_switch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).expect("create home");
+        std::fs::create_dir(home.join("My Documents")).expect("create My Documents");
+        std::fs::create_dir(home.join("My Pictures")).expect("create My Pictures");
+        for name in [
+            "Cargo.toml",
+            "config.toml",
+            "const.rs",
+            "Lemur.txt",
+            "Leopard.txt",
+            "Lion.txt",
+            "Llama.txt",
+            "notes.txt",
+            "zeta.txt",
+        ] {
+            std::fs::write(home.join(name), b"x\n").expect("write fixture");
+        }
+        for i in 1..=25 {
+            std::fs::write(home.join(format!("item-{i:02}.txt")), b"x\n").expect("write filler");
+        }
+        clear_view_probes();
+
+        let supervisor = Supervisor::new(false).expect("tokio supervisor");
+        let bg_scope = supervisor.scope();
+        let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
+        let slot_for_view = Rc::clone(&browser_slot);
+        let start = home;
+
+        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+            let mut harness = Harness::new(handler);
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(1280.0),
+                DevicePx(800.0),
+            )));
+            harness.settle(16);
+
+            let browser = browser_slot.borrow().clone().expect("browser constructed");
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while browser.read_untracked(|state| state.tab().rows.len() < 36) {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for fixture directory to load"
+                );
+                harness.advance(Duration::from_millis(25));
+                harness.pump();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            zgui::reactive::flush();
+            harness.settle(8);
+
+            let selected_label = |browser: &Browser| -> Option<String> {
+                browser.read_untracked(|state| {
+                    let tab = state.tab();
+                    let key = tab.navigation.view().selection.as_slice().first()?;
+                    let idx = tab.backing.position(key)?;
+                    tab.rows.get(idx).map(super::Row::label)
+                })
+            };
+
+            let send_key_at =
+                |harness: &mut Harness<Box<dyn AppHandler>>, event: KeyEvent, at_ms: u64| {
+                    let stamp = Timestamp::from_origin(Duration::from_millis(at_ms));
+                    harness.deliver_to_first(SurfaceEvent::Key {
+                        state: KeyState::Pressed,
+                        event: event.clone(),
+                        modifiers: Modifiers::NONE,
+                        timestamp: stamp,
+                    });
+                    harness.deliver_to_first(SurfaceEvent::Key {
+                        state: KeyState::Released,
+                        event,
+                        modifiers: Modifiers::NONE,
+                        timestamp: stamp,
+                    });
+                    harness.settle(4);
+                    zgui::reactive::flush();
+                };
+
+            assert!(!browser.0.preferences.snapshot().files.auto_focus_search);
+            browser.0.content_focus.focus();
+            zgui::reactive::flush();
+            harness.settle(4);
+
+            // 1. Continuous multi-key prefix matching ("c", "o", "n", "s").
+            send_key_at(&mut harness, KeyEvent::character("c"), 100);
+            assert_eq!(selected_label(&browser).as_deref(), Some("Cargo.toml"));
+            assert!(browser.0.filter.get_untracked().is_empty());
+            assert!(browser.0.list_focus_visible.get_untracked());
+
+            send_key_at(&mut harness, KeyEvent::character("o"), 250);
+            assert_eq!(selected_label(&browser).as_deref(), Some("config.toml"));
+
+            send_key_at(&mut harness, KeyEvent::character("n"), 400);
+            assert_eq!(selected_label(&browser).as_deref(), Some("config.toml"));
+
+            send_key_at(&mut harness, KeyEvent::character("s"), 550);
+            assert_eq!(selected_label(&browser).as_deref(), Some("const.rs"));
+
+            // 2. Repeated same character cycles ("l", "l") and distinct key switches to prefix ("a" -> "lla").
+            send_key_at(&mut harness, KeyEvent::character("l"), 2000);
+            assert_eq!(selected_label(&browser).as_deref(), Some("Lemur.txt"));
+            send_key_at(&mut harness, KeyEvent::character("l"), 2150);
+            assert_eq!(selected_label(&browser).as_deref(), Some("Leopard.txt"));
+            send_key_at(&mut harness, KeyEvent::character("a"), 2300);
+            assert_eq!(selected_label(&browser).as_deref(), Some("Llama.txt"));
+
+            // 3. Space mid-query matches filenames with spaces ("my p" -> "My Pictures").
+            send_key_at(&mut harness, KeyEvent::character("m"), 4000);
+            assert_eq!(selected_label(&browser).as_deref(), Some("My Documents"));
+            send_key_at(&mut harness, KeyEvent::character("y"), 4150);
+            assert_eq!(selected_label(&browser).as_deref(), Some("My Documents"));
+            send_key_at(
+                &mut harness,
+                KeyEvent::named(NamedKey::Space, PhysicalKey::Code(KeyCode::Space)),
+                4300,
+            );
+            assert_eq!(selected_label(&browser).as_deref(), Some("My Documents"));
+            send_key_at(&mut harness, KeyEvent::character("p"), 4450);
+            assert_eq!(selected_label(&browser).as_deref(), Some("My Pictures"));
+
+            // 4. Backspace corrects a mistyped character mid-query.
+            send_key_at(&mut harness, KeyEvent::character("c"), 6000);
+            send_key_at(&mut harness, KeyEvent::character("o"), 6150);
+            send_key_at(&mut harness, KeyEvent::character("x"), 6300);
+            assert_eq!(selected_label(&browser).as_deref(), Some("config.toml"));
+            send_key_at(
+                &mut harness,
+                KeyEvent::named(NamedKey::Backspace, PhysicalKey::Code(KeyCode::Backspace)),
+                6450,
+            );
+            send_key_at(&mut harness, KeyEvent::character("n"), 6600);
+            send_key_at(&mut harness, KeyEvent::character("s"), 6750);
+            assert_eq!(selected_label(&browser).as_deref(), Some("const.rs"));
+
+            // 5. Off-screen match scrolls into view.
+            send_key_at(&mut harness, KeyEvent::character("z"), 8000);
+            assert_eq!(selected_label(&browser).as_deref(), Some("zeta.txt"));
+            assert!(
+                browser.0.list.scroll_offset().y.0 > 0.0,
+                "matching an off-screen row must scroll the list viewport"
+            );
+
+            // 6. Escape resets active type-ahead immediately (no wait for timeout).
+            send_key_at(&mut harness, KeyEvent::character("c"), 10_000);
+            assert_eq!(selected_label(&browser).as_deref(), Some("Cargo.toml"));
+            send_key_at(
+                &mut harness,
+                KeyEvent::named(NamedKey::Escape, PhysicalKey::Code(KeyCode::Escape)),
+                10_100,
+            );
+            send_key_at(&mut harness, KeyEvent::character("n"), 10_200);
+            assert_eq!(selected_label(&browser).as_deref(), Some("notes.txt"));
+
+            // 7. Open menu blocks type-ahead.
+            browser.show_app_menu();
+            zgui::reactive::flush();
+            harness.settle(6);
+            send_key_at(&mut harness, KeyEvent::character("c"), 12_000);
+            assert_eq!(selected_label(&browser).as_deref(), Some("notes.txt"));
+            send_key_at(
+                &mut harness,
+                KeyEvent::named(NamedKey::Escape, PhysicalKey::Code(KeyCode::Escape)),
+                12_100,
+            );
+
+            // 8. Grid mode also supports type-ahead.
+            browser.toggle_view();
+            zgui::reactive::flush();
+            harness.settle(8);
+            browser.0.content_focus.focus();
+            zgui::reactive::flush();
+            harness.settle(4);
+            send_key_at(&mut harness, KeyEvent::character("l"), 14_000);
+            send_key_at(&mut harness, KeyEvent::character("i"), 14_150);
+            assert_eq!(selected_label(&browser).as_deref(), Some("Lion.txt"));
+
+            // 9. Enabling `auto_focus_search` switches typing to focus the filter field in order.
+            browser.edit_preferences(|prefs| prefs.files.auto_focus_search = true);
+            zgui::reactive::flush();
+            harness.settle(6);
+            browser.0.content_focus.focus();
+            zgui::reactive::flush();
+            harness.settle(4);
+            send_key_at(&mut harness, KeyEvent::character("n"), 16_000);
+            send_key_at(&mut harness, KeyEvent::character("o"), 16_150);
+            assert_eq!(browser.0.filter.get_untracked(), "no");
+            assert_eq!(browser.read_untracked(|state| state.tab().rows.len()), 1);
+
+            harness.shut_down();
+            Ok(())
+        };
+
+        zgui::app()
+            .with_fonts(Fonts::shipped_only())
+            .with_renderer(Box::new(noop_renderer))
+            .with_size(1280.0, 800.0)
+            .run_on(driver, move || {
+                let scope: Scope = bg_scope.clone();
+                let app = Gds::install(scope.clone());
+                app.appearance().motion().set_enabled(false);
+                let _ = app.appearance().install_window_sheet();
+                app.i18n().install_catalog(
+                    files_i18n::prepare(Language::English).expect("English catalog"),
+                );
+                let _prefs =
+                    preferences::Service::install(preferences::Preferences::default(), &scope)
+                        .expect("preferences service");
+                let browser = Browser::new(
+                    LaunchOptions {
+                        places: Ok(Places::default()),
+                        start: start.clone(),
+                        home: start.clone(),
+                        picker: None,
+                    },
+                    volumes::Service::new(scope),
+                    Rc::new(|_| {}),
+                );
+                *slot_for_view.borrow_mut() = Some(browser.clone());
+                browser.view()
+            })
+            .expect("typeahead and auto-focus search harness");
     }
 }

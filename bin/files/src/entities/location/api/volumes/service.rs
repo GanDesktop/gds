@@ -81,17 +81,17 @@ impl Service {
             tasks: tasks.clone(),
         }));
         let (sender, mut receiver) = mpsc::channel(16);
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         let watcher = {
             let cancel = tasks.token();
             tasks.spawn_named("Watch storage volumes", async move {
                 tokio::select! {
                     _ = cancel.cancelled() => {},
-                    _ = super::linux::watch(sender) => {},
+                    _ = super::udisks::watch(sender) => {},
                 }
             })
         };
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         let watcher = tasks.spawn_named("Discover storage volumes", async move {
             let _ = sender
                 .send(Observation {
@@ -211,11 +211,11 @@ impl Service {
             Gds::current().tasks().spawn_ui(
                 "Refresh storage volumes",
                 async {
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                     {
-                        super::linux::refresh().await
+                        super::udisks::refresh().await
                     }
-                    #[cfg(not(target_os = "linux"))]
+                    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
                     {
                         Err(Error::Unsupported)
                     }
@@ -341,14 +341,14 @@ impl Service {
             Gds::current()
                 .tasks()
                 .spawn("Change volume mount state", async move {
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                     {
-                        let mount_point = super::linux::operate(expected, action).await;
+                        let mount_point = super::udisks::operate(expected, action).await;
                         let started = Instant::now();
-                        let result = super::linux::refresh().await;
+                        let result = super::udisks::refresh().await;
                         (mount_point, Observation { started, result })
                     }
-                    #[cfg(not(target_os = "linux"))]
+                    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
                     {
                         let _ = (expected, action);
                         (
