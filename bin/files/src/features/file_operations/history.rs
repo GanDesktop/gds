@@ -240,8 +240,9 @@ pub fn transfer_steps(report: &transfer::Report) -> Vec<Step> {
         .items
         .iter()
         .filter(|item| {
-            item.result.is_ok()
-                || (report.mode == transfer::Mode::Copy && item.destination_committed)
+            !item.replaced
+                && (item.result.is_ok()
+                    || (report.mode == transfer::Mode::Copy && item.destination_committed))
         })
         .filter_map(|item| {
             let expected = item.committed_snapshot?;

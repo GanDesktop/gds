@@ -32,6 +32,27 @@ pub enum Mode {
     Move,
 }
 
+/// How one planned transfer entry handles an existing target at its destination path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CollisionPolicy {
+    /// Fail atomically with [`Error::Conflict`] if the destination already exists.
+    #[default]
+    Fail,
+    /// Atomically replace an existing non-directory destination (file or symlink).
+    /// Replacing an existing directory is still refused with [`Error::Conflict`].
+    ReplaceNonDirectory,
+}
+
+/// One planned transfer entry with an explicit destination directory, target leaf name, and
+/// collision policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlannedEntry {
+    pub source: PathBuf,
+    pub destination_dir: PathBuf,
+    pub target_name: OsString,
+    pub policy: CollisionPolicy,
+}
+
 #[derive(Clone, Debug)]
 pub struct Request {
     pub paths: Vec<PathBuf>,
@@ -111,9 +132,8 @@ pub const DEFAULT_COPY_BUFFER_SIZE: usize = 64 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Batch {
-    request: Request,
-    /// Explicit target leaves; sources absent here keep their original name.
-    names: Vec<NamedTarget>,
+    mode: Mode,
+    entries: Vec<PlannedEntry>,
     cancel: tokio_util::sync::CancellationToken,
     buffer_size: usize,
 }
@@ -123,7 +143,25 @@ impl Batch {
     ///
     /// # Errors
     /// Rejects empty selections, relative destinations and sources without an absolute named leaf.
-    pub fn new(mut request: Request) -> Result<Self, Error> {
+    pub fn new(request: Request) -> Result<Self, Error> {
+        Self::named(request, Vec::new())
+    }
+
+    pub fn with_buffer_size(mut self, bytes: usize) -> Self {
+        self.buffer_size = bytes.max(4096);
+        self
+    }
+
+    /// Freeze the same request with explicit target leaves for some sources.
+    ///
+    /// Names outside `request.paths` are ignored, since they belong to a source
+    /// that already succeeded. Duplicate target names are rejected here rather
+    /// than turning into an implicit overwrite during execution.
+    ///
+    /// # Errors
+    /// Reports the same request errors as [`Batch::new`], invalid leaf names and
+    /// two sources that would share one target name.
+    pub fn named(mut request: Request, targets: Vec<NamedTarget>) -> Result<Self, Error> {
         if !request.destination.is_absolute() {
             return Err(Error::InvalidDestination {
                 path: request.destination,
@@ -141,36 +179,10 @@ impl Batch {
         if request.paths.is_empty() {
             return Err(Error::EmptySelection);
         }
-        Ok(Self {
-            cancel: tokio_util::sync::CancellationToken::new(),
-            request,
-            names: Vec::new(),
-            buffer_size: DEFAULT_COPY_BUFFER_SIZE,
-        })
-    }
-
-    pub fn with_buffer_size(mut self, bytes: usize) -> Self {
-        self.buffer_size = bytes.max(4096);
-        self
-    }
-
-    /// Freeze the same request with explicit target leaves for some sources.
-    ///
-    /// Names outside `request.paths` are ignored, since they belong to a source
-    /// that already succeeded. Duplicate target names are rejected here rather
-    /// than turning into an implicit overwrite during execution.
-    ///
-    /// # Errors
-    /// Reports the same request errors as [`Batch::new`], invalid leaf names and
-    /// two sources that would share one target name.
-    pub fn named(request: Request, targets: Vec<NamedTarget>) -> Result<Self, Error> {
-        let mut batch = Self::new(request)?;
         let mut named = Vec::with_capacity(targets.len());
         let mut sources = HashSet::new();
         for target in targets {
-            if !batch.request.paths.contains(&target.source)
-                || !sources.insert(target.source.clone())
-            {
+            if !request.paths.contains(&target.source) || !sources.insert(target.source.clone()) {
                 continue;
             }
             names::validate(&target.name).map_err(|source| Error::InvalidName {
@@ -187,8 +199,69 @@ impl Batch {
             }
             named.push(target);
         }
-        batch.names = named;
-        Ok(batch)
+        let entries = request
+            .paths
+            .into_iter()
+            .map(|source| {
+                let target_name = names::target_name(&source, &named).to_owned();
+                PlannedEntry {
+                    source,
+                    destination_dir: request.destination.clone(),
+                    target_name,
+                    policy: CollisionPolicy::Fail,
+                }
+            })
+            .collect();
+        Self::planned(request.mode, entries)
+    }
+
+    /// Freeze an explicit list of planned entries, each with its own destination directory, target
+    /// leaf name, and collision policy.
+    ///
+    /// # Errors
+    /// Rejects empty lists, relative paths, invalid leaf names, and two entries targeting the same
+    /// `(destination_dir, target_name)`.
+    pub fn planned(mode: Mode, entries: Vec<PlannedEntry>) -> Result<Self, Error> {
+        if entries.is_empty() {
+            return Err(Error::EmptySelection);
+        }
+        let mut planned_targets: HashSet<(PathBuf, OsString)> = HashSet::new();
+        for entry in &entries {
+            if !entry.destination_dir.is_absolute() {
+                return Err(Error::InvalidDestination {
+                    path: entry.destination_dir.clone(),
+                });
+            }
+            if !entry.source.is_absolute()
+                || !matches!(
+                    entry.source.components().next_back(),
+                    Some(Component::Normal(_))
+                )
+            {
+                return Err(Error::InvalidSource {
+                    path: entry.source.clone(),
+                });
+            }
+            names::validate(&entry.target_name).map_err(|source| Error::InvalidName {
+                path: entry.source.clone(),
+                source,
+            })?;
+            if !planned_targets.insert((entry.destination_dir.clone(), entry.target_name.clone())) {
+                return Err(Error::DuplicateName {
+                    name: entry
+                        .target_name
+                        .to_string_lossy()
+                        .escape_debug()
+                        .to_string(),
+                });
+            }
+        }
+        Ok(Self {
+            mode,
+            entries,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            buffer_size: DEFAULT_COPY_BUFFER_SIZE,
+        })
     }
 
     /// Run on a background executor. Each item retains its own outcome and original paths.
@@ -204,18 +277,16 @@ impl Batch {
         }
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
-            let Batch { request, names, .. } = self;
-            let mode = request.mode;
-            let items = request
-                .paths
+            let Batch { mode, entries, .. } = self;
+            let items = entries
                 .into_iter()
-                .map(|source| {
-                    let destination = request
-                        .destination
-                        .join(names::target_name(&source, &names));
+                .map(|entry| {
+                    let destination = entry.destination_dir.join(&entry.target_name);
                     Item {
-                        source,
+                        source: entry.source,
                         destination,
+                        policy: entry.policy,
+                        replaced: false,
                         destination_committed: false,
                         committed_snapshot: None,
                         result: Err(Error::UnsupportedPlatform),
@@ -229,22 +300,20 @@ impl Batch {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn execute_local(self) -> Report {
         let Batch {
-            request,
-            names,
+            mode,
+            entries,
             cancel,
             buffer_size,
         } = self;
-        let mode = request.mode;
-        let items = request
-            .paths
+        let items = entries
             .into_iter()
-            .map(|source| {
-                let destination = request
-                    .destination
-                    .join(names::target_name(&source, &names));
+            .map(|entry| {
+                let destination = entry.destination_dir.join(&entry.target_name);
                 let mut item = Item {
-                    source,
+                    source: entry.source,
                     destination,
+                    policy: entry.policy,
+                    replaced: false,
                     destination_committed: false,
                     committed_snapshot: None,
                     result: Ok(()),
@@ -261,10 +330,103 @@ impl Batch {
     }
 }
 
+/// Checks whether transferring directory `source` into `destination_dir` would place it into
+/// itself or one of its descendants (resolving canonical parent paths).
+///
+/// # Errors
+/// Returns [`Error::IntoSelf`] when `destination_dir` resolves inside `source`, or filesystem
+/// inspection errors if paths cannot be resolved.
+pub fn check_into_self(source: &Path, destination_dir: &Path) -> Result<(), Error> {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        let parent = source.parent().ok_or_else(|| Error::InvalidSource {
+            path: source.to_owned(),
+        })?;
+        let leaf = source.file_name().ok_or_else(|| Error::InvalidSource {
+            path: source.to_owned(),
+        })?;
+        let canonical_source = parent
+            .canonicalize()
+            .map_err(|error| Error::filesystem("resolve source parent", parent, error))?
+            .join(leaf);
+        let metadata = fs::symlink_metadata(&canonical_source)
+            .map_err(|error| Error::filesystem("inspect source", source, error))?;
+        let canonical_dir = destination_dir
+            .canonicalize()
+            .map_err(|error| Error::filesystem("resolve destination", destination_dir, error))?;
+        if metadata.is_dir() && canonical_dir.starts_with(&canonical_source) {
+            return Err(Error::IntoSelf {
+                path: destination_dir.to_owned(),
+            });
+        }
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    {
+        let _ = (source, destination_dir);
+        Err(Error::UnsupportedPlatform)
+    }
+}
+
+/// Removes `path` via `unlinkat(..., REMOVEDIR)` only when it is still an empty real directory.
+///
+/// Returns `Ok(true)` if removed, `Ok(false)` if already gone or non-empty (preserving skipped or
+/// concurrently added children), and `Err` on unexpected filesystem failures.
+///
+/// # Errors
+/// Propagates permission or I/O errors other than `ENOENT`, `ENOTEMPTY`, `EEXIST`, or `ENOTDIR`.
+pub fn remove_empty_dir_if_empty(path: &Path) -> Result<bool, Error> {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        let parent_path = path.parent().ok_or_else(|| Error::InvalidSource {
+            path: path.to_owned(),
+        })?;
+        let leaf = path.file_name().ok_or_else(|| Error::InvalidSource {
+            path: path.to_owned(),
+        })?;
+        let parent = match File::open(parent_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(Error::filesystem("open directory parent", path, error)),
+        };
+        let stat = match rustix::fs::statat(&parent, leaf, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => stat,
+            Err(Errno::NOENT) => return Ok(false),
+            Err(error) => {
+                return Err(Error::filesystem(
+                    "inspect merged source directory",
+                    path,
+                    error,
+                ));
+            }
+        };
+        if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+            return Ok(false);
+        }
+        match rustix::fs::unlinkat(&parent, leaf, AtFlags::REMOVEDIR) {
+            Ok(()) => Ok(true),
+            Err(Errno::NOENT | Errno::NOTEMPTY | Errno::EXIST | Errno::NOTDIR) => Ok(false),
+            Err(error) => Err(Error::filesystem(
+                "remove empty merged directory",
+                path,
+                error,
+            )),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    {
+        let _ = path;
+        Err(Error::UnsupportedPlatform)
+    }
+}
+
 #[derive(Debug)]
 pub struct Item {
     pub source: PathBuf,
     pub destination: PathBuf,
+    pub policy: CollisionPolicy,
+    /// True when an existing non-directory destination was replaced atomically.
+    pub replaced: bool,
     /// Also true when a later source-removal or staging-cleanup error leaves a complete destination.
     pub destination_committed: bool,
     pub committed_snapshot: Option<crate::features::file_operations::history::Snapshot>,
@@ -341,14 +503,43 @@ impl Prepared {
         rustix::fs::renameat_with(CWD, source, CWD, destination, RenameFlags::NOREPLACE)
     }
 
+    /// Atomically replaces a non-directory `destination` with `source` via POSIX `renameat`.
+    /// The kernel rejects replacing an existing directory with `EISDIR` / `ENOTEMPTY`.
+    ///
     /// # Errors
-    /// Reports a conflict or an error inspecting the target. Commit checks again atomically.
-    fn check_destination(&self) -> Result<(), Error> {
-        match fs::symlink_metadata(&self.destination) {
-            Ok(_) => Err(Error::Conflict {
+    /// Returns the kernel rename failure.
+    fn rename_replace(source: &Path, destination: &Path) -> Result<(), Errno> {
+        rustix::fs::renameat(CWD, source, CWD, destination)
+    }
+
+    /// Validates destination according to `policy` before starting a copy or replacing move.
+    /// Returns `Ok(true)` when an existing non-directory destination will be replaced.
+    ///
+    /// # Errors
+    /// Reports [`Error::Conflict`] when `Fail` encounters an existing path or when
+    /// `ReplaceNonDirectory` encounters a directory or self-overwrite.
+    fn check_destination(&self, policy: CollisionPolicy) -> Result<bool, Error> {
+        if self.source == self.destination {
+            return Err(Error::Conflict {
                 path: self.destination.clone(),
-            }),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            });
+        }
+        match fs::symlink_metadata(&self.destination) {
+            Ok(existing) => match policy {
+                CollisionPolicy::Fail => Err(Error::Conflict {
+                    path: self.destination.clone(),
+                }),
+                CollisionPolicy::ReplaceNonDirectory => {
+                    if self.metadata.is_dir() || existing.is_dir() {
+                        Err(Error::Conflict {
+                            path: self.destination.clone(),
+                        })
+                    } else {
+                        Ok(true)
+                    }
+                }
+            },
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(Error::filesystem(
                 "inspect target",
                 &self.destination,
@@ -358,7 +549,7 @@ impl Prepared {
     }
 
     fn rename_error(&self, error: Errno) -> Error {
-        if matches!(error, Errno::EXIST | Errno::NOTEMPTY) {
+        if matches!(error, Errno::EXIST | Errno::NOTEMPTY | Errno::ISDIR) {
             Error::Conflict {
                 path: self.destination.clone(),
             }
@@ -400,9 +591,20 @@ impl Item {
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<(), Error> {
         let prepared = Prepared::new(self)?;
+        let policy = self.policy;
+        let will_replace = prepared.check_destination(policy)?;
         if mode == Mode::Move {
-            match Prepared::rename_no_replace(&prepared.source, &prepared.destination) {
+            let rename_result = match policy {
+                CollisionPolicy::Fail => {
+                    Prepared::rename_no_replace(&prepared.source, &prepared.destination)
+                }
+                CollisionPolicy::ReplaceNonDirectory => {
+                    Prepared::rename_replace(&prepared.source, &prepared.destination)
+                }
+            };
+            match rename_result {
                 Ok(()) => {
+                    self.replaced = will_replace || policy == CollisionPolicy::ReplaceNonDirectory;
                     self.destination_committed = true;
                     self.committed_snapshot =
                         crate::features::file_operations::history::Snapshot::capture(
@@ -415,7 +617,6 @@ impl Item {
                 Err(error) => return Err(prepared.rename_error(error)),
             }
         }
-        prepared.check_destination()?;
         let stage = Staging::new(&prepared.directory)?;
         let node = Node {
             source: prepared.source.clone(),
@@ -435,8 +636,16 @@ impl Item {
                     path: prepared.source.clone(),
                 });
             }
-            Prepared::rename_no_replace(&node.destination, &prepared.destination)
-                .map_err(|error| prepared.rename_error(error))?;
+            let commit_result = match policy {
+                CollisionPolicy::Fail => {
+                    Prepared::rename_no_replace(&node.destination, &prepared.destination)
+                }
+                CollisionPolicy::ReplaceNonDirectory => {
+                    Prepared::rename_replace(&node.destination, &prepared.destination)
+                }
+            };
+            commit_result.map_err(|error| prepared.rename_error(error))?;
+            self.replaced = will_replace || policy == CollisionPolicy::ReplaceNonDirectory;
             self.destination_committed = true;
             self.committed_snapshot =
                 crate::features::file_operations::history::Snapshot::capture(&prepared.destination)

@@ -68,21 +68,6 @@ impl NamedTarget {
     }
 }
 
-/// A source whose planned target is already taken in the destination folder or
-/// collides with another source's target.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Collision {
-    pub source: PathBuf,
-    pub target: OsString,
-}
-
-impl Collision {
-    /// Display form of the conflicting target, safe for dialog text.
-    pub fn target_label(&self) -> String {
-        self.target.to_string_lossy().escape_debug().to_string()
-    }
-}
-
 /// Check one leaf name; no filesystem access is performed.
 ///
 /// The comparison is byte-exact: leading and trailing spaces are legal names
@@ -171,35 +156,6 @@ pub fn target_name<'a>(source: &'a Path, chosen: &'a [NamedTarget]) -> &'a OsStr
             || source.file_name().unwrap_or(source.as_os_str()),
             |target| target.name.as_os_str(),
         )
-}
-
-/// Planned target names that already exist in `destination` or are shared by
-/// more than one source, in source order.
-///
-/// Duplicates are reported for every source after the first one, so renaming
-/// them in order never transfers two entries onto the same leaf.
-///
-/// # Errors
-/// Reports entries of `destination` that cannot be inspected; an unreadable
-/// target is never treated as free.
-pub fn collisions(
-    destination: &Path,
-    sources: &[PathBuf],
-    chosen: &[NamedTarget],
-) -> Result<Vec<Collision>, Error> {
-    let mut planned = HashSet::new();
-    let mut collisions = Vec::new();
-    for source in sources {
-        let target = target_name(source, chosen).to_owned();
-        let duplicate = !planned.insert(target.clone());
-        if duplicate || exists(destination.join(&target))? {
-            collisions.push(Collision {
-                source: source.clone(),
-                target,
-            });
-        }
-    }
-    Ok(collisions)
 }
 
 /// # Errors

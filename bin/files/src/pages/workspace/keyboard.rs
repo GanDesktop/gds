@@ -342,9 +342,9 @@ impl Browser {
 
         match self.0.prompt.get_untracked() {
             Prompt::Closed => {}
-            Prompt::Name { .. } => {
+            Prompt::Name { .. } | Prompt::Conflict { .. } => {
                 let _ = self.0.prompt_decisions.handle_key_down(event);
-                // `NameForm` owns Enter/Escape and guards against IME preedit.
+                // `NameForm` / `ConflictDialog` own Enter/Escape and guard against IME preedit.
                 return;
             }
             Prompt::About => {

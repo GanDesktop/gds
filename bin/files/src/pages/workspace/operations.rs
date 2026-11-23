@@ -1280,8 +1280,8 @@ impl Browser {
                     return;
                 };
                 let Ok(inspection) = result else {
-                    context.settle_drop(false);
                     browser.end_operation();
+                    context.settle_drop(false);
                     if let Err(error) = result {
                         browser.report_notice(error.to_string());
                     }
@@ -1291,10 +1291,13 @@ impl Browser {
                     Inspection::Ready(ready_job) => {
                         browser.execute_paste_step(ready_job, context, cancel);
                     }
+                    Inspection::Done(done_job) => {
+                        browser.finish_paste_job(done_job, context, false);
+                    }
                     Inspection::Failed { job, error } => {
-                        if job.succeeded.is_empty() && job.failures.is_empty() {
-                            context.settle_drop(false);
+                        if !job.has_disk_progress() {
                             browser.end_operation();
+                            context.settle_drop(false);
                             browser.report_notice(error.to_string());
                         } else {
                             let mut failed_job = job;
@@ -1317,29 +1320,26 @@ impl Browser {
         context: PasteContext,
         cancel: CancellationToken,
     ) {
-        let title = gds::t_untracked!(
-            "transfer-conflict-title",
-            name = conflict.collision.target_label()
-        );
-        let form = NameForm::new(NamePurpose::Conflict, title, conflict.suggestion);
-        let source = conflict.collision.source;
-        let browser_submit = self.clone();
+        let mode = job.mode;
+        let conflict_for_resolve = conflict.clone();
+        let browser_resolve = self.clone();
         let browser_cancel = self.clone();
         let shared_job = std::rc::Rc::new(std::cell::RefCell::new(Some(job)));
-        let submit_job = std::rc::Rc::clone(&shared_job);
+        let resolve_job = std::rc::Rc::clone(&shared_job);
         let cancel_job = shared_job;
-        let submit_context = context.clone();
+        let resolve_context = context.clone();
         let cancel_context = context;
-        self.name_form_with_cancel(
-            form,
-            move |chosen_name| {
-                let Some(mut next_job) = submit_job.borrow_mut().take() else {
+        self.conflict_prompt(
+            mode,
+            conflict,
+            move |resolution| {
+                let Some(mut next_job) = resolve_job.borrow_mut().take() else {
                     return;
                 };
-                next_job.resolve_conflict(source.clone(), chosen_name);
-                browser_submit.inspect_paste_step(
+                next_job.resolve_conflict(conflict_for_resolve.clone(), resolution);
+                browser_resolve.inspect_paste_step(
                     next_job,
-                    submit_context.clone(),
+                    resolve_context.clone(),
                     cancel.clone(),
                 );
             },
@@ -1350,12 +1350,12 @@ impl Browser {
                 // Cancelling a conflict prompt means the batch did not finish cleanly; reject any
                 // pending Wayland drop offer immediately so a move source never deletes files.
                 cancel_context.settle_drop(false);
-                cancelled_job.pending.clear();
+                cancelled_job.abort_remaining();
                 if cancelled_job.succeeded.is_empty() && cancelled_job.failures.is_empty() {
                     browser_cancel.end_operation();
                     browser_cancel.report_notice(i18n::text_untracked("paste-cancelled"));
                 } else {
-                    browser_cancel.finish_paste_job(cancelled_job, cancel_context.clone(), false);
+                    browser_cancel.finish_paste_job(cancelled_job, cancel_context.clone(), true);
                 }
             },
         );
@@ -1380,9 +1380,9 @@ impl Browser {
         {
             Ok(batch) => batch,
             Err(error) => {
-                if job.succeeded.is_empty() && job.failures.is_empty() {
-                    context.settle_drop(false);
+                if !job.has_disk_progress() {
                     self.end_operation();
+                    context.settle_drop(false);
                     self.report_notice(error.to_string());
                 } else {
                     job.record_abort(error.to_string());
@@ -1396,7 +1396,14 @@ impl Browser {
         let task = self
             .scope()
             .spawn_blocking_named("Transfer pasted files", move || {
-                batch.execute_cancellable(task_cancel)
+                let report = batch.execute_cancellable(task_cancel);
+                match job.apply_pass(report) {
+                    PassOutcome::Completed(mut done) => {
+                        done.cleanup_merged_sources();
+                        PassOutcome::Completed(done)
+                    }
+                    PassOutcome::RetryConflict(next_job) => PassOutcome::RetryConflict(next_job),
+                }
             });
         let weak = self.downgrade();
         self.0.owner.with(|| {
@@ -1406,27 +1413,17 @@ impl Browser {
                     context.settle_drop(false);
                     return;
                 };
-                let Ok(report) = result else {
-                    if job.succeeded.is_empty() && job.failures.is_empty() {
-                        context.settle_drop(false);
-                        browser.end_operation();
-                        if let Err(error) = result {
-                            browser.report_notice(error.to_string());
-                        }
-                    } else {
-                        if let Err(error) = result {
-                            job.record_abort(error.to_string());
-                        }
-                        browser.finish_paste_job(job, context, true);
-                    }
-                    return;
-                };
-                match job.apply_pass(report) {
-                    PassOutcome::Completed(done) => {
+                match result {
+                    Ok(PassOutcome::Completed(done)) => {
                         browser.finish_paste_job(done, context, false);
                     }
-                    PassOutcome::RetryConflict(next_job) => {
+                    Ok(PassOutcome::RetryConflict(next_job)) => {
                         browser.inspect_paste_step(next_job, context, cancel);
+                    }
+                    Err(error) => {
+                        browser.end_operation();
+                        context.settle_drop(false);
+                        browser.report_notice(error.to_string());
                     }
                 }
             }));
@@ -1436,10 +1433,10 @@ impl Browser {
     fn finish_paste_job(&self, job: PasteJob, context: PasteContext, aborted: bool) {
         let destination = job.destination.clone();
         if context.cut
-            && !job.succeeded.is_empty()
+            && !job.cut_completed.is_empty()
             && let Some(snap) = context.snapshot.clone()
         {
-            let moved = job.succeeded.clone();
+            let moved = job.cut_completed.clone();
             let weak = self.downgrade();
             self.0.owner.with(|| {
                 drop(spawn_local(async move {
@@ -1472,15 +1469,19 @@ impl Browser {
         context: PasteContext,
         aborted: bool,
     ) {
-        let whole_batch_succeeded = !aborted
-            && summary.failures.is_empty()
+        let failed_count = summary.failures.len();
+        let whole_batch_succeeded = failed_count == 0
             && summary.clipboard_error.is_none()
-            && !summary.succeeded.is_empty();
+            && !aborted
+            && summary.skipped == 0
+            && (!summary.succeeded.is_empty() || summary.merged_dirs > 0);
         context.settle_drop(whole_batch_succeeded);
+
         self.end_operation();
         let mut changed_paths = vec![destination];
         changed_paths.extend(summary.succeeded.iter().cloned());
         changed_paths.extend(summary.committed.iter().cloned());
+        changed_paths.extend(summary.touched_dirs.iter().cloned());
         changed_paths.extend(summary.undo.iter().flat_map(history::Step::paths));
         if context.record_history {
             let kind = summary.history_kind();
@@ -1488,14 +1489,15 @@ impl Browser {
             if reset {
                 self.clear_history();
             }
-            self.record_history(history::Entry::new(kind, summary.undo));
+            if !summary.non_undoable {
+                self.record_history(history::Entry::new(kind, summary.undo));
+            }
         }
         self.refresh_affected(&changed_paths);
         if !summary.committed.is_empty() {
             self.reveal_paths(summary.committed);
         }
 
-        let failed_count = summary.failures.len();
         if failed_count > 0 || summary.clipboard_error.is_some() || aborted {
             let headline = if aborted && failed_count == 0 {
                 gds::t_untracked!(
@@ -1519,13 +1521,35 @@ impl Browser {
                 format!("{headline}\n{}", details.join("\n"))
             };
             self.report_notice(message);
-        } else {
+        } else if !summary.succeeded.is_empty() && summary.skipped > 0 {
+            let message = if summary.mode == transfer::Mode::Move {
+                gds::t_untracked!(
+                    "move-done-skipped",
+                    succeeded = summary.succeeded.len() as i64,
+                    skipped = summary.skipped as i64
+                )
+            } else {
+                gds::t_untracked!(
+                    "copy-done-skipped",
+                    succeeded = summary.succeeded.len() as i64,
+                    skipped = summary.skipped as i64
+                )
+            };
+            self.report_success(message);
+        } else if !summary.succeeded.is_empty() {
             let key = if summary.mode == transfer::Mode::Move {
                 "move-done"
             } else {
                 "copy-done"
             };
             self.report_success(gds_i18n::count_untracked(key, summary.succeeded.len()));
+        } else if summary.merged_dirs > 0 && summary.skipped == 0 {
+            self.report_success(gds_i18n::count_untracked(
+                "paste-merged",
+                summary.merged_dirs,
+            ));
+        } else if summary.skipped > 0 {
+            self.report_info(gds_i18n::count_untracked("paste-skipped", summary.skipped));
         }
         self.focus_content();
     }

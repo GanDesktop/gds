@@ -126,11 +126,6 @@ const NAME_FORM_CSS: &str = css!(
         min-width: 0px;
     }
 
-    .gds-files-name-form[data-conflict="true"] {
-        width: 100%;
-        max-width: 100%;
-    }
-
     .gds-files-name-form__title-row {
         display: flex;
         flex-direction: row;
@@ -162,7 +157,6 @@ const NAME_FORM_CSS: &str = css!(
 pub(super) enum NamePurpose {
     NewFolder,
     Rename,
-    Conflict,
     Generic,
 }
 
@@ -191,10 +185,6 @@ impl NameForm {
         }
     }
 
-    pub(super) const fn is_conflict(&self) -> bool {
-        matches!(self.purpose, NamePurpose::Conflict)
-    }
-
     fn checked_name(&self, value: &str) -> Result<OsString, &'static str> {
         let candidate = if self.non_utf8 && value == self.display {
             self.initial.clone()
@@ -213,7 +203,6 @@ impl NameForm {
         match self.purpose {
             NamePurpose::NewFolder => Some(IconName::FolderPlus),
             NamePurpose::Rename => Some(IconName::TextCursor),
-            NamePurpose::Conflict => Some(IconName::ClipboardPaste),
             NamePurpose::Generic => None,
         }
     }
@@ -222,7 +211,6 @@ impl NameForm {
         match self.purpose {
             NamePurpose::NewFolder => IconName::FolderPlus,
             NamePurpose::Rename => IconName::Pencil,
-            NamePurpose::Conflict => IconName::ClipboardPaste,
             NamePurpose::Generic => IconName::Check,
         }
     }
@@ -231,7 +219,6 @@ impl NameForm {
         match self.purpose {
             NamePurpose::NewFolder => Some("new-folder-message"),
             NamePurpose::Rename => Some("rename-message"),
-            NamePurpose::Conflict => Some("transfer-conflict-message"),
             NamePurpose::Generic => None,
         }
     }
@@ -240,7 +227,6 @@ impl NameForm {
         match self.purpose {
             NamePurpose::NewFolder => Some("new-folder-placeholder"),
             NamePurpose::Rename => Some("rename-placeholder"),
-            NamePurpose::Conflict => Some("transfer-conflict-placeholder"),
             NamePurpose::Generic => None,
         }
     }
@@ -249,16 +235,13 @@ impl NameForm {
         match self.purpose {
             NamePurpose::NewFolder => "new-folder-confirm",
             NamePurpose::Rename => "rename-confirm",
-            NamePurpose::Conflict => "paste-files",
             NamePurpose::Generic => "dialog-confirm",
         }
     }
 
     const fn cancel_key(&self) -> &'static str {
         match self.purpose {
-            NamePurpose::NewFolder | NamePurpose::Rename | NamePurpose::Conflict => {
-                "operation-cancel"
-            }
+            NamePurpose::NewFolder | NamePurpose::Rename => "operation-cancel",
             NamePurpose::Generic => "dialog-cancel",
         }
     }
@@ -305,7 +288,6 @@ impl NameForm {
         let title = self.title.clone();
         let header_icon = self.header_icon();
         let primary_icon = self.primary_icon();
-        let is_conflict = self.is_conflict();
         let confirm_key = self.confirm_key();
         let cancel_key = self.cancel_key();
         let message = self.message_key().map(i18n::text);
@@ -392,7 +374,6 @@ impl NameForm {
         AnyView::new(view! {
             column(
                 class = "gds-files-name-form",
-                attr:data-conflict = is_conflict.then(|| "true".to_owned()),
                 on:key_down = move |event| {
                     if dialog_composing.get() {
                         return;
@@ -514,7 +495,6 @@ mod tests {
         );
         assert_eq!(new_folder.confirm_key(), "new-folder-confirm");
         assert_eq!(new_folder.cancel_key(), "operation-cancel");
-        assert!(!new_folder.is_conflict());
         assert!(new_folder.checked_name("New Folder").is_ok());
 
         let rename_form = NameForm::new(
@@ -533,14 +513,5 @@ mod tests {
             rename_form.checked_name("summary.txt"),
             Ok(OsString::from("summary.txt"))
         );
-
-        let conflict = NameForm::new(
-            NamePurpose::Conflict,
-            "Name Conflict".into(),
-            OsString::from("report (2).txt"),
-        );
-        assert!(conflict.is_conflict());
-        assert_eq!(conflict.confirm_key(), "paste-files");
-        assert_eq!(conflict.cancel_key(), "operation-cancel");
     }
 }

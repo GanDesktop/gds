@@ -693,6 +693,10 @@ impl Browser {
         gds::ui::feedback::notifications::success(message);
     }
 
+    pub(super) fn report_info(&self, message: impl Into<String>) {
+        gds::ui::feedback::notifications::info(message);
+    }
+
     pub(super) fn scope(&self) -> Scope {
         (*self.0.tasks).clone()
     }
@@ -829,19 +833,20 @@ impl Browser {
         self.open_prompt(Prompt::Name {
             form,
             submit: Rc::new(submit),
-            cancel: None,
         });
     }
 
-    pub(super) fn name_form_with_cancel(
+    pub(super) fn conflict_prompt(
         &self,
-        form: NameForm,
-        submit: impl Fn(OsString) + 'static,
+        mode: crate::features::file_operations::transfer::Mode,
+        conflict: crate::features::file_operations::paste::PasteConflict,
+        resolve: impl Fn(crate::features::file_operations::paste::ConflictResolution) + 'static,
         cancel: impl Fn() + 'static,
     ) {
-        self.open_prompt(Prompt::Name {
-            form,
-            submit: Rc::new(submit),
+        self.open_prompt(Prompt::Conflict {
+            mode,
+            conflict,
+            resolve: Rc::new(resolve),
             cancel: Some(Rc::new(cancel)),
         });
     }
@@ -853,7 +858,7 @@ impl Browser {
         }
         self.0.prompt_decisions.clear();
         self.0.prompt.set(Prompt::Closed);
-        if let Prompt::Name {
+        if let Prompt::Conflict {
             cancel: Some(cancel),
             ..
         } = prompt

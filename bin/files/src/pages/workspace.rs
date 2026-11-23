@@ -2,6 +2,7 @@
 
 mod advanced;
 mod chrome;
+mod conflict_dialog;
 mod drag;
 mod enrichment;
 mod geometry;

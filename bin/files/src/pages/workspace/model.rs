@@ -12,7 +12,7 @@ use crate::{
         location::{Location, navigation::Navigation, places::Places, volumes},
     },
     features::{
-        file_operations::{history, recycle},
+        file_operations::{history, paste, recycle, transfer},
         pick_files,
     },
     shared::lib::selection::{Selection, SelectionBacking},
@@ -513,6 +513,11 @@ pub(super) enum Prompt {
     Name {
         form: super::name_form::NameForm,
         submit: Rc<dyn Fn(std::ffi::OsString)>,
+    },
+    Conflict {
+        mode: transfer::Mode,
+        conflict: paste::PasteConflict,
+        resolve: Rc<dyn Fn(paste::ConflictResolution)>,
         cancel: Option<Rc<dyn Fn()>>,
     },
     Confirm {

@@ -3074,8 +3074,24 @@ impl Browser {
             let name_open_cancel = browser.clone();
             let name_decision_cancel = browser.clone();
             let name_decisions = browser.0.prompt_decisions.clone();
-            let name_body_browser = browser;
+            let name_body_browser = browser.clone();
             let retained_name: Rc<RefCell<Option<(NameForm, Rc<dyn Fn(OsString)>, u64)>>> =
+                Rc::new(RefCell::new(None));
+
+            // 4. `Prompt::Conflict` -> `ModalDialog` (`DialogSize::Md`)
+            let conflict_open =
+                Signal::derive_local(move || matches!(prompt_sig.get(), Prompt::Conflict { .. }));
+            let conflict_open_cancel = browser.clone();
+            let conflict_decision_cancel = browser.clone();
+            let conflict_decisions = browser.0.prompt_decisions.clone();
+            let conflict_body_browser = browser;
+            type RetainedConflict = (
+                crate::features::file_operations::transfer::Mode,
+                crate::features::file_operations::paste::PasteConflict,
+                Rc<dyn Fn(crate::features::file_operations::paste::ConflictResolution)>,
+                u64,
+            );
+            let retained_conflict: Rc<RefCell<Option<RetainedConflict>>> =
                 Rc::new(RefCell::new(None));
 
             view! {
@@ -3148,12 +3164,91 @@ impl Browser {
                         move || {
                             let generation = gen_sig.get();
                             let _z = enter_non_reactive_zone();
-                            if let Prompt::Name { form, submit, .. } = pb.0.prompt.get_untracked() {
+                            if let Prompt::Name { form, submit } = pb.0.prompt.get_untracked() {
                                 *retained.borrow_mut() =
                                     Some((form.clone(), Rc::clone(&submit), generation));
                                 form.view(&pb, generation, submit, &pb.0.prompt_decisions)
                             } else if let Some((form, submit, retained_gen)) = retained.borrow().clone() {
                                 form.view(&pb, retained_gen, submit, &pb.0.prompt_decisions)
+                            } else {
+                                AnyView::new(())
+                            }
+                        }
+                    }}
+                }
+                ModalDialog(
+                    open = Binding::controlled(
+                        conflict_open,
+                        move |next: bool| {
+                            if !next
+                                && matches!(
+                                    conflict_open_cancel.0.prompt.get_untracked(),
+                                    Prompt::Conflict { .. }
+                                )
+                            {
+                                conflict_open_cancel.cancel_prompt();
+                            }
+                        },
+                    ),
+                    size = DialogSize::Md,
+                    class = "gds-files-conflict-modal",
+                    dismiss_on_outside_press = false,
+                    dismiss_on_escape = false,
+                    close_on_confirm = false,
+                    on_decision = UnsyncCallback::new(move |decision: DialogDecision| {
+                        match decision {
+                            DialogDecision::Confirm => {
+                                let _ = conflict_decisions.confirm();
+                            }
+                            DialogDecision::Cancel | DialogDecision::Dismiss => {
+                                if matches!(
+                                    conflict_decision_cancel.0.prompt.get_untracked(),
+                                    Prompt::Conflict { .. }
+                                ) {
+                                    conflict_decision_cancel.cancel_prompt();
+                                }
+                            }
+                        }
+                    }),
+                ) {
+                    {{
+                        let pb = conflict_body_browser.clone();
+                        let retained = Rc::clone(&retained_conflict);
+                        move || {
+                            let generation = gen_sig.get();
+                            let _z = enter_non_reactive_zone();
+                            if let Prompt::Conflict {
+                                mode,
+                                conflict,
+                                resolve,
+                                ..
+                            } = pb.0.prompt.get_untracked()
+                            {
+                                *retained.borrow_mut() = Some((
+                                    mode,
+                                    conflict.clone(),
+                                    Rc::clone(&resolve),
+                                    generation,
+                                ));
+                                super::conflict_dialog::render_conflict_dialog(
+                                    &pb,
+                                    generation,
+                                    mode,
+                                    conflict,
+                                    resolve,
+                                    &pb.0.prompt_decisions,
+                                )
+                            } else if let Some((mode, conflict, resolve, retained_gen)) =
+                                retained.borrow().clone()
+                            {
+                                super::conflict_dialog::render_conflict_dialog(
+                                    &pb,
+                                    retained_gen,
+                                    mode,
+                                    conflict,
+                                    resolve,
+                                    &pb.0.prompt_decisions,
+                                )
                             } else {
                                 AnyView::new(())
                             }

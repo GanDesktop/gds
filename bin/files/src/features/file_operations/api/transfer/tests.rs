@@ -1,5 +1,8 @@
-use super::{DEFAULT_COPY_BUFFER_SIZE, Item, Node, Prepared};
-use std::{fs, path::PathBuf};
+use super::{
+    Batch, CollisionPolicy, DEFAULT_COPY_BUFFER_SIZE, Error, Item, Mode, Node, PlannedEntry,
+    Prepared, remove_empty_dir_if_empty,
+};
+use std::{ffi::OsString, fs, path::PathBuf};
 use tokio_util::sync::CancellationToken;
 
 // These races must occur between the copy and source cleanup. A UI scenario
@@ -22,6 +25,8 @@ impl CopiedTree {
         let prepared = Prepared::new(&Item {
             source: source.clone(),
             destination: destination.clone(),
+            policy: CollisionPolicy::Fail,
+            replaced: false,
             destination_committed: false,
             committed_snapshot: None,
             result: Ok(()),
@@ -182,6 +187,8 @@ fn preserves_modified_timestamps_on_files_links_and_directories() {
     let prepared = Prepared::new(&Item {
         source: source.clone(),
         destination: destination.clone(),
+        policy: CollisionPolicy::Fail,
+        replaced: false,
         destination_committed: false,
         committed_snapshot: None,
         result: Ok(()),
@@ -212,4 +219,88 @@ fn preserves_modified_timestamps_on_files_links_and_directories() {
     let dir_meta = fs::symlink_metadata(&destination).expect("copied directory meta");
     assert_eq!(dir_meta.mtime(), 915_148_800);
     assert_eq!(dir_meta.mtime_nsec(), 555_000_111);
+}
+
+#[test]
+fn replace_non_directory_atomically_overwrites_file_and_refuses_directories_or_self() {
+    let root = tempfile::tempdir().expect("isolated tempdir");
+    let src_dir = root.path().join("src");
+    let dst_dir = root.path().join("dst");
+    fs::create_dir_all(&src_dir).expect("create src");
+    fs::create_dir_all(&dst_dir).expect("create dst");
+
+    let src_file = src_dir.join("report.txt");
+    let dst_file = dst_dir.join("report.txt");
+    fs::write(&src_file, b"new-content").expect("write src");
+    fs::write(&dst_file, b"old-content").expect("write dst");
+
+    // 1. Atomic Copy replace overwrites file and marks item.replaced = true.
+    let report = Batch::planned(
+        Mode::Copy,
+        vec![PlannedEntry {
+            source: src_file.clone(),
+            destination_dir: dst_dir.clone(),
+            target_name: OsString::from("report.txt"),
+            policy: CollisionPolicy::ReplaceNonDirectory,
+        }],
+    )
+    .expect("planned batch")
+    .execute();
+    assert!(report.items[0].result.is_ok());
+    assert!(report.items[0].replaced);
+    assert_eq!(fs::read(&dst_file).expect("read replaced"), b"new-content");
+    assert_eq!(fs::read(&src_file).expect("source kept"), b"new-content");
+
+    // 2. Replacing an existing directory with a file is refused without deleting the directory.
+    let existing_subdir = dst_dir.join("folder");
+    fs::create_dir_all(&existing_subdir).expect("create existing dir");
+    fs::write(existing_subdir.join("keep.txt"), b"important").expect("write keep");
+    let mismatch_report = Batch::planned(
+        Mode::Copy,
+        vec![PlannedEntry {
+            source: src_file.clone(),
+            destination_dir: dst_dir.clone(),
+            target_name: OsString::from("folder"),
+            policy: CollisionPolicy::ReplaceNonDirectory,
+        }],
+    )
+    .expect("mismatch batch")
+    .execute();
+    assert!(matches!(
+        mismatch_report.items[0].result,
+        Err(Error::Conflict { .. })
+    ));
+    assert_eq!(
+        fs::read(existing_subdir.join("keep.txt")).expect("dir preserved"),
+        b"important"
+    );
+
+    // 3. Replacing a file with itself is refused.
+    let self_report = Batch::planned(
+        Mode::Copy,
+        vec![PlannedEntry {
+            source: src_file.clone(),
+            destination_dir: src_dir.clone(),
+            target_name: OsString::from("report.txt"),
+            policy: CollisionPolicy::ReplaceNonDirectory,
+        }],
+    )
+    .expect("self batch")
+    .execute();
+    assert!(matches!(
+        self_report.items[0].result,
+        Err(Error::Conflict { .. })
+    ));
+    assert_eq!(fs::read(&src_file).expect("self untouched"), b"new-content");
+
+    // 4. remove_empty_dir_if_empty preserves non-empty dirs and removes empty dirs.
+    let nonempty = root.path().join("nonempty");
+    let empty = root.path().join("empty");
+    fs::create_dir_all(&nonempty).expect("create nonempty");
+    fs::write(nonempty.join("leftover"), b"stay").expect("write leftover");
+    fs::create_dir_all(&empty).expect("create empty");
+    assert!(!remove_empty_dir_if_empty(&nonempty).expect("check nonempty"));
+    assert!(nonempty.exists());
+    assert!(remove_empty_dir_if_empty(&empty).expect("remove empty"));
+    assert!(!empty.exists());
 }

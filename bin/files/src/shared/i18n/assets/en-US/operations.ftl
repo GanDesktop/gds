@@ -19,10 +19,62 @@ transfer-name-invalid = The name contains an invalid character.
 transfer-conflict-title = “{ $name }” already exists in this folder
 transfer-conflict-message = Choose a different name. Nothing is overwritten or merged.
 transfer-conflict-placeholder = New name…
+transfer-conflict-replace-title = Replace file “{ $name }”?
+transfer-conflict-merge-title = Merge folder “{ $name }”?
+transfer-conflict-replace-message = An item with this name already exists here. Replacing overwrites the existing file and cannot be undone.
+transfer-conflict-merge-message = A folder with this name already exists here. Merging keeps files from both folders and prompts only for conflicting files inside.
+transfer-conflict-mismatch-dir-over-file = The source is a folder while the destination has a file with the same name. Rename or skip this item.
+transfer-conflict-mismatch-file-over-dir = The destination already has a folder with this name. Rename or skip this item instead of replacing the folder.
+transfer-conflict-same-message = This target collides with the source item. Choose a different name or skip it.
+transfer-conflict-location = In { $location }
+transfer-conflict-remaining = { $count ->
+    [one] { $count } more item remaining
+   *[other] { $count } more items remaining
+    }
+transfer-conflict-from-folder = From { $folder }
+transfer-conflict-in-folder = In { $folder }
+transfer-conflict-arrow-replace = Will overwrite existing file
+transfer-conflict-arrow-merge = Will merge into existing folder
+transfer-conflict-arrow-clash = Conflicts with existing item
+transfer-conflict-existing = Existing in destination
+transfer-conflict-incoming-copy = Copying
+transfer-conflict-incoming-move = Moving
+transfer-conflict-badge-newer = Newer
+transfer-conflict-badge-larger = Larger
+transfer-conflict-badge-identical = Same size & time
+transfer-conflict-rename-label = New name
+transfer-conflict-rename-reset = Use suggestion
+transfer-conflict-rename-exists = An item named “{ $name }” already exists in this folder.
+transfer-conflict-apply-all = Apply to remaining conflicts
+transfer-conflict-apply-all-hint-replace = Replace affects conflicting files only; folders and type mismatches will still prompt.
+transfer-conflict-apply-all-hint-merge = Merge applies to remaining colliding folders (conflicting files inside still prompt); Skip and Auto-rename apply to all remaining conflicts.
+transfer-conflict-apply-all-hint-mismatch = Skip and Auto-rename apply to all remaining conflicts.
+transfer-conflict-auto-rename-preview = Remaining conflicts will be numbered automatically, starting with “{ $name }”.
+transfer-conflict-replace = Replace
+transfer-conflict-replace-all = Replace all
+transfer-conflict-merge = Merge
+transfer-conflict-merge-all = Merge all
+transfer-conflict-rename = Rename…
+transfer-conflict-rename-confirm = Apply name
+transfer-conflict-auto-rename = Auto-rename
+transfer-conflict-back = Back
+transfer-conflict-skip = Skip
+transfer-conflict-skip-all = Skip all
+transfer-conflict-abort = Abort
 
 paste-cancelled = Paste cancelled. No files were changed.
 paste-cancelled-partial = Paste cancelled. { $completed } items were already completed; the rest are unchanged.
 paste-aborted-partial = The paste stopped after { $completed } items; those files are complete and the rest are unchanged.
+paste-skipped = { $count ->
+    [one] Skipped { $count } item
+   *[other] Skipped { $count } items
+    }
+paste-merged = { $count ->
+    [one] Merged { $count } folder
+   *[other] Merged { $count } folders
+    }
+copy-done-skipped = Copied { $succeeded } items; skipped { $skipped }.
+move-done-skipped = Moved { $succeeded } items; skipped { $skipped }.
 drop-into-self = Cannot move or copy a folder into itself or a subfolder.
 drop-unsupported-destination = Files can only be dropped into a local folder.
 drop-no-local-files = Could not read local files from the dropped item.
