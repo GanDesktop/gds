@@ -1,7 +1,7 @@
 use super::{
     Error, Identity, Mode, Snapshot,
     native::NativeClipboard,
-    protocol::{CLIPBOARD_ID, GNOME_FILES, KDE_CUT, TEXT_PLAIN_UTF8, URI_LIST},
+    protocol::{CLIPBOARD_ID, GNOME_FILES, KDE_CUT, TEXT_PLAIN_MIMES, TEXT_PLAIN_UTF8, URI_LIST},
     state::Cache,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -85,23 +85,22 @@ fn multi_mime_offers_preserve_intent_identity_and_ignore_plain_uri_text() {
         Snapshot::new(Mode::Cut, vec![PathBuf::from("/tmp/a b#%.txt")]).expect("selection");
     let (written, entries) = NativeClipboard::encode_snapshot(&snapshot).expect("encoded offer");
     assert_eq!(written, snapshot);
-    for expected_mime in [
-        URI_LIST,
-        GNOME_FILES,
-        KDE_CUT,
-        CLIPBOARD_ID,
-        TEXT_PLAIN_UTF8,
-    ] {
+    for expected_mime in [URI_LIST, GNOME_FILES, KDE_CUT, CLIPBOARD_ID]
+        .into_iter()
+        .chain(TEXT_PLAIN_MIMES)
+    {
         assert!(
             entries.iter().any(|entry| entry.mime_type == expected_mime),
             "missing expected MIME {expected_mime}"
         );
     }
-    let plain = entries
-        .iter()
-        .find(|entry| entry.mime_type == TEXT_PLAIN_UTF8)
-        .expect("plain text fallback entry");
-    assert_eq!(plain.bytes, b"/tmp/a b#%.txt");
+    for text_mime in TEXT_PLAIN_MIMES {
+        let plain = entries
+            .iter()
+            .find(|entry| entry.mime_type == text_mime)
+            .expect("plain text fallback entry");
+        assert_eq!(plain.bytes, b"/tmp/a b#%.txt");
+    }
 
     let mut offer = ClipboardMimeOffer {
         revision: 7,

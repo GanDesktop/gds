@@ -8,7 +8,7 @@ use zgui::prelude::{ClipboardKind, Clipboards};
 use super::{
     Error, Identity, Mode, Snapshot,
     protocol::{
-        CLIPBOARD_ID, Formats, GNOME_FILES, KDE_CUT, MAX_PAYLOAD_BYTES, TEXT_PLAIN_UTF8, URI_LIST,
+        CLIPBOARD_ID, Formats, GNOME_FILES, KDE_CUT, MAX_PAYLOAD_BYTES, TEXT_PLAIN_MIMES, URI_LIST,
     },
 };
 
@@ -64,15 +64,13 @@ impl NativeClipboard {
     }
 
     fn entries(formats: Formats, identity: &Identity) -> Vec<ClipboardMime> {
-        let mut entries = [
-            (URI_LIST, formats.uri_list),
-            (GNOME_FILES, formats.gnome),
-            (KDE_CUT, formats.kde_cut),
-            (TEXT_PLAIN_UTF8, formats.plain_text),
-        ]
-        .into_iter()
-        .map(|(mime_type, bytes)| ClipboardMime::new(mime_type, bytes))
-        .collect::<Vec<_>>();
+        let mut entries = Vec::with_capacity(4 + TEXT_PLAIN_MIMES.len());
+        entries.push(ClipboardMime::new(URI_LIST, formats.uri_list));
+        entries.push(ClipboardMime::new(GNOME_FILES, formats.gnome));
+        entries.push(ClipboardMime::new(KDE_CUT, formats.kde_cut));
+        for mime_type in TEXT_PLAIN_MIMES {
+            entries.push(ClipboardMime::new(mime_type, formats.plain_text.clone()));
+        }
         if let Some(id) = &identity.0 {
             entries.push(ClipboardMime::new(CLIPBOARD_ID, id.as_bytes().to_vec()));
         }

@@ -1681,7 +1681,9 @@ fn try_start_native_file_drag(
     let mut request = DragSourceRequest::new(
         vec![
             DragMime::new("text/uri-list", uri_list),
-            DragMime::new("text/plain;charset=utf-8", plain_text),
+            DragMime::new("text/plain;charset=utf-8", plain_text.clone()),
+            DragMime::new("text/plain", plain_text.clone()),
+            DragMime::new("UTF8_STRING", plain_text),
         ],
         DragActions::COPY | DragActions::MOVE,
     );

@@ -393,6 +393,7 @@ impl Clipboard {
                     return Ok(written);
                 }
                 Err(error) if should_use_local_fallback(&error) => {
+                    tracing::warn!(%error, "system clipboard write_mime fell back to in-process cache");
                     let baseline = NativeClipboard::probe_revision(&clip).await;
                     if self.0.write_seq.get() == seq {
                         self.0
@@ -496,6 +497,7 @@ impl Clipboard {
                     return Ok(());
                 }
                 Err(error) if should_use_local_fallback(&error) => {
+                    tracing::warn!(%error, "system clipboard write_mime fell back to in-process cache");
                     let baseline = NativeClipboard::probe_revision(&clip).await;
                     if self.0.write_seq.get() == seq {
                         self.0
