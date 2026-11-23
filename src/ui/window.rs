@@ -17,11 +17,71 @@ use crate::ui::icon::IconName;
 
 pub const HEIGHT: f32 = tokens::TOOLBAR_HEIGHT;
 pub const MACOS_CONTROLS_WIDTH: f32 = 80.;
-const INITIAL_WIDTH: f32 = 960.;
-const INITIAL_HEIGHT: f32 = 640.;
+pub const INITIAL_WIDTH: f32 = 1240.0;
+pub const INITIAL_HEIGHT: f32 = 760.0;
 const DISPLAY_FRACTION: f32 = 0.85;
-const MIN_WIDTH: f32 = 520.;
-const MIN_HEIGHT: f32 = 360.;
+pub const MIN_WIDTH: f32 = 460.0;
+pub const MIN_HEIGHT: f32 = 360.0;
+
+pub const MICRO_WIDTH: f32 = 600.0;
+pub const WIDE_WIDTH: f32 = 1200.0;
+pub const MICRO_HEIGHT: f32 = 520.0;
+
+/// Orthogonal horizontal responsive tier for GDS workspace shells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WidthTier {
+    Micro,
+    Compact,
+    Wide,
+}
+
+impl WidthTier {
+    #[must_use]
+    pub fn from_width(width: f32) -> Self {
+        if width < MICRO_WIDTH {
+            Self::Micro
+        } else if width < WIDE_WIDTH {
+            Self::Compact
+        } else {
+            Self::Wide
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Micro => "micro",
+            Self::Compact => "compact",
+            Self::Wide => "wide",
+        }
+    }
+}
+
+/// Orthogonal vertical responsive tier for GDS workspace shells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeightTier {
+    Micro,
+    Normal,
+}
+
+impl HeightTier {
+    #[must_use]
+    pub fn from_height(height: f32) -> Self {
+        if height < MICRO_HEIGHT {
+            Self::Micro
+        } else {
+            Self::Normal
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Micro => "micro",
+            Self::Normal => "normal",
+        }
+    }
+}
 
 const WINDOW_SHEET: &str = "gds-ui-window";
 
@@ -46,7 +106,7 @@ const WINDOW_CSS: &str = css!(
         flex-direction: row;
         align-items: center;
         gap: 6px;
-        height: var(--gds-toolbar-height, 52px);
+        height: var(--gds-toolbar-height, 48px);
         flex-shrink: 0;
         padding: 0 12px;
         background-color: var(--gds-sidebar-bg, var(--gds-sidebar));
@@ -60,7 +120,7 @@ const WINDOW_CSS: &str = css!(
         flex-shrink: 0;
     }
     .gds-titlebar__title {
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-foreground);
         white-space: nowrap;
         overflow: hidden;

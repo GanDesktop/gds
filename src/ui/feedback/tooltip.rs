@@ -27,7 +27,7 @@ const SHEET: &str = css!(
         max-height: 320px;
         overflow-y: auto;
         font-family: var(--gds-font-sans);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 400;
         line-height: 1.35;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
@@ -40,7 +40,7 @@ const SHEET: &str = css!(
     .zui-tooltip .gds-tooltip-text,
     .gds-tooltip-text {
         color: var(--gds-panel-foreground);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         line-height: 1.35;
         white-space: normal;
         overflow-wrap: anywhere;
@@ -57,7 +57,7 @@ const SHEET: &str = css!(
 
     .gds-tooltip-details__title {
         color: var(--gds-panel-foreground);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 600;
         line-height: 1.35;
         white-space: normal;
@@ -65,7 +65,7 @@ const SHEET: &str = css!(
     }
 
     .gds-tooltip-details__item {
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-muted-foreground);
         line-height: 1.35;
         white-space: normal;

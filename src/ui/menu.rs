@@ -55,7 +55,7 @@ const SHEET: &str = css!(
         overflow-x: hidden;
         overflow-y: auto;
         font-family: var(--gds-font-sans);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-menu-focus-park {
@@ -78,7 +78,7 @@ const SHEET: &str = css!(
 
     .gds-menu-content .zui-menu__item,
     .gds-menu-content .zui-menu__label {
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-menu-content .zui-menu__item:not(.zui-menu__item--destructive):hover,
@@ -101,7 +101,7 @@ const SHEET: &str = css!(
         width: 100%;
         min-width: 0;
         gap: 24px;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-menu-item-row {
@@ -116,7 +116,7 @@ const SHEET: &str = css!(
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-menu-item-shortcut {

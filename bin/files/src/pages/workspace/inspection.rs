@@ -21,8 +21,8 @@ use gds::service::task_manager::Scope;
 use gds::ui::button::{ButtonSize, ButtonVariant};
 use gds::ui::capacity::CapacityBarProps;
 use gds::ui::feedback::dialog::{
-    DialogActionsProps, DialogContentProps, DialogDecision, DialogDescriptionProps,
-    DialogFooterProps, DialogHeaderProps, DialogProps, DialogTitleProps,
+    DialogActionsProps, DialogDecision, DialogDescriptionProps, DialogFooterProps,
+    DialogHeaderProps, DialogSize, DialogTitleProps, ModalDialogProps,
 };
 use gds::ui::feedback::tooltip::HintTooltipProps;
 use gds::ui::file_inspection::{Cache, Options, State as InspectionState};
@@ -148,7 +148,8 @@ pub(super) const INSPECTION_CSS: &str = css!(
         width: 100%;
         min-width: 0;
         min-height: 0;
-        overflow: hidden;
+        overflow-y: auto;
+        overflow-x: hidden;
         box-sizing: border-box;
         background: transparent;
         border-left: 1px solid var(--gds-border);
@@ -171,7 +172,7 @@ pub(super) const INSPECTION_CSS: &str = css!(
     }
 
     .gds-files-details__empty-text {
-        font-size: var(--gds-font-size-sm, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-muted-foreground);
         text-align: center;
     }
@@ -179,11 +180,9 @@ pub(super) const INSPECTION_CSS: &str = css!(
     .gds-files-details__content {
         display: flex;
         flex-direction: column;
-        flex: 1 1 0%;
+        flex: 0 0 auto;
         width: 100%;
         min-width: 0;
-        min-height: 0;
-        overflow: hidden;
     }
 
     .gds-files-details__hero {
@@ -202,11 +201,9 @@ pub(super) const INSPECTION_CSS: &str = css!(
     .gds-files-details__body {
         display: flex;
         flex-direction: column;
-        flex: 1 1 0%;
+        flex: 0 0 auto;
         width: 100%;
         min-width: 0;
-        min-height: 0;
-        overflow-y: auto;
         padding: 12px 14px 14px 14px;
         gap: 12px;
         box-sizing: border-box;
@@ -271,7 +268,7 @@ pub(super) const INSPECTION_CSS: &str = css!(
         width: 100%;
         min-width: 0;
         max-height: calc(44px * var(--gds-font-scale, 1));
-        font-size: var(--gds-font-size-md, 16px);
+        font-size: var(--gds-text-md, 16px);
         line-height: calc(22px * var(--gds-font-scale, 1));
         font-weight: 600;
         color: var(--gds-foreground);
@@ -294,13 +291,13 @@ pub(super) const INSPECTION_CSS: &str = css!(
     }
 
     .gds-files-details__label {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         flex-shrink: 0;
     }
 
     .gds-files-details__value {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-foreground);
         text-align: right;
         min-width: 0;
@@ -331,7 +328,7 @@ pub(super) const INSPECTION_CSS: &str = css!(
     .gds-files-details__tag-chip {
         padding: 2px 8px;
         border-radius: 999px;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         background: var(--gds-surface);
         border: 1px solid var(--gds-border);
         color: var(--gds-foreground);
@@ -395,7 +392,7 @@ pub(super) const INSPECTION_CSS: &str = css!(
     }
 
     .gds-files-permissions-group__title {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         font-weight: 600;
         color: var(--gds-foreground);
     }
@@ -415,12 +412,12 @@ pub(super) const INSPECTION_CSS: &str = css!(
     }
 
     .gds-files-permissions-note {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
 
     .gds-files-permissions-error {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-error);
     }
     "#
@@ -1773,9 +1770,38 @@ impl Browser {
         let slots = dialog_slots(self);
         let tags_sig = slots.tags;
         let open = Signal::derive_local(move || tags_sig.get().is_some());
+        let can_dismiss = Signal::derive_local(move || {
+            !tags_sig.get().as_ref().is_some_and(TagEditor::is_saving)
+        });
+        let modal_disabled = Signal::derive_local(move || {
+            !tags_sig
+                .get()
+                .as_ref()
+                .is_some_and(|editor| editor.available() && !editor.is_saving())
+        });
+        let on_modal_decision =
+            UnsyncCallback::new(move |decision: DialogDecision| match decision {
+                DialogDecision::Confirm => {
+                    if let Some(editor) = tags_sig.get_untracked()
+                        && editor.available_untracked()
+                        && !editor.is_saving_untracked()
+                    {
+                        editor.save(move || tags_sig.set(None));
+                    }
+                }
+                DialogDecision::Cancel | DialogDecision::Dismiss => {
+                    if !tags_sig
+                        .get_untracked()
+                        .as_ref()
+                        .is_some_and(TagEditor::is_saving_untracked)
+                    {
+                        tags_sig.set(None);
+                    }
+                }
+            });
 
         AnyView::new(view! {
-            Dialog(
+            ModalDialog(
                 open = Binding::controlled(open, move |next: bool| {
                     if !next
                         && !tags_sig
@@ -1786,64 +1812,52 @@ impl Browser {
                         tags_sig.set(None);
                     }
                 }),
+                size = DialogSize::Md,
+                disabled = modal_disabled,
+                dismiss_on_outside_press = can_dismiss,
+                dismiss_on_escape = can_dismiss,
+                close_on_confirm = false,
+                on_decision = on_modal_decision,
             ) {
-                DialogContent(class = "gds-dialog-content") {
-                    {move || match tags_sig.get() {
-                        None => AnyView::new(()),
-                        Some(editor) => {
-                            let full_path = editor.path().display().to_string();
-                            let title_path = editor
-                                .path()
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                                .filter(|s| !s.is_empty())
-                                .unwrap_or_else(|| full_path.clone());
-                            let fields = editor.fields();
-                            let save_editor = editor.clone();
-                            let disabled = Signal::derive_local(move || {
-                                !editor.available() || editor.is_saving()
-                            });
-                            AnyView::new(view! {
-                                column(class = "gds-files-dialog-body") {
-                                    DialogHeader {
-                                        DialogTitle {{i18n::text("tags-editor-title")}}
-                                        box(class = "gds-files-dialog-desc-wrap") {
-                                            HintTooltip(text = full_path) {
-                                                DialogDescription(class = "gds-files-dialog-desc") {
-                                                    {title_path}
-                                                }
+                {move || match tags_sig.get() {
+                    None => AnyView::new(()),
+                    Some(editor) => {
+                        let full_path = editor.path().display().to_string();
+                        let title_path = editor
+                            .path()
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| full_path.clone());
+                        let fields = editor.fields();
+                        let disabled = Signal::derive_local(move || {
+                            !editor.available() || editor.is_saving()
+                        });
+                        AnyView::new(view! {
+                            column(class = "gds-files-dialog-body") {
+                                DialogHeader {
+                                    DialogTitle {{i18n::text("tags-editor-title")}}
+                                    box(class = "gds-files-dialog-desc-wrap") {
+                                        HintTooltip(text = full_path) {
+                                            DialogDescription(class = "gds-files-dialog-desc") {
+                                                {title_path}
                                             }
                                         }
                                     }
-                                    {fields}
-                                    DialogFooter {
-                                        DialogActions(
-                                            primary_label = i18n::text("permissions-save"),
-                                            cancel_label = i18n::text("operation-cancel"),
-                                            disabled = disabled,
-                                            on_decision = UnsyncCallback::new(move |decision: DialogDecision| {
-                                                match decision {
-                                                    DialogDecision::Confirm => {
-                                                        save_editor.save(move || tags_sig.set(None));
-                                                    }
-                                                    DialogDecision::Cancel | DialogDecision::Dismiss => {
-                                                        if !tags_sig
-                                                            .get_untracked()
-                                                            .as_ref()
-                                                            .is_some_and(TagEditor::is_saving_untracked)
-                                                        {
-                                                            tags_sig.set(None);
-                                                        }
-                                                    }
-                                                }
-                                            }),
-                                        )
-                                    }
                                 }
-                            })
-                        }
-                    }}
-                }
+                                {fields}
+                                DialogFooter {
+                                    DialogActions(
+                                        primary_label = i18n::text("permissions-save"),
+                                        cancel_label = i18n::text("operation-cancel"),
+                                        disabled = disabled,
+                                        on_decision = on_modal_decision,
+                                    )
+                                }
+                            }
+                        })
+                    }
+                }}
             }
         })
     }
@@ -1868,9 +1882,38 @@ impl Browser {
         let slots = dialog_slots(self);
         let perm_sig = slots.permissions;
         let open = Signal::derive_local(move || perm_sig.get().is_some());
+        let can_dismiss = Signal::derive_local(move || {
+            !perm_sig
+                .get()
+                .as_ref()
+                .is_some_and(|editor| editor.0.saving.get())
+        });
+        let modal_disabled = Signal::derive_local(move || {
+            !perm_sig
+                .get()
+                .as_ref()
+                .is_some_and(PermissionEditor::can_save)
+        });
+        let on_modal_decision =
+            UnsyncCallback::new(move |decision: DialogDecision| match decision {
+                DialogDecision::Confirm => {
+                    if let Some(editor) = perm_sig.get_untracked() {
+                        editor.save(move || perm_sig.set(None));
+                    }
+                }
+                DialogDecision::Cancel | DialogDecision::Dismiss => {
+                    if !perm_sig
+                        .get_untracked()
+                        .as_ref()
+                        .is_some_and(PermissionEditor::is_saving_untracked)
+                    {
+                        perm_sig.set(None);
+                    }
+                }
+            });
 
         AnyView::new(view! {
-            Dialog(
+            ModalDialog(
                 open = Binding::controlled(open, move |next: bool| {
                     if !next
                         && !perm_sig
@@ -1881,59 +1924,47 @@ impl Browser {
                         perm_sig.set(None);
                     }
                 }),
+                size = DialogSize::Md,
+                disabled = modal_disabled,
+                dismiss_on_outside_press = can_dismiss,
+                dismiss_on_escape = can_dismiss,
+                close_on_confirm = false,
+                on_decision = on_modal_decision,
             ) {
-                DialogContent(class = "gds-dialog-content") {
-                    {move || match perm_sig.get() {
-                        None => AnyView::new(()),
-                        Some(editor) => {
-                            let name = editor.0.entry.display_name.clone();
-                            let full_path = editor.0.entry.path.display().to_string();
-                            let fields = editor.fields();
-                            let save_editor = editor;
-                            let save_disabled = Signal::derive_local(move || {
-                                !perm_sig.get().as_ref().is_some_and(PermissionEditor::can_save)
-                            });
-                            AnyView::new(view! {
-                                column(class = "gds-files-dialog-body") {
-                                    DialogHeader {
-                                        DialogTitle {{i18n::text("permissions-title")}}
-                                        box(class = "gds-files-dialog-desc-wrap") {
-                                            HintTooltip(text = full_path) {
-                                                DialogDescription(class = "gds-files-dialog-desc") {
-                                                    {name}
-                                                }
+                {move || match perm_sig.get() {
+                    None => AnyView::new(()),
+                    Some(editor) => {
+                        let name = editor.0.entry.display_name.clone();
+                        let full_path = editor.0.entry.path.display().to_string();
+                        let fields = editor.fields();
+                        let save_disabled = Signal::derive_local(move || {
+                            !perm_sig.get().as_ref().is_some_and(PermissionEditor::can_save)
+                        });
+                        AnyView::new(view! {
+                            column(class = "gds-files-dialog-body") {
+                                DialogHeader {
+                                    DialogTitle {{i18n::text("permissions-title")}}
+                                    box(class = "gds-files-dialog-desc-wrap") {
+                                        HintTooltip(text = full_path) {
+                                            DialogDescription(class = "gds-files-dialog-desc") {
+                                                {name}
                                             }
                                         }
                                     }
-                                    {fields}
-                                    DialogFooter {
-                                        DialogActions(
-                                            primary_label = i18n::text("permissions-save"),
-                                            cancel_label = i18n::text("operation-cancel"),
-                                            disabled = save_disabled,
-                                            on_decision = UnsyncCallback::new(move |decision: DialogDecision| {
-                                                match decision {
-                                                    DialogDecision::Confirm => {
-                                                        save_editor.save(move || perm_sig.set(None));
-                                                    }
-                                                    DialogDecision::Cancel | DialogDecision::Dismiss => {
-                                                        if !perm_sig
-                                                            .get_untracked()
-                                                            .as_ref()
-                                                            .is_some_and(PermissionEditor::is_saving_untracked)
-                                                        {
-                                                            perm_sig.set(None);
-                                                        }
-                                                    }
-                                                }
-                                            }),
-                                        )
-                                    }
                                 }
-                            })
-                        }
-                    }}
-                }
+                                {fields}
+                                DialogFooter {
+                                    DialogActions(
+                                        primary_label = i18n::text("permissions-save"),
+                                        cancel_label = i18n::text("operation-cancel"),
+                                        disabled = save_disabled,
+                                        on_decision = on_modal_decision,
+                                    )
+                                }
+                            }
+                        })
+                    }
+                }}
             }
         })
     }
@@ -2079,6 +2110,9 @@ impl Browser {
     }
 
     pub(super) fn toggle_details(&self) {
+        if !self.details_permitted_untracked() {
+            return;
+        }
         self.0.details.update(|visible| *visible = !*visible);
         let visible = self.0.details.get_untracked();
         let location = self.0.state.borrow().tab().navigation.location().clone();

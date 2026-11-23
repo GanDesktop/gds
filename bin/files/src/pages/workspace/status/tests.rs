@@ -15,7 +15,10 @@ fn compact_task_button_opens_the_list_and_cancels_one_task() {
         volumes::Snapshot::default(),
         |browser| AnyView::new(browser.view()),
         |harness, browser| {
-            assert!(browser.compact_untracked());
+            assert_eq!(
+                browser.width_tier_untracked(),
+                gds::ui::window::WidthTier::Compact
+            );
             let files = browser
                 .begin_background_task("files", "Copying documents")
                 .expect("files task");

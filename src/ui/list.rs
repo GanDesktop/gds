@@ -71,7 +71,7 @@ const LIST_CSS: &str = css!(
         padding: var(--gds-list-cell-padding-y, 4px) var(--gds-list-cell-padding-x, 12px);
         border-radius: var(--gds-list-row-radius, 6px);
         color: var(--gds-foreground);
-        font-size: var(--gds-list-name-size, 13px);
+        font-size: var(--gds-list-name-size, var(--gds-text-sm, 14px));
         overflow: hidden;
         white-space: nowrap;
         text-overflow: ellipsis;
@@ -282,6 +282,26 @@ fn render_list_surface(
     }
 }
 
+fn default_row_height_signal() -> Signal<f32, LocalStorage> {
+    Signal::derive_local(|| {
+        crate::app::Gds::try_current().map_or(DataListStyle::ROW_HEIGHT, |gds| {
+            gds.appearance()
+                .typography()
+                .scaled(DataListStyle::ROW_HEIGHT)
+        })
+    })
+}
+
+fn default_header_height_signal() -> Signal<f32, LocalStorage> {
+    Signal::derive_local(|| {
+        crate::app::Gds::try_current().map_or(DataListStyle::HEADER_HEIGHT, |gds| {
+            gds.appearance()
+                .typography()
+                .scaled(DataListStyle::HEADER_HEIGHT)
+        })
+    })
+}
+
 /// Borderless list container with `:focus-visible`-only `1px` inset contour and
 /// built-in capture-phase blank-space press detection.
 #[allow(clippy::too_many_arguments)]
@@ -291,12 +311,11 @@ pub fn ListSurface(
     #[prop(optional)] node_ref: Option<NodeRef>,
     #[prop(optional)] scroll_ref: Option<NodeRef>,
     #[prop(into, default = Signal::stored_local(0_usize))] rows: Signal<usize, LocalStorage>,
-    #[prop(into, default = Signal::stored_local(DataListStyle::ROW_HEIGHT))] row_height: Signal<
+    #[prop(into, default = default_row_height_signal())] row_height: Signal<f32, LocalStorage>,
+    #[prop(into, default = default_header_height_signal())] header_height: Signal<
         f32,
         LocalStorage,
     >,
-    #[prop(into, default = Signal::stored_local(DataListStyle::HEADER_HEIGHT))]
-    header_height: Signal<f32, LocalStorage>,
     #[prop(into, default = Signal::stored_local(0.0_f32))] inset_x: Signal<f32, LocalStorage>,
     #[prop(into, default = Signal::stored_local(DataListStyle::SCROLLBAR_LANE))]
     bottom_inset: Signal<f32, LocalStorage>,
@@ -366,10 +385,7 @@ pub fn ListRow(
 #[component]
 pub fn VirtualizedListSurface<V, F>(
     #[prop(into)] count: Signal<usize, LocalStorage>,
-    #[prop(into, default = Signal::stored_local(DataListStyle::ROW_HEIGHT))] row_size: Signal<
-        f32,
-        LocalStorage,
-    >,
+    #[prop(into, default = default_row_height_signal())] row_size: Signal<f32, LocalStorage>,
     #[prop(default = 4)] overscan: usize,
     #[prop(default = ListStyle::Plain)] list_style: ListStyle,
     #[prop(into, optional)] label: Option<String>,

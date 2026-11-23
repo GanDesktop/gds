@@ -122,8 +122,8 @@ const NAME_FORM_CSS: &str = css!(
         display: flex;
         flex-direction: column;
         gap: 12px;
-        min-width: 340px;
-        max-width: 440px;
+        width: 100%;
+        min-width: 0px;
     }
 
     .gds-files-name-form[data-conflict="true"] {
@@ -147,13 +147,13 @@ const NAME_FORM_CSS: &str = css!(
     .gds-files-name-form__message {
         margin: 0px;
         color: var(--gds-muted-foreground);
-        font-size: 13px;
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-files-name-form__error {
         margin: 0px;
         color: var(--gds-error);
-        font-size: 12px;
+        font-size: var(--gds-text-xs, 12px);
     }
     "#
 );

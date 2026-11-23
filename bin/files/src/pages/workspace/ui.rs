@@ -40,19 +40,33 @@ use crate::{
     shared::lib::clipboard::Clipboard,
 };
 
-pub(super) const DEFAULT_WINDOW_WIDTH: f32 = 1240.0;
-pub(super) const COMPACT_WINDOW_WIDTH: f32 = 1080.0;
+pub(super) const DEFAULT_WINDOW_WIDTH: f32 = gds::ui::window::INITIAL_WIDTH;
+pub(super) const DEFAULT_WINDOW_HEIGHT: f32 = gds::ui::window::INITIAL_HEIGHT;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FilterFocusMode {
+    SelectAll,
+    CaretEnd,
+}
 
 pub(super) fn resolve_initial_widths(reported_width: Option<f32>) -> (f32, f32) {
     let window_width = reported_width
         .filter(|width| width.is_finite() && *width > 0.0)
         .unwrap_or(DEFAULT_WINDOW_WIDTH);
-    let sidebar_width = if window_width < COMPACT_WINDOW_WIDTH {
+    let sidebar_width = if gds::ui::window::WidthTier::from_width(window_width)
+        == gds::ui::window::WidthTier::Micro
+    {
         COLLAPSED_SIDEBAR_WIDTH
     } else {
         SIDEBAR_WIDTH
     };
     (window_width, (window_width - sidebar_width).max(1.0))
+}
+
+pub(super) fn resolve_initial_height(reported_height: Option<f32>) -> f32 {
+    reported_height
+        .filter(|height| height.is_finite() && *height > 0.0)
+        .unwrap_or(DEFAULT_WINDOW_HEIGHT)
 }
 
 pub(super) fn sample_workspace_sidebar(
@@ -63,7 +77,11 @@ pub(super) fn sample_workspace_sidebar(
     Signal<f32, LocalStorage>,
 ) {
     let sidebar_state = Signal::derive_local(move || {
-        SidebarState::from_collapsed(!sidebar.get() || window_width.get() < COMPACT_WINDOW_WIDTH)
+        SidebarState::from_collapsed(
+            !sidebar.get()
+                || gds::ui::window::WidthTier::from_width(window_width.get())
+                    == gds::ui::window::WidthTier::Micro,
+        )
     });
     let presentation = use_sidebar_presentation(sidebar_state);
     let width = Signal::derive_local(move || presentation.get().width());
@@ -166,7 +184,11 @@ pub(super) struct Workspace {
     pub column_widths: RwSignal<HashMap<Column, f32>, LocalStorage>,
     pub pages: RwSignal<Pages, LocalStorage>,
     pub window_width: RwSignal<f32, LocalStorage>,
+    pub window_height: RwSignal<f32, LocalStorage>,
     pub content_width: RwSignal<f32, LocalStorage>,
+    pub footer_filter_open: RwSignal<bool, LocalStorage>,
+    pub filter_focus_request: RwSignal<Option<FilterFocusMode>, LocalStorage>,
+    pub micro_locations_expanded: RwSignal<bool, LocalStorage>,
     pub address_presentation: RwSignal<AddressPresentation, LocalStorage>,
     pub sidebar_tabs_height: RwSignal<Option<f32>, LocalStorage>,
     pub settings: crate::widgets::settings::View,
@@ -181,7 +203,6 @@ pub(super) struct Workspace {
     pub notice: RwSignal<Option<String>, LocalStorage>,
     pub prompt: RwSignal<Prompt, LocalStorage>,
     pub prompt_generation: RwSignal<u64, LocalStorage>,
-    pub prompt_about: RwSignal<bool, LocalStorage>,
     pub confirm_options: RwSignal<ConfirmOptions, LocalStorage>,
     pub prompt_decisions: PromptDecisionSlot,
     pub address: RwSignal<String, LocalStorage>,
@@ -320,7 +341,13 @@ impl Browser {
                 .as_ref()
                 .map(|win| win.size().get_untracked().width.0),
         );
+        let initial_height = resolve_initial_height(
+            window
+                .as_ref()
+                .map(|win| win.size().get_untracked().height.0),
+        );
         let window_width = RwSignal::new_local(initial_width);
+        let window_height = RwSignal::new_local(initial_height);
         let sidebar = RwSignal::new_local(true);
         let (sidebar_presentation, sidebar_width) =
             owner.with(|| sample_workspace_sidebar(sidebar, window_width));
@@ -346,7 +373,11 @@ impl Browser {
             column_widths: RwSignal::new_local(initial_widths),
             pages: RwSignal::new_local(Pages::default()),
             window_width,
+            window_height,
             content_width: RwSignal::new_local(initial_content_width),
+            footer_filter_open: RwSignal::new_local(false),
+            filter_focus_request: RwSignal::new_local(None),
+            micro_locations_expanded: RwSignal::new_local(false),
             address_presentation: RwSignal::new_local(AddressPresentation::Breadcrumbs),
             sidebar_tabs_height: RwSignal::new_local(sidebar_tabs_height),
             settings,
@@ -360,7 +391,6 @@ impl Browser {
             notice,
             prompt: RwSignal::new_local(Prompt::Closed),
             prompt_generation: RwSignal::new_local(0),
-            prompt_about: RwSignal::new_local(false),
             confirm_options: RwSignal::new_local(ConfirmOptions::default()),
             prompt_decisions: PromptDecisionSlot::default(),
             address: RwSignal::new_local(location.display_address()),
@@ -556,7 +586,7 @@ impl Browser {
     }
 
     pub(super) fn toggle_sidebar(&self) {
-        if self.compact_untracked() {
+        if self.width_tier_untracked() == gds::ui::window::WidthTier::Micro {
             return;
         }
         let next = !self.0.sidebar.get_untracked();
@@ -753,11 +783,10 @@ impl Browser {
         debug_assert!(!matches!(prompt, Prompt::Closed));
         self.0.menus.close();
         self.0.confirm_options.set(options);
-        self.0.prompt_about.set(matches!(prompt, Prompt::About));
+        self.0.prompt.set(prompt);
         self.0
             .prompt_generation
             .update(|generation| *generation = generation.wrapping_add(1));
-        self.0.prompt.set(prompt);
     }
 
     pub(super) fn confirm_with_options(

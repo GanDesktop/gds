@@ -22,14 +22,14 @@ use gds::ui::sidebar::{SideBarContentProps, SideBarProps, SidebarPresentation};
 use gds::ui::tooltip::{HintTooltipProps, TooltipTextProps};
 use gds::ui::{
     FrameContext, IconButtonProps, IconName, IconProps, Shortcut, ShortcutBadgeProps,
-    ToggleSwitchProps,
+    ToggleSwitchProps, window::WidthTier,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, ReadSignal, RwSignal, UnsyncCallback};
 use zgui::view::{ShowProps, install_stylesheet};
 use zgui::vocab::{Key, NamedKey};
-use zgui::{component, view};
+use zgui::{component, css, view};
 use zgui_ui::{TooltipContentProps, TooltipProps, TooltipTriggerProps};
 use zgui_ui_primitives::Binding;
 
@@ -38,95 +38,76 @@ use crate::shared::ui::actions::Command;
 pub use pages::Page;
 
 const SETTINGS_SHEET: &str = "gds-files-settings";
-const SETTINGS_CSS: &str = r#"
-.gds-settings-sidebar {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    min-width: 0;
-    gap: 4px;
-    padding: var(--gds-sidebar-padding, 10px);
-    box-sizing: border-box;
-}
+const SETTINGS_CSS: &str = css!(
+    r#"
+    .gds-settings-sidebar {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0;
+        gap: 4px;
+        padding: var(--gds-sidebar-padding, 10px);
+        box-sizing: border-box;
+    }
 
-.gds-settings-sidebar > .zui-tooltip__trigger {
-    display: flex;
-    width: 100%;
-    min-width: 0;
-}
+    .gds-settings-sidebar > .zui-tooltip__trigger {
+        display: flex;
+        width: 100%;
+        min-width: 0;
+    }
 
-.gds-settings-nav-corner-anchor {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-}
+    .gds-settings-nav-corner-anchor {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+    }
 
-.gds-settings-content {
-    display: flex;
-    flex-direction: column;
-    flex: 1 1 0%;
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    min-height: 0;
-    padding: 24px;
-    box-sizing: border-box;
-    outline: none;
-    box-shadow: none;
-}
+    .gds-settings-content {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0%;
+        width: 100%;
+        height: 100%;
+        min-width: 0;
+        min-height: 0;
+        padding: 24px;
+        box-sizing: border-box;
+        outline: none;
+        box-shadow: none;
+    }
 
-.gds-settings-content:focus,
-.gds-settings-content:focus-visible {
-    outline: none;
-    box-shadow: none;
-}
+    .gds-settings-content:focus,
+    .gds-settings-content:focus-visible {
+        outline: none;
+        box-shadow: none;
+    }
 
-.gds-settings-heading {
-    font-size: var(--gds-font-size-xl, 20px);
-    font-weight: 600;
-    margin-bottom: 20px;
-}
+    .gds-settings-heading {
+        font-size: var(--gds-text-lg, 20px);
+        font-weight: 600;
+        margin-bottom: 20px;
+    }
 
-.gds-settings-col {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    min-width: 0;
-}
+    .gds-settings-col {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        max-width: 880px;
+        min-width: 0;
+    }
 
-.gds-settings-label-trigger {
-    display: inline-flex;
-    align-self: flex-start;
-    max-width: 100%;
-}
+    .gds-settings-label-trigger {
+        display: inline-flex;
+        align-self: flex-start;
+        max-width: 100%;
+    }
 
-.gds-setting-control.gds-setting-control > .zui-select,
-.gds-setting-control.gds-setting-control .zui-select {
-    width: 100%;
-    min-width: 0;
-    height: var(--gds-control-height, 36px);
-    min-height: var(--gds-control-height, 36px);
-    background: var(--gds-content);
-    color: var(--gds-foreground);
-    border: 1px solid var(--gds-outline);
-    border-radius: var(--gds-radius-control, 6px);
-    box-shadow: none;
-    outline: none;
-    box-sizing: border-box;
-}
-
-.gds-setting-control.gds-setting-control .zui-select:focus,
-.gds-setting-control.gds-setting-control .zui-select:focus-visible {
-    border-color: var(--gds-primary);
-    box-shadow: none;
-    outline: none;
-}
-
-.gds-settings-footer {
-    font-size: var(--gds-font-size-xs, 12px);
-    color: var(--gds-muted-foreground);
-}
-"#;
+    .gds-settings-footer {
+        font-size: var(--gds-text-xs, 12px);
+        color: var(--gds-muted-foreground);
+    }
+    "#
+);
 
 #[derive(Clone)]
 pub struct View {
@@ -659,7 +640,18 @@ fn SettingsSidebar(view: View, presentation: SidebarPresentation) -> impl IntoVi
     install_stylesheet(SETTINGS_SHEET, SETTINGS_CSS);
     let frame_sidebar_width = FrameContext::current().and_then(|ctx| ctx.sidebar_width);
     let initial_frame_width = frame_sidebar_width.map(|sig| sig.get_untracked());
+    let window = zgui::prelude::try_use_window();
     let pres_sig = Signal::derive_local(move || {
+        if window.as_ref().is_some_and(|w| {
+            let width = w.size().get().width.0;
+            width > 0.0 && WidthTier::from_width(width) == WidthTier::Micro
+        }) {
+            return SidebarPresentation::from_width(
+                COLLAPSED_SIDEBAR_WIDTH,
+                SIDEBAR_WIDTH,
+                COLLAPSED_SIDEBAR_WIDTH,
+            );
+        }
         if let (Some(width_sig), Some(initial_w)) = (frame_sidebar_width, initial_frame_width) {
             let live_w = width_sig.get();
             if (initial_w - presentation.width()).abs() < 0.5 || (live_w - initial_w).abs() >= 0.5 {
@@ -875,7 +867,7 @@ mod tests {
                 .set_surface_tiled(surface.id(), Edges::ALL);
             harness.settle(16);
 
-            // 1. Regression check for #94: `.gds-settings-sidebar` fits 222px and leaves >1000px for content!
+            // 1. Regression check for #94: `.gds-settings-sidebar` fits 224px and leaves >1000px for content!
             let content_node = content_driver.lock().expect("lock").expect("content ref");
             let content_bounds = content_node.window_bounds().expect("content bounds");
             let scale = content_node.scale().max(1.0);
@@ -883,7 +875,7 @@ mod tests {
             let content_w = content_bounds.size.width.0 / scale;
             assert!(
                 (content_x - tokens::SIDEBAR_WIDTH).abs() < 2.0,
-                "settings content must start at sidebar boundary (~222px), got x={content_x}"
+                "settings content must start at sidebar boundary (~224px), got x={content_x}"
             );
             assert!(
                 content_w > 1000.0,
@@ -994,7 +986,7 @@ mod tests {
                 "modified Theme source row must render Reset to default IconButton"
             );
 
-            // 3. Collapse sidebar width to 58px -> content shifts cleanly to x=58px and category rail centers at x=29px!
+            // 3. Collapse sidebar width to 56px -> content shifts cleanly to x=56px and category rail centers at x=28px!
             let width_sig = width_driver.lock().expect("lock").expect("width sig");
             width_sig.set(tokens::COLLAPSED_SIDEBAR_WIDTH);
             flush();
@@ -1004,7 +996,7 @@ mod tests {
             let collapsed_content_x = collapsed_content_bounds.origin.x.0 / scale;
             assert!(
                 (collapsed_content_x - tokens::COLLAPSED_SIDEBAR_WIDTH).abs() < 2.0,
-                "collapsed settings content must start at ~58px, got x={collapsed_content_x}"
+                "collapsed settings content must start at ~56px, got x={collapsed_content_x}"
             );
 
             let collapsed_nav_centers: Vec<f32> = nav_refs
@@ -1018,7 +1010,7 @@ mod tests {
             assert!(
                 collapsed_nav_centers
                     .iter()
-                    .all(|cx| (cx - 29.0).abs() < 0.5)
+                    .all(|cx| (cx - tokens::COLLAPSED_SIDEBAR_WIDTH * 0.5).abs() < 0.5)
             );
 
             harness.shut_down();

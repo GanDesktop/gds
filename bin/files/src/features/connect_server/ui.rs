@@ -15,7 +15,7 @@ use gds::{
         button::{ButtonProps, ButtonVariant},
         dialog::{
             DialogActionsProps, DialogCommand, DialogDecision, DialogDescriptionProps,
-            DialogFooterProps, DialogHeaderProps, DialogTitleProps, ModalDialogProps,
+            DialogFooterProps, DialogHeaderProps, DialogSize, DialogTitleProps, ModalDialogProps,
             handle_dialog_key_down,
         },
     },
@@ -39,25 +39,13 @@ type Completion = Rc<dyn Fn(Result<Address, String>)>;
 const DIALOG_SHEET: &str = "gds-files-connect-dialog";
 const DIALOG_CSS: &str = css!(
     r#"
-    .gds-connect-dialog,
-    .zui-dialog.gds-dialog-content.gds-connect-dialog {
-        width: 480px;
-        max-width: 92vw;
-    }
-
-    .gds-connect-dialog[data-host-key="true"],
-    .zui-dialog.gds-dialog-content.gds-connect-dialog[data-host-key="true"] {
-        width: 520px;
-        max-width: 92vw;
-    }
-
     .gds-connect-dialog__key-scope {
         width: 100%;
         min-width: 0;
     }
 
     .gds-connect-dialog__error {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-error);
     }
 
@@ -73,7 +61,7 @@ const DIALOG_CSS: &str = css!(
         white-space: pre-wrap;
         word-break: break-all;
         font-family: var(--gds-font-mono, monospace);
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
     "#
@@ -524,7 +512,9 @@ impl Connector {
         AnyView::new(view! {
             ModalDialog(
                 open = Binding::controlled(open, |_| {}),
+                size = DialogSize::Md,
                 disabled = Signal::stored_local(true),
+                close_on_confirm = false,
                 on_decision = modal_decision,
                 class = "gds-connect-dialog",
                 attr:data-host-key = move || is_host_key.get().then(|| "true".to_owned()),

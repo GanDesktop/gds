@@ -298,7 +298,7 @@ impl Browser {
                 let favorite = target_place
                     .as_ref()
                     .is_some_and(|place| self.read(|state| state.places.is_favorite(place)));
-                let compact = self.compact();
+                let details_permitted = self.details_permitted();
                 let details_visible = self.0.details.get();
                 let has_selected_tag = selected.iter().any(|row| matches!(row, Row::Tag(_)));
 
@@ -331,9 +331,9 @@ impl Browser {
                         IconName::Info,
                         Command::Details,
                         Browser::toggle_details,
-                        !compact && !pure_tag_catalogue,
+                        details_permitted && !pure_tag_catalogue,
                     )
-                    .checked(details_visible && !compact && !pure_tag_catalogue),
+                    .checked(details_visible && details_permitted && !pure_tag_catalogue),
                     refresh(!busy && !reloading),
                 ];
                 if recent {

@@ -68,10 +68,14 @@ const CAPACITY_CSS: &str = css!(
         animation: none;
         transform: translateX(0);
     }
+    @keyframes gds-capacity-indeterminate {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(250%); }
+    }
     .gds-capacity.gds-capacity .gds-capacity__label {
         height: 17px;
         line-height: 17px;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -85,7 +89,7 @@ const CAPACITY_CSS: &str = css!(
         flex-direction: row;
         justify-content: center;
         align-items: center;
-        font-size: calc(10px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-2xs, 10px);
         font-variant-numeric: tabular-nums;
         text-align: center;
     }"

@@ -42,7 +42,7 @@ const TASK_MANAGER_CSS: &str = "
     padding: 12px 12px 8px 12px;
     background: transparent;
     color: var(--gds-muted-foreground);
-    font-size: var(--gds-font-size-xs, 12px);
+    font-size: var(--gds-text-xs, 12px);
 }
 .gds-tasks-col-name {
     flex: 1 1 0;
@@ -93,7 +93,7 @@ const TASK_MANAGER_CSS: &str = "
     width: 100%;
     height: 30px;
     padding-right: 12px;
-    font-size: 12px;
+    font-size: var(--gds-text-xs, 12px);
     cursor: pointer;
     box-sizing: border-box;
 }
@@ -125,13 +125,13 @@ const TASK_MANAGER_CSS: &str = "
 .gds-tasks-row-id {
     color: var(--gds-muted-foreground);
     font-family: var(--gds-font-mono);
-    font-size: 10px;
+    font-size: var(--gds-text-2xs, 10px);
     flex-shrink: 0;
 }
 .gds-tasks-empty {
     padding: 12px;
     flex-shrink: 0;
-    font-size: var(--gds-font-size-small, 14px);
+    font-size: var(--gds-text-sm, 14px);
     color: var(--gds-muted-foreground);
 }
 .gds-tasks-detail {
@@ -142,7 +142,7 @@ const TASK_MANAGER_CSS: &str = "
     padding: 12px;
     overflow-y: auto;
     font-family: var(--gds-font-mono);
-    font-size: 12px;
+    font-size: var(--gds-text-xs, 12px);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     user-select: text;

@@ -86,7 +86,7 @@ const TAGS_CSS: &str = css!(
         border-radius: 4px;
         background: var(--gds-surface);
         border: 1px solid var(--gds-border);
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-foreground);
         box-sizing: border-box;
     }
@@ -117,16 +117,16 @@ const TAGS_CSS: &str = css!(
         background: transparent !important;
         box-shadow: none !important;
         outline: none !important;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-files-tag-editor__status {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
 
     .gds-files-tag-editor__error {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-error);
     }
     "#
@@ -259,6 +259,10 @@ impl TagEditor {
 
     pub(super) fn available(&self) -> bool {
         !self.0.loading.get() && !self.0.load_failed.get()
+    }
+
+    pub(super) fn available_untracked(&self) -> bool {
+        !self.0.loading.get_untracked() && !self.0.load_failed.get_untracked()
     }
 
     pub(super) fn focus(&self) {

@@ -187,7 +187,7 @@ const FRAME_CSS: &str = css!(
         width: 100%;
         min-width: 0px;
         color: var(--gds-foreground);
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         background-color: transparent;
     }
     .gds-footer--legacy {
@@ -322,6 +322,56 @@ pub fn Frame(
     });
 
     let window = zgui::prelude::try_use_window();
+    let frame_node = NodeRef::new();
+    let initial_win_size = window.as_ref().map(|w| w.size().get_untracked());
+    let observed_w = RwSignal::new_local(
+        initial_win_size
+            .map(|s| s.width.0)
+            .filter(|&w| w > 0.0)
+            .unwrap_or(crate::ui::window::INITIAL_WIDTH),
+    );
+    let observed_h = RwSignal::new_local(
+        initial_win_size
+            .map(|s| s.height.0)
+            .filter(|&h| h > 0.0)
+            .unwrap_or(crate::ui::window::INITIAL_HEIGHT),
+    );
+    if let Some(ref win) = window {
+        let win_size = win.size();
+        let fx = zgui::reactive::RenderEffect::new(move |_| {
+            let size = win_size.get();
+            if size.width.0 > 0.0 && (observed_w.get_untracked() - size.width.0).abs() > 0.25 {
+                observed_w.set(size.width.0);
+            }
+            if size.height.0 > 0.0 && (observed_h.get_untracked() - size.height.0).abs() > 0.25 {
+                observed_h.set(size.height.0);
+            }
+        });
+        zgui::reactive::on_cleanup_local(move || drop(fx));
+    } else {
+        let border_size = frame_node.observe_border_size();
+        let fx = zgui::reactive::RenderEffect::new(move |_| {
+            if let Some(size) = border_size.get() {
+                let s = frame_node.scale().max(1.0);
+                let w = size.width.0 / s;
+                let h = size.height.0 / s;
+                if w > 0.0 && (observed_w.get_untracked() - w).abs() > 0.25 {
+                    observed_w.set(w);
+                }
+                if h > 0.0 && (observed_h.get_untracked() - h).abs() > 0.25 {
+                    observed_h.set(h);
+                }
+            }
+        });
+        zgui::reactive::on_cleanup_local(move || drop(fx));
+    }
+    let width_tier = Signal::derive_local(move || {
+        crate::ui::window::WidthTier::from_width(observed_w.get()).as_str()
+    });
+    let height_tier = Signal::derive_local(move || {
+        crate::ui::window::HeightTier::from_height(observed_h.get()).as_str()
+    });
+
     let is_maximized = Signal::derive_local({
         let window = window.clone();
         move || {
@@ -362,7 +412,10 @@ pub fn Frame(
 
     view! {
         column(
+            node_ref = frame_node,
             class = "gds-frame",
+            attr:data-width-tier = move || Some(width_tier.get().to_owned()),
+            attr:data-height-tier = move || Some(height_tier.get().to_owned()),
             attr:data-maximized = move || is_maximized.get().then(|| "true".to_owned()),
             attr:data-tiled = move || is_tiled.get().then(|| "true".to_owned()),
             attr:data-server-decorated = move || is_server_decorated.get().then(|| "true".to_owned()),
@@ -666,8 +719,8 @@ mod tests {
                 "hovering north edge grip sets vertical resize cursor when floating"
             );
 
-            // Collapse sidebar_width to 58px -> floating Frame has 1px CSD border, so menu button
-            // center sits at 1 + 29 = 30px in window coords (and exact 29px when tiled!).
+            // Collapse sidebar_width to 56px -> floating Frame has 1px CSD border, so menu button
+            // center sits at 1 + 28 = 29px in window coords (and exact 28px when tiled!).
             if let Some(sig) = *width_sig_driver.lock().expect("lock") {
                 sig.set(tokens::COLLAPSED_SIDEBAR_WIDTH);
                 flush();
@@ -678,12 +731,12 @@ mod tests {
             let scale = node.scale().max(1.0);
             let floating_center_x = (bounds.origin.x.0 + bounds.size.width.0 * 0.5) / scale;
             assert!(
-                (floating_center_x - 30.0).abs() < 0.5,
-                "32px menu button inside 58px collapsed toolbar column (1px floating frame border) sits at x=30, got {floating_center_x}"
+                (floating_center_x - 29.0).abs() < 0.5,
+                "32px menu button inside 56px collapsed toolbar column (1px floating frame border) sits at x=29, got {floating_center_x}"
             );
 
             // Click the menu button inside FrameToolbar — must fire click without starting window drag!
-            let button_pos = Point::new(CssPx(30.0), CssPx(26.0));
+            let button_pos = Point::new(CssPx(29.0), CssPx(24.0));
             harness.deliver_to_first(SurfaceEvent::Pointer {
                 action: PointerAction::Pressed,
                 event: PointerEvent::mouse(button_pos).with_button(PointerButton::Primary),
@@ -699,7 +752,7 @@ mod tests {
             harness.settle(16);
 
             // Mark surface tiled -> 1px frame border squares to 0px and ResizeGrips unmount,
-            // placing menu button center at exact x = 29px!
+            // placing menu button center at exact x = 28px!
             harness
                 .platform()
                 .set_surface_tiled(surface.id(), Edges::ALL);
@@ -708,8 +761,8 @@ mod tests {
             let tiled_center_x =
                 (tiled_bounds.origin.x.0 + tiled_bounds.size.width.0 * 0.5) / scale;
             assert!(
-                (tiled_center_x - 29.0).abs() < 0.5,
-                "when tiled (0px frame border), 32px menu button sits dead-center at x=29, got {tiled_center_x}"
+                (tiled_center_x - 28.0).abs() < 0.5,
+                "when tiled (0px frame border), 32px menu button sits dead-center at x=28, got {tiled_center_x}"
             );
 
             harness.shut_down();

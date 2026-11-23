@@ -26,8 +26,8 @@ use crate::app::Gds;
 use crate::appearance::tokens::{DataListStyle, SIDEBAR_ICON_SIZE};
 use crate::ui::button::{ButtonProps, IconButtonProps};
 use crate::ui::dialog::{
-    DialogActionsProps, DialogAnchor, DialogContentProps, DialogDecision, DialogFooterProps,
-    DialogHeaderProps, DialogProps, DialogScope, DialogTitleProps, handle_dialog_key_down,
+    DialogActionsProps, DialogAnchor, DialogDecision, DialogFooterProps, DialogHeaderProps,
+    DialogSize, DialogTitleProps, ModalDialogProps,
 };
 use crate::ui::icon::{IconName, IconProps};
 use crate::ui::list::{ListGeometry, ListSurfaceProps};
@@ -72,7 +72,7 @@ const SHEET: &str = css!(
     .gds-picker-breadcrumbs {
         width: 100%;
         min-width: 0px;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-picker-current-crumb {
@@ -120,10 +120,10 @@ const SHEET: &str = css!(
         display: flex;
         flex-direction: row;
         align-items: center;
-        height: 30px;
+        height: var(--gds-list-header-height, 30px);
         flex-shrink: 0;
         padding: 0px 12px;
-        font-size: calc(11px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         border-bottom: 1px solid var(--gds-border);
         user-select: none;
@@ -141,7 +141,7 @@ const SHEET: &str = css!(
         flex-direction: column;
         width: 100%;
         min-width: 0px;
-        padding: 2px 0px;
+        padding: var(--gds-list-selection-inset, 2px) 0px;
         box-sizing: border-box;
     }
 
@@ -161,14 +161,14 @@ const SHEET: &str = css!(
         gap: 10px;
         width: 100%;
         height: 100%;
-        min-height: 36px;
+        min-height: var(--gds-list-selection-height, 36px);
         min-width: 0px;
         padding: 0px 12px;
         box-sizing: border-box;
         cursor: pointer;
         border-radius: 6px;
         color: var(--gds-foreground);
-        font-size: calc(13px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-picker-row__icon {
@@ -229,13 +229,8 @@ const SHEET: &str = css!(
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: calc(12px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
-    }
-
-    .gds-picker-dialog.gds-picker-dialog {
-        width: 640px;
-        max-width: calc(100vw - 32px);
     }
     "#
 );
@@ -448,6 +443,18 @@ pub fn DirectoryPickerView(
 
     let row_count = Signal::derive_local(move || rows.with(DirectoryRows::len));
     let any_pending = Signal::derive_local(move || is_loading.get() || loading_more.get());
+    let scaled_row_height = Signal::derive_local(|| {
+        Gds::try_current().map_or(ROW_HEIGHT, |gds| {
+            gds.appearance().typography().scaled(ROW_HEIGHT)
+        })
+    });
+    let scaled_header_height = Signal::derive_local(|| {
+        Gds::try_current().map_or(DataListStyle::HEADER_HEIGHT, |gds| {
+            gds.appearance()
+                .typography()
+                .scaled(DataListStyle::HEADER_HEIGHT)
+        })
+    });
 
     let blank_press_attrs = Attrs::new().listener(
         events::POINTER_DOWN,
@@ -463,8 +470,8 @@ pub fn DirectoryPickerView(
             let scroll_y = CssPx(list_ref.scroll_position().offset.y.0 / scale);
             let geometry = ListGeometry {
                 rows: row_count.get_untracked(),
-                row_height: ROW_HEIGHT,
-                header_height: DataListStyle::HEADER_HEIGHT,
+                row_height: scaled_row_height.get_untracked(),
+                header_height: scaled_header_height.get_untracked(),
                 inset_x: 0.0,
                 bottom_inset: 0.0,
                 scrollbar_width: DataListStyle::SCROLLBAR_LANE,
@@ -775,6 +782,8 @@ pub fn DirectoryPickerView(
                         box(class = "gds-picker-table-host") {
                             ListSurface(
                                 node_ref = surface_ref,
+                                row_height = scaled_row_height,
+                                header_height = scaled_header_height,
                                 class = "gds-picker-list-surface",
                                 attr:data-style = "plain",
                                 {..blank_attrs}
@@ -786,14 +795,14 @@ pub fn DirectoryPickerView(
                                     node_ref = list_ref,
                                     class = "gds-picker-list",
                                     count = row_count,
-                                    row_size = Signal::stored_local(ROW_HEIGHT),
+                                    row_size = scaled_row_height,
                                     overscan = 4,
                                     label = text_or_untracked("picker-folders", "Folders"),
                                     on:scroll = move |_| {
                                         let pos = l_ref.scroll_position();
                                         if pos.content_size.height.0 > 0.0
                                             && pos.remaining().height.0
-                                                <= ROW_HEIGHT
+                                                <= scaled_row_height.get_untracked()
                                                     * (TABLE_LOAD_MORE_THRESHOLD as f32)
                                                     * l_ref.scale()
                                         {
@@ -863,7 +872,7 @@ pub fn DirectoryPickerView(
     }
 }
 
-/// Modal directory chooser dialog built over [`zgui_ui::Dialog`] and [`DirectoryPickerView`].
+/// Modal directory chooser dialog built over [`ModalDialog`] (`DialogSize::Lg`) and [`DirectoryPickerView`].
 #[component]
 pub fn DirectoryPickerDialog(
     #[prop(into, optional)] open: Binding<bool>,
@@ -894,7 +903,6 @@ pub fn DirectoryPickerDialog(
     on_cleanup_local(move || drop(reset_settled));
     let picker_confirm = picker.clone();
     let picker_cancel_close = picker.clone();
-    let picker_open_change = picker.clone();
     let can_accept = picker.can_accept();
     let disabled = Signal::derive_local(move || !can_accept.get());
     let editing_loc = picker.is_editing_location();
@@ -931,54 +939,34 @@ pub fn DirectoryPickerDialog(
         })
     };
 
-    let on_open_change = {
-        let settled = Rc::clone(&settled);
-        UnsyncCallback::new(move |next_open: bool| {
-            open.write(next_open);
-            if next_open {
-                settled.set(false);
-            } else if !settled.replace(true) {
-                picker_open_change.cancel_loading();
-                if let Some(on_cancel) = on_cancel {
-                    on_cancel.run(());
-                }
-                if let Some(anchor) = anchor {
-                    anchor.restore();
-                }
-            }
-        })
-    };
-
-    let on_key_decision = on_decision;
     view! {
-        Dialog(open = open, on_open_change = on_open_change) {
-            DialogContent(
-                class = "gds-picker-dialog",
-                dismiss_on_outside_press = true,
-                dismiss_on_escape = dismiss_on_escape,
-                on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
-                    handle_dialog_key_down(disabled.get_untracked(), on_key_decision, ev);
-                },
-            ) {
-                {{
-                    let _scope = DialogScope::enter();
-                    let picker = picker.clone();
-                    view! {
-                        DialogHeader {
-                            DialogTitle {{move || title.get()}}
-                        }
-                        DirectoryPickerView(picker = picker)
-                        DialogFooter {
-                            DialogActions(
-                                confirm_label = confirm_label,
-                                cancel_label = cancel_label,
-                                disabled = disabled,
-                                on_decision = on_decision,
-                            )
-                        }
+        ModalDialog(
+            open = open,
+            size = DialogSize::Lg,
+            disabled = disabled,
+            dismiss_on_escape = dismiss_on_escape,
+            close_on_confirm = false,
+            anchor = anchor,
+            on_decision = on_decision,
+            class = "gds-picker-dialog",
+        ) {
+            {{
+                let picker = picker.clone();
+                view! {
+                    DialogHeader {
+                        DialogTitle {{move || title.get()}}
                     }
-                }}
-            }
+                    DirectoryPickerView(picker = picker)
+                    DialogFooter {
+                        DialogActions(
+                            confirm_label = confirm_label,
+                            cancel_label = cancel_label,
+                            disabled = disabled,
+                            on_decision = on_decision,
+                        )
+                    }
+                }
+            }}
         }
     }
 }

@@ -33,6 +33,7 @@ use gds::ui::split::{
     DIVIDER_HEIGHT as SPLIT_DIVIDER_HEIGHT, Options as SplitOptions, State as SplitState,
     VerticalSplitProps, constrained_height,
 };
+use gds::ui::window::{HeightTier, WidthTier};
 use gds::ui::{HeldModifier, IconName, IconProps, Shortcut};
 use zgui::geom::{DevicePx, Point};
 use zgui::prelude::*;
@@ -45,7 +46,7 @@ use zgui_ui_primitives::Binding;
 
 use super::keyboard::{SidebarRegion, SidebarRow};
 use super::model::{AddressPresentation, Pane};
-use super::ui::Browser;
+use super::ui::{Browser, FilterFocusMode};
 use super::view::local_memo;
 use crate::entities::file::ui::EntryPresentation;
 use crate::entities::location::{
@@ -61,14 +62,15 @@ const SECTION_HEADER_HEIGHT: f32 = 34.0;
 const LOCATION_HEADER_HEIGHT: f32 = 28.0;
 const GROUP_GAP: f32 = 6.0;
 const ROW_GAP: f32 = 4.0;
-const ITEM_GAP: f32 = 8.0;
-const TAB_HEIGHT: f32 = 44.0;
+pub(super) const ITEM_GAP: f32 = 8.0;
+pub(super) const TAB_HEIGHT: f32 = 44.0;
 const TAB_CLOSE_RESERVE: f32 = ITEM_GAP * 2.0 + ICON_BUTTON_SIZE;
 const DEFAULT_DEVICE_ROWS: usize = 4;
+const HEADER_ACTION_SIZE: f32 = 28.0;
 const HEADING_ICON_SIZE: f32 = 12.0;
 const HEADING_PADDING: f32 = 8.0;
 const COLLAPSED_ACTION_INSET: f32 =
-    (COLLAPSED_SIDEBAR_WIDTH - 2.0 * SIDEBAR_PADDING - ICON_BUTTON_SIZE) * 0.5;
+    (COLLAPSED_SIDEBAR_WIDTH - 2.0 * SIDEBAR_PADDING - HEADER_ACTION_SIZE) * 0.5;
 const COLLAPSED_HEADING_INSET: f32 =
     (COLLAPSED_SIDEBAR_WIDTH - 2.0 * SIDEBAR_PADDING - HEADING_ICON_SIZE) * 0.5;
 const COMPACT_CAPACITY_THRESHOLD: f32 = 120.0;
@@ -124,7 +126,7 @@ pub(super) const CHROME_CSS: &str = css!(
         flex: 1 1 0%;
         align-items: center;
         min-width: 96px;
-        height: 30px;
+        height: var(--gds-icon-button-size, 32px);
         margin: 0px 6px;
         border-radius: var(--gds-radius-control, 6px);
         background: transparent;
@@ -151,7 +153,7 @@ pub(super) const CHROME_CSS: &str = css!(
         background-color: transparent;
         color: var(--gds-foreground);
         font-family: var(--gds-font-sans);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         box-shadow: none;
         outline: none;
     }
@@ -178,7 +180,7 @@ pub(super) const CHROME_CSS: &str = css!(
         text-overflow: ellipsis;
         white-space: nowrap;
         color: var(--gds-foreground);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-files-address-read.gds-files-address-read {
@@ -187,7 +189,7 @@ pub(super) const CHROME_CSS: &str = css!(
         align-items: center;
         min-width: 0px;
         height: 100%;
-        padding-right: 1px;
+        padding-right: 2px;
     }
 
     .zui-button.gds-icon-button.gds-files-address-edit {
@@ -224,7 +226,7 @@ pub(super) const CHROME_CSS: &str = css!(
         border-radius: 4px;
         cursor: pointer;
         color: var(--gds-muted-foreground);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         user-select: none;
     }
 
@@ -263,6 +265,60 @@ pub(super) const CHROME_CSS: &str = css!(
         min-width: 0px;
     }
 
+    .gds-files-micro-filter.gds-files-micro-filter {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0px;
+        flex: 0 1 auto;
+    }
+
+    .gds-files-micro-filter.gds-files-micro-filter[data-floating="true"] {
+        position: absolute;
+        left: 12px;
+        bottom: 10px;
+        z-index: 6;
+        padding: 3px;
+        border-radius: var(--gds-radius-control, 6px);
+        background-color: var(--gds-panel);
+        border: 1px solid var(--gds-border);
+    }
+
+    .gds-files-micro-filter-input-wrap.gds-files-micro-filter-input-wrap {
+        display: flex;
+        width: 184px;
+        min-width: 88px;
+        max-width: 220px;
+        flex: 0 1 auto;
+        transition: width var(--gds-motion-normal, 160ms) var(--gds-motion-ease-out, cubic-bezier(0, 0, 0.2, 1));
+    }
+
+    .gds-input-field.gds-input-field.gds-files-micro-filter-field {
+        width: 100%;
+        min-width: 0px;
+        height: 24px;
+        min-height: 24px;
+        border-radius: 5px;
+    }
+
+    .gds-input-field.gds-files-micro-filter-field .gds-input-field__leading {
+        padding-left: 7px;
+    }
+
+    .gds-input-field.gds-files-micro-filter-field .gds-input-field__trailing {
+        padding-right: 2px;
+    }
+
+    .gds-input-field.gds-files-micro-filter-field .gds-input-field__clear {
+        width: 18px;
+        height: 18px;
+    }
+
+    .gds-input-field.gds-files-micro-filter-field .zui-field.gds-input-field__input {
+        font-size: var(--gds-text-xs, 12px);
+        padding: 0px 6px;
+    }
+
     .gds-files-sidebar-tabs-section.gds-files-sidebar-tabs-section {
         display: flex;
         flex-direction: column;
@@ -292,8 +348,9 @@ pub(super) const CHROME_CSS: &str = css!(
     .gds-files-sidebar-locations-section.gds-files-sidebar-locations-section {
         display: flex;
         flex-direction: column;
-        flex-shrink: 1;
+        flex: 0 1 auto;
         width: 100%;
+        max-height: 100%;
         min-width: 0px;
         min-height: 0px;
         padding: 0px 0px var(--gds-sidebar-padding, 10px) 0px;
@@ -302,7 +359,8 @@ pub(super) const CHROME_CSS: &str = css!(
     }
 
     .gds-files-sidebar-footer.gds-files-sidebar-footer {
-        flex-shrink: 1;
+        flex: 0 1 auto;
+        max-height: 45%;
         min-height: 0px;
         overflow: hidden;
     }
@@ -334,6 +392,7 @@ pub(super) const CHROME_CSS: &str = css!(
     .gds-files-sidebar-locations.gds-files-sidebar-locations {
         display: flex;
         flex-direction: column;
+        flex: 0 1 auto;
         width: 100%;
         min-width: 0px;
         min-height: 0px;
@@ -349,7 +408,7 @@ pub(super) const CHROME_CSS: &str = css!(
         flex: 0 0 auto;
         flex-shrink: 0;
         width: 100%;
-        min-width: calc(var(--gds-collapsed-sidebar-width, 58px) - 2 * var(--gds-sidebar-padding, 10px));
+        min-width: calc(var(--gds-collapsed-sidebar-width, 56px) - 2 * var(--gds-sidebar-padding, 10px));
         gap: 4px;
     }
 
@@ -370,12 +429,27 @@ pub(super) const CHROME_CSS: &str = css!(
         padding: 0px var(--gds-files-tabs-title-pad-x, 6px);
     }
 
+    .gds-files-sidebar-content {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0px;
+        width: 100%;
+        min-width: 0px;
+        min-height: 0px;
+        overflow: hidden;
+    }
+
     .gds-files-sidebar-empty {
+        padding: 6px;
+        font-size: var(--gds-text-xs, 12px);
         color: color-mix(
             in srgb,
             var(--gds-muted-foreground) var(--gds-sidebar-label-pct, 100%),
             transparent
         );
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .gds-files-sidebar-heading.gds-files-sidebar-heading {
@@ -429,7 +503,7 @@ pub(super) const CHROME_CSS: &str = css!(
         flex: 0 0 auto;
         flex-shrink: 0;
         width: 100%;
-        min-width: calc(var(--gds-collapsed-sidebar-width, 58px) - 2 * var(--gds-sidebar-padding, 10px));
+        min-width: calc(var(--gds-collapsed-sidebar-width, 56px) - 2 * var(--gds-sidebar-padding, 10px));
         overflow: hidden;
         box-sizing: border-box;
     }
@@ -467,9 +541,9 @@ pub(super) const CHROME_CSS: &str = css!(
     .gds-files-location-item.gds-files-location-item {
         flex: 0 0 auto;
         flex-shrink: 0;
-        height: 38px;
-        min-height: 38px;
-        max-height: 38px;
+        height: var(--gds-sidebar-item-height, 36px);
+        min-height: var(--gds-sidebar-item-height, 36px);
+        max-height: var(--gds-sidebar-item-height, 36px);
         box-sizing: border-box;
     }
 
@@ -521,7 +595,7 @@ pub(super) const CHROME_CSS: &str = css!(
         flex-shrink: 0;
         padding: 6px 0px;
         gap: 0px;
-        min-height: 38px;
+        min-height: var(--gds-sidebar-item-height, 36px);
         box-sizing: border-box;
     }
 
@@ -769,17 +843,20 @@ impl Browser {
         })
     }
 
-    /// Right-column toolbar controls (`[PanelLeft, Back, Forward, Parent, flex:1 AddressBar]`).
+    /// Right-column toolbar controls (`[PanelLeft, Back, Forward, Parent, flex:1 AddressBar, optional Micro ... menu]`).
     pub(super) fn toolbar_controls(&self) -> AnyView {
         install_chrome_stylesheets();
         let browser = self.clone();
         let toggle_b = self.clone();
-        let compact_b = self.clone();
+        let width_b = self.clone();
+        let height_b = self.clone();
         let pane_b = self.clone();
-        let compact = Signal::derive_local(move || compact_b.compact());
+        let micro_width = Signal::derive_local(move || width_b.width_tier() == WidthTier::Micro);
+        let micro_height =
+            Signal::derive_local(move || height_b.height_tier() == HeightTier::Micro);
         let pane_sig = local_memo(move || pane_b.pane());
         let show_sidebar_toggle =
-            Signal::derive_local(move || pane_sig.get() != Pane::Help && !compact.get());
+            Signal::derive_local(move || pane_sig.get() != Pane::Help && !micro_width.get());
         let no_drag = self.0.window.as_ref().map(WindowHandle::no_drag_handler);
 
         AnyView::new(view! {
@@ -811,12 +888,33 @@ impl Browser {
                     Pane::Files => {
                         let nav_b = browser.clone();
                         let addr_b = browser.clone();
+                        let menu_b = browser.clone();
+                        let no_drag_menu = no_drag;
                         AnyView::new(view! {
                             row(class = "gds-files-toolbar-files") {
-                                Show(when = move || !compact.get()) {
+                                Show(when = move || !micro_width.get()) {
                                     {{nav_b.navigation_buttons()}}
                                 }
                                 {{addr_b.address_bar()}}
+                                Show(when = move || micro_height.get()) {
+                                    {{
+                                        let mb = menu_b.clone();
+                                        view! {
+                                            row(
+                                                class = "gds-files-menu-controls",
+                                                on:pointer_down = move |ev: &mut EventCx<'_, events::PointerDown>| {
+                                                    if let Some(ref handler) = no_drag_menu {
+                                                        handler(ev);
+                                                    } else {
+                                                        ev.stop_propagation();
+                                                    }
+                                                }
+                                            ) {
+                                                {mb.page_menu()}
+                                            }
+                                        }
+                                    }}
+                                }
                             }
                         })
                     }
@@ -1292,10 +1390,29 @@ impl Browser {
         self.0.address.set(original);
     }
 
+    pub(super) fn activate_filter(&self) {
+        if !self.filter_available_untracked() {
+            return;
+        }
+        if self.height_tier_untracked() == HeightTier::Micro {
+            self.0.footer_filter_open.set(true);
+        }
+        let node = self.0.filter_node;
+        if node.is_bound() {
+            node.focus();
+            node.select_all();
+        } else {
+            self.0
+                .filter_focus_request
+                .set(Some(FilterFocusMode::SelectAll));
+        }
+    }
+
     pub(super) fn folder_filter(&self) -> AnyView {
         install_chrome_stylesheets();
         let filter_sig = self.0.filter;
         let filter_node = self.0.filter_node;
+        let focus_req = self.0.filter_focus_request;
         let available_browser = self.clone();
         let change_browser = self.clone();
         let wrap_ref = NodeRef::new();
@@ -1312,6 +1429,7 @@ impl Browser {
             Show(when = move || visible.get()) {
                 box(node_ref = wrap_ref, class = "gds-files-filter-wrap") {
                     {{
+                        attach_filter_focus_effect(filter_node, filter_sig, focus_req);
                         let change_browser = change_browser.clone();
                         move || {
                             GdsLang::track();
@@ -1338,10 +1456,96 @@ impl Browser {
         })
     }
 
+    /// Subordinate `24px` directory filter used in `HeightTier::Micro` (`H < 520px`), mounted
+    /// either inside the `32px` footer's status slot (`floating = false`) or as a bottom-left
+    /// floating pill when Save-picker mode occupies the footer status slot (`floating = true`).
+    pub(super) fn micro_filter(&self, floating: bool) -> AnyView {
+        install_chrome_stylesheets();
+        let filter_sig = self.0.filter;
+        let filter_node = self.0.filter_node;
+        let footer_open = self.0.footer_filter_open;
+        let focus_req = self.0.filter_focus_request;
+        let open_browser = self.clone();
+        let change_browser = self.clone();
+        let clear_browser = self.clone();
+        let expanded =
+            Signal::derive_local(move || footer_open.get() || !filter_sig.get().is_empty());
+
+        AnyView::new(view! {
+            row(
+                class = "gds-files-micro-filter",
+                attr:data-floating = floating.then(|| "true".to_owned()),
+            ) {
+                {{move || {
+                    if expanded.get() {
+                        let wrap_ref = NodeRef::new();
+                        keytips::stage_shortcut(
+                            wrap_ref,
+                            Command::Filter.shortcut(),
+                            HintPlacement::Trailing,
+                            Signal::stored_local(true),
+                        );
+                        attach_filter_focus_effect(filter_node, filter_sig, focus_req);
+                        let cb = change_browser.clone();
+                        let clb = clear_browser.clone();
+                        AnyView::new(view! {
+                            box(node_ref = wrap_ref, class = "gds-files-micro-filter-input-wrap") {
+                                {{move || {
+                                    GdsLang::track();
+                                    let change_b = cb.clone();
+                                    let clear_b = clb.clone();
+                                    view! {
+                                        InputField(
+                                            node_ref = filter_node,
+                                            value = Binding::from(filter_sig),
+                                            placeholder = i18n::text("filter-placeholder"),
+                                            label = i18n::text("filter"),
+                                            leading_icon = IconName::Search,
+                                            clearable = true,
+                                            class = "gds-files-micro-filter-field",
+                                            on_change = UnsyncCallback::new(move |value: String| {
+                                                change_b.filter(value);
+                                            }),
+                                            on_clear = UnsyncCallback::new(move |()| {
+                                                clear_b.filter(String::new());
+                                                clear_b.0.footer_filter_open.set(false);
+                                                clear_b.focus_content();
+                                            }),
+                                            on:focus_out = move |_| {
+                                                if filter_sig.get_untracked().is_empty()
+                                                    && !node_contains_focus(filter_node)
+                                                {
+                                                    footer_open.set(false);
+                                                }
+                                            },
+                                        )
+                                    }
+                                }}}
+                            }
+                        })
+                    } else {
+                        let trigger_b = open_browser.clone();
+                        AnyView::new(view! {
+                            IconButton(
+                                icon = IconName::Search,
+                                size = ButtonSize::IconXs,
+                                label = Signal::derive_local(|| i18n::text("filter")),
+                                shortcut = Some(Command::Filter.shortcut()),
+                                on:click = move |_| trigger_b.activate_filter(),
+                            )
+                        })
+                    }
+                }}}
+            }
+        })
+    }
+
     pub(super) fn filter_available(&self) -> bool {
         self.pane() == Pane::Files
             && self.read(|state| match state.tab().navigation.location() {
-                Location::Recent | Location::Favorites | Location::Tags(_) => !self.compact(),
+                Location::Recent | Location::Favorites | Location::Tags(_) => {
+                    self.height_tier() == HeightTier::Micro || !self.actions_collapsed()
+                }
                 Location::Directory(_) | Location::Volume { .. } | Location::Remote(_) => true,
                 Location::Network | Location::Volumes | Location::Trash => false,
             })
@@ -1351,7 +1555,8 @@ impl Browser {
         self.pane_untracked() == Pane::Files
             && self.read_untracked(|state| match state.tab().navigation.location() {
                 Location::Recent | Location::Favorites | Location::Tags(_) => {
-                    !self.compact_untracked()
+                    self.height_tier_untracked() == HeightTier::Micro
+                        || !self.actions_collapsed_untracked()
                 }
                 Location::Directory(_) | Location::Volume { .. } | Location::Remote(_) => true,
                 Location::Network | Location::Volumes | Location::Trash => false,
@@ -1399,13 +1604,30 @@ impl Browser {
             WORKSPACE_DURATION_MS,
         );
 
+        let height_tier = Signal::derive_local({
+            let b = self.clone();
+            move || b.height_tier()
+        });
+        let micro_loc_sig = self.0.micro_locations_expanded;
+        let reset_micro_loc_fx = RenderEffect::new(move |_| {
+            if height_tier.get() == HeightTier::Normal && micro_loc_sig.get_untracked() {
+                micro_loc_sig.set(false);
+            }
+        });
+        on_cleanup_local(move || drop(reset_micro_loc_fx));
+
         let loc_expanded = Signal::derive_local({
             let b = self.clone();
             move || {
-                !b.0.preferences
-                    .state()
-                    .with(|p| p.files.sidebar.locations_collapsed)
-                    || b.0.sidebar_region.get() == Some(SidebarRegion::Locations)
+                let focused = b.0.sidebar_region.get() == Some(SidebarRegion::Locations);
+                if b.height_tier() == HeightTier::Micro {
+                    b.0.micro_locations_expanded.get() || focused
+                } else {
+                    !b.0.preferences
+                        .state()
+                        .with(|p| p.files.sidebar.locations_collapsed)
+                        || focused
+                }
             }
         });
         let loc_progress = use_transition(
@@ -1530,6 +1752,7 @@ impl Browser {
                             }
                             IconButton(
                                 icon = IconName::Plus,
+                                size = ButtonSize::IconSm,
                                 label = Signal::derive_local(|| i18n::text("new-tab")),
                                 shortcut = Some(Command::NewTab.shortcut()),
                                 on:click = move |_| {
@@ -1793,8 +2016,9 @@ impl Browser {
                         node_ref = locations_region_ref,
                         style:display = "flex",
                         style:flex-direction = "column",
-                        style:flex-shrink = "1",
+                        style:flex = "0 1 auto",
                         style:width = "100%",
+                        style:max-height = "100%",
                         style:min-width = "0px",
                         style:min-height = "0px",
                         style:overflow = "hidden"
@@ -1814,10 +2038,16 @@ impl Browser {
                                     let focused = toggle_b.0.sidebar_region.get_untracked()
                                         == Some(SidebarRegion::Locations)
                                         || node_contains_focus(locations_node);
-                                    toggle_b.edit_preferences(|p| {
-                                        p.files.sidebar.locations_collapsed =
-                                            !p.files.sidebar.locations_collapsed || focused;
-                                    });
+                                    if toggle_b.height_tier_untracked() == HeightTier::Micro {
+                                        let next = !toggle_b.0.micro_locations_expanded.get_untracked()
+                                            && !focused;
+                                        toggle_b.0.micro_locations_expanded.set(next);
+                                    } else {
+                                        toggle_b.edit_preferences(|p| {
+                                            p.files.sidebar.locations_collapsed =
+                                                !p.files.sidebar.locations_collapsed || focused;
+                                        });
+                                    }
                                     if focused {
                                         toggle_b.sidebar_focus_changed(SidebarRegion::Locations, false);
                                         toggle_b.focus_content();
@@ -2452,6 +2682,30 @@ pub(super) fn section_overflow_y(progress: f32) -> &'static str {
 fn section_curtain_transform(progress: f32) -> Option<String> {
     let p = progress.clamp(0.0, 1.0);
     ((1.0 - p) > 1e-3).then(|| format!("translateY({:.2}px)", -(1.0 - p) * 8.0))
+}
+
+fn attach_filter_focus_effect(
+    filter_node: NodeRef,
+    filter_sig: RwSignal<String, LocalStorage>,
+    focus_request: RwSignal<Option<FilterFocusMode>, LocalStorage>,
+) {
+    let focus_fx = RenderEffect::new(move |_| {
+        let Some(mode) = focus_request.get() else {
+            return;
+        };
+        if filter_node.get().is_none() {
+            return;
+        }
+        focus_request.set(None);
+        let current = filter_sig.get_untracked();
+        filter_node.focus();
+        filter_node.set_value(&current);
+        match mode {
+            FilterFocusMode::SelectAll => filter_node.select_all(),
+            FilterFocusMode::CaretEnd => filter_node.set_selection(current.len()..current.len()),
+        }
+    });
+    on_cleanup_local(move || drop(focus_fx));
 }
 
 fn node_contains_focus(node: NodeRef) -> bool {

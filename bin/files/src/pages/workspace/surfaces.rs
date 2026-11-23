@@ -70,14 +70,14 @@ const SURFACES_CSS: &str = css!(
     }
 
     .gds-files-collection-state__title {
-        font-size: var(--gds-font-size-md, 16px);
+        font-size: var(--gds-text-md, 16px);
         font-weight: 500;
         color: var(--gds-foreground);
         text-align: center;
     }
 
     .gds-files-collection-state__detail {
-        font-size: var(--gds-font-size-sm, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-muted-foreground);
         text-align: center;
     }
@@ -102,7 +102,7 @@ const SURFACES_CSS: &str = css!(
     }
 
     .gds-files-collection-notice__text {
-        font-size: var(--gds-font-size-sm, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-foreground);
     }
 
@@ -112,7 +112,7 @@ const SURFACES_CSS: &str = css!(
         flex: none;
         align-items: center;
         width: 100%;
-        height: 30px;
+        height: var(--gds-list-header-height, 30px);
         border-bottom: 1px solid var(--gds-border);
     }
 
@@ -172,7 +172,7 @@ const SURFACES_CSS: &str = css!(
 
     .gds-files-collection-header__label {
         min-width: 0;
-        font-size: 11px;
+        font-size: var(--gds-text-xs, 12px);
         font-weight: 400;
         color: var(--gds-muted-foreground);
         overflow: hidden;
@@ -270,7 +270,7 @@ const SURFACES_CSS: &str = css!(
     }
 
     .gds-files-collection-cell--meta {
-        font-size: 12px;
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
 
@@ -317,7 +317,7 @@ const SURFACES_CSS: &str = css!(
     }
 
     .gds-files-collection-cell__name {
-        font-size: 13px;
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-foreground);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -331,7 +331,7 @@ const SURFACES_CSS: &str = css!(
     }
 
     .gds-files-collection-cell__text {
-        font-size: 12px;
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -355,7 +355,7 @@ const SURFACES_CSS: &str = css!(
     }
 
     .gds-files-collection-cell__badge {
-        font-size: 11px;
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         flex-shrink: 0;
     }
@@ -369,7 +369,7 @@ const SURFACES_CSS: &str = css!(
     }
 
     .gds-files-collection-mount-picker__label {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -1117,7 +1117,12 @@ impl Browser {
     }
 
     pub(super) fn collection_columns(&self) -> Option<Vec<(&'static str, f32)>> {
-        let dimensions = || (self.table_viewport_width().max(240.0), self.compact());
+        let dimensions = || {
+            (
+                self.table_viewport_width().max(240.0),
+                self.narrow_collection(),
+            )
+        };
         let _ = self.0.revision.get();
         let state = self.0.state.borrow();
         let tab = state.tab();

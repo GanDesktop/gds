@@ -8,19 +8,19 @@ use gds::{
         motion::{WORKSPACE_DURATION_MS, use_transition},
         tokens::DataListStyle,
     },
+    ui::window::{HeightTier, WidthTier},
 };
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, RenderEffect, RwSignal, Signal, on_cleanup_local};
 
-use super::{
-    model::RowKey,
-    ui::{Browser, COMPACT_WINDOW_WIDTH},
-};
+use super::{model::RowKey, ui::Browser};
 
 pub(super) const TABLE_INSET: f32 = gds::ui::page::TABLE_INSET;
 pub(super) const GRID_PADDING: f32 = 8.0;
 pub(super) const GRID_GAP: f32 = 8.0;
 pub(super) const SCROLLBAR_LANE: f32 = DataListStyle::SCROLLBAR_LANE;
+pub(super) const COMPACT_ACTIONS_WIDTH: f32 = 620.0;
+pub(super) const NARROW_COLLECTION_WIDTH: f32 = 680.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct RectF {
@@ -165,12 +165,66 @@ impl Grid {
 }
 
 impl Browser {
-    pub(super) fn compact(&self) -> bool {
-        self.0.window_width.get() < COMPACT_WINDOW_WIDTH
+    pub(super) fn width_tier(&self) -> WidthTier {
+        WidthTier::from_width(self.0.window_width.get())
     }
 
-    pub(super) fn compact_untracked(&self) -> bool {
-        self.0.window_width.get_untracked() < COMPACT_WINDOW_WIDTH
+    pub(super) fn width_tier_untracked(&self) -> WidthTier {
+        WidthTier::from_width(self.0.window_width.get_untracked())
+    }
+
+    pub(super) fn height_tier(&self) -> HeightTier {
+        HeightTier::from_height(self.0.window_height.get())
+    }
+
+    pub(super) fn height_tier_untracked(&self) -> HeightTier {
+        HeightTier::from_height(self.0.window_height.get_untracked())
+    }
+
+    pub(super) fn actions_collapsed(&self) -> bool {
+        self.width_tier() == WidthTier::Micro || self.0.content_width.get() < COMPACT_ACTIONS_WIDTH
+    }
+
+    pub(super) fn actions_collapsed_untracked(&self) -> bool {
+        self.width_tier_untracked() == WidthTier::Micro
+            || self.0.content_width.get_untracked() < COMPACT_ACTIONS_WIDTH
+    }
+
+    pub(super) fn narrow_collection(&self) -> bool {
+        self.width_tier() == WidthTier::Micro
+            || self.0.content_width.get() < NARROW_COLLECTION_WIDTH
+    }
+
+    pub(super) fn details_permitted(&self) -> bool {
+        self.width_tier() == WidthTier::Wide
+    }
+
+    pub(super) fn details_permitted_untracked(&self) -> bool {
+        self.width_tier_untracked() == WidthTier::Wide
+    }
+
+    pub(super) fn list_row_height(&self) -> f32 {
+        Gds::try_current().map_or(DataListStyle::ROW_HEIGHT, |gds| {
+            gds.appearance()
+                .typography()
+                .scaled(DataListStyle::ROW_HEIGHT)
+        })
+    }
+
+    pub(super) fn list_row_height_untracked(&self) -> f32 {
+        Gds::try_current().map_or(DataListStyle::ROW_HEIGHT, |gds| {
+            gds.appearance()
+                .typography()
+                .scaled_untracked(DataListStyle::ROW_HEIGHT)
+        })
+    }
+
+    pub(super) fn list_header_height(&self) -> f32 {
+        Gds::try_current().map_or(DataListStyle::HEADER_HEIGHT, |gds| {
+            gds.appearance()
+                .typography()
+                .scaled(DataListStyle::HEADER_HEIGHT)
+        })
     }
 
     pub(super) fn grid_geometry(&self) -> Grid {
@@ -200,7 +254,7 @@ impl Browser {
         if self.read_untracked(|state| state.tab().mode == crate::entities::file::ViewMode::Grid) {
             self.grid_geometry_untracked().row_height
         } else {
-            DataListStyle::ROW_HEIGHT
+            self.list_row_height_untracked()
         }
     }
 }

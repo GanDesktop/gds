@@ -26,11 +26,11 @@ use zgui::vocab::{FocusCause, Key, Live, Modifiers, NamedKey, Role};
 use zgui::{component, css, view};
 
 use crate::app::Gds;
-use crate::appearance::tokens::NOTIFICATION_INSET;
+use crate::appearance::tokens::{NOTIFICATION_TOP_GAP, TOOLBAR_HEIGHT};
 use crate::ui::actions::{ActionDispatcher, Command};
 use crate::ui::keytips::{HintPlacement, has_active_modal_scope, stage_shortcut};
 
-pub const TOP_OFFSET: f32 = 42.0;
+pub const TOP_OFFSET: f32 = TOOLBAR_HEIGHT + NOTIFICATION_TOP_GAP;
 pub const MAX_CONTENT_HEIGHT: f32 = 240.0;
 pub const DETAIL_LIMIT: usize = 4;
 pub const AUTO_DISMISS_DELAY: Duration = Duration::from_secs(5);
@@ -43,8 +43,8 @@ const HOST_SHEET: &str = css!(
 
     .gds-notification-column {
         position: fixed;
-        top: 42px;
-        right: 12px;
+        top: calc(var(--gds-toolbar-height, 48px) + var(--gds-notification-top-gap, 8px));
+        right: var(--gds-notification-inset, 12px);
         display: flex;
         flex-direction: column;
         gap: 8px;
@@ -876,8 +876,6 @@ pub fn NotificationHost(children: Children) -> impl IntoView {
                     column(
                         node_ref = column_ref,
                         class = "gds-notification-column",
-                        style:top = Some(format!("{TOP_OFFSET}px")),
-                        style:right = Some(format!("{NOTIFICATION_INSET}px")),
                         on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
                             handle_stack_key_down(queue, ev);
                         },

@@ -79,7 +79,7 @@ pub(super) const TERMINAL_CSS: &str = "
 }
 .gds-terminal-status-line {
     padding: 2px 12px;
-    font-size: var(--gds-font-size-xs, 12px);
+    font-size: var(--gds-text-xs, 12px);
     background-color: transparent;
     color: var(--gds-muted-foreground);
 }
@@ -88,7 +88,7 @@ pub(super) const TERMINAL_CSS: &str = "
 }
 .gds-terminal-error-line {
     padding: 2px 12px;
-    font-size: var(--gds-font-size-xs, 12px);
+    font-size: var(--gds-text-xs, 12px);
     background-color: transparent;
     color: var(--gds-error);
 }

@@ -23,16 +23,37 @@ use zgui::reactive::{
     LocalStorage, RenderEffect, Signal, UnsyncCallback, on_cleanup_local, provide_local_context,
 };
 use zgui::view::{ListenerGuard, current_host, events};
+use zgui::vocab::{Key, NamedKey};
 use zgui::{component, css, view};
 use zgui_ui::overlay::OverlayState;
 use zgui_ui_primitives::Binding;
 
 use crate::app::Gds;
 use crate::ui::button::{ButtonProps, ButtonVariant};
-use crate::ui::icon::IconName;
+use crate::ui::icon::{IconName, IconProps};
 use crate::ui::keytips::{
     DialogScopeId, KeytipRegistry, allocate_dialog_scope_id, push_modal_scope, remove_modal_scope,
 };
+
+/// Canonical modal width tiers (`Sm = 420px`, `Md = 500px`, `Lg = 640px`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DialogSize {
+    Sm,
+    #[default]
+    Md,
+    Lg,
+}
+
+impl DialogSize {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sm => "sm",
+            Self::Md => "md",
+            Self::Lg => "lg",
+        }
+    }
+}
 
 const SHEET: &str = css!(
     r#"
@@ -47,12 +68,34 @@ const SHEET: &str = css!(
         border: 1px solid var(--gds-border);
         border-radius: 8px;
         font-family: var(--gds-font-sans);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
-    .gds-dialog-content {
-        min-width: 340px;
-        max-width: 520px;
+    .zui-dialog.gds-dialog-content {
+        width: 500px;
+        min-width: 0px;
+        max-width: calc(100vw - 32px);
+        box-sizing: border-box;
+    }
+
+    .zui-dialog.gds-dialog-content[data-size="sm"] {
+        width: 420px;
+    }
+
+    .zui-dialog.gds-dialog-content[data-size="md"] {
+        width: 500px;
+    }
+
+    .zui-dialog.gds-dialog-content[data-size="lg"] {
+        width: 640px;
+    }
+
+    .zui-dialog .zui-dialog__title {
+        font-size: var(--gds-text-md, 16px);
+    }
+
+    .zui-dialog .zui-dialog__description {
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .zui-dialog .zui-dialog__dismiss {
@@ -72,6 +115,47 @@ const SHEET: &str = css!(
         align-items: center;
         justify-content: flex-end;
         gap: 8px;
+    }
+
+    .gds-confirm-dialog__body {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        outline: none;
+    }
+
+    .gds-confirm-dialog__title-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .gds-confirm-dialog__title-icon[data-destructive="true"] {
+        color: var(--gds-error);
+    }
+
+    .gds-confirm-dialog__items {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 8px 12px;
+        border-radius: var(--gds-radius-control, 6px);
+        background-color: var(--gds-surface);
+        border: 1px solid var(--gds-border);
+    }
+
+    .gds-confirm-dialog__item {
+        font-size: var(--gds-text-xs, 12px);
+        color: var(--gds-foreground);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .gds-confirm-dialog__more {
+        font-size: var(--gds-text-xs, 12px);
+        color: var(--gds-muted-foreground);
     }
     "#
 );
@@ -278,6 +362,10 @@ pub fn DialogActions(
 #[component]
 pub fn ModalDialog(
     #[prop(into, optional)] open: Binding<bool>,
+    #[prop(into, default = Signal::stored_local(DialogSize::Md))] size: Signal<
+        DialogSize,
+        LocalStorage,
+    >,
     #[prop(into, default = Signal::stored_local(false))] disabled: Signal<bool, LocalStorage>,
     #[prop(into, default = Signal::stored_local(true))] dismiss_on_outside_press: Signal<
         bool,
@@ -288,6 +376,7 @@ pub fn ModalDialog(
         LocalStorage,
     >,
     #[prop(default = true)] dismiss_control: bool,
+    #[prop(default = true)] close_on_confirm: bool,
     #[prop(optional)] anchor: Option<DialogAnchor>,
     #[prop(optional)] on_decision: Option<UnsyncCallback<DialogDecision>>,
     #[prop(into, optional)] class: Classes,
@@ -303,6 +392,12 @@ pub fn ModalDialog(
             let now_open = open.get().unwrap_or(false);
             if now_open && prev != Some(true) {
                 settled.set(false);
+            } else if !now_open
+                && prev == Some(true)
+                && !settled.get()
+                && let Some(anchor) = anchor
+            {
+                anchor.restore();
             }
             now_open
         });
@@ -311,9 +406,16 @@ pub fn ModalDialog(
     let finish = {
         let settled = Rc::clone(&settled);
         UnsyncCallback::new(move |decision: DialogDecision| {
-            if settled.replace(true) {
+            if settled.get() {
                 return;
             }
+            if decision == DialogDecision::Confirm && !close_on_confirm {
+                if let Some(cb) = on_decision {
+                    cb.run(DialogDecision::Confirm);
+                }
+                return;
+            }
+            settled.set(true);
             open.write(false);
             if let Some(cb) = on_decision {
                 cb.run(decision);
@@ -346,6 +448,7 @@ pub fn ModalDialog(
             DialogContent(
                 class = "gds-dialog-content",
                 class = class,
+                attr:data-size = move || Some(size.get().as_str().to_owned()),
                 dismiss_on_outside_press = dismiss_on_outside_press,
                 dismiss_on_escape = dismiss_on_escape,
                 dismiss_control = dismiss_control,
@@ -364,19 +467,39 @@ pub fn ModalDialog(
 }
 
 /// Controlled confirmation modal built over [`ModalDialog`] with focus trap, `Escape`
-/// dismissal, outside scrim dismissal, mnemonic `Alt+A` / `Alt+C` actions, and focus restoration
-/// to `anchor`.
+/// dismissal, outside scrim dismissal, mnemonic `Alt+A` / `Alt+C` actions, optional header icon
+/// and bounded preview list, and focus restoration to `anchor`.
 #[allow(clippy::too_many_arguments)]
 #[component]
 pub fn ConfirmDialog(
     #[prop(into, optional)] open: Binding<bool>,
+    #[prop(into, default = Signal::stored_local(DialogSize::Sm))] size: Signal<
+        DialogSize,
+        LocalStorage,
+    >,
     #[prop(into)] title: Signal<String, LocalStorage>,
     #[prop(into, optional)] description: Option<Signal<String, LocalStorage>>,
+    #[prop(into, default = Signal::stored_local(None))] icon: Signal<
+        Option<IconName>,
+        LocalStorage,
+    >,
+    #[prop(into, default = Signal::stored_local(IconName::Check))] primary_icon: Signal<
+        IconName,
+        LocalStorage,
+    >,
+    #[prop(into, default = Signal::stored_local(Vec::new()))] items: Signal<
+        Vec<String>,
+        LocalStorage,
+    >,
+    #[prop(into, default = Signal::stored_local(None))] overflow_text: Signal<
+        Option<String>,
+        LocalStorage,
+    >,
     #[prop(into, optional)] confirm_label: Option<Signal<String, LocalStorage>>,
     #[prop(into, optional)] cancel_label: Option<Signal<String, LocalStorage>>,
-    #[prop(default = IconName::Check)] primary_icon: IconName,
-    #[prop(default = false)] destructive: bool,
+    #[prop(into, default = Signal::stored_local(false))] destructive: Signal<bool, LocalStorage>,
     #[prop(into, default = Signal::stored_local(false))] disabled: Signal<bool, LocalStorage>,
+    #[prop(into, default = Signal::stored_local(0_u64))] generation: Signal<u64, LocalStorage>,
     #[prop(optional)] anchor: Option<DialogAnchor>,
     on_decision: UnsyncCallback<DialogDecision>,
 ) -> impl IntoView {
@@ -390,12 +513,12 @@ pub fn ConfirmDialog(
     let settled = Rc::new(Cell::new(false));
     {
         let settled = Rc::clone(&settled);
-        let reset_fx = zgui::reactive::RenderEffect::new(move |prev: Option<bool>| {
-            let now_open = open.get().unwrap_or(false);
-            if now_open && prev != Some(true) {
+        let reset_fx = zgui::reactive::RenderEffect::new(move |prev: Option<(bool, u64)>| {
+            let now = (open.get().unwrap_or(false), generation.get());
+            if now.0 && prev != Some(now) {
                 settled.set(false);
             }
-            now_open
+            now
         });
         on_cleanup_local(move || drop(reset_fx));
     }
@@ -432,6 +555,7 @@ pub fn ConfirmDialog(
         Dialog(open = open, on_open_change = on_open_change) {
             DialogContent(
                 class = "gds-dialog-content",
+                attr:data-size = move || Some(size.get().as_str().to_owned()),
                 dismiss_on_outside_press = true,
                 dismiss_on_escape = true,
                 on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
@@ -440,25 +564,107 @@ pub fn ConfirmDialog(
             ) {
                 {{
                     let _scope = DialogScope::enter();
-                    view! {
-                        DialogHeader {
-                            DialogTitle {{move || title.get()}}
-                            {description.map(|desc| {
-                                view! {
-                                    DialogDescription {{move || desc.get()}}
-                                }
-                                .into_view()
-                            })}
+                    let confirm_body = NodeRef::new();
+                    let focus_fx = RenderEffect::new(move |mounted_before: Option<bool>| {
+                        let mounted = confirm_body.get().is_some();
+                        if mounted && mounted_before != Some(true) {
+                            confirm_body.focus();
                         }
-                        DialogFooter {
-                            DialogActions(
-                                primary_label = confirm_label,
-                                primary_icon = primary_icon,
-                                cancel_label = cancel_label,
-                                destructive = destructive,
-                                disabled = disabled,
-                                on_decision = finish,
-                            )
+                        mounted
+                    });
+                    on_cleanup_local(move || drop(focus_fx));
+
+                    view! {
+                        column(
+                            node_ref = confirm_body,
+                            class = "gds-confirm-dialog__body",
+                            tabindex = Focus::Programmatic,
+                            on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
+                                if !ev.repeat
+                                    && ev.target == ev.current
+                                    && ev.modifiers.held().is_empty()
+                                    && ev.key == Key::Named(NamedKey::Enter)
+                                    && !disabled.get_untracked()
+                                {
+                                    finish.run(DialogDecision::Confirm);
+                                    ev.prevent_default();
+                                    ev.stop_propagation();
+                                }
+                            },
+                        ) {
+                            DialogHeader {
+                                {{move || {
+                                    if let Some(header_icon) = icon.get() {
+                                        AnyView::new(view! {
+                                            row(class = "gds-confirm-dialog__title-row") {
+                                                Icon(
+                                                    name = header_icon,
+                                                    size = 18.0,
+                                                    class = "gds-confirm-dialog__title-icon",
+                                                    attr:data-destructive = move || {
+                                                        destructive.get().then(|| "true".to_owned())
+                                                    },
+                                                )
+                                                DialogTitle {{move || title.get()}}
+                                            }
+                                        })
+                                    } else {
+                                        AnyView::new(view! {
+                                            DialogTitle {{move || title.get()}}
+                                        })
+                                    }
+                                }}}
+                                {description.map(|desc| {
+                                    view! {
+                                        DialogDescription {{move || desc.get()}}
+                                    }
+                                    .into_view()
+                                })}
+                            }
+                            {{move || {
+                                let shown_items = items.get();
+                                let overflow_line = overflow_text.get();
+                                (!shown_items.is_empty()).then(|| {
+                                    let rows = shown_items
+                                        .into_iter()
+                                        .map(|item| {
+                                            view! {
+                                                text(class = "gds-confirm-dialog__item") {{item}}
+                                            }
+                                            .into_view()
+                                        })
+                                        .collect::<Vec<_>>();
+                                    let more = overflow_line
+                                        .filter(|line| !line.is_empty())
+                                        .map(|line| {
+                                            view! {
+                                                text(class = "gds-confirm-dialog__more") {{line}}
+                                            }
+                                        });
+                                    view! {
+                                        column(class = "gds-confirm-dialog__items") {
+                                            {rows}
+                                            {more}
+                                        }
+                                    }
+                                })
+                            }}}
+                            DialogFooter {
+                                {{move || {
+                                    let p_icon = primary_icon.get();
+                                    let is_destructive = destructive.get();
+                                    view! {
+                                        DialogActions(
+                                            primary_label = confirm_label,
+                                            primary_icon = p_icon,
+                                            cancel_label = cancel_label,
+                                            destructive = is_destructive,
+                                            disabled = disabled,
+                                            on_decision = finish,
+                                        )
+                                    }
+                                }}}
+                            }
                         }
                     }
                 }}

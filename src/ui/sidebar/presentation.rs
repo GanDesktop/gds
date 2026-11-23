@@ -120,7 +120,7 @@ impl SidebarPresentation {
 }
 
 /// Continuously interpolate [`SidebarPresentation`] over `160ms` (`ease-out cubic`) using standard
-/// GDS sidebar widths (`222px` expanded / `58px` collapsed).
+/// GDS sidebar widths (`224px` expanded / `56px` collapsed).
 #[must_use]
 pub fn use_sidebar_presentation(
     state: Signal<SidebarState, LocalStorage>,

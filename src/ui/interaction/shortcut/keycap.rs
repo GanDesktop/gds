@@ -18,7 +18,7 @@ pub(super) const SHEET: &str = css!(
         background: var(--gds-surface);
         color: var(--gds-muted-foreground);
         font-family: var(--gds-font-sans);
-        font-size: calc(12px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-xs, 12px);
         font-weight: 400;
         line-height: 1;
         white-space: nowrap;

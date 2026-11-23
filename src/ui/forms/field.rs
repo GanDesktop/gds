@@ -145,7 +145,7 @@ const FIELD_CSS: &str = css!(
         background: transparent;
         color: var(--gds-foreground);
         font-family: var(--gds-font-sans);
-        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-size: var(--gds-text-sm, 14px);
         box-shadow: none;
         outline: none;
     }
@@ -173,7 +173,7 @@ const FIELD_CSS: &str = css!(
         border: 1px solid var(--gds-outline);
         border-radius: var(--gds-radius-control, 6px);
         font-family: var(--gds-font-sans);
-        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-size: var(--gds-text-sm, 14px);
         box-shadow: none;
         outline: none;
     }
@@ -209,7 +209,7 @@ const FIELD_CSS: &str = css!(
         padding-right: 32px;
         color: var(--gds-foreground);
         font-family: var(--gds-font-sans);
-        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-size: var(--gds-text-sm, 14px);
     }
     .gds-search-choice-field > .zui-input-group__addon.gds-search-choice-field__addon {
         position: absolute;

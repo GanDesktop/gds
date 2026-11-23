@@ -87,14 +87,7 @@ impl Browser {
             Command::Forward => self.history(true),
             Command::Parent => self.parent(),
             Command::Refresh => self.refresh(),
-            Command::Filter => {
-                if self.filter_available_untracked() {
-                    let current = self.0.filter.get_untracked();
-                    self.0.filter_node.focus();
-                    self.0.filter_node.set_value(&current);
-                    self.0.filter_node.select_all();
-                }
-            }
+            Command::Filter => self.activate_filter(),
             Command::Hidden => {
                 self.edit_preferences(|prefs| {
                     prefs.files.show_hidden = !prefs.files.show_hidden;
@@ -358,7 +351,10 @@ impl Browser {
                 if self.0.prompt_decisions.handle_key_down(event) {
                     return;
                 }
-                if event.key == Key::Named(NamedKey::Escape) {
+                if event.key == Key::Named(NamedKey::Escape)
+                    || gds::ui::feedback::dialog::DialogCommand::Cancel
+                        .matches_event(event, modifiers)
+                {
                     self.cancel_prompt();
                     event.prevent_default();
                     event.stop_propagation();
@@ -781,10 +777,18 @@ impl Browser {
 
         match event.key {
             Key::Named(NamedKey::Escape) => {
-                if !self.0.filter.get_untracked().is_empty() {
+                if self.height_tier_untracked() == gds::ui::window::HeightTier::Micro {
+                    if !self.0.filter.get_untracked().is_empty() {
+                        self.filter(String::new());
+                        self.0.filter_node.set_value("");
+                    }
+                    self.0.footer_filter_open.set(false);
+                    self.focus_content();
+                } else if !self.0.filter.get_untracked().is_empty() {
                     self.filter(String::new());
                     self.0.filter_node.set_value("");
                 } else {
+                    self.0.footer_filter_open.set(false);
                     self.focus_content();
                 }
                 true
@@ -866,10 +870,17 @@ impl Browser {
             }
             let mut next = self.0.filter.get_untracked();
             next.push_str(inserted);
+            self.0.footer_filter_open.set(true);
             self.filter(next.clone());
-            self.0.filter_node.focus();
-            self.0.filter_node.set_value(&next);
-            self.0.filter_node.set_selection(next.len()..next.len());
+            if self.0.filter_node.is_bound() {
+                self.0.filter_node.focus();
+                self.0.filter_node.set_value(&next);
+                self.0.filter_node.set_selection(next.len()..next.len());
+            } else {
+                self.0
+                    .filter_focus_request
+                    .set(Some(super::ui::FilterFocusMode::CaretEnd));
+            }
             return true;
         }
         self.typeahead_input(inserted, now)

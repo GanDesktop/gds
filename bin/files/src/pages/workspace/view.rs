@@ -1,20 +1,15 @@
 use std::{
     cell::{Cell, OnceCell, RefCell},
+    ffi::OsString,
     rc::Rc,
 };
 
 use gds::app::Gds;
-use gds::appearance::{
-    motion::{WORKSPACE_DURATION_MS, ease_out_cubic, use_transition},
-    tokens::DataListStyle,
-};
+use gds::appearance::motion::{WORKSPACE_DURATION_MS, ease_out_cubic, use_transition};
 use gds::i18n;
-use gds::ui::about::{AboutProps, Application};
-use gds::ui::button::IconButtonProps;
-use gds::ui::feedback::dialog::{
-    DialogActionsProps, DialogContentProps, DialogDecision, DialogDescriptionProps,
-    DialogFooterProps, DialogHeaderProps, DialogProps, DialogScope, DialogTitleProps,
-};
+use gds::ui::about::{AboutDialogProps, Application};
+use gds::ui::button::{ButtonSize, IconButtonProps};
+use gds::ui::feedback::dialog::{ConfirmDialogProps, DialogDecision, DialogSize, ModalDialogProps};
 use gds::ui::feedback::notifications::{NotificationHostProps, error as notify_error};
 use gds::ui::feedback::tooltip::{HintTooltipProps, wrap_tokens};
 use gds::ui::frame::{
@@ -30,7 +25,7 @@ use gds::ui::page::{
     PageTitleProps, TABLE_INSET,
 };
 use gds::ui::time::TimestampViewProps;
-use gds::ui::window::WindowControlsProps;
+use gds::ui::window::{HeightTier, WindowControlsProps};
 use gds::ui::{IconName, IconProps};
 use zgui::geom::{CssPx, Point};
 use zgui::prelude::*;
@@ -40,7 +35,7 @@ use zgui::reactive::{
 };
 use zgui::view::time::{FrameHandle, Timers};
 use zgui::view::{CustomPropertyName, Scoped, current_host, events, install_stylesheet};
-use zgui::vocab::{Key, NamedKey, PointerButton, Role, SharedString, Timestamp};
+use zgui::vocab::{PointerButton, Role, SharedString, Timestamp};
 use zgui::{css, view};
 use zgui_ui::{ButtonProps, ButtonVariant, SpinnerProps, VirtualListProps, Virtualize};
 use zgui_ui_primitives::Binding;
@@ -48,7 +43,8 @@ use zgui_ui_primitives::Binding;
 use super::geometry::{GRID_GAP, GRID_PADDING, GridMotion};
 use super::marquee;
 use super::menus::Surface;
-use super::model::{ConfirmOptions, Contents, Pane, Prompt, Row};
+use super::model::{Contents, Pane, Prompt, Row};
+use super::name_form::NameForm;
 use super::ui::Browser;
 use crate::entities::file::ViewMode;
 use crate::entities::file::columns::Column;
@@ -59,8 +55,6 @@ use crate::shared::lib::clipboard::Clipboard;
 use crate::shared::ui::actions::Command;
 use crate::widgets::help::FilesHelpProps;
 
-const ROW_HEIGHT: f32 = DataListStyle::ROW_HEIGHT;
-const HEADER_HEIGHT: f32 = DataListStyle::HEADER_HEIGHT;
 const DETAILS_WIDTH: f32 = 280.0;
 const TAB_ENTER_INITIAL_OPACITY: f32 = 0.88;
 const CONFIRM_PREVIEW_LIMIT: usize = 5;
@@ -121,23 +115,6 @@ const WORKSPACE_CSS: &str = css!(
         overflow: hidden;
     }
 
-    .gds-files-menu-controls {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex: none;
-    }
-
-    .gds-files-toolbar {
-        display: flex;
-        flex: 1 1 0%;
-        width: 100%;
-        height: 100%;
-        align-items: center;
-        gap: 4px;
-        min-width: 0px;
-    }
-
     .gds-files-toolbar-title {
         display: flex;
         flex: 1 1 0%;
@@ -149,62 +126,12 @@ const WORKSPACE_CSS: &str = css!(
     }
 
     .gds-files-toolbar-title-text {
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 400;
         color: var(--gds-foreground);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-    }
-
-    .gds-files-sidebar-content {
-        display: flex;
-        flex-direction: column;
-        flex: 1 1 0px;
-        width: 100%;
-        min-width: 0px;
-        min-height: 0px;
-        overflow: hidden;
-    }
-
-    .gds-files-sidebar-region-host {
-        display: flex;
-        flex-direction: column;
-        flex: 1 1 0px;
-        width: 100%;
-        min-width: 0px;
-        min-height: 0px;
-        overflow: hidden;
-    }
-
-    .gds-files-sidebar-empty {
-        padding: 6px;
-        font-size: 12px;
-        color: var(--gds-muted-foreground);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .gds-files-location-item {
-        flex: 0 0 auto;
-        flex-shrink: 0;
-        width: 100%;
-        max-width: 100%;
-        min-width: 0px;
-        border-radius: 6px;
-        box-sizing: border-box;
-    }
-
-    .gds-files-volume-unmounted {
-        font-size: 12px;
-        color: var(--gds-muted-foreground);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .gds-files-nav-icon {
-        flex: none;
     }
 
     .gds-files-workspace-outer {
@@ -386,7 +313,7 @@ const WORKSPACE_CSS: &str = css!(
         flex: none;
         align-items: center;
         width: 100%;
-        height: 30px;
+        height: var(--gds-list-header-height, 30px);
         border-bottom: 1px solid var(--gds-border);
     }
 
@@ -435,7 +362,7 @@ const WORKSPACE_CSS: &str = css!(
     .gds-files-header-label {
         flex: 0 1 auto;
         min-width: 0px;
-        font-size: 11px;
+        font-size: var(--gds-text-xs, 12px);
         font-weight: 400;
         color: var(--gds-muted-foreground);
         overflow: hidden;
@@ -515,7 +442,7 @@ const WORKSPACE_CSS: &str = css!(
         flex-direction: column;
         flex: 1 1 0px;
         min-width: 0px;
-        padding: 2px 0px;
+        padding: var(--gds-list-selection-inset, 2px) 0px;
         box-sizing: border-box;
     }
 
@@ -561,7 +488,7 @@ const WORKSPACE_CSS: &str = css!(
         flex: 1 1 0px;
         width: auto;
         height: auto;
-        min-height: 36px;
+        min-height: var(--gds-list-selection-height, 36px);
         align-items: center;
     }
 
@@ -621,7 +548,7 @@ const WORKSPACE_CSS: &str = css!(
     .gds-files-row-name-text {
         flex: 0 1 auto;
         min-width: 0px;
-        font-size: 13px;
+        font-size: var(--gds-text-sm, 14px);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -644,7 +571,7 @@ const WORKSPACE_CSS: &str = css!(
         justify-content: flex-start;
         min-width: 0px;
         padding: 0px 12px;
-        font-size: 12px;
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         box-sizing: border-box;
     }
@@ -853,6 +780,7 @@ const WORKSPACE_CSS: &str = css!(
         display: block;
         width: 100%;
         min-width: 0px;
+        font-size: var(--gds-text-sm, 14px);
         white-space: normal;
         overflow-wrap: anywhere;
         overflow: hidden;
@@ -943,12 +871,12 @@ const WORKSPACE_CSS: &str = css!(
     .gds-files-footer-status {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 8px;
         min-width: 0px;
     }
 
     .gds-files-footer-status-text {
-        font-size: 12px;
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         white-space: nowrap;
     }
@@ -958,111 +886,6 @@ const WORKSPACE_CSS: &str = css!(
         flex: none;
         align-items: center;
         gap: 4px;
-    }
-
-    .gds-files-columns-dialog {
-        width: 520px;
-        max-width: calc(100vw - 32px);
-    }
-
-    .gds-files-columns-body {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
-
-    .gds-files-columns-address {
-        font-size: 12px;
-        color: var(--gds-muted-foreground);
-    }
-
-    .gds-files-columns-list {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-
-    .gds-files-column-option {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .gds-files-column-name {
-        flex: 1 1 0%;
-        min-width: 0px;
-    }
-
-    .gds-files-prompt-dialog[data-conflict="true"] {
-        width: 520px;
-        max-width: calc(100vw - 32px);
-    }
-
-    .gds-files-prompt-dialog {
-        min-width: 340px;
-        max-width: 520px;
-    }
-
-    .gds-files-about-box {
-        display: flex;
-        flex-direction: column;
-        flex: 1 1 0%;
-        width: 100%;
-        height: 100%;
-        min-width: 0px;
-        min-height: 0px;
-    }
-
-    .gds-files-confirm-body {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        min-width: 340px;
-        max-width: 440px;
-    }
-
-    .gds-files-confirm-title-row {
-        display: flex;
-        flex-direction: row;
-        align-items: center;
-        gap: 8px;
-        min-width: 0px;
-    }
-
-    .gds-files-confirm-title-icon {
-        flex: none;
-        color: var(--gds-foreground);
-    }
-
-    .gds-files-confirm-title-icon[data-destructive="true"] {
-        color: var(--gds-error);
-    }
-
-    .gds-files-confirm-items {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        padding: 8px 10px;
-        border-radius: 6px;
-        border: 1px solid var(--gds-border);
-        background-color: var(--gds-surface);
-        min-width: 0px;
-    }
-
-    .gds-files-confirm-item {
-        font-size: 12px;
-        color: var(--gds-foreground);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .gds-files-confirm-more {
-        font-size: 12px;
-        color: var(--gds-muted-foreground);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
     "#
 );
@@ -1266,27 +1089,38 @@ impl Browser {
         on_cleanup_local(move || drop(keytip_guard_fx));
 
         // `WindowHandle::size()` is already in `CssPx` and starts `(0.0, 0.0)` before Wayland
-        // configure; ignore non-positive widths and do not divide by scale (#114).
+        // configure; ignore non-positive dimensions and do not divide by scale (#114).
         if let Some(window) = self.0.window.clone() {
             let width_sig = self.0.window_width;
+            let height_sig = self.0.window_height;
             let size = window.size();
             let win_fx = RenderEffect::new(move |_| {
-                let width = size.get().width.0;
+                let sz = size.get();
+                let width = sz.width.0;
+                let height = sz.height.0;
                 if width.is_finite() && width > 0.0 {
                     width_sig.set(width);
+                }
+                if height.is_finite() && height > 0.0 {
+                    height_sig.set(height);
                 }
             });
             on_cleanup_local(move || drop(win_fx));
         } else {
             let root = self.0.root_focus;
             let width_sig = self.0.window_width;
+            let height_sig = self.0.window_height;
             let root_size = root.observe_border_size();
             let root_fx = RenderEffect::new(move |_| {
                 if let Some(sz) = root_size.get() {
                     let s = root.scale().max(1.0);
                     let width = sz.width.0 / s;
+                    let height = sz.height.0 / s;
                     if width.is_finite() && width > 0.0 {
                         width_sig.set(width);
+                    }
+                    if height.is_finite() && height > 0.0 {
+                        height_sig.set(height);
                     }
                 }
             });
@@ -1300,19 +1134,12 @@ impl Browser {
 
         let root_focus = self.0.root_focus;
         let notice_sig = self.0.notice;
-        let prompt_sig = self.0.prompt;
-        let prompt_about = self.0.prompt_about;
-        let prompt_open = Signal::derive_local(move || !matches!(prompt_sig.get(), Prompt::Closed));
-        let prompt_conflict = RwSignal::new_local(false);
-        let prompt_about_retained = RwSignal::new_local(false);
-        let key_decision_slot = self.0.prompt_decisions.clone();
 
         let keyboard = self.clone();
         let init_focus_browser = self.clone();
         let mouse = self.clone();
         let main_browser = self.clone();
         let prompt_browser = self.clone();
-        let cancel_browser = self.clone();
         let connector_view = self.0.connector.view();
         let menu_overlay = self.menu_overlay();
 
@@ -1328,68 +1155,7 @@ impl Browser {
                         });
                         on_cleanup_local(move || drop(notice_fx));
 
-                        let prompt_dialog = Scoped::new(move || {
-                            let _prompt_modal_scope = DialogScope::use_open(prompt_open);
-                            view! {
-                                Dialog(
-                                    open = Binding::controlled(
-                                        prompt_open,
-                                        move |next: bool| {
-                                            if !next {
-                                                cancel_browser.cancel_prompt();
-                                            }
-                                        }
-                                    )
-                                ) {
-                                    DialogContent(
-                                        class = "gds-files-prompt-dialog",
-                                        attr:data-about = move || {
-                                            (prompt_about.get() || prompt_about_retained.get())
-                                                .then(|| "true".to_owned())
-                                        },
-                                        attr:data-conflict = move || {
-                                            prompt_conflict.get().then(|| "true".to_owned())
-                                        },
-                                        dismiss_on_outside_press = true,
-                                        dismiss_on_escape = true,
-                                        on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
-                                            let _ = key_decision_slot.handle_key_down(ev);
-                                        }
-                                    ) {
-                                        {{
-                                            let pb = prompt_browser.clone();
-                                            let gen_sig = pb.0.prompt_generation;
-                                            let opts_sig = pb.0.confirm_options;
-                                            let retained = Rc::new(RefCell::new((
-                                                Prompt::Closed,
-                                                ConfirmOptions::default(),
-                                            )));
-                                            move || {
-                                                let generation = gen_sig.get();
-                                                let live_options = opts_sig.get();
-                                                let _z = enter_non_reactive_zone();
-                                                let current = pb.0.prompt.get_untracked();
-                                                let (prompt, options) = if matches!(current, Prompt::Closed) {
-                                                    retained.borrow().clone()
-                                                } else {
-                                                    let is_about = matches!(current, Prompt::About);
-                                                    let is_conflict = matches!(
-                                                        &current,
-                                                        Prompt::Name { form, .. } if form.is_conflict()
-                                                    );
-                                                    prompt_about_retained.set(is_about);
-                                                    prompt_conflict.set(is_conflict);
-                                                    *retained.borrow_mut() =
-                                                        (current.clone(), live_options.clone());
-                                                    (current, live_options)
-                                                };
-                                                pb.prompt_view(prompt, options, generation)
-                                            }
-                                        }}
-                                    }
-                                }
-                            }
-                        });
+                        let prompt_dialog = prompt_browser.prompt_dialogs();
 
                         let shortcut_guard: Rc<RefCell<Option<zgui::view::WindowShortcut>>> =
                             Rc::new(RefCell::new(None));
@@ -1578,9 +1344,18 @@ impl Browser {
                         picker_name
                     } else {
                         let status_controls = sb.status_controls();
+                        let filter_b = sb.clone();
+                        let show_micro_filter = Signal::derive_local(move || {
+                            filter_b.height_tier() == HeightTier::Micro
+                                && filter_b.filter_available()
+                        });
+                        let micro_b = sb.clone();
                         AnyView::new(view! {
                             row(class = "gds-files-footer-status") {
                                 text(class = "gds-files-footer-status-text") {{move || sb.status()}}
+                                Show(when = move || show_micro_filter.get()) {
+                                    {{micro_b.micro_filter(false)}}
+                                }
                                 {status_controls}
                             }
                         })
@@ -1698,6 +1473,7 @@ impl Browser {
                             IconButton(
                                 node_ref = term_btn_ref,
                                 icon = IconName::Terminal,
+                                size = ButtonSize::IconXs,
                                 label = terminal_label,
                                 toggled = Some(terminal_toggled),
                                 shortcut = Some(Command::Terminal.shortcut()),
@@ -1754,7 +1530,7 @@ impl Browser {
         self.details_available_structure()
     }
 
-    fn details_available_structure(&self) -> bool {
+    pub(super) fn details_available_structure(&self) -> bool {
         self.read_structure(|state| {
             let tab = state.tab();
             match tab.contents {
@@ -1842,7 +1618,10 @@ impl Browser {
         let details_goal = Signal::derive_local({
             let browser = self.clone();
             move || {
-                if !browser.compact() && browser.0.details.get() && browser.details_available() {
+                if browser.details_permitted()
+                    && browser.0.details.get()
+                    && browser.details_available()
+                {
                     1.0_f32
                 } else {
                     0.0_f32
@@ -1852,7 +1631,7 @@ impl Browser {
         let details_progress = use_transition(details_goal, WORKSPACE_DURATION_MS);
         let details_mounted = Signal::derive_local({
             let browser = self.clone();
-            move || !browser.compact() && details_progress.get() > 0.001
+            move || browser.details_permitted() && details_progress.get() > 0.001
         });
 
         let details_width = Signal::derive_local(move || {
@@ -1878,6 +1657,14 @@ impl Browser {
             }
         });
         on_cleanup_local(move || drop(size_fx));
+
+        let float_check_b = self.clone();
+        let show_floating_filter = Signal::derive_local(move || {
+            float_check_b.is_save_picker()
+                && float_check_b.height_tier() == HeightTier::Micro
+                && float_check_b.filter_available()
+        });
+        let float_filter_b = self.clone();
 
         AnyView::new(view! {
             row(class = "gds-files-content-shell") {
@@ -1907,30 +1694,11 @@ impl Browser {
                 ) {
                     {{move || {
                         if is_network.get() {
-                            // `surfaces/network.rs` renders its own desktop `ContentPage` (`#121`).
+                            // `surfaces/network.rs` renders its own `ContentPage` and `HeightTier::Normal` `PageHeader`.
                             let net_browser = content_browser.clone();
-                            let compact_net = content_browser.clone();
-                            let tb_net = title_browser.clone();
-                            let ab_net = actions_browser.clone();
                             let picker_footer = net_browser.picker_footer();
                             AnyView::new(view! {
                                 column(class = "gds-files-workspace-column") {
-                                    Show(when = move || compact_net.compact()) {
-                                        {{
-                                            let tb_hdr = tb_net.clone();
-                                            let ab_hdr = ab_net.clone();
-                                            view! {
-                                                PageHeader {
-                                                    PageTitle {
-                                                        text(class = "gds-files-title-text") {{move || tb_hdr.page_title()}}
-                                                    }
-                                                    PageActions(class = "gds-files-page-actions") {
-                                                        {move || ab_hdr.page_actions()}
-                                                    }
-                                                }
-                                            }
-                                        }}
-                                    }
                                     {{net_browser.network_content()}}
                                     {picker_footer}
                                 }
@@ -1940,18 +1708,31 @@ impl Browser {
                             let ab = actions_browser.clone();
                             let nb = notice_browser.clone();
                             let cb = content_browser.clone();
-                            let filter_view = cb.folder_filter();
+                            let fb = content_browser.clone();
+                            let hb = content_browser.clone();
+                            let normal_height =
+                                Signal::derive_local(move || hb.height_tier() == HeightTier::Normal);
                             let picker_footer = cb.picker_footer();
                             AnyView::new(view! {
                                 ContentPage {
-                                    PageHeader {
-                                        PageTitle {
-                                            text(class = "gds-files-title-text") {{move || tb.page_title()}}
-                                        }
-                                        PageActions(class = "gds-files-page-actions") {
-                                            {filter_view}
-                                            {move || ab.page_actions()}
-                                        }
+                                    Show(when = move || normal_height.get()) {
+                                        {{
+                                            let tb_hdr = tb.clone();
+                                            let ab_hdr = ab.clone();
+                                            let fb_hdr = fb.clone();
+                                            let filter_view = fb_hdr.folder_filter();
+                                            view! {
+                                                PageHeader {
+                                                    PageTitle {
+                                                        text(class = "gds-files-title-text") {{move || tb_hdr.page_title()}}
+                                                    }
+                                                    PageActions(class = "gds-files-page-actions") {
+                                                        {filter_view}
+                                                        {move || ab_hdr.page_actions()}
+                                                    }
+                                                }
+                                            }
+                                        }}
                                     }
                                     {move || nb.collection_notice()}
                                     PageContent {
@@ -1966,6 +1747,9 @@ impl Browser {
                             })
                         }
                     }}}
+                    Show(when = move || show_floating_filter.get()) {
+                        {{float_filter_b.micro_filter(true)}}
+                    }
                 }
                 Show(when = move || details_mounted.get()) {
                     {{
@@ -2434,6 +2218,9 @@ impl Browser {
         let table_browser = self.clone();
         let overflow_browser = self.clone();
 
+        let row_h_browser = self.clone();
+        let hdr_h_browser = self.clone();
+        let row_height_sig = Signal::derive_local(move || row_h_browser.list_row_height());
         let row_count = Signal::derive_local(move || {
             count_browser.read_structure(|state| state.tab().rows.len())
         });
@@ -2441,7 +2228,7 @@ impl Browser {
             if row_count.get() == 0 {
                 0.0
             } else {
-                HEADER_HEIGHT
+                hdr_h_browser.list_header_height()
             }
         });
         let empty = local_memo({
@@ -2498,7 +2285,7 @@ impl Browser {
             ListSurface(
                 scroll_ref = list_node,
                 rows = row_count,
-                row_height = ROW_HEIGHT,
+                row_height = row_height_sig,
                 header_height = header_h_sig,
                 inset_x = TABLE_INSET,
                 on_blank_press = blank_press,
@@ -2537,10 +2324,7 @@ impl Browser {
                                             .map(|column| header_browser.column_header(*column))
                                             .collect::<Vec<_>>();
                                         AnyView::new(view! {
-                                            row(
-                                                class = "gds-files-header-row",
-                                                style:height = format!("{HEADER_HEIGHT}px")
-                                            ) {{cells}}
+                                            row(class = "gds-files-header-row") {{cells}}
                                         })
                                     }
                                 }
@@ -2549,7 +2333,7 @@ impl Browser {
                                 VirtualList(
                                     node_ref = Some(list_node),
                                     count = row_count,
-                                    row_size = ROW_HEIGHT,
+                                    row_size = row_height_sig,
                                     label = i18n::text("app-title"),
                                     class = "gds-files-virtual-list",
                                     row = move |index: usize| rows_browser.visible_row(index, None)
@@ -2811,7 +2595,6 @@ impl Browser {
             let tile_height =
                 tile_pres.map_or_else(|| Signal::stored_local(geometry.tile_height), |p| p.height);
             let tile_offset = tile_pres.map(|p| p.offset);
-            let name_size = geometry.name_size;
             let line_height = geometry.line_height;
             let artwork_height = geometry.artwork_height;
             let name_height = geometry.name_height;
@@ -2873,7 +2656,6 @@ impl Browser {
                     ) {
                         text(
                             class = "gds-files-tile-name",
-                            style:font-size = format!("{name_size:.1}px"),
                             style:line-height = format!("{line_height:.1}px"),
                             style:max-height = format!("{:.1}px", line_height * 2.0)
                         ) {{label}}
@@ -3051,7 +2833,7 @@ impl Browser {
     }
 
     fn page_actions(&self) -> AnyView {
-        if self.compact() {
+        if self.actions_collapsed() {
             return self.page_menu();
         }
         if let Some(actions) = self.special_page_actions() {
@@ -3062,7 +2844,8 @@ impl Browser {
             let browser = self.clone();
             move || {
                 let grid = browser.read_structure(|state| state.tab().mode == ViewMode::Grid);
-                let details_avail = browser.details_available_structure();
+                let details_avail =
+                    browser.details_permitted() && browser.details_available_structure();
                 (grid, details_avail)
             }
         });
@@ -3176,171 +2959,207 @@ impl Browser {
         })
     }
 
-    fn prompt_view(&self, prompt: Prompt, options: ConfirmOptions, generation: u64) -> AnyView {
-        let decision_slot = &self.0.prompt_decisions;
-        match prompt {
-            Prompt::Closed => {
-                if matches!(self.0.prompt.get_untracked(), Prompt::Closed) {
-                    decision_slot.clear();
-                }
-                AnyView::new(())
-            }
-            Prompt::About => {
-                let about_browser = self.downgrade();
-                let decision_cb = UnsyncCallback::new(move |decision: DialogDecision| {
-                    let Some(browser) = about_browser.upgrade() else {
-                        return;
-                    };
-                    if browser.0.prompt_generation.get_untracked() != generation
-                        || !matches!(browser.0.prompt.get_untracked(), Prompt::About)
-                    {
-                        return;
-                    }
-                    if matches!(decision, DialogDecision::Cancel | DialogDecision::Dismiss) {
-                        browser.cancel_prompt();
-                    }
-                });
-                decision_slot.register(true, None, decision_cb);
-                AnyView::new(view! {
-                    box(class = "gds-files-about-box") {
-                        About(application = Application::cargo("gds-files"))
-                    }
-                })
-            }
-            Prompt::Confirm {
-                title,
-                message,
-                primary,
-                accept,
-            } => {
-                let confirm_browser = self.downgrade();
-                let settled = Rc::new(Cell::new(false));
-                let decision_cb = UnsyncCallback::new(move |decision: DialogDecision| {
-                    if settled.get() {
-                        return;
-                    }
-                    let Some(browser) = confirm_browser.upgrade() else {
-                        return;
-                    };
-                    if browser.0.prompt_generation.get_untracked() != generation
-                        || matches!(browser.0.prompt.get_untracked(), Prompt::Closed)
-                    {
-                        return;
-                    }
-                    settled.set(true);
-                    match decision {
-                        DialogDecision::Confirm => {
-                            browser.0.prompt_decisions.clear();
-                            browser.0.prompt.set(Prompt::Closed);
-                            accept();
+    fn prompt_dialogs(&self) -> AnyView {
+        let browser = self.clone();
+        AnyView::new(Scoped::new(move || {
+            let prompt_sig = browser.0.prompt;
+            let gen_sig = browser.0.prompt_generation;
+
+            // 1. `Prompt::About` -> `AboutDialog` (`DialogSize::Sm = 420px`)
+            let about_open =
+                Signal::derive_local(move || matches!(prompt_sig.get(), Prompt::About));
+            let about_cancel = browser.clone();
+
+            // 2. `Prompt::Confirm` -> `ConfirmDialog` (`DialogSize::Sm = 420px`)
+            let confirm_open =
+                Signal::derive_local(move || matches!(prompt_sig.get(), Prompt::Confirm { .. }));
+            let confirm_title = RwSignal::new_local(String::new());
+            let confirm_message = RwSignal::new_local(String::new());
+            let confirm_primary = RwSignal::new_local(String::new());
+            let confirm_cancel_lbl = Signal::derive_local(|| i18n::text("operation-cancel"));
+            let confirm_icon = RwSignal::new_local(Option::<IconName>::None);
+            let confirm_primary_icon = RwSignal::new_local(IconName::Check);
+            let confirm_items = RwSignal::new_local(Vec::<String>::new());
+            let confirm_overflow = RwSignal::new_local(Option::<String>::None);
+            let confirm_destructive = RwSignal::new_local(false);
+            let confirm_cb_slot: Rc<RefCell<Option<UnsyncCallback<DialogDecision>>>> =
+                Rc::new(RefCell::new(None));
+            {
+                let cb_browser = browser.clone();
+                let slot = Rc::clone(&confirm_cb_slot);
+                let sync_confirm_fx = RenderEffect::new(move |_| {
+                    let generation = gen_sig.get();
+                    let _z = enter_non_reactive_zone();
+                    match cb_browser.0.prompt.get_untracked() {
+                        Prompt::Confirm {
+                            title,
+                            message,
+                            primary,
+                            accept,
+                        } => {
+                            let options = cb_browser.0.confirm_options.get_untracked();
+                            let shown_items: Vec<String> = options
+                                .items
+                                .iter()
+                                .take(CONFIRM_PREVIEW_LIMIT)
+                                .cloned()
+                                .collect();
+                            let extra_from_slice =
+                                options.items.len().saturating_sub(CONFIRM_PREVIEW_LIMIT);
+                            let remaining = options.overflow_count.saturating_add(extra_from_slice);
+                            let overflow_line = (remaining > 0)
+                                .then(|| i18n::count("operation-more-items", remaining));
+
+                            confirm_title.set(title);
+                            confirm_message.set(message);
+                            confirm_primary.set(primary);
+                            confirm_icon.set(options.icon);
+                            confirm_primary_icon
+                                .set(options.primary_icon.unwrap_or(IconName::Check));
+                            confirm_items.set(shown_items);
+                            confirm_overflow.set(overflow_line);
+                            confirm_destructive.set(options.destructive);
+
+                            let weak = cb_browser.downgrade();
+                            let settled = Rc::new(Cell::new(false));
+                            let decision_cb =
+                                UnsyncCallback::new(move |decision: DialogDecision| {
+                                    if settled.get() {
+                                        return;
+                                    }
+                                    let Some(b) = weak.upgrade() else {
+                                        return;
+                                    };
+                                    if b.0.prompt_generation.get_untracked() != generation
+                                        || !matches!(
+                                            b.0.prompt.get_untracked(),
+                                            Prompt::Confirm { .. }
+                                        )
+                                    {
+                                        return;
+                                    }
+                                    settled.set(true);
+                                    match decision {
+                                        DialogDecision::Confirm => {
+                                            b.0.prompt_decisions.clear();
+                                            b.0.prompt.set(Prompt::Closed);
+                                            accept();
+                                        }
+                                        DialogDecision::Cancel | DialogDecision::Dismiss => {
+                                            b.cancel_prompt();
+                                        }
+                                    }
+                                });
+                            *slot.borrow_mut() = Some(decision_cb);
+                            cb_browser
+                                .0
+                                .prompt_decisions
+                                .register(false, None, decision_cb);
                         }
-                        DialogDecision::Cancel | DialogDecision::Dismiss => {
-                            browser.cancel_prompt();
+                        Prompt::Closed => {
+                            cb_browser.0.prompt_decisions.clear();
                         }
+                        _ => {}
                     }
                 });
+                on_cleanup_local(move || drop(sync_confirm_fx));
+            }
+            let cb_slot_run = confirm_cb_slot;
 
-                decision_slot.register(false, None, decision_cb);
+            // 3. `Prompt::Name` -> `ModalDialog` (`DialogSize::Sm`)
+            let name_open =
+                Signal::derive_local(move || matches!(prompt_sig.get(), Prompt::Name { .. }));
+            let name_open_cancel = browser.clone();
+            let name_decision_cancel = browser.clone();
+            let name_decisions = browser.0.prompt_decisions.clone();
+            let name_body_browser = browser;
+            let retained_name: Rc<RefCell<Option<(NameForm, Rc<dyn Fn(OsString)>, u64)>>> =
+                Rc::new(RefCell::new(None));
 
-                let confirm_body = NodeRef::new();
-                let prompt_sig = self.0.prompt;
-                let focus_fx = RenderEffect::new(move |mounted_before: Option<bool>| {
-                    let mounted = confirm_body.get().is_some();
-                    if mounted
-                        && mounted_before != Some(true)
-                        && matches!(prompt_sig.get_untracked(), Prompt::Confirm { .. })
-                    {
-                        confirm_body.focus();
-                    }
-                    mounted
-                });
-                on_cleanup_local(move || drop(focus_fx));
-
-                let shown_items: Vec<String> = options
-                    .items
-                    .iter()
-                    .take(CONFIRM_PREVIEW_LIMIT)
-                    .cloned()
-                    .collect();
-                let extra_from_slice = options.items.len().saturating_sub(CONFIRM_PREVIEW_LIMIT);
-                let remaining = options.overflow_count.saturating_add(extra_from_slice);
-                let header_icon = options.icon;
-                let destructive = options.destructive;
-                let primary_icon = options.primary_icon.unwrap_or(IconName::Check);
-
-                AnyView::new(view! {
-                    column(
-                        node_ref = confirm_body,
-                        class = "gds-files-confirm-body",
-                        tabindex = Focus::Programmatic,
-                        on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
-                            if !ev.repeat
-                                && ev.modifiers.held().is_empty()
-                                && ev.key == Key::Named(NamedKey::Enter)
-                            {
-                                decision_cb.run(DialogDecision::Confirm);
-                                ev.prevent_default();
-                                ev.stop_propagation();
+            view! {
+                AboutDialog(
+                    open = Binding::controlled(
+                        about_open,
+                        move |next: bool| {
+                            if !next && matches!(about_cancel.0.prompt.get_untracked(), Prompt::About) {
+                                about_cancel.cancel_prompt();
                             }
                         },
-                    ) {
-                        DialogHeader {
-                            {if let Some(icon) = header_icon {
-                                AnyView::new(view! {
-                                    row(class = "gds-files-confirm-title-row") {
-                                        Icon(
-                                            name = icon,
-                                            size = 18.0,
-                                            class = "gds-files-confirm-title-icon",
-                                            attr:data-destructive = destructive.then(|| "true".to_owned()),
-                                        )
-                                        DialogTitle {{title}}
-                                    }
-                                })
-                            } else {
-                                AnyView::new(view! {
-                                    DialogTitle {{title}}
-                                })
-                            }}
-                            DialogDescription {{message}}
+                    ),
+                    application = Application::cargo("gds-files"),
+                )
+                ConfirmDialog(
+                    open = Binding::controlled(confirm_open, |_| {}),
+                    size = DialogSize::Sm,
+                    title = confirm_title,
+                    description = confirm_message,
+                    icon = confirm_icon,
+                    primary_icon = confirm_primary_icon,
+                    items = confirm_items,
+                    overflow_text = confirm_overflow,
+                    confirm_label = confirm_primary,
+                    cancel_label = confirm_cancel_lbl,
+                    destructive = confirm_destructive,
+                    generation = gen_sig,
+                    on_decision = UnsyncCallback::new(move |decision: DialogDecision| {
+                        let cb = *cb_slot_run.borrow();
+                        if let Some(cb) = cb {
+                            cb.run(decision);
                         }
-                        {(!shown_items.is_empty()).then(|| {
-                            let rows = shown_items
-                                .into_iter()
-                                .map(|item| {
-                                    view! {
-                                        text(class = "gds-files-confirm-item") {{item}}
-                                    }
-                                    .into_view()
-                                })
-                                .collect::<Vec<_>>();
-                            let more = (remaining > 0).then(|| {
-                                let count_label = i18n::count("operation-more-items", remaining);
-                                view! {
-                                    text(class = "gds-files-confirm-more") {{count_label}}
-                                }
-                            });
-                            view! {
-                                column(class = "gds-files-confirm-items") {
-                                    {rows}
-                                    {more}
+                    }),
+                )
+                ModalDialog(
+                    open = Binding::controlled(
+                        name_open,
+                        move |next: bool| {
+                            if !next
+                                && matches!(
+                                    name_open_cancel.0.prompt.get_untracked(),
+                                    Prompt::Name { .. }
+                                )
+                            {
+                                name_open_cancel.cancel_prompt();
+                            }
+                        },
+                    ),
+                    size = DialogSize::Sm,
+                    close_on_confirm = false,
+                    on_decision = UnsyncCallback::new(move |decision: DialogDecision| {
+                        match decision {
+                            DialogDecision::Confirm => {
+                                let _ = name_decisions.confirm();
+                            }
+                            DialogDecision::Cancel | DialogDecision::Dismiss => {
+                                if matches!(
+                                    name_decision_cancel.0.prompt.get_untracked(),
+                                    Prompt::Name { .. }
+                                ) {
+                                    name_decision_cancel.cancel_prompt();
                                 }
                             }
-                        })}
-                        DialogFooter {
-                            DialogActions(
-                                primary_label = primary,
-                                primary_icon = primary_icon,
-                                cancel_label = i18n::text("operation-cancel"),
-                                destructive = destructive,
-                                on_decision = decision_cb,
-                            )
                         }
-                    }
-                })
+                    }),
+                ) {
+                    {{
+                        let pb = name_body_browser.clone();
+                        let retained = Rc::clone(&retained_name);
+                        move || {
+                            let generation = gen_sig.get();
+                            let _z = enter_non_reactive_zone();
+                            if let Prompt::Name { form, submit, .. } = pb.0.prompt.get_untracked() {
+                                *retained.borrow_mut() =
+                                    Some((form.clone(), Rc::clone(&submit), generation));
+                                form.view(&pb, generation, submit, &pb.0.prompt_decisions)
+                            } else if let Some((form, submit, retained_gen)) = retained.borrow().clone() {
+                                form.view(&pb, retained_gen, submit, &pb.0.prompt_decisions)
+                            } else {
+                                AnyView::new(())
+                            }
+                        }
+                    }}
+                }
             }
-            Prompt::Name { form, submit, .. } => form.view(self, generation, submit, decision_slot),
-        }
+        }))
     }
 }
 
@@ -4322,18 +4141,21 @@ pub(super) mod tests {
                 );
             }
 
-            // 6. Compact window (< 1080px) guards Ctrl+B so `sidebar` preference stays intact.
+            // 6. Micro window (< 600px) guards Ctrl+B so `sidebar` preference stays intact.
             harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
-                DevicePx(960.0),
+                DevicePx(540.0),
                 DevicePx(800.0),
             )));
-            harness.settle(8);
-            assert!(browser.compact_untracked());
+            harness.run_for(Duration::from_millis(200), Duration::from_millis(16));
+            assert_eq!(
+                browser.width_tier_untracked(),
+                gds::ui::window::WidthTier::Micro
+            );
             assert_content_width_matches_layout(&browser);
             send_ctrl_b(&mut harness);
             assert!(
                 browser.0.sidebar.get_untracked(),
-                "Ctrl+B in compact mode (< 1080px) must not flip underlying sidebar state"
+                "Ctrl+B in micro mode (< 600px) must not flip underlying sidebar state"
             );
 
             harness.deliver_to_first(SurfaceEvent::ScaleFactorChanged {

@@ -179,7 +179,15 @@ fn reactive_appearance_emits_gds_and_zui_css_tokens() {
         assert_eq!(app.typography().size(), 20.0);
         let scaled_css = app.gds_stylesheet_css();
         assert!(scaled_css.contains("--gds-font-size: 20.00px;"));
-        assert!(scaled_css.contains("--gds-font-size-2xl: 30.00px;"));
+        assert!(scaled_css.contains("--gds-text-2xs: 12.50px;"));
+        assert!(scaled_css.contains("--gds-text-xs: 15.00px;"));
+        assert!(scaled_css.contains("--gds-text-sm: 17.50px;"));
+        assert!(scaled_css.contains("--gds-text-md: 20.00px;"));
+        assert!(scaled_css.contains("--gds-text-lg: 25.00px;"));
+        assert!(scaled_css.contains("--gds-list-row-height: 50.00px;"));
+        assert!(scaled_css.contains("--gds-list-selection-height: 45.00px;"));
+        assert!(scaled_css.contains("--gds-list-header-height: 37.50px;"));
+        assert!(!scaled_css.contains("--gds-font-size-small:"));
     });
     root.unmount();
 }

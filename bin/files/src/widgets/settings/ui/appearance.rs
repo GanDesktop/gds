@@ -13,8 +13,8 @@ use gds::{
 };
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, RenderEffect, RwSignal, on_cleanup_local};
-use zgui::view;
 use zgui::view::install_stylesheet;
+use zgui::{css, view};
 use zgui_ui::{
     SelectContentProps, SelectItemProps, SelectProps, SelectTriggerProps, SelectValueProps,
 };
@@ -25,24 +25,26 @@ use super::{Preferences, View};
 type Entries = Vec<theme::provider::custom::Entry>;
 
 const APPEARANCE_SHEET: &str = "gds-files-settings-appearance";
-const APPEARANCE_CSS: &str = r#"
-.gds-settings-appearance {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    min-width: 0;
-}
+const APPEARANCE_CSS: &str = css!(
+    r#"
+    .gds-settings-appearance {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0;
+    }
 
-.gds-settings-appearance__sample {
-    padding: 16px 0;
-    border-bottom: 1px solid var(--gds-border);
-    color: var(--gds-muted-foreground);
-    font-size: var(--gds-font-size-lg, 18px);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-"#;
+    .gds-settings-appearance__sample {
+        padding: 16px 0;
+        border-bottom: 1px solid var(--gds-border);
+        color: var(--gds-muted-foreground);
+        font-size: calc(18px * var(--gds-font-scale, 1));
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    "#
+);
 
 pub(super) fn system_option_disabled(system_available: Option<bool>) -> bool {
     matches!(system_available, Some(false))

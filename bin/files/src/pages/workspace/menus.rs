@@ -5,7 +5,6 @@ mod pages;
 use std::{cell::Cell, path::PathBuf, rc::Rc};
 
 use gds::app::Gds;
-use gds::appearance::tokens::DataListStyle;
 use gds::i18n;
 use gds::ui::button::{
     ApplicationMenuButtonProps, ButtonProps as GdsButtonProps, ButtonSize,
@@ -13,8 +12,8 @@ use gds::ui::button::{
 };
 use gds::ui::drag::DRAG_THRESHOLD;
 use gds::ui::feedback::dialog::{
-    DialogActionsProps, DialogContentProps, DialogDecision, DialogFooterProps, DialogHeaderProps,
-    DialogProps, DialogTitleProps,
+    DialogActionsProps, DialogDecision, DialogFooterProps, DialogHeaderProps, DialogSize,
+    DialogTitleProps, ModalDialogProps,
 };
 use gds::ui::feedback::tooltip::HintTooltipProps;
 use gds::ui::menu::{MenuEntry, render_entries};
@@ -49,11 +48,6 @@ const MENUS_SHEET: &str = "gds-files-workspace-menus";
 
 const MENUS_CSS: &str = css!(
     r#"
-    .zui-dialog.gds-files-columns-dialog {
-        width: 460px;
-        max-width: calc(100vw - 32px);
-    }
-
     .gds-files-columns-body {
         display: flex;
         flex-direction: column;
@@ -99,7 +93,7 @@ const MENUS_CSS: &str = css!(
         background: var(--gds-surface);
         border: 1px solid var(--gds-border);
         color: var(--gds-foreground);
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         min-width: 0;
         max-width: 100%;
         box-sizing: border-box;
@@ -121,7 +115,7 @@ const MENUS_CSS: &str = css!(
     }
 
     .gds-files-columns-scope-label {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         white-space: nowrap;
     }
@@ -136,7 +130,7 @@ const MENUS_CSS: &str = css!(
     }
 
     .gds-files-columns-group-heading {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         font-weight: 600;
         color: var(--gds-muted-foreground);
         padding: 4px 6px 2px 6px;
@@ -199,7 +193,7 @@ const MENUS_CSS: &str = css!(
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-foreground);
     }
 
@@ -733,7 +727,21 @@ impl Browser {
     }
 
     fn page_entries(&self) -> Vec<MenuEntry> {
+        let include_filter = self.height_tier_untracked() == gds::ui::window::HeightTier::Micro
+            && self.filter_available_untracked();
         if let Some(mut entries) = self.special_page_entries() {
+            if include_filter {
+                entries.insert(
+                    0,
+                    self.menu_item_entry(
+                        "filter",
+                        Some(IconName::Search),
+                        Some(Command::Filter),
+                        false,
+                        Browser::activate_filter,
+                    ),
+                );
+            }
             let sort = self.sort_entries();
             if !sort.is_empty() {
                 entries.push(MenuEntry::Submenu {
@@ -749,9 +757,20 @@ impl Browser {
             .read_untracked(|state| state.places.is_favorite(state.tab().navigation.location()));
         let columns = self.configurable_columns_untracked();
         let show_hidden = self.0.preferences.snapshot().files.show_hidden;
-        let compact = self.compact_untracked();
+        let details_disabled =
+            !self.details_permitted_untracked() || !self.details_available_structure();
 
-        let mut entries = vec![MenuEntry::Item {
+        let mut entries = Vec::new();
+        if include_filter {
+            entries.push(self.menu_item_entry(
+                "filter",
+                Some(IconName::Search),
+                Some(Command::Filter),
+                false,
+                Browser::activate_filter,
+            ));
+        }
+        entries.push(MenuEntry::Item {
             label: i18n::text_untracked(if grid { "view-list" } else { "view-grid" }),
             icon: Some(if grid {
                 IconName::List
@@ -762,7 +781,7 @@ impl Browser {
             disabled: false,
             destructive: false,
             on_select: self.menu_action("view-toggle", Browser::toggle_view),
-        }];
+        });
         entries.push(self.menu_item_entry(
             if favorite {
                 "favorite-remove"
@@ -821,7 +840,7 @@ impl Browser {
             Command::Details.label_id(),
             Some(IconName::Info),
             Some(Command::Details),
-            compact,
+            details_disabled,
             Browser::toggle_details,
         ));
         entries.push(self.command_item(Command::Refresh, Browser::refresh));
@@ -868,7 +887,7 @@ impl Browser {
             let tile = if grid {
                 self.grid_geometry_untracked().tile(index, scale)
             } else {
-                let row = DataListStyle::ROW_HEIGHT;
+                let row = self.list_row_height_untracked();
                 RectF::new(0.0, row * index as f32, 0.0, row)
             };
             let scroll = self.0.list.scroll_position().offset;
@@ -2042,6 +2061,7 @@ impl Browser {
             move || matches!(browser.0.menus.surface.get(), Surface::Columns { .. })
         });
         let close_columns = self.clone();
+        let decision_columns = self.clone();
         let content_columns = self.clone();
         let popup_browser = self.clone();
         let permissions_view = self.permissions_dialog();
@@ -2050,7 +2070,7 @@ impl Browser {
         AnyView::new(view! {
             box(class = "gds-files-menu-overlay") {
                 {move || popup_browser.context_popup()}
-                Dialog(
+                ModalDialog(
                     open = Binding::controlled(
                         columns_open,
                         move |next: bool| {
@@ -2058,18 +2078,36 @@ impl Browser {
                                 close_columns.0.menus.close();
                             }
                         }
-                    )
+                    ),
+                    size = DialogSize::Md,
+                    close_on_confirm = false,
+                    on_decision = UnsyncCallback::new(move |decision: DialogDecision| {
+                        match decision {
+                            DialogDecision::Confirm => {
+                                if let Surface::Columns {
+                                    location,
+                                    layout,
+                                    scope,
+                                } = decision_columns.0.menus.surface.get_untracked()
+                                {
+                                    decision_columns.apply_columns(
+                                        location,
+                                        Some(layout.get_untracked()),
+                                        scope.get_untracked(),
+                                    );
+                                }
+                            }
+                            DialogDecision::Cancel | DialogDecision::Dismiss => {
+                                decision_columns.0.menus.close();
+                            }
+                        }
+                    }),
+                    class = "gds-files-columns-dialog",
                 ) {
-                    DialogContent(
-                        class = "gds-dialog-content gds-files-columns-dialog",
-                        dismiss_on_outside_press = true,
-                        dismiss_on_escape = true
-                    ) {
-                        {{
-                            let c = content_columns.clone();
-                            move || c.columns_dialog()
-                        }}
-                    }
+                    {{
+                        let c = content_columns.clone();
+                        move || c.columns_dialog()
+                    }}
                 }
                 {permissions_view}
                 {tags_view}

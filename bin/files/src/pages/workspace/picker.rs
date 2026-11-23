@@ -65,11 +65,11 @@ const PICKER_CSS: &str = css!(
     .gds-files-picker-name-input.zui-input,
     .gds-files-picker-name-input.gds-files-picker-name-input {
         width: 100%;
-        height: 28px;
-        min-height: 28px;
-        max-height: 28px;
+        height: 24px;
+        min-height: 24px;
+        max-height: 24px;
         padding: 0 8px;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-files-picker-controls-slot {
@@ -90,25 +90,26 @@ const PICKER_CSS: &str = css!(
     }
 
     .gds-files-picker-label {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         white-space: nowrap;
     }
 
     .gds-files-picker-filter-trigger.gds-files-picker-filter-trigger,
     .gds-files-picker-filter-trigger.gds-files-picker-filter-trigger[data-size="sm"] {
-        height: 28px;
-        min-height: 28px;
-        max-height: 28px;
+        height: 24px;
+        min-height: 24px;
+        max-height: 24px;
         padding-top: 0;
         padding-bottom: 0;
         max-width: 200px;
     }
 
+    .gds-files-picker-btn.zui-button.gds-button[data-size="xs"],
     .gds-files-picker-btn.zui-button.gds-button[data-size="sm"] {
-        height: 28px;
-        min-height: 28px;
-        max-height: 28px;
+        height: 24px;
+        min-height: 24px;
+        max-height: 24px;
     }
     "#
 );
@@ -475,6 +476,15 @@ impl Browser {
         })
     }
 
+    pub(super) fn is_save_picker(&self) -> bool {
+        self.read(|state| {
+            state
+                .picker
+                .as_ref()
+                .is_some_and(|picker| picker.options.is_save())
+        })
+    }
+
     pub(super) fn render_picker_name(&self) -> Option<AnyView> {
         let is_save = self.read_untracked(|state| {
             state
@@ -751,7 +761,7 @@ impl Browser {
                 })}
                 GdsButton(
                     variant = ButtonVariant::Outline,
-                    size = ButtonSize::Sm,
+                    size = ButtonSize::Xs,
                     icon = IconName::X,
                     tooltip = cancel_label.clone(),
                     shortcut = cancel_shortcut,
@@ -764,7 +774,7 @@ impl Browser {
                 GdsButton(
                     node_ref = confirm_node,
                     variant = ButtonVariant::Default,
-                    size = ButtonSize::Sm,
+                    size = ButtonSize::Xs,
                     icon = IconName::Check,
                     disabled = disabled_confirm,
                     tooltip = confirm_label.clone(),

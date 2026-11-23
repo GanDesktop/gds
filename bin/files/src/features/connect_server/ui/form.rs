@@ -59,7 +59,7 @@ const FORM_CSS: &str = css!(
     }
 
     .gds-connect-form__label {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
 
@@ -108,7 +108,7 @@ const FORM_CSS: &str = css!(
     }
 
     .gds-connect-form__protocol-desc {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
     "#

@@ -23,7 +23,7 @@ use zgui_ui_primitives::prelude::{DismissReason, DismissableLayerProps};
 
 use crate::app::Gds;
 use crate::ui::button::IconButtonProps;
-use crate::ui::dialog::{DialogAnchor, ModalDialogProps};
+use crate::ui::dialog::{DialogAnchor, DialogSize, ModalDialogProps};
 use crate::ui::icon::{IconName, IconProps};
 use crate::ui::shortcut::Shortcut;
 use crate::ui::tooltip::HintTooltipProps;
@@ -49,7 +49,7 @@ const ABOUT_CSS: &str = css!(
         outline: none;
         color: var(--gds-foreground);
         font-family: var(--gds-font-sans);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-about__overview-scroll {
@@ -114,7 +114,7 @@ const ABOUT_CSS: &str = css!(
     }
 
     .gds-about__title {
-        font-size: calc(20px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-lg, 20px);
         font-weight: 600;
         line-height: 1.25;
         color: var(--gds-foreground);
@@ -155,7 +155,7 @@ const ABOUT_CSS: &str = css!(
     .gds-about__info-label {
         flex-shrink: 0;
         color: var(--gds-muted-foreground);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         line-height: 1.35;
     }
 
@@ -176,7 +176,7 @@ const ABOUT_CSS: &str = css!(
         white-space: nowrap;
         text-align: right;
         font-family: var(--gds-font-mono);
-        font-size: calc(13px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-sm, 14px);
         font-variant-numeric: tabular-nums;
         line-height: 1.35;
         color: var(--gds-control-foreground);
@@ -284,7 +284,7 @@ const ABOUT_CSS: &str = css!(
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 500;
         line-height: 1.35;
         color: var(--gds-control-foreground);
@@ -292,7 +292,7 @@ const ABOUT_CSS: &str = css!(
 
     .gds-about__row-meta {
         flex-shrink: 0;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         white-space: nowrap;
     }
@@ -324,7 +324,7 @@ const ABOUT_CSS: &str = css!(
         flex-direction: row;
         align-items: center;
         flex-shrink: 0;
-        height: var(--gds-toolbar-height, 52px);
+        height: var(--gds-toolbar-height, 48px);
         padding: 0px 48px 0px 10px;
         gap: 8px;
         min-width: 0px;
@@ -338,7 +338,7 @@ const ABOUT_CSS: &str = css!(
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: var(--gds-font-size-md, 16px);
+        font-size: var(--gds-text-md, 16px);
         font-weight: 600;
         line-height: 1.25;
         color: var(--gds-foreground);
@@ -379,7 +379,7 @@ const ABOUT_CSS: &str = css!(
 
     .gds-about__section-label {
         padding-left: 4px;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         font-weight: 500;
         line-height: 1.3;
         color: var(--gds-muted-foreground);
@@ -399,7 +399,7 @@ const ABOUT_CSS: &str = css!(
     .gds-about__author-name {
         flex: 1 1 0%;
         min-width: 0px;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-control-foreground);
         overflow-wrap: anywhere;
         user-select: text;
@@ -457,7 +457,7 @@ const ABOUT_CSS: &str = css!(
     }
 
     .gds-about__credit-name {
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 500;
         line-height: 1.3;
         color: var(--gds-control-foreground);
@@ -467,7 +467,7 @@ const ABOUT_CSS: &str = css!(
     }
 
     .gds-about__credit-url {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         line-height: 1.3;
         color: var(--gds-muted-foreground);
         overflow: hidden;
@@ -485,7 +485,7 @@ const ABOUT_CSS: &str = css!(
     }
 
     .gds-about__license-id {
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 600;
         color: var(--gds-control-foreground);
     }
@@ -498,19 +498,15 @@ const ABOUT_CSS: &str = css!(
     .gds-about__license-text {
         white-space: pre-wrap;
         overflow-wrap: anywhere;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         line-height: 1.55;
         color: var(--gds-muted-foreground);
         user-select: text;
     }
 
     .zui-dialog.gds-dialog-content.gds-about-dialog,
-    .zui-dialog.gds-about-dialog,
-    .zui-dialog.gds-files-prompt-dialog[data-about="true"] {
-        width: 420px;
+    .zui-dialog.gds-about-dialog {
         height: 408px;
-        min-width: 0px;
-        max-width: calc(100vw - 32px);
         max-height: calc(100vh - 32px);
         padding: 0px;
         gap: 0px;
@@ -518,8 +514,7 @@ const ABOUT_CSS: &str = css!(
     }
 
     .zui-dialog.gds-dialog-content.gds-about-dialog .zui-dialog__dismiss,
-    .zui-dialog.gds-about-dialog .zui-dialog__dismiss,
-    .zui-dialog.gds-files-prompt-dialog[data-about="true"] .zui-dialog__dismiss {
+    .zui-dialog.gds-about-dialog .zui-dialog__dismiss {
         top: 10px;
         right: 10px;
         width: 32px;
@@ -534,15 +529,13 @@ const ABOUT_CSS: &str = css!(
     }
 
     .zui-dialog.gds-dialog-content.gds-about-dialog .zui-dialog__dismiss:hover,
-    .zui-dialog.gds-about-dialog .zui-dialog__dismiss:hover,
-    .zui-dialog.gds-files-prompt-dialog[data-about="true"] .zui-dialog__dismiss:hover {
+    .zui-dialog.gds-about-dialog .zui-dialog__dismiss:hover {
         background-color: var(--gds-hover);
         color: var(--gds-foreground);
     }
 
     .zui-dialog.gds-dialog-content.gds-about-dialog .zui-dialog__dismiss:active,
-    .zui-dialog.gds-about-dialog .zui-dialog__dismiss:active,
-    .zui-dialog.gds-files-prompt-dialog[data-about="true"] .zui-dialog__dismiss:active {
+    .zui-dialog.gds-about-dialog .zui-dialog__dismiss:active {
         background-color: var(--gds-pressed);
         color: var(--gds-foreground);
     }
@@ -1253,6 +1246,7 @@ pub fn AboutDialog(
     view! {
         ModalDialog(
             open = open,
+            size = DialogSize::Sm,
             disabled = true,
             anchor = anchor,
             on_decision = on_decision,

@@ -65,7 +65,7 @@ const SHEET: &str = css!(
         min-width: 0px;
         padding: 6px 10px;
         border-bottom: 1px solid var(--gds-border);
-        font-size: calc(12px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-xs, 12px);
         font-weight: 600;
         color: var(--gds-panel-foreground);
     }
@@ -76,7 +76,7 @@ const SHEET: &str = css!(
         gap: 3px;
         min-width: 0px;
         padding: 6px 10px;
-        font-size: calc(13px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-panel-foreground);
         overflow-wrap: anywhere;
     }
@@ -87,7 +87,7 @@ const SHEET: &str = css!(
         align-items: center;
         min-width: 0px;
         padding: 0px 10px 6px 10px;
-        font-size: calc(12px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         overflow: hidden;
         text-overflow: ellipsis;

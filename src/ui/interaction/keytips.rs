@@ -70,7 +70,7 @@ const SHEET: &str = css!(
         border: 1px solid var(--gds-border);
         color: var(--gds-muted-foreground);
         font-family: var(--gds-font-sans);
-        font-size: calc(10px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-2xs, 10px);
         font-weight: 400;
         line-height: 1.2;
         white-space: nowrap;

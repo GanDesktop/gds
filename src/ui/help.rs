@@ -8,7 +8,7 @@ use zgui::{component, css, view};
 use zgui_ui_primitives::Binding;
 
 use super::{Shortcut, ShortcutBadgeProps};
-use crate::ui::dialog::{DialogHeaderProps, DialogTitleProps, ModalDialogProps};
+use crate::ui::dialog::{DialogHeaderProps, DialogSize, DialogTitleProps, ModalDialogProps};
 
 const HELP_SHEET: &str = "gds-ui-help";
 
@@ -24,7 +24,7 @@ const HELP_CSS: &str = css!(
         padding: 24px;
         background: var(--gds-content-bg, var(--gds-content));
         color: var(--gds-foreground);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .gds-help-page__body.gds-help-page__body {
@@ -32,7 +32,7 @@ const HELP_CSS: &str = css!(
         flex-direction: column;
         gap: 0px;
         width: 100%;
-        max-width: none;
+        max-width: 880px;
         min-width: 0px;
     }
 
@@ -47,7 +47,7 @@ const HELP_CSS: &str = css!(
     }
 
     .gds-shortcut-heading.gds-shortcut-heading {
-        font-size: var(--gds-font-size-2xl, calc(24px * var(--gds-font-scale, 1)));
+        font-size: var(--gds-text-lg, 20px);
         line-height: 1.25;
         font-weight: 600;
         color: var(--gds-foreground);
@@ -67,7 +67,7 @@ const HELP_CSS: &str = css!(
     .gds-shortcut-row__label.gds-shortcut-row__label {
         flex: 1 1 0%;
         min-width: 0px;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-foreground);
     }
 
@@ -81,9 +81,7 @@ const HELP_CSS: &str = css!(
     }
 
     .gds-help-dialog.gds-help-dialog {
-        width: 680px;
         height: 560px;
-        max-width: calc(100vw - 32px);
         max-height: calc(100vh - 32px);
         padding: 0px;
         overflow: hidden;
@@ -188,6 +186,7 @@ pub fn HelpDialog(
     view! {
         ModalDialog(
             open = open,
+            size = DialogSize::Lg,
             disabled = true,
             class = "gds-help-dialog",
         ) {

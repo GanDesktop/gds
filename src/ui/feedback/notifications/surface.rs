@@ -79,7 +79,7 @@ pub(super) const SHEET: &str = css!(
     .gds-notification-summary {
         width: 100%;
         min-width: 0;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 400;
         line-height: 1.4;
         color: var(--gds-panel-foreground);
@@ -103,7 +103,7 @@ pub(super) const SHEET: &str = css!(
     .gds-notification-detail-line {
         width: 100%;
         min-width: 0;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         line-height: 1.35;
         color: var(--gds-muted-foreground);
         overflow-wrap: anywhere;

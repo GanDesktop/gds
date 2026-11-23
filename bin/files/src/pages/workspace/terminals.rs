@@ -193,7 +193,7 @@ pub(super) const TERMINALS_CSS: &str = css!(
     }
 
     .gds-files-terminal-header__active-title {
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-foreground);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -274,7 +274,7 @@ pub(super) const TERMINALS_CSS: &str = css!(
         padding: var(--gds-terminal-content-inset, 12px);
         background: transparent;
         color: var(--gds-muted-foreground);
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         box-sizing: border-box;
     }
 
@@ -905,7 +905,9 @@ impl Browser {
                 self.focus_active_terminal();
             }
         } else {
-            let _ = self.0.terminals.inner.maximized.try_set(false);
+            if self.height_tier_untracked() == gds::ui::window::HeightTier::Normal {
+                let _ = self.0.terminals.inner.maximized.try_set(false);
+            }
             self.focus_content();
         }
     }
@@ -1299,7 +1301,11 @@ impl Browser {
             return true;
         }
         if *key == Key::Named(NamedKey::F6) && modifiers.is_empty() {
-            let _ = self.0.terminals.inner.maximized.try_set(false);
+            if self.height_tier_untracked() == gds::ui::window::HeightTier::Micro {
+                let _ = self.0.terminal.try_set(false);
+            } else {
+                let _ = self.0.terminals.inner.maximized.try_set(false);
+            }
             self.focus_content();
             return true;
         }
@@ -1351,7 +1357,17 @@ impl Browser {
         let open_target = Signal::derive_local(move || if visible_sig.get() { 1.0 } else { 0.0 });
         let open_progress = motion::use_transition(open_target, motion::WORKSPACE_DURATION_MS);
 
-        let max_target = Signal::derive_local(move || if maximized_sig.get() { 1.0 } else { 0.0 });
+        let micro_height = Signal::derive_local({
+            let b = self.clone();
+            move || b.height_tier() == gds::ui::window::HeightTier::Micro
+        });
+        let max_target = Signal::derive_local(move || {
+            if maximized_sig.get() || micro_height.get() {
+                1.0
+            } else {
+                0.0
+            }
+        });
         let max_progress = motion::use_transition(max_target, motion::WORKSPACE_DURATION_MS);
 
         let dock_for_height = dock.clone();
@@ -1722,13 +1738,15 @@ impl Browser {
                             disabled = cwd_disabled,
                             on:click = move |_| b_cwd.switch_terminal_directory(),
                         )
-                        IconButton(
-                            icon = max_icon,
-                            label = max_label,
-                            on:click = move |_| {
-                                maximized_sig.update(|m| *m = !*m);
-                            },
-                        )
+                        Show(when = move || !micro_height.get()) {
+                            IconButton(
+                                icon = max_icon,
+                                label = max_label,
+                                on:click = move |_| {
+                                    maximized_sig.update(|m| *m = !*m);
+                                },
+                            )
+                        }
                     }
                 }
 

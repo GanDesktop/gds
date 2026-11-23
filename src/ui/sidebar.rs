@@ -109,7 +109,7 @@ const SIDEBAR_CSS: &str = css!(
         text-overflow: ellipsis;
         white-space: nowrap;
         padding: 0px var(--gds-sidebar-section-padding, 6px);
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         font-weight: 400;
         color: color-mix(
             in srgb,

@@ -36,7 +36,7 @@ const SETTINGS_CSS: &str = css!(
         width: 100%;
     }
     .gds-setting-group.gds-setting-group {
-        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 400;
         color: var(--gds-muted-foreground);
         padding-top: 16px;
@@ -54,25 +54,31 @@ const SETTINGS_CSS: &str = css!(
         border-radius: 0px;
         width: 100%;
     }
+    [data-width-tier=\"micro\"] .gds-setting-row.gds-setting-row,
+    .gds-setting-row.gds-setting-row[data-micro=\"true\"] {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+    }
     .gds-setting-label.gds-setting-label {
         display: flex;
         flex-direction: column;
         gap: 4px;
         flex: 1 1 0%;
         min-width: 0px;
-        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-size: var(--gds-text-sm, 14px);
     }
     .gds-setting-title.gds-setting-title {
-        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 400;
         color: var(--gds-foreground);
     }
     .gds-setting-description.gds-setting-description {
-        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-muted-foreground);
     }
     .gds-setting-error.gds-setting-error {
-        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-error);
     }
     .gds-setting-actions.gds-setting-actions {
@@ -81,6 +87,11 @@ const SETTINGS_CSS: &str = css!(
         flex-shrink: 0;
         align-items: center;
         gap: var(--gds-setting-gap, 8px);
+    }
+    [data-width-tier=\"micro\"] .gds-setting-actions.gds-setting-actions,
+    .gds-setting-row[data-micro=\"true\"] .gds-setting-actions.gds-setting-actions {
+        align-self: flex-end;
+        max-width: 100%;
     }
     .gds-setting-reset.gds-setting-reset {
         width: var(--gds-setting-reset-size, 32px);
@@ -97,6 +108,31 @@ const SETTINGS_CSS: &str = css!(
         flex-direction: row;
         align-items: center;
         justify-content: flex-end;
+    }
+    [data-width-tier=\"micro\"] .gds-setting-control.gds-setting-control,
+    .gds-setting-row[data-micro=\"true\"] .gds-setting-control.gds-setting-control {
+        max-width: 100%;
+        min-width: 0px;
+    }
+    .gds-setting-control.gds-setting-control > .zui-select,
+    .gds-setting-control.gds-setting-control .zui-select {
+        width: 100%;
+        min-width: 0px;
+        height: var(--gds-control-height, 36px);
+        min-height: var(--gds-control-height, 36px);
+        background: var(--gds-content);
+        color: var(--gds-foreground);
+        border: 1px solid var(--gds-outline);
+        border-radius: var(--gds-radius-control, 6px);
+        box-shadow: none;
+        outline: none;
+        box-sizing: border-box;
+    }
+    .gds-setting-control.gds-setting-control .zui-select:focus,
+    .gds-setting-control.gds-setting-control .zui-select:focus-visible {
+        border-color: var(--gds-primary);
+        box-shadow: none;
+        outline: none;
     }
     .gds-setting-control.gds-setting-control > .zui-select__trigger,
     .gds-setting-control.gds-setting-control .zui-select__trigger,
@@ -139,7 +175,7 @@ const SETTINGS_CSS: &str = css!(
         flex-shrink: 0;
         text-align: right;
         white-space: nowrap;
-        font-size: var(--gds-font-size-small, var(--gds-font-size-sm, 14px));
+        font-size: var(--gds-text-sm, 14px);
         font-variant-numeric: tabular-nums;
         color: var(--gds-foreground);
     }"

@@ -43,7 +43,7 @@ const SHEET: &str = css!(
     .gds-thumbnail__status {
         width: 100%;
         padding: 0px 8px;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         text-align: center;
         overflow: hidden;

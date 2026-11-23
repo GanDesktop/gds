@@ -471,17 +471,17 @@ impl Palette {
         theme.typography.size_xs = format!("{:.2}px", 12.0 * scale);
         theme.typography.size_sm = format!("{:.2}px", 14.0 * scale);
         theme.typography.size_md = format!("{:.2}px", 16.0 * scale);
-        theme.typography.size_lg = format!("{:.2}px", 18.0 * scale);
+        theme.typography.size_lg = format!("{:.2}px", 16.0 * scale);
         theme.typography.size_xl = format!("{:.2}px", 20.0 * scale);
-        theme.typography.size_x2l = format!("{:.2}px", 24.0 * scale);
-        theme.typography.size_x3l = format!("{:.2}px", 30.0 * scale);
+        theme.typography.size_x2l = format!("{:.2}px", 20.0 * scale);
+        theme.typography.size_x3l = format!("{:.2}px", 20.0 * scale);
         theme.typography.leading_xs = format!("{:.2}px", 16.0 * scale);
         theme.typography.leading_sm = format!("{:.2}px", 20.0 * scale);
-        theme.typography.leading_md = format!("{:.2}px", 24.0 * scale);
-        theme.typography.leading_lg = format!("{:.2}px", 28.0 * scale);
-        theme.typography.leading_xl = format!("{:.2}px", 28.0 * scale);
-        theme.typography.leading_x2l = format!("{:.2}px", 32.0 * scale);
-        theme.typography.leading_x3l = format!("{:.2}px", 36.0 * scale);
+        theme.typography.leading_md = format!("{:.2}px", 22.0 * scale);
+        theme.typography.leading_lg = format!("{:.2}px", 22.0 * scale);
+        theme.typography.leading_xl = format!("{:.2}px", 26.0 * scale);
+        theme.typography.leading_x2l = format!("{:.2}px", 26.0 * scale);
+        theme.typography.leading_x3l = format!("{:.2}px", 26.0 * scale);
 
         if motion.reduced() {
             "0ms".clone_into(&mut theme.motion.duration_fast);

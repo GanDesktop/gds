@@ -76,7 +76,7 @@ const STATIC_BASE_CSS: &str = r#"
     overflow: hidden;
     color: var(--gds-foreground);
     font-family: var(--gds-font-sans);
-    font-size: var(--gds-font-size-small, 14px);
+    font-size: var(--gds-text-sm, 14px);
 }
 
 .gds-frame-content {
@@ -92,7 +92,7 @@ const STATIC_BASE_CSS: &str = r#"
     display: flex;
     flex-direction: row;
     align-items: center;
-    height: var(--gds-toolbar-height, 52px);
+    height: var(--gds-toolbar-height, 48px);
     flex-shrink: 0;
 }
 
@@ -100,7 +100,7 @@ const STATIC_BASE_CSS: &str = r#"
     display: flex;
     flex-direction: row;
     align-items: center;
-    height: var(--gds-footer-height, 36px);
+    height: var(--gds-footer-height, 32px);
     flex-shrink: 0;
 }
 
@@ -118,7 +118,7 @@ const STATIC_BASE_CSS: &str = r#"
     align-items: center;
     flex-shrink: 0;
     gap: var(--gds-nav-item-gap, 8px);
-    min-height: var(--gds-sidebar-item-height, 38px);
+    min-height: var(--gds-sidebar-item-height, 36px);
     padding: 0 var(--gds-nav-item-pad-right, 8px) 0 var(--gds-nav-item-pad-left, 8px);
     border: none;
     border-radius: var(--gds-radius-control, 6px);
@@ -408,70 +408,12 @@ const STATIC_BASE_CSS: &str = r#"
     background-color: var(--gds-pressed);
 }
 
-.gds-capacity {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    width: 100%;
+.zui-empty__title.zui-empty__title {
+    font-size: var(--gds-text-md, 16px);
 }
 
-.gds-capacity__label {
-    font-size: var(--gds-font-size-xs, 12px);
-    color: var(--gds-muted-foreground);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.gds-capacity[data-selected="true"] .gds-capacity__label {
-    color: var(--gds-selection-foreground);
-}
-
-.gds-capacity__track {
-    width: 100%;
-    height: 4px;
-    border-radius: 2px;
-    background: color-mix(in srgb, var(--gds-foreground) 12%, transparent);
-    border: none;
-    overflow: hidden;
-}
-
-.gds-capacity__fill {
-    height: 100%;
-    width: var(--gds-capacity-width, 0%);
-    background: var(--gds-primary);
-    transform: translateX(0);
-    transition: width var(--gds-motion-normal, 160ms) var(--gds-motion-ease-out, ease-out);
-}
-
-.gds-capacity[data-selected="true"] .gds-capacity__fill {
-    background: var(--gds-selection-foreground);
-}
-
-.gds-capacity[data-unavailable="true"] .gds-capacity__fill {
-    width: 0%;
-    background: var(--gds-muted-foreground);
-    opacity: 0.35;
-}
-
-.gds-capacity[data-loading="true"] .gds-capacity__fill {
-    width: 40%;
-    animation: gds-capacity-indeterminate 1200ms var(--gds-motion-ease-standard, ease) infinite;
-}
-
-@keyframes gds-capacity-indeterminate {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(250%); }
-}
-
-.gds-capacity[data-compact="true"] {
-    width: auto;
-    min-width: 28px;
-    align-items: center;
-}
-
-.gds-capacity[data-compact="true"] .gds-capacity__label {
-    font-variant-numeric: tabular-nums;
+.zui-empty__description.zui-empty__description {
+    font-size: var(--gds-text-sm, 14px);
 }
 
 .gds-disclosure {
@@ -520,59 +462,6 @@ const STATIC_BASE_CSS: &str = r#"
     padding: 0;
 }
 
-.gds-help-page {
-    width: 100%;
-    height: 100%;
-    padding: 24px;
-    background: var(--gds-content-bg, var(--gds-content));
-}
-
-.gds-help-page__body {
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-    max-width: 720px;
-    width: 100%;
-}
-
-.gds-shortcut-section {
-    display: flex;
-    flex-direction: column;
-    padding: 0 0 24px 0;
-    background: transparent;
-    border: none;
-    border-radius: 0;
-}
-
-.gds-shortcut-heading {
-    font-size: var(--gds-font-size-2xl, 24px);
-    font-weight: 600;
-    color: var(--gds-foreground);
-    padding-bottom: 16px;
-}
-
-.gds-shortcut-row {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 24px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--gds-border);
-}
-
-.gds-shortcut-row__label {
-    font-size: var(--gds-font-size-small, 14px);
-    color: var(--gds-foreground);
-}
-
-.gds-shortcut-row__keys {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-}
-
 .gds-shortcut-hint {
     display: inline-flex;
     flex-direction: row;
@@ -582,7 +471,7 @@ const STATIC_BASE_CSS: &str = r#"
 
 .gds-tooltip-text {
     color: var(--gds-panel-foreground);
-    font-size: var(--gds-font-size-small, 14px);
+    font-size: var(--gds-text-sm, 14px);
 }
 
 .gds-timestamp,
@@ -592,113 +481,7 @@ const STATIC_BASE_CSS: &str = r#"
 
 .gds-field-placeholder {
     color: var(--gds-muted-foreground);
-    font-size: var(--gds-font-size-small, 14px);
-}
-
-.gds-setting-form {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    width: 100%;
-}
-
-.gds-setting-form[data-disabled="true"] {
-    opacity: 0.6;
-}
-
-.gds-setting-section {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-}
-
-.gds-setting-group {
-    font-size: var(--gds-font-size-small, 14px);
-    font-weight: 600;
-    color: var(--gds-muted-foreground);
-    padding-top: 6px;
-}
-
-.gds-setting-row {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 24px;
-    padding: 16px 0;
-    border-radius: 0;
-    background: transparent;
-    border: none;
-    border-bottom: 1px solid var(--gds-border);
-}
-
-.gds-setting-label {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    flex: 1 1 auto;
-    min-width: 0;
-}
-
-.gds-setting-title {
-    font-size: var(--gds-font-size-small, 14px);
-    font-weight: 500;
-    color: var(--gds-foreground);
-}
-
-.gds-setting-description {
-    font-size: var(--gds-font-size-small, 14px);
-    color: var(--gds-muted-foreground);
-}
-
-.gds-setting-error {
-    font-size: var(--gds-font-size-xs, 12px);
-    color: var(--gds-error);
-}
-
-.gds-setting-actions {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: var(--gds-setting-gap, 8px);
-    flex: none;
-}
-
-.gds-setting-control {
-    width: var(--gds-setting-control-width, 260px);
-    display: flex;
-    flex-direction: row;
-    justify-content: flex-end;
-    align-items: center;
-}
-
-.gds-setting-reset {
-    width: var(--gds-setting-reset-size, 32px);
-    height: var(--gds-setting-reset-size, 32px);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.gds-setting-number {
-    width: 100%;
-}
-
-.gds-setting-number-row {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-}
-
-.gds-setting-number-value {
-    width: 4.5rem;
-    text-align: right;
-    white-space: nowrap;
-    font-size: var(--gds-font-size-small, 14px);
-    font-variant-numeric: tabular-nums;
-    color: var(--gds-muted-foreground);
+    font-size: var(--gds-text-sm, 14px);
 }
 "#;
 

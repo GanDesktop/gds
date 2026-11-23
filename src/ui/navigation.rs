@@ -59,7 +59,7 @@ const NAVIGATION_CSS: &str = css!(
         width: 100%;
         max-width: 100%;
         min-width: 0px;
-        min-height: var(--gds-sidebar-item-height, 38px);
+        min-height: var(--gds-sidebar-item-height, 36px);
         padding-left: var(--gds-nav-item-pad-left, 8px);
         padding-right: var(--gds-nav-item-pad-right, 8px);
         gap: var(--gds-nav-item-gap, 8px);
@@ -139,7 +139,7 @@ const NAVIGATION_CSS: &str = css!(
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         line-height: 18px;
         color: color-mix(
             in srgb,
@@ -161,7 +161,7 @@ const NAVIGATION_CSS: &str = css!(
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: color-mix(
             in srgb,
             var(--gds-muted-foreground) var(--gds-sidebar-label-pct, 100%),
@@ -179,7 +179,7 @@ const NAVIGATION_CSS: &str = css!(
     .gds-nav-item__actions {
         position: absolute;
         right: 0px;
-        top: 3px;
+        top: 2px;
         display: flex;
         flex-direction: row;
         align-items: center;
@@ -276,7 +276,7 @@ pub(super) fn install_navigation_stylesheets() {
 }
 
 /// Interactive borderless navigation pill supporting continuous `SidebarPresentation` width
-/// interpolation (`x = 29px` dead-center collapsed rail alignment and stable `38px`/`44px` row
+/// interpolation (`x = 28px` dead-center collapsed rail alignment and stable `36px`/`44px` row
 /// heights), trailing overlay actions, shortcuts, tooltips, and middle-click handling.
 #[allow(clippy::too_many_arguments)]
 #[component]

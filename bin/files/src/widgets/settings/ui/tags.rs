@@ -13,42 +13,44 @@ use zgui::reactive::{
     LocalStorage, Owner as UiOwner, ReadSignal, RenderEffect, RwSignal, on_cleanup_local,
     spawn_local,
 };
-use zgui::view;
 use zgui::view::install_stylesheet;
+use zgui::{css, view};
 use zgui_ui_primitives::Binding;
 
 use super::{Preferences, View};
 use crate::entities::tags;
 
 const TAGS_SHEET: &str = "gds-files-settings-tags";
-const TAGS_CSS: &str = r#"
-.gds-settings-tags {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    min-width: 0;
-}
+const TAGS_CSS: &str = css!(
+    r#"
+    .gds-settings-tags {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0;
+    }
 
-.gds-settings-tags__title {
-    font-size: var(--gds-font-size-lg, 18px);
-    font-weight: 600;
-}
+    .gds-settings-tags__title {
+        font-size: var(--gds-text-md, 16px);
+        font-weight: 600;
+    }
 
-.gds-settings-tags__probe {
-    display: flex;
-    flex-direction: row;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 12px 0;
-}
+    .gds-settings-tags__probe {
+        display: flex;
+        flex-direction: row;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 12px 0;
+    }
 
-.gds-settings-tags__status {
-    flex: 1 1 0%;
-    min-width: 0;
-    white-space: normal;
-    color: var(--gds-muted-foreground);
-}
-"#;
+    .gds-settings-tags__status {
+        flex: 1 1 0%;
+        min-width: 0;
+        white-space: normal;
+        color: var(--gds-muted-foreground);
+    }
+    "#
+);
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum State {

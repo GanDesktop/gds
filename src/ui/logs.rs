@@ -93,7 +93,7 @@ const LOGS_CSS: &str = "
     background: transparent;
     box-shadow: none;
     color: var(--gds-muted-foreground);
-    font-size: var(--gds-font-size-small, 14px);
+    font-size: var(--gds-text-sm, 14px);
     cursor: pointer;
 }
 .gds-logs-tabs-trigger.zui-tabs__trigger:hover {
@@ -174,7 +174,7 @@ const LOGS_CSS: &str = "
     height: 22px;
     padding: 0 8px;
     font-family: var(--gds-font-mono);
-    font-size: 12px;
+    font-size: var(--gds-text-xs, 12px);
     cursor: pointer;
     box-sizing: border-box;
     white-space: nowrap;
@@ -248,7 +248,7 @@ const LOGS_CSS: &str = "
     max-height: 164px;
     overflow-y: auto;
     font-family: var(--gds-font-mono);
-    font-size: 12px;
+    font-size: var(--gds-text-xs, 12px);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     user-select: text;
@@ -264,7 +264,7 @@ const LOGS_CSS: &str = "
     padding: 4px 8px;
     background: transparent;
     color: var(--gds-muted-foreground);
-    font-size: 12px;
+    font-size: var(--gds-text-xs, 12px);
 }
 ";
 

@@ -10,7 +10,7 @@ const SHEET: &str = css!(
         min-width: 0px;
         min-height: 0px;
         width: 100%;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-foreground);
     }
 
@@ -54,7 +54,7 @@ const SHEET: &str = css!(
         min-width: 0px;
         flex-shrink: 0;
         height: var(--gds-icon-button-size, 32px);
-        font-size: calc(12px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
     "#

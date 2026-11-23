@@ -3,68 +3,72 @@ use gds::ui::button::{ButtonProps, ButtonSize, ButtonVariant};
 use gds::ui::settings::SettingResetProps;
 use gds::ui::{IconButtonProps, IconName, IconProps};
 use zgui::prelude::*;
-use zgui::view;
 use zgui::view::install_stylesheet;
+use zgui::{css, view};
 
 use crate::entities::preferences::FilesPreferences;
 
 const PERFORMANCE_SHEET: &str = "gds-files-settings-performance";
-const PERFORMANCE_CSS: &str = r#"
-.gds-settings-perf {
-    display: flex;
-    flex-direction: column;
-    gap: 24px;
-}
+const PERFORMANCE_CSS: &str = css!(
+    r#"
+    .gds-settings-perf {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+    }
 
-.gds-settings-perf__banner {
-    display: flex;
-    flex-direction: row;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 16px;
-    border-radius: 6px;
-    border: 1px solid var(--gds-border);
-    background: color-mix(in srgb, var(--gds-surface) 50%, transparent);
-}
+    .gds-settings-perf__banner {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 16px;
+        border-radius: 6px;
+        border: 1px solid var(--gds-border);
+        background: color-mix(in srgb, var(--gds-surface) 50%, transparent);
+    }
 
-.gds-settings-perf__banner[data-locked="true"] {
-    border-color: color-mix(in srgb, var(--gds-warning) 40%, transparent);
-    background: color-mix(in srgb, var(--gds-warning) 8%, transparent);
-}
+    .gds-settings-perf__banner[data-locked="true"] {
+        border-color: color-mix(in srgb, var(--gds-warning) 40%, transparent);
+        background: color-mix(in srgb, var(--gds-warning) 8%, transparent);
+    }
 
-.gds-settings-perf__icon {
-    padding-top: 2px;
-    color: var(--gds-muted-foreground);
-}
+    .gds-settings-perf__icon {
+        padding-top: 2px;
+        color: var(--gds-muted-foreground);
+    }
 
-.gds-settings-perf__banner[data-locked="true"] .gds-settings-perf__icon {
-    color: var(--gds-warning);
-}
+    .gds-settings-perf__banner[data-locked="true"] .gds-settings-perf__icon {
+        color: var(--gds-warning);
+    }
 
-.gds-settings-perf__text {
-    display: flex;
-    flex-direction: column;
-    flex: 1 1 0%;
-    min-width: 0;
-    gap: 4px;
-}
+    .gds-settings-perf__text {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 180px;
+        min-width: 0;
+        gap: 4px;
+    }
 
-.gds-settings-perf__title {
-    font-weight: 600;
-}
+    .gds-settings-perf__title {
+        font-weight: 600;
+    }
 
-.gds-settings-perf__desc {
-    color: var(--gds-muted-foreground);
-    white-space: normal;
-}
+    .gds-settings-perf__desc {
+        color: var(--gds-muted-foreground);
+        white-space: normal;
+    }
 
-.gds-settings-perf__action {
-    display: flex;
-    align-items: center;
-    align-self: center;
-    flex-shrink: 0;
-}
-"#;
+    .gds-settings-perf__action {
+        display: flex;
+        align-items: center;
+        align-self: center;
+        flex-shrink: 0;
+        margin-left: auto;
+    }
+    "#
+);
 
 /// Form model for GDS Files runtime performance parameters displayed on [`super::Page::Performance`].
 #[derive(

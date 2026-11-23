@@ -127,18 +127,15 @@ impl Resolved {
 
     pub(crate) fn write_css_declarations(&self, out: &mut String) {
         let scale = self.scale();
-        let small = self.size * crate::appearance::tokens::UI_TEXT_SCALE;
         let _ = writeln!(out, "    --gds-font-sans: {};", self.sans_css_stack());
         let _ = writeln!(out, "    --gds-font-mono: {};", self.mono_css_stack());
         let _ = writeln!(out, "    --gds-font-size: {:.2}px;", self.size);
-        let _ = writeln!(out, "    --gds-font-size-small: {small:.2}px;");
         let _ = writeln!(out, "    --gds-font-scale: {scale:.4};");
-        let _ = writeln!(out, "    --gds-font-size-xs: {:.2}px;", 12.0 * scale);
-        let _ = writeln!(out, "    --gds-font-size-sm: {:.2}px;", 14.0 * scale);
-        let _ = writeln!(out, "    --gds-font-size-md: {:.2}px;", 16.0 * scale);
-        let _ = writeln!(out, "    --gds-font-size-lg: {:.2}px;", 18.0 * scale);
-        let _ = writeln!(out, "    --gds-font-size-xl: {:.2}px;", 20.0 * scale);
-        let _ = writeln!(out, "    --gds-font-size-2xl: {:.2}px;", 24.0 * scale);
+        let _ = writeln!(out, "    --gds-text-2xs: {:.2}px;", 10.0 * scale);
+        let _ = writeln!(out, "    --gds-text-xs: {:.2}px;", 12.0 * scale);
+        let _ = writeln!(out, "    --gds-text-sm: {:.2}px;", 14.0 * scale);
+        let _ = writeln!(out, "    --gds-text-md: {:.2}px;", 16.0 * scale);
+        let _ = writeln!(out, "    --gds-text-lg: {:.2}px;", 20.0 * scale);
     }
 }
 

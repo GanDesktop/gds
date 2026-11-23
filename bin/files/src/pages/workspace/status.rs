@@ -28,7 +28,7 @@ use super::view::local_memo;
 use crate::entities::file::{directory, ui::FileIcon};
 use crate::shared::lib::clipboard::{Clipboard, Mode, Snapshot};
 
-const CONTROL_SIZE: f32 = 32.0;
+const CONTROL_SIZE: f32 = 24.0;
 const TRIGGER_ICON_SIZE: f32 = 14.0;
 const LABEL_MAX_WIDTH: f32 = 240.0;
 const LABEL_TRAILING_GAP: f32 = 8.0;
@@ -57,8 +57,9 @@ const STATUS_CSS: &str = css!(
     .gds-files-status-button.gds-files-status-button {
         display: inline-flex;
         align-items: center;
-        min-width: 32px;
-        height: 32px;
+        min-width: 24px;
+        height: 24px;
+        min-height: 24px;
         padding: 0px;
         border: none;
         border-radius: var(--gds-radius-control, 6px);
@@ -91,7 +92,7 @@ const STATUS_CSS: &str = css!(
         align-items: center;
         gap: 0px;
         min-width: 0px;
-        height: 32px;
+        height: 24px;
     }
 
     .gds-files-status-icon-wrap.gds-files-status-icon-wrap {
@@ -99,15 +100,15 @@ const STATUS_CSS: &str = css!(
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 32px;
-        height: 32px;
+        width: 24px;
+        height: 24px;
         flex: none;
     }
 
     .gds-files-status-badge.gds-files-status-badge {
         position: absolute;
-        top: 2px;
-        right: 1px;
+        top: 0px;
+        right: 0px;
         min-width: 12px;
         height: 12px;
         border-radius: 999px;
@@ -122,7 +123,7 @@ const STATUS_CSS: &str = css!(
     }
 
     .gds-files-status-badge-text.gds-files-status-badge-text {
-        font-size: 9px;
+        font-size: var(--gds-text-2xs, 10px);
         line-height: 1;
         font-variant-numeric: tabular-nums;
     }
@@ -140,7 +141,7 @@ const STATUS_CSS: &str = css!(
         max-width: 240px;
         min-width: 0px;
         flex-shrink: 0;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         line-height: 18px;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -155,7 +156,7 @@ const STATUS_CSS: &str = css!(
 
     .gds-files-status-empty.gds-files-status-empty {
         padding: 12px;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
 
@@ -229,7 +230,7 @@ const STATUS_CSS: &str = css!(
     .gds-files-status-row-label.gds-files-status-row-label {
         flex: 1 1 0%;
         min-width: 0px;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -373,12 +374,23 @@ impl Browser {
         });
         let compact_badge = Signal::derive_local({
             let browser = self.clone();
-            move || should_collapse_status_badge(browser.compact(), active_count.get())
+            move || {
+                let narrow = browser.width_tier() != gds::ui::window::WidthTier::Wide
+                    || browser.narrow_collection()
+                    || (browser.height_tier() == gds::ui::window::HeightTier::Micro
+                        && (browser.0.footer_filter_open.get()
+                            || !browser.0.filter.get().is_empty()));
+                should_collapse_status_badge(narrow, active_count.get())
+            }
         });
         let controls_gap = Signal::derive_local({
             let browser = self.clone();
             move || {
-                if browser.compact() { 0.0 } else { 4.0 }
+                if browser.width_tier() != gds::ui::window::WidthTier::Wide {
+                    0.0
+                } else {
+                    4.0
+                }
             }
         });
 

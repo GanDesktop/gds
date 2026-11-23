@@ -313,32 +313,47 @@ fn restore_snapshot(browser: &Browser, origin: &Origin, prior: &Snapshot) {
     });
 }
 
-fn scroll_node_for(browser: &Browser, layout: Layout) -> NodeRef {
-    match layout {
-        Layout::List { viewport } => viewport,
-        Layout::Grid => browser.0.list,
-    }
-}
-
 fn to_content_coords(
     browser: &Browser,
     layout: Layout,
     surface_node: NodeRef,
     win_pos: (f32, f32),
 ) -> (f32, f32) {
-    let scroll_node = scroll_node_for(browser, layout);
-    let bounds = scroll_node
-        .window_bounds()
-        .or_else(|| surface_node.window_bounds());
-    let scale = scroll_node.scale().max(1.0);
-    let offset = scroll_node.scroll_offset();
-    if let Some(bounds) = bounds {
-        (
-            win_pos.0 - bounds.origin.x.0 / scale + offset.x.0 / scale,
-            win_pos.1 - bounds.origin.y.0 / scale + offset.y.0 / scale,
-        )
-    } else {
-        win_pos
+    match layout {
+        Layout::List { viewport } => {
+            let x_scale = viewport.scale().max(1.0);
+            let x = viewport
+                .window_bounds()
+                .or_else(|| surface_node.window_bounds())
+                .map_or(win_pos.0, |bounds| {
+                    win_pos.0 - bounds.origin.x.0 / x_scale + viewport.scroll_offset().x.0 / x_scale
+                });
+            let list = browser.0.list;
+            let y_scale = list.scale().max(1.0);
+            let y = list
+                .window_bounds()
+                .or_else(|| surface_node.window_bounds())
+                .map_or(win_pos.1, |bounds| {
+                    win_pos.1 - bounds.origin.y.0 / y_scale + list.scroll_offset().y.0 / y_scale
+                });
+            (x, y)
+        }
+        Layout::Grid => {
+            let scroll_node = browser.0.list;
+            let bounds = scroll_node
+                .window_bounds()
+                .or_else(|| surface_node.window_bounds());
+            let scale = scroll_node.scale().max(1.0);
+            let offset = scroll_node.scroll_offset();
+            if let Some(bounds) = bounds {
+                (
+                    win_pos.0 - bounds.origin.x.0 / scale + offset.x.0 / scale,
+                    win_pos.1 - bounds.origin.y.0 / scale + offset.y.0 / scale,
+                )
+            } else {
+                win_pos
+            }
+        }
     }
 }
 

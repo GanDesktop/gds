@@ -9,22 +9,23 @@ use gds::{
     appearance::tokens::{COLLAPSED_SIDEBAR_WIDTH, SIDEBAR_WIDTH},
     i18n::Language,
     service::task_manager::Scope,
+    ui::window::WIDE_WIDTH,
 };
 use zgui::reactive::{
     Mounted, RenderEffect, RwSignal, Signal, flush, install, on_cleanup_local, prelude::*,
 };
 
 use super::{
-    COMPACT_WINDOW_WIDTH, DEFAULT_WINDOW_WIDTH, DragSources, observe_window_title,
-    resolve_initial_widths, sample_workspace_sidebar,
+    DEFAULT_WINDOW_WIDTH, DragSources, observe_window_title, resolve_initial_widths,
+    sample_workspace_sidebar,
 };
 use crate::{entities::preferences::Preferences, shared::i18n};
 
 #[test]
-fn initial_window_width_defaults_to_desktop_width_instead_of_compact_mode() {
+fn initial_window_width_defaults_to_desktop_width_and_collapses_only_in_micro_tier() {
     let (default_w, default_content_w) = resolve_initial_widths(None);
     assert_eq!(default_w, DEFAULT_WINDOW_WIDTH);
-    assert!(default_w >= COMPACT_WINDOW_WIDTH);
+    assert!(default_w >= WIDE_WIDTH);
     assert_eq!(default_content_w, DEFAULT_WINDOW_WIDTH - SIDEBAR_WIDTH);
 
     let (pending_w, pending_content_w) = resolve_initial_widths(Some(0.0));
@@ -33,11 +34,15 @@ fn initial_window_width_defaults_to_desktop_width_instead_of_compact_mode() {
 
     let (compact_w, compact_content_w) = resolve_initial_widths(Some(860.0));
     assert_eq!(compact_w, 860.0);
-    assert_eq!(compact_content_w, 860.0 - COLLAPSED_SIDEBAR_WIDTH);
+    assert_eq!(compact_content_w, 860.0 - SIDEBAR_WIDTH);
+
+    let (micro_w, micro_content_w) = resolve_initial_widths(Some(540.0));
+    assert_eq!(micro_w, 540.0);
+    assert_eq!(micro_content_w, 540.0 - COLLAPSED_SIDEBAR_WIDTH);
 }
 
 #[test]
-fn workspace_sidebar_signal_synchronizes_manual_toggle_and_compact_breakpoint() {
+fn workspace_sidebar_signal_synchronizes_manual_toggle_and_micro_breakpoint() {
     let _ = install();
     let root = Mounted::new();
     root.with(|| {
@@ -51,7 +56,14 @@ fn workspace_sidebar_signal_synchronizes_manual_toggle_and_compact_breakpoint() 
         assert_eq!(width.get_untracked(), SIDEBAR_WIDTH);
         assert!(!presentation.get_untracked().collapsed());
 
+        // Compact width (600..1200) keeps user-expanded sidebar open.
         window_width.set(960.0);
+        flush();
+        assert_eq!(width.get_untracked(), SIDEBAR_WIDTH);
+        assert!(!presentation.get_untracked().collapsed());
+
+        // Micro width (< 600) locks the 56px collapsed rail without mutating `sidebar`.
+        window_width.set(540.0);
         flush();
         assert_eq!(width.get_untracked(), COLLAPSED_SIDEBAR_WIDTH);
         assert!(presentation.get_untracked().collapsed());

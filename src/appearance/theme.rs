@@ -249,7 +249,7 @@ impl Prepared {
         );
         self.loaded.palette.write_css_declarations(&mut out);
         self.material().write_css_declarations(&mut out);
-        tokens::write_css_declarations(&mut out);
+        tokens::write_css_declarations(&mut out, typography.scale());
         typography.write_css_declarations(&mut out);
         motion.write_css_declarations(&mut out);
         out.push_str("}\n");

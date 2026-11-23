@@ -51,7 +51,7 @@ const PAGE_CSS: &str = css!(
         text-overflow: ellipsis;
         white-space: nowrap;
         font-weight: 600;
-        font-size: calc(22px * var(--gds-font-scale, 1));
+        font-size: var(--gds-text-lg, 20px);
     }
     .gds-page-actions {
         display: flex;
@@ -69,7 +69,7 @@ const PAGE_CSS: &str = css!(
         gap: 8px;
         padding: 0px 24px 8px 24px;
         color: var(--gds-muted-foreground);
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
     }
     .gds-page-content {
         display: flex;

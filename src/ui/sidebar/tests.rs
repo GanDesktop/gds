@@ -168,7 +168,7 @@ fn use_sidebar_presentation_animates_continuously_and_settles_at_rail_width() {
             sig.set(SidebarState::Collapsed);
             flush();
         }
-        // Halfway through 160ms transition, width must be strictly between 58px and 222px.
+        // Halfway through 160ms transition, width must be strictly between 56px and 224px.
         harness.run_for(Duration::from_millis(80), Duration::from_millis(16));
         let mid_w = latest_width.lock().expect("lock").expect("mid width");
         assert!(
@@ -176,7 +176,7 @@ fn use_sidebar_presentation_animates_continuously_and_settles_at_rail_width() {
             "sidebar should interpolate continuously mid-flight, got {mid_w}"
         );
 
-        // Settle at 58px rail width and verify zero further frames.
+        // Settle at 56px rail width and verify zero further frames.
         harness.run_for(Duration::from_millis(220), Duration::from_millis(16));
         let collapsed_w = *latest_width.lock().expect("lock");
         assert_eq!(

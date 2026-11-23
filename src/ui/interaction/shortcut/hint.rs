@@ -17,7 +17,7 @@ pub(crate) const SHEET: &str = css!(
         align-items: center;
         min-width: 0;
         gap: 16px;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-panel-foreground);
     }
 

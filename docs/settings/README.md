@@ -27,7 +27,7 @@ Provides local **Appearance** (matching suite theme, font, opacity, rounded corn
 
 ## 3. Controls & Immediate-Apply Semantics
 
-- **Standardized controls**: Enumerations always use dropdowns (never ad-hoc button strips); numbers and percentages use value-displaying sliders stepped at component precision (preventing float noise like `0.6999999` from triggering spurious writes).
+- **Standardized controls**: Booleans use `ToggleSwitch` (`44 × 24 px`), enumerations use `36 px` dropdowns / `SearchChoiceField` (never ad-hoc button strips), and numbers/percentages use value-displaying sliders stepped at component precision (preventing float noise like `0.6999999` from triggering spurious writes). Settings content caps at `max-width: 880 px` on wide displays, and `SettingRow` wraps controls onto a second line when window width falls below `600 px`.
 - **Per-field reset**: Every editable row compares its value against `Preferences::default()`. Divergent fields reveal a compact reset icon button in `SettingReset` without shifting layout; resetting restores only that single field.
 - **Immediate apply, background save**: Real value changes emit `Event::Apply` immediately and enqueue an atomic disk write—there is no Save button or bottom confirmation bar. Programmatic sync (`set_preferences` / `set_value`) never re-emits change events.
 - **Distinct failure feedback**: Validation or runtime-apply failure rolls back to the previous valid preference and notifies the user. Disk-write failure (including read-only or declaratively managed symlink configs) keeps the applied in-memory state active and reports *"Applied, but could not be saved"* via the top-right notification overlay.

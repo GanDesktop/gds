@@ -15,14 +15,16 @@ effective_reduced_motion = !animations_enabled || system_reduced_motion
 
 ## Standard Transitions
 
-All animated transitions use **`ease-out cubic`** without spring overshoot, retarget smoothly from the currently displayed value when reversed mid-flight, and stop scheduling frames once settled:
+All animated transitions use **`ease-out cubic`** (`cubic-bezier(0, 0, 0.2, 1)`) without spring overshoot, pre-step `8 ms` from rest so the first rendered frame advances immediately without stall, retarget smoothly from the currently displayed value when reversed mid-flight, and stop scheduling frames once settled:
 
 | Surface / Control | Duration | Behavior |
 | --- | --- | --- |
+| **Menu & dual-icon hover (`--gds-motion-fast`)** | `100 ms` | Crossfades `ApplicationMenuButton` (`24 px` brand mark → `16 px` `Menu` on pointer `:hover` only) and `IconButton` hover glyphs. |
+| **`ToggleSwitch` (`--gds-motion-inline`)** | `140 ms` | Interpolates circular thumb `translateX` (`20 px` `Md` / `16 px` `Sm`) and `color-mix` track/border/thumb colors simultaneously. |
 | **Inline text-button keytips** | `140 ms` | Smoothly expands/contracts button width for measured modifier hint (`Ctrl` / `Alt`); reserves zero extra width at rest. |
 | **Section chevrons (`DisclosureIcon`)** | `140 ms` | Rotates a right-facing chevron 90° on expand inside fixed-size icon/label slots (`DisclosureIcon(expanded = ...)`). |
 | **Sidebar width (`use_sidebar_presentation`)** | `160 ms` | Sampled once by the workspace host and shared across the entire left column (see [Sidebar Anatomy](sidebar.md)). |
-| **Files panels & footer status** | `160 ms` | Details panel width, terminal dock height (including maximize/restore), sidebar group heights, and compact/expanded footer status badges. |
+| **Files panels & footer controls** | `160 ms` | Details panel width (`0 ↔ 280 px`), terminal dock height (including maximize/restore), sidebar group curtains, footer `Ctrl+F` search input, and compact/expanded footer status pills. |
 | **Files selection & grid reflow** | `160 ms` | Tab, row, and grid-tile highlight crossfades; visible grid tiles interpolate bounds by stable file path; switched tabs fade in from `88%` opacity (initial window render is immediate). |
 
 ## Never Animated

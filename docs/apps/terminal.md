@@ -40,7 +40,7 @@ Both applications place the terminal dock beneath the workspace across two colum
 | **Ownership** | Window-level collection (independent of file tabs; switching or closing file tabs never kills shells; unavailable in picker mode) | Per-workspace collection on declared **local IPC** connections only (never enabled on remote or loopback TCP connections) |
 | **Empty dock reveal** | Opening an empty dock on a valid local folder spawns one shell automatically; closing the last shell hides/empties without auto-restarting | Managed per workspace; switching workspaces restores each workspace's shells, active tab, and split height |
 | **Working directory** | Uses current real local folder (falls back to `$HOME` on virtual/remote/unmounted pages). Header **Open current folder in new terminal tab** spawns a fresh tab—never injects `cd` into a live PTY | Starts in the workspace's primary directory; switching conversations inside the workspace leaves shells untouched |
-| **Tab naming & controls** | `F2` sets a custom instance title immune to shell title updates; dock header supports maximize/restore across both columns | Header provides multi-instance switcher (when `> 1` instance), close, and new-terminal actions |
+| **Tab naming & controls** | `F2` sets a custom instance title immune to shell title updates; dock header supports maximize/restore across both columns (below `520 px` window height, the dock operates strictly in binary Hidden / Maximized mode without an intermediate split state) | Header provides multi-instance switcher (when `> 1` instance), close, and new-terminal actions |
 
 ## Input & Shell Configuration
 

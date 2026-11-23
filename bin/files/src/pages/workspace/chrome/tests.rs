@@ -557,7 +557,7 @@ fn mounted_device_below_the_fold_can_be_opened_from_the_keyboard() {
 fn new_tab_can_be_opened_from_the_collapsed_sidebar() {
     let temp = tempfile::tempdir().expect("tempdir");
     run_chrome_harness(temp.path(), |harness, browser| {
-        browser.0.window_width.set(960.0);
+        browser.0.window_width.set(540.0);
         flush();
         harness.settle(16);
         let original = browser.read_untracked(|ws| ws.tab().id);
@@ -583,7 +583,7 @@ fn collapsed_pinned_tab_renders_single_corner_pin_button_without_pinned_icon_bad
             .expect("offscreen surface");
 
         browser.update(|ws| ws.tab_mut().navigation.cancel_pending());
-        browser.0.window_width.set(960.0);
+        browser.0.window_width.set(540.0);
         flush();
         harness.settle(16);
 
@@ -1090,4 +1090,172 @@ fn clicking_outside_address_bar_exits_edit_mode() {
             browser.view()
         })
         .expect("headless address outside-click harness");
+}
+
+#[test]
+fn orthogonal_responsive_tiers_and_proportional_list_scaling_contracts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let start = temp.path().join("workspace");
+    std::fs::create_dir_all(&start).expect("create workspace");
+    std::fs::write(start.join("alpha.txt"), b"a\n").expect("write alpha");
+    std::fs::write(start.join("bravo.txt"), b"b\n").expect("write bravo");
+    clear_recorded_tab_nodes();
+
+    run_browser_harness(
+        &start,
+        (1240.0, 760.0),
+        volumes::Snapshot::default(),
+        |browser| AnyView::new(browser.view()),
+        |harness, browser| {
+            let surface = harness.platform().offscreens()[0].clone();
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while browser.read_untracked(|ws| ws.tab().rows.len() < 2) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out loading fixture rows"
+                );
+                harness.advance(Duration::from_millis(25));
+                harness.pump();
+            }
+            harness.settle(8);
+
+            // 1. Wide x Normal (1240 x 760): Details toggles cleanly; Locations starts expanded.
+            assert_eq!(
+                browser.width_tier_untracked(),
+                gds::ui::window::WidthTier::Wide
+            );
+            assert_eq!(
+                browser.height_tier_untracked(),
+                gds::ui::window::HeightTier::Normal
+            );
+            browser.toggle_details();
+            flush();
+            harness.settle(8);
+            assert!(browser.0.details.get_untracked());
+            let loc_bounds_normal = browser
+                .0
+                .locations_node
+                .window_bounds()
+                .expect("expanded locations bounds in Normal height");
+            assert!(loc_bounds_normal.size.height.0 > 60.0);
+
+            // 2. Compact x Normal (960 x 760): Details is suppressed while Sidebar stays toggleable.
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(960.0),
+                DevicePx(760.0),
+            )));
+            harness.advance(Duration::from_millis(25));
+            harness.settle(12);
+            assert_eq!(
+                browser.width_tier_untracked(),
+                gds::ui::window::WidthTier::Compact
+            );
+            assert!(!browser.details_permitted_untracked());
+            assert_eq!(browser.sidebar_width().get_untracked(), SIDEBAR_WIDTH);
+            browser.toggle_sidebar();
+            flush();
+            harness.settle(8);
+            assert_eq!(
+                browser.sidebar_width().get_untracked(),
+                COLLAPSED_SIDEBAR_WIDTH
+            );
+            browser.toggle_sidebar();
+            flush();
+            harness.settle(8);
+            assert_eq!(browser.sidebar_width().get_untracked(), SIDEBAR_WIDTH);
+
+            // 3. Compact x Micro (960 x 440): Locations auto-collapses without mutating preferences,
+            //    toolbar exposes `page-actions` (`...`), and Ctrl+F opens + Esc collapses the 24px
+            //    footer filter.
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(960.0),
+                DevicePx(440.0),
+            )));
+            harness.advance(Duration::from_millis(25));
+            harness.settle(12);
+            assert_eq!(
+                browser.height_tier_untracked(),
+                gds::ui::window::HeightTier::Micro
+            );
+            assert!(
+                !browser
+                    .0
+                    .preferences
+                    .snapshot()
+                    .files
+                    .sidebar
+                    .locations_collapsed,
+                "Micro height auto-collapse must not mutate persisted locations_collapsed preference"
+            );
+            let buttons_micro = collect_live_buttons(&surface);
+            let page_menu_btn =
+                find_button_by_label(&buttons_micro, &gds::i18n::text_untracked("page-tools"))
+                    .expect("toolbar trailing ... page-tools button in Micro height");
+            assert!(
+                page_menu_btn.y1 <= 48.0,
+                "expected ... page-actions button inside 48px toolbar when H < 520, got {page_menu_btn:?}"
+            );
+            let filter_btn =
+                find_button_by_label(&buttons_micro, &gds::i18n::text_untracked("filter"))
+                    .expect("24px footer Search trigger button in Micro height");
+            assert!(
+                (filter_btn.y1 - filter_btn.y0 - 24.0).abs() <= 1.0 && filter_btn.y0 >= 408.0,
+                "expected 24px subordinate filter button inside 32px footer, got {filter_btn:?}"
+            );
+
+            browser.focus_content();
+            harness.settle(4);
+            send_key_chord(harness, KeyEvent::character("f"), Modifiers::CONTROL);
+            assert!(
+                browser.0.footer_filter_open.get_untracked() && browser.0.filter_node.is_bound(),
+                "Ctrl+F in Micro height must expand and bind the inline footer filter"
+            );
+            browser.filter("alpha".to_owned());
+            flush();
+            harness.settle(6);
+            assert_eq!(browser.read_untracked(|ws| ws.tab().rows.len()), 1);
+
+            send_key_chord(
+                harness,
+                KeyEvent::named(NamedKey::Escape, PhysicalKey::Code(KeyCode::Escape)),
+                Modifiers::NONE,
+            );
+            assert!(
+                browser.0.filter.get_untracked().is_empty()
+                    && !browser.0.footer_filter_open.get_untracked(),
+                "Escape in Micro height must clear filter text and collapse the footer filter"
+            );
+
+            // 4. Proportional list scaling at 20px font size (`scale = 20 / DEFAULT_SIZE`).
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(1240.0),
+                DevicePx(760.0),
+            )));
+            harness.advance(Duration::from_millis(25));
+            browser.0.owner.with(|| {
+                Gds::current()
+                    .appearance()
+                    .typography()
+                    .apply(&gds::appearance::typography::Preferences {
+                        family: None,
+                        size: 20.0,
+                    })
+                    .expect("valid 20px font size");
+            });
+            flush();
+            harness.settle(12);
+            let expected_scale = 20.0_f32 / gds::appearance::typography::DEFAULT_SIZE;
+            assert!(
+                (browser.list_row_height_untracked() - 40.0 * expected_scale).abs() < 0.05,
+                "expected scaled 40px list row height, got {}",
+                browser.list_row_height_untracked()
+            );
+            assert!(
+                (browser.0.owner.with(|| browser.list_header_height()) - 30.0 * expected_scale)
+                    .abs()
+                    < 0.05,
+                "expected scaled 30px list header height"
+            );
+        },
+    );
 }

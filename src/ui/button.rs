@@ -42,7 +42,7 @@ const SHEET: &str = css!(
     .zui-button.gds-button:not([data-size="xs"]):not([data-size="sm"]):not([data-size="lg"]):not([data-size^="icon"]) {
         height: 36px;
         gap: 8px;
-        font-size: var(--gds-font-size-small, 14px);
+        font-size: var(--gds-text-sm, 14px);
     }
 
     .zui-button.gds-button[data-size="sm"] {

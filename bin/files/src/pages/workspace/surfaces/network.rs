@@ -36,11 +36,12 @@ const NETWORK_CSS: &str = css!(
     .gds-files-network-section {
         gap: 8px;
         width: 100%;
+        max-width: 880px;
         min-width: 0;
     }
 
     .gds-files-network-section__title {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         font-weight: 600;
         color: var(--gds-muted-foreground);
     }
@@ -84,7 +85,7 @@ const NETWORK_CSS: &str = css!(
     }
 
     .gds-files-network-row__title {
-        font-size: var(--gds-font-size-sm, 14px);
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 500;
         color: var(--gds-foreground);
         overflow: hidden;
@@ -93,7 +94,7 @@ const NETWORK_CSS: &str = css!(
     }
 
     .gds-files-network-row__detail {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -106,7 +107,7 @@ const NETWORK_CSS: &str = css!(
         align-items: center;
         gap: 8px;
         flex-shrink: 0;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
 
@@ -117,6 +118,7 @@ const NETWORK_CSS: &str = css!(
         gap: 12px;
         padding: 4px 0;
         width: 100%;
+        max-width: 880px;
         min-width: 0;
     }
 
@@ -129,12 +131,12 @@ const NETWORK_CSS: &str = css!(
     }
 
     .gds-files-network-notice__title {
-        font-size: var(--gds-font-size-sm, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-foreground);
     }
 
     .gds-files-network-notice__detail {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -146,12 +148,12 @@ const NETWORK_CSS: &str = css!(
         flex-direction: row;
         align-items: center;
         gap: 8px;
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
 
     .gds-files-network-notice__error {
-        font-size: var(--gds-font-size-xs, 12px);
+        font-size: var(--gds-text-xs, 12px);
         color: var(--gds-error);
     }
 
@@ -171,7 +173,7 @@ const NETWORK_CSS: &str = css!(
     }
 
     .gds-files-network-empty__text {
-        font-size: var(--gds-font-size-sm, 14px);
+        font-size: var(--gds-text-sm, 14px);
         color: var(--gds-muted-foreground);
         text-align: center;
     }
@@ -420,7 +422,8 @@ impl Browser {
         install_network_stylesheet();
         self.track();
 
-        let compact = self.compact();
+        let show_header = self.height_tier() == gds::ui::window::HeightTier::Normal;
+        let actions_collapsed = self.actions_collapsed();
         let (in_picker, saved, mounts, error, discovery_loading) = self.read(|state| {
             let in_picker = state.picker.is_some();
             let saved: Vec<Address> = if in_picker {
@@ -544,31 +547,39 @@ impl Browser {
         let empty = sections.is_empty();
         let add_header_browser = self.clone();
         let refresh_browser = self.clone();
+        let menu_browser = self.clone();
 
-        let header = (!compact).then(move || {
-            let add_action = (!in_picker).then(move || {
-                view! {
+        let header = show_header.then(move || {
+            let actions = if actions_collapsed {
+                menu_browser.page_menu()
+            } else {
+                let add_action = (!in_picker).then(move || {
+                    view! {
+                        IconButton(
+                            icon = IconName::Plus,
+                            label = i18n::text("remote-add-location"),
+                            disabled = connecting,
+                            on:click = move |_| open_add_location_prompt(add_header_browser.clone()),
+                        )
+                    }
+                    .into_view()
+                });
+                AnyView::new(view! {
+                    {add_action}
                     IconButton(
-                        icon = IconName::Plus,
-                        label = i18n::text("remote-add-location"),
-                        disabled = connecting,
-                        on:click = move |_| open_add_location_prompt(add_header_browser.clone()),
+                        icon = IconName::RefreshCw,
+                        label = i18n::text("refresh"),
+                        shortcut = Some(Command::Refresh.shortcut()),
+                        disabled = discovery_loading,
+                        on:click = move |_| refresh_browser.refresh(),
                     )
-                }
-                .into_view()
-            });
+                })
+            };
             AnyView::new(view! {
                 PageHeader {
                     PageTitle {{i18n::text("network")}}
                     PageActions {
-                        {add_action}
-                        IconButton(
-                            icon = IconName::RefreshCw,
-                            label = i18n::text("refresh"),
-                            shortcut = Some(Command::Refresh.shortcut()),
-                            disabled = discovery_loading,
-                            on:click = move |_| refresh_browser.refresh(),
-                        )
+                        {actions}
                     }
                 }
             })
