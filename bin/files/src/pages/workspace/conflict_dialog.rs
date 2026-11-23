@@ -269,14 +269,6 @@ const CONFLICT_DIALOG_CSS: &str = css!(
         color: var(--gds-foreground);
     }
 
-    .gds-files-conflict__batch-hint {
-        margin: 0px;
-        padding-left: 24px;
-        font-size: var(--gds-text-xs, 12px);
-        color: var(--gds-muted-foreground);
-        line-height: 1.4;
-    }
-
     .gds-files-conflict__actions {
         display: flex;
         flex-direction: row;
@@ -312,6 +304,8 @@ pub(super) struct ConflictTestHooks {
     pub(super) rename_invalid: Signal<bool, LocalStorage>,
     #[cfg(feature = "files-e2e")]
     pub(super) body_node: NodeRef,
+    #[cfg(feature = "files-e2e")]
+    pub(super) batch_node: NodeRef,
     #[cfg(feature = "files-e2e")]
     pub(super) footer_row_node: NodeRef,
     pub(super) enter_or_auto_rename: Rc<dyn Fn()>,
@@ -359,6 +353,7 @@ pub(super) fn render_conflict_dialog(
     let settled = Rc::new(Cell::new(false));
     let body_node = NodeRef::new();
     let input_node = NodeRef::new();
+    let batch_node = NodeRef::new();
     let footer_row_node = NodeRef::new();
 
     // Live validation checks both name syntax and whether the candidate already exists in this
@@ -593,6 +588,8 @@ pub(super) fn render_conflict_dialog(
             #[cfg(feature = "files-e2e")]
             body_node,
             #[cfg(feature = "files-e2e")]
+            batch_node,
+            #[cfg(feature = "files-e2e")]
             footer_row_node,
             enter_or_auto_rename: Rc::clone(&enter_or_auto_rename_action),
             exit_rename: exit_rename_action.clone(),
@@ -659,8 +656,7 @@ pub(super) fn render_conflict_dialog(
     let end_composing = Rc::clone(&composing);
     let blur_composing = composing;
 
-    let reset_display_value = initial_display.clone();
-    let auto_rename_preview_name = initial_display;
+    let reset_display_value = initial_display;
     let rename_panel = move || {
         let in_manual_rename = rename_mode.get() && !apply_all.get();
         if in_manual_rename {
@@ -749,29 +745,21 @@ pub(super) fn render_conflict_dialog(
                     })}
                 }
             }))
-        } else if !can_return_from_rename && apply_all.get() {
-            let preview = gds::t_untracked!(
-                "transfer-conflict-auto-rename-preview",
-                name = auto_rename_preview_name.clone()
-            );
-            Some(AnyView::new(view! {
-                column(class = "gds-files-conflict__rename") {
-                    text(class = "gds-files-conflict__card-meta") { {preview} }
-                }
-            }))
         } else {
             None
         }
     };
 
-    let apply_all_hint_key = match kind {
-        ConflictKind::DirectoryIntoDirectory => "transfer-conflict-apply-all-hint-merge",
-        ConflictKind::FileIntoFile => "transfer-conflict-apply-all-hint-replace",
-        ConflictKind::TypeMismatch | ConflictKind::SameEntry => {
-            "transfer-conflict-apply-all-hint-mismatch"
-        }
+    let apply_all_label_key = match kind {
+        ConflictKind::FileIntoFile => "transfer-conflict-apply-all-files",
+        ConflictKind::DirectoryIntoDirectory => "transfer-conflict-apply-all-folders",
+        ConflictKind::TypeMismatch | ConflictKind::SameEntry => "transfer-conflict-apply-all-other",
     };
-    let apply_all_view = conflict.has_more_conflicts_possible.then(|| {
+    let has_more_conflicts_possible = conflict.has_more_conflicts_possible;
+    let apply_all_view = move || {
+        if !has_more_conflicts_possible || (can_return_from_rename && rename_mode.get()) {
+            return None;
+        }
         let box_ref = NodeRef::new();
         let lbl_ref = NodeRef::new();
         let checked = Binding::controlled(
@@ -790,8 +778,8 @@ pub(super) fn render_conflict_dialog(
                 }
             },
         );
-        view! {
-            column(class = "gds-files-conflict__batch") {
+        Some(AnyView::new(view! {
+            column(node_ref = batch_node, class = "gds-files-conflict__batch") {
                 row(class = "gds-files-conflict__apply-all") {
                     Checkbox(
                         node_ref = box_ref,
@@ -799,17 +787,12 @@ pub(super) fn render_conflict_dialog(
                         labelled_by = lbl_ref,
                     )
                     Label(node_ref = lbl_ref, control = box_ref) {
-                        {i18n::text("transfer-conflict-apply-all")}
+                        {i18n::text(apply_all_label_key)}
                     }
                 }
-                {move || apply_all.get().then(|| view! {
-                    text(class = "gds-files-conflict__batch-hint") {
-                        {i18n::text(apply_all_hint_key)}
-                    }
-                })}
             }
-        }
-    });
+        }))
+    };
 
     let footer_abort = Rc::clone(&abort_action);
     let footer_skip = Rc::clone(&skip_action);
@@ -880,9 +863,14 @@ pub(super) fn render_conflict_dialog(
                 "transfer-conflict-skip"
             };
             let rename_key = if is_all {
-                "transfer-conflict-auto-rename"
+                "transfer-conflict-keep-both"
             } else {
                 "transfer-conflict-rename"
+            };
+            let rename_icon = if is_all {
+                IconName::CopyPlus
+            } else {
+                IconName::Pencil
             };
             let rename_variant = if footer_merge.is_none() && footer_replace.is_none() {
                 ButtonVariant::Default
@@ -939,7 +927,7 @@ pub(super) fn render_conflict_dialog(
                     }
                     Button(
                         variant = rename_variant,
-                        icon = IconName::Pencil,
+                        icon = rename_icon,
                         on:click = move |_| rename_or_auto(),
                     ) {
                         {i18n::text(rename_key)}
@@ -1286,10 +1274,8 @@ fn comparison_badges(incoming: &EntryInfo, existing: &EntryInfo) -> (Vec<Badge>,
 
 fn initial_selection_end(display: &str, kind: EntryKind) -> usize {
     if kind != EntryKind::Directory
-        && let Some(stem) = Path::new(display)
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-        && !stem.is_empty()
+        && let Some(parts) = names::split_name(OsStr::new(display))
+        && let Some(stem) = parts.stem.to_str()
         && display.starts_with(stem)
         && display.as_bytes().get(stem.len()) == Some(&b'.')
     {
@@ -1377,6 +1363,28 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         harness.settle(4);
+    }
+
+    #[test]
+    fn initial_selection_end_selects_stem_before_simple_and_compound_extensions() {
+        use super::{EntryKind, initial_selection_end};
+
+        assert_eq!(
+            initial_selection_end("report (2).pdf", EntryKind::File),
+            "report (2)".len()
+        );
+        assert_eq!(
+            initial_selection_end("archive (2).tar.gz", EntryKind::File),
+            "archive (2)".len()
+        );
+        assert_eq!(
+            initial_selection_end(".env (2)", EntryKind::File),
+            ".env (2)".len()
+        );
+        assert_eq!(
+            initial_selection_end("release.v2 (2)", EntryKind::Directory),
+            "release.v2 (2)".len()
+        );
     }
 
     #[test]
@@ -1712,11 +1720,14 @@ mod tests {
                 );
             };
 
-            // 1. Default FileIntoFile state (unchecked)
-            check_single_row("file-default", h.footer_row_node, h.body_node);
-            if let Some(dir) = &preview_dir
-                && let Some(window) = handle_driver.borrow().as_ref()
-            {
+            let render_preview = |filename: &str, check_apply_all: bool, open_rename: bool| {
+                let Some(dir) = &preview_dir else {
+                    return;
+                };
+                let window_guard = handle_driver.borrow();
+                let Some(window) = window_guard.as_ref() else {
+                    return;
+                };
                 let snap_browser = browser.clone();
                 if let Ok(rendered) = window.render_view(
                     zgui::prelude::ViewSnapshotOptions::new().with_max_size(620.0, 620.0),
@@ -1736,6 +1747,14 @@ mod tests {
                                 resolve,
                                 &snap_browser.0.prompt_decisions,
                             );
+                            if let Some(snap_hooks) = take_conflict_test_hooks() {
+                                if check_apply_all {
+                                    snap_hooks.apply_all.set(true);
+                                }
+                                if open_rename {
+                                    snap_hooks.rename_mode.set(true);
+                                }
+                            }
                             zgui::view! {
                                 box(
                                     class = "zui-dialog gds-dialog-content gds-files-conflict-modal",
@@ -1752,25 +1771,43 @@ mod tests {
                 ) {
                     save_png(
                         dir,
-                        "conflict-file-default.png",
+                        filename,
                         rendered.image.rgba(),
                         rendered.image.width(),
                         rendered.image.height(),
                     );
                 }
-            }
+            };
 
-            // 2. Apply-to-all checked (batch labels must STILL stay on one row!)
+            // 1. Default FileIntoFile state (unchecked)
+            check_single_row("file-default", h.footer_row_node, h.body_node);
+            assert!(
+                h.batch_node.window_bounds().is_some(),
+                "apply-all checkbox must be visible in decision state"
+            );
+            render_preview("conflict-file-default.png", false, false);
+
+            // 2. Apply-to-all checked (batch labels + single-line Keep-both hint stay compact!)
             h.apply_all.set(true);
             harness.settle(8);
             check_single_row("file-apply-all", h.footer_row_node, h.body_node);
+            assert!(
+                h.batch_node.window_bounds().is_some(),
+                "apply-all checkbox + hint must stay visible when checked"
+            );
+            render_preview("conflict-file-apply-all.png", true, false);
 
-            // 3. Uncheck Apply-to-all and enter Rename mode (with live collision error!)
+            // 3. Uncheck Apply-to-all and enter Rename mode -> batch checkbox must hide!
             h.apply_all.set(false);
             harness.settle(8);
             (h.enter_or_auto_rename)();
             harness.settle(8);
             check_single_row("file-rename-mode", h.footer_row_node, h.body_node);
+            assert!(
+                h.batch_node.window_bounds().is_none(),
+                "apply-all checkbox must hide while manually renaming a single file"
+            );
+            render_preview("conflict-file-rename.png", false, true);
 
             (h.abort)();
             wait_until(&mut harness, Duration::from_secs(3), || {

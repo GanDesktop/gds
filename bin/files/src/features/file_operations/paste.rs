@@ -532,17 +532,33 @@ impl PasteJob {
                 task.expand_merge = false;
                 self.queue.push_front(task);
                 if resolution.apply_to_all {
-                    self.file_all = Some(FileAllPolicy::AutoRename);
-                    self.dir_all = Some(DirAllPolicy::AutoRename);
-                    self.mismatch_all = Some(MismatchAllPolicy::AutoRename);
+                    match conflict.kind {
+                        ConflictKind::FileIntoFile => {
+                            self.file_all = Some(FileAllPolicy::AutoRename);
+                        }
+                        ConflictKind::DirectoryIntoDirectory => {
+                            self.dir_all = Some(DirAllPolicy::AutoRename);
+                        }
+                        ConflictKind::TypeMismatch | ConflictKind::SameEntry => {
+                            self.mismatch_all = Some(MismatchAllPolicy::AutoRename);
+                        }
+                    }
                 }
             }
             ConflictAction::Skip => {
                 self.skipped += 1;
                 if resolution.apply_to_all {
-                    self.file_all = Some(FileAllPolicy::Skip);
-                    self.dir_all = Some(DirAllPolicy::Skip);
-                    self.mismatch_all = Some(MismatchAllPolicy::Skip);
+                    match conflict.kind {
+                        ConflictKind::FileIntoFile => {
+                            self.file_all = Some(FileAllPolicy::Skip);
+                        }
+                        ConflictKind::DirectoryIntoDirectory => {
+                            self.dir_all = Some(DirAllPolicy::Skip);
+                        }
+                        ConflictKind::TypeMismatch | ConflictKind::SameEntry => {
+                            self.mismatch_all = Some(MismatchAllPolicy::Skip);
+                        }
+                    }
                 }
             }
             // Defensive fallback if an inapplicable action was supplied for this conflict kind.
@@ -1225,5 +1241,137 @@ mod tests {
         assert_eq!(summary.succeeded.len(), 1);
         assert_eq!(summary.skipped, 2);
         assert!(dst.join("collide").is_dir());
+    }
+
+    #[test]
+    fn apply_to_all_keep_both_and_skip_stay_isolated_per_conflict_kind() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let src = root.path().join("src");
+        let dst = root.path().join("dst");
+        fs::create_dir_all(src.join("FolderA")).expect("src FolderA");
+        fs::create_dir_all(dst.join("FolderA")).expect("dst FolderA");
+        fs::write(src.join("FolderA/inside.txt"), b"inside-a").expect("src inside");
+        fs::write(src.join("a.txt"), b"new-a").expect("src a");
+        fs::write(dst.join("a.txt"), b"old-a").expect("dst a");
+        fs::write(src.join("archive.tar.gz"), b"new-tgz").expect("src tgz");
+        fs::write(dst.join("archive.tar.gz"), b"old-tgz").expect("dst tgz");
+        fs::write(src.join("clash"), b"file-clash").expect("src clash");
+        fs::create_dir_all(dst.join("clash")).expect("dst clash dir");
+
+        // 1. Keep-both (AutoRename) + apply_to_all on FileIntoFile renames all remaining files
+        //    (including compound .tar.gz) while STILL prompting for FolderA and clash!
+        let job = PasteJob::new(
+            dst.clone(),
+            transfer::Mode::Copy,
+            vec![
+                src.join("a.txt"),
+                src.join("archive.tar.gz"),
+                src.join("FolderA"),
+                src.join("clash"),
+            ],
+        );
+        let Inspection::Conflict { mut job, conflict } = job.inspect() else {
+            panic!("expected FileIntoFile on a.txt");
+        };
+        assert_eq!(conflict.kind, ConflictKind::FileIntoFile);
+        let suggestion = conflict.suggestion.clone();
+        job.resolve_conflict(
+            conflict,
+            ConflictResolution {
+                action: ConflictAction::Rename(suggestion),
+                apply_to_all: true,
+            },
+        );
+
+        // archive.tar.gz auto-renamed silently; next conflict MUST be FolderA!
+        let Inspection::Conflict { mut job, conflict } = job.inspect() else {
+            panic!("expected DirectoryIntoDirectory on FolderA despite file keep-both");
+        };
+        assert_eq!(conflict.kind, ConflictKind::DirectoryIntoDirectory);
+        assert_eq!(conflict.task.target_name, OsString::from("FolderA"));
+        job.resolve_conflict(
+            conflict,
+            ConflictResolution {
+                action: ConflictAction::Skip,
+                apply_to_all: true,
+            },
+        );
+
+        // Folder Skip-all MUST NOT skip TypeMismatch on `clash`!
+        let Inspection::Conflict { mut job, conflict } = job.inspect() else {
+            panic!("expected TypeMismatch on clash despite file keep-both and dir skip-all");
+        };
+        assert_eq!(conflict.kind, ConflictKind::TypeMismatch);
+        assert_eq!(conflict.task.target_name, OsString::from("clash"));
+        job.resolve_conflict(
+            conflict,
+            ConflictResolution {
+                action: ConflictAction::Skip,
+                apply_to_all: false,
+            },
+        );
+
+        let summary = run_to_completion(job);
+        assert!(summary.failures.is_empty());
+        assert_eq!(summary.succeeded.len(), 2);
+        assert_eq!(summary.skipped, 2);
+        assert_eq!(
+            fs::read(dst.join("a (2).txt")).expect("auto-renamed a.txt"),
+            b"new-a"
+        );
+        assert_eq!(
+            fs::read(dst.join("archive (2).tar.gz")).expect("auto-renamed archive.tar.gz"),
+            b"new-tgz"
+        );
+        assert!(!dst.join("FolderA/inside.txt").exists());
+
+        // 2. Skip + apply_to_all on FileIntoFile skips remaining files while STILL prompting for
+        //    FolderA!
+        let job2 = PasteJob::new(
+            dst.clone(),
+            transfer::Mode::Copy,
+            vec![
+                src.join("a.txt"),
+                src.join("archive.tar.gz"),
+                src.join("FolderA"),
+            ],
+        );
+        let Inspection::Conflict {
+            job: mut job2,
+            conflict,
+        } = job2.inspect()
+        else {
+            panic!("expected FileIntoFile on a.txt");
+        };
+        job2.resolve_conflict(
+            conflict,
+            ConflictResolution {
+                action: ConflictAction::Skip,
+                apply_to_all: true,
+            },
+        );
+        let Inspection::Conflict {
+            job: mut job2,
+            conflict,
+        } = job2.inspect()
+        else {
+            panic!("expected DirectoryIntoDirectory on FolderA despite file skip-all");
+        };
+        assert_eq!(conflict.kind, ConflictKind::DirectoryIntoDirectory);
+        let dir_suggestion = conflict.suggestion.clone();
+        job2.resolve_conflict(
+            conflict,
+            ConflictResolution {
+                action: ConflictAction::Rename(dir_suggestion),
+                apply_to_all: false,
+            },
+        );
+        let summary2 = run_to_completion(job2);
+        assert!(summary2.failures.is_empty());
+        assert_eq!(summary2.skipped, 2);
+        assert_eq!(
+            fs::read(dst.join("FolderA (2)/inside.txt")).expect("renamed FolderA"),
+            b"inside-a"
+        );
     }
 }
