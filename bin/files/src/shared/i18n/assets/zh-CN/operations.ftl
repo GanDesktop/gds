@@ -23,6 +23,10 @@ transfer-conflict-placeholder = 新名称…
 paste-cancelled = 已取消粘贴，未更改任何文件。
 paste-cancelled-partial = 已取消粘贴。{ $completed } 个项目已完成，其余项目保持原样。
 paste-aborted-partial = 粘贴在完成 { $completed } 个项目后中止，其余项目保持原样。
+drop-into-self = 无法将文件夹移动或复制到其自身或子文件夹中。
+drop-unsupported-destination = 只能将文件拖放到本地文件夹中。
+drop-no-local-files = 无法从拖放项目中读取本地文件。
+file-operation-busy = 请先完成或取消当前文件操作。
 
 undo = 撤销
 redo = 重做

@@ -838,13 +838,48 @@ pub fn TerminalView(
         }
     };
 
+    let on_drag_over = move |ev: &mut EventCx<'_, zgui::view::events::DragOver>| {
+        if ev.offers_files() {
+            ev.accept_drag(DragDecision::accept(
+                "text/uri-list",
+                DragActions::COPY,
+                Some(DragAction::Copy),
+            ));
+            ev.prevent_default();
+            ev.stop_propagation();
+        } else if let Some(text_mime) = ev.best_text_mime() {
+            ev.accept_drag(DragDecision::accept(
+                text_mime,
+                DragActions::COPY,
+                Some(DragAction::Copy),
+            ));
+            ev.prevent_default();
+            ev.stop_propagation();
+        }
+    };
+
     let on_drop = {
         let terminal = terminal.clone();
         move |ev: &mut EventCx<'_, zgui::view::events::Drop>| {
             if !ev.paths.is_empty() {
                 terminal.paste_paths(&ev.paths);
+                if let Some(handle) = ev.take_drop_handle() {
+                    handle.complete();
+                }
                 root_ref.focus();
                 terminal.request_redraw();
+                ev.prevent_default();
+                ev.stop_propagation();
+            } else if let Some(text) = ev.text()
+                && !text.is_empty()
+            {
+                terminal.paste_text(&text);
+                if let Some(handle) = ev.take_drop_handle() {
+                    handle.complete();
+                }
+                root_ref.focus();
+                terminal.request_redraw();
+                ev.prevent_default();
                 ev.stop_propagation();
             }
         }
@@ -925,6 +960,7 @@ pub fn TerminalView(
             on:pointer_up = on_pointer_up,
             on:pointer_cancel = on_pointer_cancel,
             on:wheel = on_wheel,
+            on:drag_over = on_drag_over,
             on:drop = on_drop,
         ) {
             box(node_ref = canvas_ref, class = "gds-terminal-canvas-host") {

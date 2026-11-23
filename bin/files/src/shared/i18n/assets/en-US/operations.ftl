@@ -23,6 +23,10 @@ transfer-conflict-placeholder = New name…
 paste-cancelled = Paste cancelled. No files were changed.
 paste-cancelled-partial = Paste cancelled. { $completed } items were already completed; the rest are unchanged.
 paste-aborted-partial = The paste stopped after { $completed } items; those files are complete and the rest are unchanged.
+drop-into-self = Cannot move or copy a folder into itself or a subfolder.
+drop-unsupported-destination = Files can only be dropped into a local folder.
+drop-no-local-files = Could not read local files from the dropped item.
+file-operation-busy = Finish or cancel the current file operation first.
 
 undo = Undo
 redo = Redo

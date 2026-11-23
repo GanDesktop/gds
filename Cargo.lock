@@ -391,7 +391,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -402,7 +402,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -447,7 +447,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -1776,7 +1776,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 2.0.119",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -2160,7 +2160,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.3",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2471,7 +2471,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3233,7 +3233,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.21",
- "windows 0.54.0",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -3608,7 +3608,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -4586,7 +4586,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4674,7 +4674,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "png 0.18.1",
  "thiserror 2.0.21",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4827,7 +4827,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6511,7 +6511,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7236,7 +7236,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8098,7 +8098,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8809,7 +8809,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9499,7 +9499,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10312,7 +10312,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -11271,7 +11271,7 @@ dependencies = [
 [[package]]
 name = "zgui"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "web-time",
  "zgui-atlas",
@@ -11304,7 +11304,7 @@ dependencies = [
 [[package]]
 name = "zgui-a11y"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "accesskit",
  "zgui-bits",
@@ -11320,7 +11320,7 @@ dependencies = [
 [[package]]
 name = "zgui-anim"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "zgui-bits",
  "zgui-dom",
@@ -11333,12 +11333,12 @@ dependencies = [
 [[package]]
 name = "zgui-arena"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 
 [[package]]
 name = "zgui-atlas"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "etagere",
  "rustc-hash 2.1.3",
@@ -11350,7 +11350,7 @@ dependencies = [
 [[package]]
 name = "zgui-bits"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "bitflags 2.13.2",
  "zgui-geom",
@@ -11359,7 +11359,7 @@ dependencies = [
 [[package]]
 name = "zgui-canvas"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "kurbo",
  "peniko",
@@ -11372,12 +11372,12 @@ dependencies = [
 [[package]]
 name = "zgui-color"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 
 [[package]]
 name = "zgui-css"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "app_units",
  "cssparser",
@@ -11394,7 +11394,7 @@ dependencies = [
 [[package]]
 name = "zgui-custom"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "rustc-hash 2.1.3",
  "zgui-elements",
@@ -11409,7 +11409,7 @@ dependencies = [
 [[package]]
 name = "zgui-dom"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "app_units",
  "bitflags 2.13.2",
@@ -11434,7 +11434,7 @@ dependencies = [
 [[package]]
 name = "zgui-edit"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "zgui-dom",
  "zgui-geom",
@@ -11445,7 +11445,7 @@ dependencies = [
 [[package]]
 name = "zgui-elements"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "kurbo",
  "zgui-canvas",
@@ -11459,7 +11459,7 @@ dependencies = [
 [[package]]
 name = "zgui-geom"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "bytemuck",
 ]
@@ -11467,7 +11467,7 @@ dependencies = [
 [[package]]
 name = "zgui-image"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "image",
  "thiserror 2.0.21",
@@ -11477,7 +11477,7 @@ dependencies = [
 [[package]]
 name = "zgui-input"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
@@ -11494,7 +11494,7 @@ dependencies = [
 [[package]]
 name = "zgui-interned"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "rustc-hash 2.1.3",
 ]
@@ -11502,7 +11502,7 @@ dependencies = [
 [[package]]
 name = "zgui-layout"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "cephal",
  "rayon",
@@ -11525,7 +11525,7 @@ dependencies = [
 [[package]]
 name = "zgui-paint"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
@@ -11553,7 +11553,7 @@ dependencies = [
 [[package]]
 name = "zgui-platform"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "accesskit",
  "raw-window-handle",
@@ -11566,7 +11566,7 @@ dependencies = [
 [[package]]
 name = "zgui-platform-headless"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "accesskit",
  "web-time",
@@ -11578,7 +11578,7 @@ dependencies = [
 [[package]]
 name = "zgui-platform-wayland"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -11603,7 +11603,7 @@ dependencies = [
 [[package]]
 name = "zgui-platform-web"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "accesskit",
  "js-sys",
@@ -11621,7 +11621,7 @@ dependencies = [
 [[package]]
 name = "zgui-platform-winit"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -11651,7 +11651,7 @@ dependencies = [
 [[package]]
 name = "zgui-profile"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "tracing",
  "web-time",
@@ -11660,7 +11660,7 @@ dependencies = [
 [[package]]
 name = "zgui-reactive"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "any_spawner",
  "futures",
@@ -11676,7 +11676,7 @@ dependencies = [
 [[package]]
 name = "zgui-render"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "thiserror 2.0.21",
  "web-time",
@@ -11689,7 +11689,7 @@ dependencies = [
 [[package]]
 name = "zgui-render-vector-coverage"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "bytemuck",
  "kurbo",
@@ -11708,7 +11708,7 @@ dependencies = [
 [[package]]
 name = "zgui-render-vector-vello"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "kurbo",
  "peniko",
@@ -11728,7 +11728,7 @@ dependencies = [
 [[package]]
 name = "zgui-render-wgpu"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "ash",
  "bincode",
@@ -11754,7 +11754,7 @@ dependencies = [
 [[package]]
 name = "zgui-runtime"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "rustc-hash 2.1.3",
  "thiserror 2.0.21",
@@ -11791,7 +11791,7 @@ dependencies = [
 [[package]]
 name = "zgui-scene"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "bytemuck",
  "kurbo",
@@ -11810,7 +11810,7 @@ dependencies = [
 [[package]]
 name = "zgui-scroll"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
@@ -11824,7 +11824,7 @@ dependencies = [
 [[package]]
 name = "zgui-shader"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "zgui-geom",
  "zgui-paint",
@@ -11838,7 +11838,7 @@ dependencies = [
 [[package]]
 name = "zgui-shader-macro"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "bincode",
  "naga",
@@ -11851,7 +11851,7 @@ dependencies = [
 [[package]]
 name = "zgui-style"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "app_units",
  "bitflags 2.13.2",
@@ -11880,7 +11880,7 @@ dependencies = [
 [[package]]
 name = "zgui-svg"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "kurbo",
  "peniko",
@@ -11893,7 +11893,7 @@ dependencies = [
 [[package]]
 name = "zgui-text"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "accesskit",
  "kurbo",
@@ -11910,7 +11910,7 @@ dependencies = [
 [[package]]
 name = "zgui-text-parley"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "fontique",
  "kurbo",
@@ -11931,7 +11931,7 @@ dependencies = [
 [[package]]
 name = "zgui-text-style"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
@@ -11945,7 +11945,7 @@ dependencies = [
 [[package]]
 name = "zgui-tokio"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "thiserror 2.0.21",
  "tokio",
@@ -11956,7 +11956,7 @@ dependencies = [
 [[package]]
 name = "zgui-ui"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "zgui",
  "zgui-ui-icons",
@@ -11967,7 +11967,7 @@ dependencies = [
 [[package]]
 name = "zgui-ui-icons"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "zgui",
 ]
@@ -11975,7 +11975,7 @@ dependencies = [
 [[package]]
 name = "zgui-ui-primitives"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "zgui",
 ]
@@ -11983,7 +11983,7 @@ dependencies = [
 [[package]]
 name = "zgui-ui-tokens"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "zgui",
 ]
@@ -11991,7 +11991,7 @@ dependencies = [
 [[package]]
 name = "zgui-view"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "zgui-geom",
  "zgui-interned",
@@ -12002,7 +12002,7 @@ dependencies = [
 [[package]]
 name = "zgui-view-dom"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "rustc-hash 2.1.3",
  "tracing",
@@ -12015,7 +12015,7 @@ dependencies = [
 [[package]]
 name = "zgui-view-macro"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -12025,7 +12025,7 @@ dependencies = [
 [[package]]
 name = "zgui-vocab"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "accesskit",
  "zgui-geom",
@@ -12035,7 +12035,7 @@ dependencies = [
 [[package]]
 name = "zgui-wgpu"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "rustc-hash 2.1.3",
  "tracing",
@@ -12056,7 +12056,7 @@ dependencies = [
 [[package]]
 name = "zgui-wgsl"
 version = "0.1.0"
-source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#e90275a74764f643eb396ffd60eba0aafcebc461"
+source = "git+https://github.com/GanDesktop/zgui?branch=gds-0.1.0#c215f913338bd12a08b5d79c346046f62bc79f5c"
 dependencies = [
  "zgui-scene",
 ]

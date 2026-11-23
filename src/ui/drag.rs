@@ -3,10 +3,12 @@
 mod content;
 mod footer;
 mod header;
+mod icon;
 
 pub use content::DragCardContent;
 pub use footer::DragCardFooter;
 pub use header::DragCardHeader;
+pub use icon::{MAX_PREVIEW_ITEMS, render_drag_card_icon};
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -21,11 +23,15 @@ use zgui::{component, css, view};
 /// Pointer offset in CSS pixels separating the cursor from the floating [`DragCard`].
 pub const POINTER_GAP: f32 = 12.0;
 
+/// Fixed width in CSS pixels of a floating file drag preview card (`DragCard` and native
+/// `DragIcon`).
+pub const CARD_WIDTH: f32 = 248.0;
+
 /// Minimum width in CSS pixels of a floating [`DragCard`].
-pub const MIN_WIDTH: f32 = 140.0;
+pub const MIN_WIDTH: f32 = CARD_WIDTH;
 
 /// Maximum width in CSS pixels of a floating [`DragCard`].
-pub const MAX_WIDTH: f32 = 248.0;
+pub const MAX_WIDTH: f32 = CARD_WIDTH;
 
 /// Pointer movement distance in CSS pixels required before a press promotes to an active drag.
 pub const DRAG_THRESHOLD: f32 = 5.0;
@@ -39,13 +45,13 @@ const SHEET: &str = css!(
     }
 
     .gds-drag-card.gds-drag-card {
-        position: fixed;
-        pointer-events: none;
         display: flex;
         flex-direction: column;
         overflow: hidden;
-        min-width: 140px;
+        width: 248px;
+        min-width: 248px;
         max-width: 248px;
+        box-sizing: border-box;
         padding: 0px;
         gap: 0px;
         border-radius: 8px;
@@ -55,6 +61,11 @@ const SHEET: &str = css!(
         font-family: var(--gds-font-sans);
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
         user-select: none;
+    }
+
+    .gds-drag-card.gds-drag-card--floating {
+        position: fixed;
+        pointer-events: none;
     }
 
     .gds-drag-card__header.gds-drag-card__header {
@@ -102,10 +113,27 @@ const SHEET: &str = css!(
     "#
 );
 
-pub(crate) fn install_drag_stylesheet() {
+/// Installs the shared drag overlay and drop target stylesheet on the current window host.
+pub fn install_drag_stylesheet() {
     if zgui::view::current_host().is_some() {
         crate::ui::styles::install_ui_stylesheets();
         zgui::view::install_stylesheet("gds-ui-drag", SHEET);
+    }
+}
+
+/// Inline fixed-width drag preview card surface, shared between floating [`DragCard`] overlays and
+/// offscreen native [`render_drag_card_icon`] snapshots.
+#[component]
+pub fn DragCardSurface(
+    #[prop(into, optional)] class: Classes,
+    #[prop(attrs)] attrs: Attrs,
+    children: Children,
+) -> impl IntoView {
+    install_drag_stylesheet();
+    view! {
+        column(class = "gds-drag-card", class = class, {..attrs}) {
+            {children.into_view_once()}
+        }
     }
 }
 
@@ -127,7 +155,7 @@ pub fn DragCard(
         AnyView::new(view! {
             box(class = "gds-drag-portal-overlay", a11y:hidden = true) {
                 column(
-                    class = "gds-drag-card",
+                    class = "gds-drag-card gds-drag-card--floating",
                     class = class,
                     style:left = move || Some(format!("{}px", coords().0 + POINTER_GAP)),
                     style:top = move || Some(format!("{}px", coords().1 + POINTER_GAP)),
@@ -323,16 +351,102 @@ pub fn drop_hit_test(node: &NodeRef, position: (f32, f32)) -> bool {
         && position.1 <= top + height
 }
 
-/// Attaches `.gds-drop-target` active state tracking and OS external file drop listeners onto a
-/// destination element.
+/// One external OS file drop delivered onto a drop target, carrying the negotiated action and
+/// protocol completion handle.
+pub struct ExternalFileDrop {
+    /// Local file paths decoded from `text/uri-list`.
+    pub paths: Vec<PathBuf>,
+    /// Final action settled by the compositor (`Copy`, `Move`, or `None` when unspecified).
+    pub action: Option<DragAction>,
+    /// Pointer coordinates in CSS pixels at release.
+    pub position: (f32, f32),
+    /// Protocol completion token; call [`DropHandle::complete`] only once the operation succeeds.
+    pub handle: Option<DropHandle>,
+}
+
+/// Negotiation policy advertised by a file drop target during hover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileDropOptions {
+    /// Actions allowed when files are dropped onto this target.
+    pub supported_actions: DragActions,
+    /// Action preferred by default when keyboard modifiers do not override it.
+    pub preferred_action: Option<DragAction>,
+}
+
+impl FileDropOptions {
+    /// Accepts only copying (for example pasting file paths into a terminal).
+    #[must_use]
+    pub const fn copy_only() -> Self {
+        Self {
+            supported_actions: DragActions::COPY,
+            preferred_action: Some(DragAction::Copy),
+        }
+    }
+
+    /// Accepts both copying and moving, preferring `preferred` when no modifier overrides it.
+    #[must_use]
+    pub const fn copy_or_move(preferred: DragAction) -> Self {
+        Self {
+            supported_actions: DragActions::COPY.union(DragActions::MOVE),
+            preferred_action: Some(preferred),
+        }
+    }
+}
+
+/// Why [`file_drop_target_attrs`] rejected an incoming `DROP` event before invoking `on_drop`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileDropRejection {
+    /// The target's `can_accept` gate returned `false`.
+    Disallowed,
+    /// The dropped payload contained no readable local file paths.
+    EmptyPaths,
+}
+
+/// Configuration for [`file_drop_target_attrs`].
+pub struct FileDropTarget {
+    /// Whether an in-window drag is hovering over this target.
+    pub active: Signal<bool, LocalStorage>,
+    /// Actions advertised to the compositor during `drag_enter` / `drag_over`.
+    pub options: FileDropOptions,
+    /// Optional dynamic gate checked on hover and drop (for example rejecting a folder dragged onto
+    /// itself or a descendant within this process).
+    pub can_accept: Option<Rc<dyn Fn() -> bool>>,
+    /// Optional hover transition callback (`true` on accepted enter, `false` on leave/drop).
+    pub on_hover_change: Option<UnsyncCallback<bool>>,
+    /// Handler invoked on drop with decoded paths, negotiated action, and [`DropHandle`].
+    pub on_drop: Option<UnsyncCallback<ExternalFileDrop>>,
+    /// Optional callback invoked when an incoming `DROP` is rejected before `on_drop` runs.
+    pub on_reject: Option<UnsyncCallback<FileDropRejection>>,
+}
+
+/// Attaches `.gds-drop-target` active state tracking, dynamic MIME/action negotiation, and OS
+/// external file drop listeners onto a destination element.
 #[must_use]
-pub fn drop_target_attrs(
-    active: Signal<bool, LocalStorage>,
-    on_external_drop: Option<UnsyncCallback<(Vec<PathBuf>, (f32, f32))>>,
-) -> Attrs {
+pub fn file_drop_target_attrs(target: FileDropTarget) -> Attrs {
     install_drag_stylesheet();
+    let FileDropTarget {
+        active,
+        options,
+        can_accept,
+        on_hover_change,
+        on_drop,
+        on_reject,
+    } = target;
+
     let external_hover = RwSignal::new_local(false);
     let is_active = Signal::derive_local(move || active.get() || external_hover.get());
+    let set_hover = move |next: bool| {
+        if external_hover.get_untracked() != next {
+            external_hover.set(next);
+            if let Some(cb) = on_hover_change {
+                cb.run(next);
+            }
+        }
+    };
+
+    let enter_can_accept = can_accept.clone();
+    let over_can_accept = can_accept.clone();
+    let drop_can_accept = can_accept;
 
     Attrs::new()
         .class_toggle(zgui::view::ClassName::new("gds-drop-target"), true)
@@ -343,9 +457,19 @@ pub fn drop_target_attrs(
             events::DRAG_ENTER,
             ListenerOptions::DEFAULT,
             move |ev: &mut EventCx<'_, events::DragEnter>| {
-                if !ev.paths.is_empty() {
-                    external_hover.set(true);
+                let allowed =
+                    ev.offers_files() && enter_can_accept.as_ref().is_none_or(|gate| gate());
+                if allowed {
+                    set_hover(true);
+                    ev.accept_drag(DragDecision::accept(
+                        "text/uri-list",
+                        options.supported_actions,
+                        options.preferred_action,
+                    ));
                     ev.prevent_default();
+                } else {
+                    set_hover(false);
+                    ev.accept_drag(DragDecision::reject());
                 }
             },
         )
@@ -353,30 +477,92 @@ pub fn drop_target_attrs(
             events::DRAG_OVER,
             ListenerOptions::DEFAULT,
             move |ev: &mut EventCx<'_, events::DragOver>| {
-                if !ev.paths.is_empty() {
-                    external_hover.set(true);
+                let allowed =
+                    ev.offers_files() && over_can_accept.as_ref().is_none_or(|gate| gate());
+                if allowed {
+                    set_hover(true);
+                    ev.accept_drag(DragDecision::accept(
+                        "text/uri-list",
+                        options.supported_actions,
+                        options.preferred_action,
+                    ));
                     ev.prevent_default();
+                } else {
+                    set_hover(false);
+                    ev.accept_drag(DragDecision::reject());
                 }
+                ev.stop_propagation();
             },
         )
         .listener(events::DRAG_LEAVE, ListenerOptions::DEFAULT, move |_| {
-            external_hover.set(false);
+            set_hover(false);
         })
         .listener(
             events::DROP,
             ListenerOptions::DEFAULT,
             move |ev: &mut EventCx<'_, events::Drop>| {
-                external_hover.set(false);
-                if !ev.paths.is_empty()
-                    && let Some(on_drop) = on_external_drop
-                {
-                    let pos = (ev.position.x.0, ev.position.y.0);
-                    on_drop.run((ev.paths.clone(), pos));
-                    ev.prevent_default();
+                set_hover(false);
+                let allowed = drop_can_accept.as_ref().is_none_or(|gate| gate());
+                if !allowed {
+                    if let Some(handle) = ev.take_drop_handle() {
+                        handle.reject();
+                    }
+                    if let Some(on_reject) = on_reject {
+                        on_reject.run(FileDropRejection::Disallowed);
+                    }
                     ev.stop_propagation();
+                    return;
                 }
+                let Some(on_drop) = on_drop else {
+                    return;
+                };
+                let handle = ev.take_drop_handle();
+                if ev.paths.is_empty() {
+                    if let Some(handle) = handle {
+                        handle.reject();
+                    }
+                    if let Some(on_reject) = on_reject {
+                        on_reject.run(FileDropRejection::EmptyPaths);
+                    }
+                    ev.stop_propagation();
+                    return;
+                }
+                let pos = (ev.position.x.0, ev.position.y.0);
+                on_drop.run(ExternalFileDrop {
+                    paths: ev.paths.clone(),
+                    action: ev.action,
+                    position: pos,
+                    handle,
+                });
+                ev.prevent_default();
+                ev.stop_propagation();
             },
         )
+}
+
+/// Attaches `.gds-drop-target` active state tracking and copy-only OS external file drop
+/// listeners onto a destination element.
+#[must_use]
+pub fn drop_target_attrs(
+    active: Signal<bool, LocalStorage>,
+    on_external_drop: Option<UnsyncCallback<(Vec<PathBuf>, (f32, f32))>>,
+) -> Attrs {
+    let on_drop = on_external_drop.map(|cb| {
+        UnsyncCallback::new(move |drop: ExternalFileDrop| {
+            cb.run((drop.paths, drop.position));
+            if let Some(handle) = drop.handle {
+                handle.complete();
+            }
+        })
+    });
+    file_drop_target_attrs(FileDropTarget {
+        active,
+        options: FileDropOptions::copy_only(),
+        can_accept: None,
+        on_hover_change: None,
+        on_drop,
+        on_reject: None,
+    })
 }
 
 #[cfg(test)]
@@ -571,5 +757,216 @@ mod tests {
                 }
             })
             .expect("drag threshold test ran");
+    }
+
+    #[test]
+    fn file_drop_target_negotiates_lazy_hover_and_defers_drop_handle() {
+        use std::path::PathBuf;
+        use std::sync::atomic::{AtomicU8, Ordering};
+        use zgui::platform::DragEvent;
+
+        use super::{
+            ExternalFileDrop, FileDropOptions, FileDropRejection, FileDropTarget,
+            file_drop_target_attrs,
+        };
+
+        #[derive(Default)]
+        struct Sink {
+            atlas: zgui::atlas::MemorySink,
+            target: Option<zgui::render::RenderTarget>,
+        }
+
+        impl zgui::render::Renderer for Sink {
+            fn capabilities(&self) -> zgui::render::RenderCapabilities {
+                zgui::render::RenderCapabilities::MINIMAL
+            }
+            fn configure(&mut self, target: zgui::render::RenderTarget) {
+                self.target = Some(target);
+            }
+            fn target(&self) -> Option<zgui::render::RenderTarget> {
+                self.target
+            }
+            fn register_external(
+                &mut self,
+                _: zgui::render::ExternalTexture,
+            ) -> zgui::render::TextureHandle {
+                zgui::render::TextureHandle(0)
+            }
+            fn release_external(&mut self, _: zgui::render::TextureHandle) {}
+            fn memory(&self) -> zgui::render::MemoryReport {
+                zgui::render::MemoryReport::default()
+            }
+            fn draw(
+                &mut self,
+                _: &zgui::scene::Scene,
+                _: &zgui::bits::DamageSet,
+            ) -> zgui::render::FrameOutcome {
+                zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
+            }
+            fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
+                &mut self.atlas
+            }
+        }
+
+        let captured_drop: Rc<RefCell<Option<ExternalFileDrop>>> = Rc::new(RefCell::new(None));
+        let drop_view = Rc::clone(&captured_drop);
+        let drop_driver = Rc::clone(&captured_drop);
+        let captured_rejections: Rc<RefCell<Vec<FileDropRejection>>> =
+            Rc::new(RefCell::new(Vec::new()));
+        let rejections_view = Rc::clone(&captured_rejections);
+        let rejections_driver = Rc::clone(&captured_rejections);
+        let allow_gate = Rc::new(std::cell::Cell::new(true));
+        let gate_view = Rc::clone(&allow_gate);
+        let gate_driver = Rc::clone(&allow_gate);
+
+        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+            let mut harness = Harness::new(handler);
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(200.0),
+                DevicePx(100.0),
+            )));
+            harness.settle(8);
+
+            let surface = harness.platform().offscreens()[0].clone();
+            let offer = DragOfferId::new(1);
+
+            // Lazy Wayland hover carries mime_types with empty paths and must negotiate Copy|Move.
+            harness.deliver_to_first(SurfaceEvent::Drag(DragEvent::Entered {
+                offer,
+                mime_types: vec!["text/uri-list".to_owned()],
+                source_actions: DragActions::COPY | DragActions::MOVE,
+                action: Some(DragAction::Move),
+                paths: Vec::new(),
+                position: Point::new(CssPx(40.0), CssPx(40.0)),
+            }));
+            harness.settle(4);
+            assert_eq!(
+                surface.take_drag_responses(),
+                vec![(
+                    offer,
+                    DragDecision::accept(
+                        "text/uri-list",
+                        DragActions::COPY | DragActions::MOVE,
+                        Some(DragAction::Move),
+                    ),
+                )]
+            );
+
+            // When the dynamic gate disallows dropping (e.g. self-directory), hover rejects.
+            gate_driver.set(false);
+            harness.deliver_to_first(SurfaceEvent::Drag(DragEvent::Moved {
+                offer,
+                position: Point::new(CssPx(45.0), CssPx(40.0)),
+            }));
+            harness.settle(4);
+            assert_eq!(
+                surface.take_drag_responses(),
+                vec![(offer, DragDecision::reject())]
+            );
+
+            // Dropping while gate disallows rejects the DropHandle and notifies on_reject.
+            let disallowed_settled = Arc::new(AtomicU8::new(0));
+            let disallowed_cb = Arc::clone(&disallowed_settled);
+            harness.deliver_to_first(SurfaceEvent::Drag(DragEvent::Dropped {
+                offer,
+                mime_types: vec!["text/uri-list".to_owned()],
+                source_actions: DragActions::COPY | DragActions::MOVE,
+                action: Some(DragAction::Move),
+                paths: vec![PathBuf::from("/tmp/self-dir")],
+                payload: None,
+                position: Point::new(CssPx(45.0), CssPx(40.0)),
+                handle: DropHandle::new(move |ok| {
+                    disallowed_cb.store(if ok { 1 } else { 2 }, Ordering::Relaxed);
+                }),
+            }));
+            harness.settle(4);
+            assert_eq!(disallowed_settled.load(Ordering::Relaxed), 2);
+            assert!(drop_driver.borrow().is_none());
+
+            // Re-enable gate and drop with empty paths -> rejects and notifies EmptyPaths.
+            gate_driver.set(true);
+            let empty_settled = Arc::new(AtomicU8::new(0));
+            let empty_cb = Arc::clone(&empty_settled);
+            harness.deliver_to_first(SurfaceEvent::Drag(DragEvent::Dropped {
+                offer,
+                mime_types: vec!["text/uri-list".to_owned()],
+                source_actions: DragActions::COPY | DragActions::MOVE,
+                action: Some(DragAction::Move),
+                paths: Vec::new(),
+                payload: None,
+                position: Point::new(CssPx(45.0), CssPx(40.0)),
+                handle: DropHandle::new(move |ok| {
+                    empty_cb.store(if ok { 1 } else { 2 }, Ordering::Relaxed);
+                }),
+            }));
+            harness.settle(4);
+            assert_eq!(empty_settled.load(Ordering::Relaxed), 2);
+            assert_eq!(
+                *rejections_driver.borrow(),
+                vec![FileDropRejection::Disallowed, FileDropRejection::EmptyPaths]
+            );
+
+            // Drop with valid paths -> DropHandle stays pending until caller completes it.
+            let settled = Arc::new(AtomicU8::new(0));
+            let settled_cb = Arc::clone(&settled);
+            harness.deliver_to_first(SurfaceEvent::Drag(DragEvent::Dropped {
+                offer,
+                mime_types: vec!["text/uri-list".to_owned()],
+                source_actions: DragActions::COPY | DragActions::MOVE,
+                action: Some(DragAction::Move),
+                paths: vec![PathBuf::from("/tmp/moved.txt")],
+                payload: None,
+                position: Point::new(CssPx(45.0), CssPx(40.0)),
+                handle: DropHandle::new(move |ok| {
+                    settled_cb.store(if ok { 1 } else { 2 }, Ordering::Relaxed);
+                }),
+            }));
+            harness.settle(4);
+            assert_eq!(settled.load(Ordering::Relaxed), 0);
+
+            let received = drop_driver
+                .borrow_mut()
+                .take()
+                .expect("drop payload delivered");
+            assert_eq!(received.action, Some(DragAction::Move));
+            assert_eq!(received.paths, vec![PathBuf::from("/tmp/moved.txt")]);
+            received.handle.expect("DropHandle forwarded").complete();
+            assert_eq!(settled.load(Ordering::Relaxed), 1);
+
+            harness.shut_down();
+            Ok(())
+        };
+
+        zgui::app()
+            .with_fonts(Fonts::shipped_only())
+            .with_size(200.0, 100.0)
+            .with_renderer(Box::new(|_: &Arc<dyn Surface>, target| {
+                let mut sink = Sink::default();
+                zgui::render::Renderer::configure(&mut sink, target);
+                Ok::<_, AppError>(Box::new(sink) as Box<dyn zgui::render::Renderer>)
+            }))
+            .run_on(driver, move || {
+                let out = Rc::clone(&drop_view);
+                let rej = Rc::clone(&rejections_view);
+                let gate = Rc::clone(&gate_view);
+                let attrs = file_drop_target_attrs(FileDropTarget {
+                    active: Signal::stored_local(false),
+                    options: FileDropOptions::copy_or_move(DragAction::Move),
+                    can_accept: Some(Rc::new(move || gate.get())),
+                    on_hover_change: None,
+                    on_drop: Some(UnsyncCallback::new(move |drop| {
+                        *out.borrow_mut() = Some(drop);
+                    })),
+                    on_reject: Some(UnsyncCallback::new(move |reason| {
+                        rej.borrow_mut().push(reason);
+                    })),
+                });
+                zgui::view! {
+                    box(style:width = "200px", style:height = "100px", {..attrs}) {
+                        text { "Folder target" }
+                    }
+                }
+            })
+            .expect("file drop target negotiation test ran");
     }
 }

@@ -2133,7 +2133,9 @@ impl Browser {
                                                     Some(path) => {
                                                         rows_b.file_drag_target(item, path.to_owned())
                                                     }
-                                                    None => item,
+                                                    None => {
+                                                        rows_b.unsupported_file_drop_target(item)
+                                                    }
                                                 }
                                             }}
                                         }
@@ -2636,7 +2638,7 @@ impl Browser {
         });
         let wrapped = match local_path {
             Some(path) => self.file_drag_target(tipped, path),
-            None => tipped,
+            None => self.unsupported_file_drop_target(tipped),
         };
         let dragged = self.draggable_tab(wrapped, id, pinned);
         self.tab_menu(dragged, id)
@@ -2654,7 +2656,7 @@ impl Browser {
         }
     }
 
-    fn sidebar_tab_title(&self, location: &Location) -> String {
+    pub(super) fn sidebar_tab_title(&self, location: &Location) -> String {
         if let Location::Volume { identity, relative } = location
             && relative.is_empty()
             && let Some(volume) = self.volume_at_location(identity)
@@ -2662,6 +2664,21 @@ impl Browser {
             return volume.name;
         }
         self.location_title(location)
+    }
+
+    pub(super) fn tab_drag_snapshot(&self, id: u64) -> Option<(IconName, String, String, bool)> {
+        self.read_untracked(|state| {
+            let active_id = state.tab().id;
+            let tab = state.tabs.iter().find(|tab| tab.id == id)?;
+            let location = tab.navigation.location();
+            let icon = location.icon();
+            let title = self.sidebar_tab_title(location);
+            let detail_path = tab
+                .navigation
+                .path()
+                .map_or_else(|| location.label(), |path| path.display().to_string());
+            Some((icon, title, detail_path, active_id == id))
+        })
     }
 }
 

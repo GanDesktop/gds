@@ -1410,6 +1410,7 @@ impl Browser {
                         let pres_initial = sidebar_pres.get_untracked();
                         let files_sidebar = sidebar_browser.sidebar(pres_initial);
                         let files_content = content_browser.file_content(workspace_width);
+                        let drag_overlay = content_browser.drag_overlay();
                         let term_b = terminal_browser.clone();
                         AnyView::new(view! {
                             WorkspaceFrame(
@@ -1426,6 +1427,7 @@ impl Browser {
                                     Show(when = move || picker_is_none.get()) {
                                         {{term_b.terminal_view(pres_initial)}}
                                     }
+                                    {drag_overlay}
                                 }
                             }
                         })
@@ -1814,8 +1816,8 @@ impl Browser {
     fn render_file_body(&self, body: FileBody) -> AnyView {
         match body {
             FileBody::Loading(location) => self.location_loading(&location),
-            FileBody::Collection(state) => state.view(self),
-            FileBody::Network => self.network_content(),
+            FileBody::Collection(state) => self.background_drop_target(state.view(self)),
+            FileBody::Network => self.background_drop_target(self.network_content()),
             FileBody::Empty(message) => {
                 let target = self.empty_view(message);
                 self.directory_menu(self.background_drop_target(target))

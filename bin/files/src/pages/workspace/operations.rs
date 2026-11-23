@@ -11,8 +11,10 @@ use std::{
 use gds::i18n as gds_i18n;
 use gds::service::desktop::{Desktop, OpenMode, OpenOutcome};
 use gds::ui::IconName;
+use gds::ui::drag::ExternalFileDrop;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use zgui::prelude::{DragAction, DropHandle};
 use zgui::reactive::{on_cleanup_local, spawn_local};
 
 use super::{
@@ -89,6 +91,41 @@ fn history_slot(browser: &Browser) -> Rc<WindowHistorySlot> {
         map.borrow_mut().insert(key, Rc::clone(&created));
     });
     created
+}
+
+#[derive(Clone)]
+struct PasteContext {
+    cut: bool,
+    record_history: bool,
+    snapshot: Option<clipboard::Snapshot>,
+    drop_handle: Rc<RefCell<Option<DropHandle>>>,
+}
+
+impl PasteContext {
+    fn new(
+        cut: bool,
+        record_history: bool,
+        snapshot: Option<clipboard::Snapshot>,
+        drop_handle: Option<DropHandle>,
+    ) -> Self {
+        Self {
+            cut,
+            record_history,
+            snapshot,
+            drop_handle: Rc::new(RefCell::new(drop_handle)),
+        }
+    }
+
+    fn settle_drop(&self, succeeded: bool) {
+        let Some(handle) = self.drop_handle.borrow_mut().take() else {
+            return;
+        };
+        if succeeded {
+            handle.complete();
+        } else {
+            handle.reject();
+        }
+    }
 }
 
 fn sanitize_preview_name(raw: &str) -> String {
@@ -1150,12 +1187,58 @@ impl Browser {
                             transfer::Mode::Copy
                         };
                         let job = PasteJob::new(destination, mode, snapshot.paths.clone());
-                        browser.start_paste_job(job, cut, true, Some(snapshot));
+                        browser.start_paste_job(
+                            job,
+                            PasteContext::new(cut, true, Some(snapshot), None),
+                        );
                     }
                     Err(error) => browser.report_notice(error.to_string()),
                 }
             }));
         });
+    }
+
+    pub(super) fn handle_external_file_drop(&self, destination: PathBuf, drop: ExternalFileDrop) {
+        let ExternalFileDrop {
+            paths,
+            action,
+            handle,
+            ..
+        } = drop;
+        if paths.is_empty() {
+            if let Some(handle) = handle {
+                handle.reject();
+            }
+            self.report_notice(i18n::text_untracked("drop-no-local-files"));
+            return;
+        }
+        let mode = if action == Some(DragAction::Move) {
+            transfer::Mode::Move
+        } else {
+            transfer::Mode::Copy
+        };
+        let invalid_self_target = paths
+            .iter()
+            .any(|src| destination == *src || destination.starts_with(src));
+        if invalid_self_target {
+            if let Some(handle) = handle {
+                handle.reject();
+            }
+            self.report_notice(i18n::text_untracked("drop-into-self"));
+            return;
+        }
+        let same_dir = mode == transfer::Mode::Move
+            && paths
+                .iter()
+                .all(|path| path.parent() == Some(destination.as_path()));
+        if same_dir {
+            if let Some(handle) = handle {
+                handle.reject();
+            }
+            return;
+        }
+        let job = PasteJob::new(destination, mode, paths);
+        self.start_paste_job(job, PasteContext::new(false, true, None, handle));
     }
 
     pub(super) fn inspect_paste(
@@ -1172,30 +1255,19 @@ impl Browser {
         } else {
             None
         };
-        self.start_paste_job(transfer, cut, history, snapshot);
+        self.start_paste_job(transfer, PasteContext::new(cut, history, snapshot, None));
     }
 
-    fn start_paste_job(
-        &self,
-        job: PasteJob,
-        cut: bool,
-        record_history: bool,
-        snapshot: Option<clipboard::Snapshot>,
-    ) {
+    fn start_paste_job(&self, job: PasteJob, context: PasteContext) {
         let Some(cancel) = self.begin_operation(&i18n::text_untracked("paste-working")) else {
+            context.settle_drop(false);
+            self.report_notice(i18n::text_untracked("file-operation-busy"));
             return;
         };
-        self.inspect_paste_step(job, cut, record_history, snapshot, cancel);
+        self.inspect_paste_step(job, context, cancel);
     }
 
-    fn inspect_paste_step(
-        &self,
-        job: PasteJob,
-        cut: bool,
-        record_history: bool,
-        snapshot: Option<clipboard::Snapshot>,
-        cancel: CancellationToken,
-    ) {
+    fn inspect_paste_step(&self, job: PasteJob, context: PasteContext, cancel: CancellationToken) {
         let task = self
             .scope()
             .spawn_blocking_named("Inspect paste conflicts", move || job.inspect());
@@ -1204,9 +1276,11 @@ impl Browser {
             drop(spawn_local(async move {
                 let result = task.await;
                 let Some(browser) = weak.upgrade() else {
+                    context.settle_drop(false);
                     return;
                 };
                 let Ok(inspection) = result else {
+                    context.settle_drop(false);
                     browser.end_operation();
                     if let Err(error) = result {
                         browser.report_notice(error.to_string());
@@ -1215,39 +1289,21 @@ impl Browser {
                 };
                 match inspection {
                     Inspection::Ready(ready_job) => {
-                        browser.execute_paste_step(
-                            ready_job,
-                            cut,
-                            record_history,
-                            snapshot,
-                            cancel,
-                        );
+                        browser.execute_paste_step(ready_job, context, cancel);
                     }
                     Inspection::Failed { job, error } => {
                         if job.succeeded.is_empty() && job.failures.is_empty() {
+                            context.settle_drop(false);
                             browser.end_operation();
                             browser.report_notice(error.to_string());
                         } else {
                             let mut failed_job = job;
                             failed_job.record_abort(error.to_string());
-                            browser.finish_paste_job(
-                                failed_job,
-                                cut,
-                                record_history,
-                                snapshot,
-                                true,
-                            );
+                            browser.finish_paste_job(failed_job, context, true);
                         }
                     }
                     Inspection::Conflict { job, conflict } => {
-                        browser.ask_paste_conflict(
-                            job,
-                            conflict,
-                            cut,
-                            record_history,
-                            snapshot,
-                            cancel,
-                        );
+                        browser.ask_paste_conflict(job, conflict, context, cancel);
                     }
                 }
             }));
@@ -1258,9 +1314,7 @@ impl Browser {
         &self,
         job: PasteJob,
         conflict: paste::PasteConflict,
-        cut: bool,
-        record_history: bool,
-        snapshot: Option<clipboard::Snapshot>,
+        context: PasteContext,
         cancel: CancellationToken,
     ) {
         let title = gds::t_untracked!(
@@ -1274,7 +1328,8 @@ impl Browser {
         let shared_job = std::rc::Rc::new(std::cell::RefCell::new(Some(job)));
         let submit_job = std::rc::Rc::clone(&shared_job);
         let cancel_job = shared_job;
-        let snapshot_cancel = snapshot.clone();
+        let submit_context = context.clone();
+        let cancel_context = context;
         self.name_form_with_cancel(
             form,
             move |chosen_name| {
@@ -1284,9 +1339,7 @@ impl Browser {
                 next_job.resolve_conflict(source.clone(), chosen_name);
                 browser_submit.inspect_paste_step(
                     next_job,
-                    cut,
-                    record_history,
-                    snapshot.clone(),
+                    submit_context.clone(),
                     cancel.clone(),
                 );
             },
@@ -1294,18 +1347,15 @@ impl Browser {
                 let Some(mut cancelled_job) = cancel_job.borrow_mut().take() else {
                     return;
                 };
+                // Cancelling a conflict prompt means the batch did not finish cleanly; reject any
+                // pending Wayland drop offer immediately so a move source never deletes files.
+                cancel_context.settle_drop(false);
                 cancelled_job.pending.clear();
                 if cancelled_job.succeeded.is_empty() && cancelled_job.failures.is_empty() {
                     browser_cancel.end_operation();
                     browser_cancel.report_notice(i18n::text_untracked("paste-cancelled"));
                 } else {
-                    browser_cancel.finish_paste_job(
-                        cancelled_job,
-                        cut,
-                        record_history,
-                        snapshot_cancel.clone(),
-                        false,
-                    );
+                    browser_cancel.finish_paste_job(cancelled_job, cancel_context.clone(), false);
                 }
             },
         );
@@ -1314,9 +1364,7 @@ impl Browser {
     fn execute_paste_step(
         &self,
         mut job: PasteJob,
-        cut: bool,
-        record_history: bool,
-        snapshot: Option<clipboard::Snapshot>,
+        context: PasteContext,
         cancel: CancellationToken,
     ) {
         let buffer_bytes = self
@@ -1333,11 +1381,12 @@ impl Browser {
             Ok(batch) => batch,
             Err(error) => {
                 if job.succeeded.is_empty() && job.failures.is_empty() {
+                    context.settle_drop(false);
                     self.end_operation();
                     self.report_notice(error.to_string());
                 } else {
                     job.record_abort(error.to_string());
-                    self.finish_paste_job(job, cut, record_history, snapshot, true);
+                    self.finish_paste_job(job, context, true);
                 }
                 return;
             }
@@ -1354,10 +1403,12 @@ impl Browser {
             drop(spawn_local(async move {
                 let result = task.await;
                 let Some(browser) = weak.upgrade() else {
+                    context.settle_drop(false);
                     return;
                 };
                 let Ok(report) = result else {
                     if job.succeeded.is_empty() && job.failures.is_empty() {
+                        context.settle_drop(false);
                         browser.end_operation();
                         if let Err(error) = result {
                             browser.report_notice(error.to_string());
@@ -1366,34 +1417,27 @@ impl Browser {
                         if let Err(error) = result {
                             job.record_abort(error.to_string());
                         }
-                        browser.finish_paste_job(job, cut, record_history, snapshot, true);
+                        browser.finish_paste_job(job, context, true);
                     }
                     return;
                 };
                 match job.apply_pass(report) {
                     PassOutcome::Completed(done) => {
-                        browser.finish_paste_job(done, cut, record_history, snapshot, false);
+                        browser.finish_paste_job(done, context, false);
                     }
                     PassOutcome::RetryConflict(next_job) => {
-                        browser.inspect_paste_step(next_job, cut, record_history, snapshot, cancel);
+                        browser.inspect_paste_step(next_job, context, cancel);
                     }
                 }
             }));
         });
     }
 
-    fn finish_paste_job(
-        &self,
-        job: PasteJob,
-        cut: bool,
-        record_history: bool,
-        snapshot: Option<clipboard::Snapshot>,
-        aborted: bool,
-    ) {
+    fn finish_paste_job(&self, job: PasteJob, context: PasteContext, aborted: bool) {
         let destination = job.destination.clone();
-        if cut
+        if context.cut
             && !job.succeeded.is_empty()
-            && let Some(snap) = snapshot
+            && let Some(snap) = context.snapshot.clone()
         {
             let moved = job.succeeded.clone();
             let weak = self.downgrade();
@@ -1405,34 +1449,40 @@ impl Browser {
                         .err()
                         .map(|error| error.to_string());
                     let Some(browser) = weak.upgrade() else {
+                        context.settle_drop(false);
                         return;
                     };
                     browser.complete_paste_summary(
                         job.into_summary(clipboard_error),
                         destination,
-                        record_history,
+                        context,
                         aborted,
                     );
                 }));
             });
             return;
         }
-        self.complete_paste_summary(job.into_summary(None), destination, record_history, aborted);
+        self.complete_paste_summary(job.into_summary(None), destination, context, aborted);
     }
 
     fn complete_paste_summary(
         &self,
         summary: paste::Summary,
         destination: PathBuf,
-        record_history: bool,
+        context: PasteContext,
         aborted: bool,
     ) {
+        let whole_batch_succeeded = !aborted
+            && summary.failures.is_empty()
+            && summary.clipboard_error.is_none()
+            && !summary.succeeded.is_empty();
+        context.settle_drop(whole_batch_succeeded);
         self.end_operation();
         let mut changed_paths = vec![destination];
         changed_paths.extend(summary.succeeded.iter().cloned());
         changed_paths.extend(summary.committed.iter().cloned());
         changed_paths.extend(summary.undo.iter().flat_map(history::Step::paths));
-        if record_history {
+        if context.record_history {
             let kind = summary.history_kind();
             let reset = summary.requires_history_reset();
             if reset {

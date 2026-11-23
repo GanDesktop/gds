@@ -14,7 +14,10 @@ use gds::{
     t,
     ui::{
         HeldModifier, IconButtonProps, IconName, IconProps, Shortcut,
-        drag::{DRAG_THRESHOLD, drop_hit_test, drop_target_attrs},
+        drag::{
+            DRAG_THRESHOLD, ExternalFileDrop, FileDropOptions, FileDropTarget, drop_hit_test,
+            file_drop_target_attrs,
+        },
         feedback::{
             dialog::{
                 DialogActionsProps, DialogDecision, DialogFooterProps, DialogHeaderProps,
@@ -1032,12 +1035,12 @@ impl Browser {
         self.new_terminal_at(dir);
     }
 
-    fn paste_paths_to_active_terminal(&self, paths: &[PathBuf]) {
+    fn paste_paths_to_active_terminal(&self, paths: &[PathBuf]) -> bool {
         if self.0.terminals.inner.sealed.get()
             || paths.is_empty()
             || !self.terminal_visible_untracked()
         {
-            return;
+            return false;
         }
         if let Some(id) = self.0.terminals.active.try_get_untracked().flatten()
             && let Some(entry) = self.0.terminals.find_session(id)
@@ -1045,7 +1048,9 @@ impl Browser {
         {
             entry.terminal.paste_paths(paths);
             entry.terminal.focus();
+            return true;
         }
+        false
     }
 
     pub(super) fn observe_terminals(&self) {
@@ -1146,7 +1151,7 @@ impl Browser {
                         let Some(b) = move_weak.upgrade() else {
                             return;
                         };
-                        if b.0.terminals.inner.sealed.get() {
+                        if b.0.terminals.inner.sealed.get() || b.has_native_drag_active() {
                             return;
                         }
                         let pos = (ev.position.x.0, ev.position.y.0);
@@ -1198,7 +1203,7 @@ impl Browser {
                         let Some(b) = up_weak.upgrade() else {
                             return;
                         };
-                        if b.0.terminals.inner.sealed.get() {
+                        if b.0.terminals.inner.sealed.get() || b.has_native_drag_active() {
                             return;
                         }
                         if b.0
@@ -1226,7 +1231,7 @@ impl Browser {
                             && b.terminal_visible_untracked()
                             && drop_hit_test(&b.0.terminals.inner.pane_node, pos)
                         {
-                            b.paste_paths_to_active_terminal(&paths);
+                            let _ = b.paste_paths_to_active_terminal(&paths);
                         }
                     },
                 );
@@ -1481,14 +1486,23 @@ impl Browser {
             }
         });
 
-        let pane_drop_attrs = drop_target_attrs(
-            dock.inner.internal_drop_hover.into(),
-            Some(UnsyncCallback::new(
-                move |(paths, _pos): (Vec<PathBuf>, (f32, f32))| {
-                    b_drop_ext.paste_paths_to_active_terminal(&paths);
-                },
-            )),
-        );
+        let pane_drop_attrs = file_drop_target_attrs(FileDropTarget {
+            active: dock.inner.internal_drop_hover.into(),
+            options: FileDropOptions::copy_only(),
+            can_accept: None,
+            on_hover_change: None,
+            on_drop: Some(UnsyncCallback::new(move |drop: ExternalFileDrop| {
+                let pasted = b_drop_ext.paste_paths_to_active_terminal(&drop.paths);
+                if let Some(handle) = drop.handle {
+                    if pasted {
+                        handle.complete();
+                    } else {
+                        handle.reject();
+                    }
+                }
+            })),
+            on_reject: None,
+        });
 
         let rename_open = Signal::derive_local(move || rename_sig.get().is_some());
         let rename_composing = Rc::new(Cell::new(false));

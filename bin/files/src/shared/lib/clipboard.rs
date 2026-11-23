@@ -26,6 +26,17 @@ use zgui::platform::{ClipboardError, ClipboardMimeOffer};
 use zgui::prelude::{ClipboardKind, LocalStorage, RwSignal, try_use_clipboard};
 use zgui::reactive::{on_cleanup_local, prelude::*, spawn_local};
 
+/// Encodes local filesystem `paths` as `(text/uri-list, text/plain;charset=utf-8)` payloads for
+/// native cross-window drag offers.
+///
+/// # Errors
+/// Reports unrepresentable paths or payloads exceeding the transfer size limit.
+pub fn encode_drag_payloads(paths: &[PathBuf]) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    let uri_list = Formats::encode_uris(paths)?;
+    let plain_text = Formats::encode_plain_paths(paths, &uri_list);
+    Ok((uri_list, plain_text))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {

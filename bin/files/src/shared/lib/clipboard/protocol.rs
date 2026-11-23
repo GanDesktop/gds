@@ -75,7 +75,7 @@ impl Formats {
         })
     }
 
-    fn encode_plain_paths(paths: &[PathBuf], uri_list: &[u8]) -> Vec<u8> {
+    pub(super) fn encode_plain_paths(paths: &[PathBuf], uri_list: &[u8]) -> Vec<u8> {
         if let Some(utf8_paths) = paths
             .iter()
             .map(|path| path.to_str())
