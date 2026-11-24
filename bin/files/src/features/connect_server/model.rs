@@ -18,6 +18,7 @@ pub(crate) enum Intent {
 pub(super) struct Request {
     pub address: Address,
     pub credentials: Credentials,
+    pub remember: bool,
 }
 
 pub(super) struct Details {

@@ -2,12 +2,12 @@ mod form;
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use form::Form;
+use form::{Form, InitialAuth};
 use gds::{
     app::Gds,
     i18n,
     service::{
-        remote::{Address, ConnectOptions, HostKeyChallenge, Session},
+        remote::{Address, ConnectOptions, Credentials, HostKeyChallenge, Session, keyring},
         task_manager::{Owner as TaskOwner, Scope},
     },
     ui::{
@@ -241,16 +241,118 @@ impl Connector {
             completed(Err(i18n::text_untracked("remote-task-running")));
             return;
         }
+        let attempt = Attempt {
+            intent,
+            completed: Rc::new(completed),
+        };
+        if intent == Intent::Open
+            && let Some(address) = address
+        {
+            self.begin_with_saved(address, attempt);
+            return;
+        }
+        self.open_form(address, None, false, None, attempt, None);
+    }
+
+    fn open_form(
+        &self,
+        address: Option<Address>,
+        keyring_available: Option<bool>,
+        has_saved: bool,
+        initial_auth: Option<InitialAuth>,
+        attempt: Attempt,
+        error: Option<String>,
+    ) {
+        let should_probe = keyring_available.is_none();
         self.0.owner.with(|| {
-            let form = Form::new(address);
+            let form = Form::new(address, keyring_available, has_saved, initial_auth);
             self.set_dialog(DialogState::Form {
-                form,
-                attempt: Attempt {
-                    intent,
-                    completed: Rc::new(completed),
-                },
-                error: None,
+                form: form.clone(),
+                attempt,
+                error,
             });
+            if should_probe {
+                let probe_form = form;
+                Gds::current().tasks().spawn_ui(
+                    "Probe system keyring availability",
+                    async move { keyring::is_available().await },
+                    move |result| {
+                        if let Ok(available) = result {
+                            probe_form.set_keyring_available(available);
+                        }
+                    },
+                );
+            }
+        });
+    }
+
+    pub fn forget_credentials(
+        &self,
+        address: Address,
+        finished: impl FnOnce(Result<bool, String>) + 'static,
+    ) {
+        let finished = RefCell::new(Some(finished));
+        self.0.owner.with(|| {
+            Gds::current().tasks().spawn_ui(
+                "Forget remote credentials",
+                async move { keyring::delete(&address).await },
+                move |result| {
+                    let outcome = result
+                        .map_err(|error| error.to_string())
+                        .and_then(|inner| inner.map_err(|error| error.to_string()));
+                    let callback = finished.borrow_mut().take();
+                    if let Some(callback) = callback {
+                        callback(outcome);
+                    }
+                },
+            );
+        });
+    }
+
+    fn forget_form_credentials(&self) {
+        let DialogState::Form { form, .. } = self.0.dialog.get_untracked() else {
+            return;
+        };
+        let Some(address) = form
+            .saved_address()
+            .or_else(|| form.request().ok().map(|req| req.address))
+        else {
+            return;
+        };
+        let weak = Rc::downgrade(&self.0);
+        self.forget_credentials(address, move |result| {
+            let Some(state) = weak.upgrade() else {
+                return;
+            };
+            match result {
+                Ok(_) => {
+                    form.set_has_saved(false);
+                    state.dialog.update(|dialog| {
+                        if let DialogState::Form {
+                            form: current,
+                            error,
+                            ..
+                        } = dialog
+                            && *current == form
+                        {
+                            *error = None;
+                        }
+                    });
+                }
+                Err(message) => {
+                    state.dialog.update(|dialog| {
+                        if let DialogState::Form {
+                            form: current,
+                            error,
+                            ..
+                        } = dialog
+                            && *current == form
+                        {
+                            *error = Some(message);
+                        }
+                    });
+                }
+            }
         });
     }
 
@@ -315,21 +417,20 @@ impl Connector {
         }
     }
 
-    fn begin(&self, request: Request, attempt: Attempt) {
-        let Some(dirs) = directories::BaseDirs::new() else {
-            let err = i18n::text_untracked("remote-state-unavailable");
-            self.set_dialog(DialogState::Closed);
-            (attempt.completed)(Err(err));
-            return;
-        };
-        let known_hosts = dirs
-            .state_dir()
-            .unwrap_or(dirs.data_local_dir())
-            .join("gds/files/known_hosts");
-        let Request {
-            address,
-            credentials,
-        } = request;
+    fn known_hosts_path() -> Option<std::path::PathBuf> {
+        let dirs = directories::BaseDirs::new()?;
+        Some(
+            dirs.state_dir()
+                .unwrap_or(dirs.data_local_dir())
+                .join("gds/files/known_hosts"),
+        )
+    }
+
+    fn start_connecting(
+        &self,
+        address: &Address,
+        attempt: &Attempt,
+    ) -> (Rc<TaskOwner>, mpsc::Sender<HostKeyChallenge>) {
         let tasks = Rc::new(self.0.tasks.named_child("Remote connection"));
         let weak = Rc::downgrade(&self.0);
         let challenge_tasks = tasks.clone();
@@ -365,17 +466,201 @@ impl Connector {
                 }
             });
         });
-
-        let destination = address.clone();
-        let intent = attempt.intent;
-        let active_tasks: Scope = (*tasks).clone();
-        let weak = Rc::downgrade(&self.0);
         self.set_dialog(DialogState::Connecting {
             address: address.clone(),
             attempt: attempt.clone(),
             tasks: tasks.clone(),
             challenge: None,
         });
+        (tasks, sender)
+    }
+
+    fn begin_with_saved(&self, address: Address, attempt: Attempt) {
+        enum AutoConnect {
+            Connected(Session),
+            NeedsForm {
+                keyring_available: bool,
+                has_saved: bool,
+                initial_auth: Option<InitialAuth>,
+                auth_failed: bool,
+            },
+            Failed(String),
+        }
+
+        let Some(known_hosts) = Self::known_hosts_path() else {
+            let err = i18n::text_untracked("remote-state-unavailable");
+            self.set_dialog(DialogState::Closed);
+            (attempt.completed)(Err(err));
+            return;
+        };
+        let (tasks, sender) = self.start_connecting(&address, &attempt);
+        let destination = address.clone();
+        let active_tasks: Scope = (*tasks).clone();
+        let weak = Rc::downgrade(&self.0);
+
+        self.0.owner.with(|| {
+            Gds::current().tasks().spawn_ui(
+                "Connect to remote server",
+                async move {
+                    let work = active_tasks.spawn_cancellable_named(
+                        "Connect to remote server",
+                        async move {
+                            if !keyring::is_available().await {
+                                return AutoConnect::NeedsForm {
+                                    keyring_available: false,
+                                    has_saved: false,
+                                    initial_auth: None,
+                                    auth_failed: false,
+                                };
+                            }
+                            let saved = match keyring::lookup(&destination).await {
+                                Ok(Some(saved)) => saved,
+                                Ok(None) => {
+                                    return AutoConnect::NeedsForm {
+                                        keyring_available: true,
+                                        has_saved: false,
+                                        initial_auth: None,
+                                        auth_failed: false,
+                                    };
+                                }
+                                Err(keyring::Error::Dismissed) => {
+                                    return AutoConnect::NeedsForm {
+                                        keyring_available: true,
+                                        has_saved: true,
+                                        initial_auth: None,
+                                        auth_failed: false,
+                                    };
+                                }
+                                Err(keyring::Error::Unavailable) => {
+                                    return AutoConnect::NeedsForm {
+                                        keyring_available: false,
+                                        has_saved: false,
+                                        initial_auth: None,
+                                        auth_failed: false,
+                                    };
+                                }
+                                Err(err) => {
+                                    tracing::warn!("remote keyring lookup failed: {err}");
+                                    return AutoConnect::NeedsForm {
+                                        keyring_available: true,
+                                        has_saved: false,
+                                        initial_auth: None,
+                                        auth_failed: false,
+                                    };
+                                }
+                            };
+                            let initial_auth = if let Some(path) = saved.private_key.as_ref() {
+                                Some(InitialAuth::Key {
+                                    path: path.to_string_lossy().into_owned(),
+                                })
+                            } else if !saved.password.is_empty() {
+                                Some(InitialAuth::Password)
+                            } else {
+                                None
+                            };
+                            match Session::connect(
+                                &destination,
+                                ConnectOptions {
+                                    credentials: saved,
+                                    known_hosts,
+                                },
+                                sender,
+                            )
+                            .await
+                            {
+                                Ok(session) => AutoConnect::Connected(session),
+                                Err(gds::service::remote::Error::Authentication) => {
+                                    AutoConnect::NeedsForm {
+                                        keyring_available: true,
+                                        has_saved: true,
+                                        initial_auth,
+                                        auth_failed: true,
+                                    }
+                                }
+                                Err(error) => AutoConnect::Failed(error.to_string()),
+                            }
+                        },
+                    );
+                    work.await
+                },
+                move |result| {
+                    let Some(state) = weak.upgrade() else {
+                        return;
+                    };
+                    let connector = Connector(state);
+                    let current = connector.0.dialog.get_untracked();
+                    if !matches!(
+                        &current,
+                        DialogState::Connecting { tasks: active, .. } if Rc::ptr_eq(active, &tasks)
+                    ) {
+                        return;
+                    }
+                    let outcome = result
+                        .map_err(|error| error.to_string())
+                        .and_then(|inner| inner.map_err(|error| error.to_string()));
+                    match outcome {
+                        Ok(AutoConnect::Connected(session)) => {
+                            {
+                                connector.0.sessions.borrow_mut().insert(
+                                    address.connection_key(),
+                                    Connection {
+                                        address: address.clone(),
+                                        session,
+                                    },
+                                );
+                            }
+                            connector.bump_sessions();
+                            connector.set_dialog(DialogState::Closed);
+                            (attempt.completed)(Ok(address));
+                        }
+                        Ok(AutoConnect::NeedsForm {
+                            keyring_available,
+                            has_saved,
+                            initial_auth,
+                            auth_failed,
+                        }) => {
+                            let error = auth_failed
+                                .then(|| i18n::text_untracked("remote-saved-auth-failed"));
+                            connector.open_form(
+                                Some(address),
+                                Some(keyring_available),
+                                has_saved,
+                                initial_auth,
+                                attempt,
+                                error,
+                            );
+                        }
+                        Ok(AutoConnect::Failed(message)) | Err(message) => {
+                            connector.set_dialog(DialogState::Closed);
+                            (attempt.completed)(Err(message));
+                        }
+                    }
+                },
+            );
+        });
+    }
+
+    fn begin(&self, request: Request, attempt: Attempt) {
+        let Some(known_hosts) = Self::known_hosts_path() else {
+            let err = i18n::text_untracked("remote-state-unavailable");
+            self.set_dialog(DialogState::Closed);
+            (attempt.completed)(Err(err));
+            return;
+        };
+        let Request {
+            address,
+            credentials,
+            remember,
+        } = request;
+        let credentials_to_save = remember
+            .then(|| credentials.clone())
+            .filter(Credentials::has_secret);
+        let (tasks, sender) = self.start_connecting(&address, &attempt);
+
+        let destination = address.clone();
+        let intent = attempt.intent;
+        let active_tasks: Scope = (*tasks).clone();
+        let weak = Rc::downgrade(&self.0);
 
         self.0.owner.with(|| {
             Gds::current().tasks().spawn_ui(
@@ -395,6 +680,13 @@ impl Connector {
                             .await?;
                             if intent == Intent::Add {
                                 session.list(&destination).await?;
+                            }
+                            if let Some(to_save) = credentials_to_save
+                                && let Err(err) = keyring::store(&destination, &to_save).await
+                            {
+                                tracing::warn!(
+                                    "failed to store remote credentials in system keyring: {err}"
+                                );
                             }
                             Ok::<_, gds::service::remote::Error>(session)
                         },
@@ -587,6 +879,7 @@ fn render_dialog(
                 error,
             }) => {
                 let enter = connector.clone();
+                let forget = connector.clone();
                 let ready_form = form.clone();
                 let cancel_connector = connector.clone();
                 let (title, label, primary_icon) = match attempt.intent {
@@ -599,7 +892,11 @@ fn render_dialog(
                         DialogHeader {
                             DialogTitle {{i18n::text(title)}}
                         }
-                        {form.view(is_live, move || enter.submit())}
+                        {form.view(
+                            is_live,
+                            move || enter.submit(),
+                            move || forget.forget_form_credentials(),
+                        )}
                         {error.map(|message| view! {
                             text(class = "gds-connect-dialog__error") {{message}}
                         }.into_view())}

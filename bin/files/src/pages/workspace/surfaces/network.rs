@@ -281,6 +281,8 @@ fn remote_location_row(
     let open_browser = browser.clone();
     let disconnect_addr = address.clone();
     let disconnect_browser = browser.clone();
+    let forget_addr = address.clone();
+    let forget_browser = browser.clone();
     let fav_addr = address;
     let fav_browser = browser;
 
@@ -335,6 +337,26 @@ fn remote_location_row(
                         },
                     )
                 }.into_view())}}
+                IconButton(
+                    icon = IconName::Lock,
+                    label = i18n::text("remote-forget-credentials"),
+                    disabled = connecting,
+                    on:click = move |_| {
+                        let notice_browser = forget_browser.clone();
+                        forget_browser
+                            .0
+                            .connector
+                            .forget_credentials(forget_addr.clone(), move |result| match result {
+                                Ok(true) => notice_browser.report_notice(
+                                    i18n::text_untracked("remote-credentials-forgotten"),
+                                ),
+                                Ok(false) => notice_browser.report_notice(
+                                    i18n::text_untracked("remote-credentials-not-found"),
+                                ),
+                                Err(message) => notice_browser.report_notice(message),
+                            });
+                    },
+                ) {}
                 IconButton(
                     icon = if saved { IconName::Trash } else { IconName::Star },
                     label = i18n::text(if saved { "remote-remove-saved" } else { "remote-save-location" }),

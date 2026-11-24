@@ -58,3 +58,9 @@ remote-network-empty = 添加网络位置以连接服务器。
 
 remote-not-open = 尚未打开此位置
 remote-back-network = 返回网络
+remote-remember-credentials = 在系统密钥环中记住凭据
+remote-keyring-unavailable = 系统密钥环服务（org.freedesktop.secrets）不可用
+remote-forget-credentials = 忘记已保存的凭据
+remote-credentials-forgotten = 已从系统密钥环中移除保存的凭据
+remote-credentials-not-found = 未找到此服务器已保存的凭据
+remote-saved-auth-failed = 已保存的凭据认证失败，请重新输入凭据或清除已保存的凭据。

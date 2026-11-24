@@ -11,7 +11,8 @@ use zgui::reactive::{LocalStorage, Owner, RenderEffect, RwSignal, Signal, on_cle
 use zgui::view::{EventCx, current_host, events, install_stylesheet};
 use zgui::vocab::{Key, NamedKey};
 use zgui::{component, css, view};
-use zgui_ui::InputProps;
+use zgui_ui::{CheckboxProps, Checked, InputProps, LabelProps};
+use zgui_ui_primitives::Binding;
 
 use super::super::model::{DEFAULT_SFTP_PORT, DEFAULT_SMB_PORT, Details, Error, Request};
 
@@ -111,6 +112,33 @@ const FORM_CSS: &str = css!(
         font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
     }
+
+    .gds-connect-form__keyring {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    .gds-connect-form__remember {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+
+    .gds-connect-form__hint {
+        font-size: var(--gds-text-xs, 12px);
+        color: var(--gds-muted-foreground);
+    }
+
+    .gds-connect-form__saved-actions {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-start;
+    }
     "#
 );
 
@@ -148,6 +176,12 @@ impl Authentication {
 }
 
 #[derive(Clone, PartialEq)]
+pub(super) enum InitialAuth {
+    Password,
+    Key { path: String },
+}
+
+#[derive(Clone, PartialEq)]
 struct Fields {
     protocol: Protocol,
     host: RwSignal<String, LocalStorage>,
@@ -157,16 +191,25 @@ struct Fields {
     user: RwSignal<String, LocalStorage>,
     authentication: RwSignal<Authentication, LocalStorage>,
     methods: Vec<Authentication>,
+    remember: RwSignal<bool, LocalStorage>,
 }
 
 #[derive(Clone, PartialEq)]
 pub(super) struct Form {
     owner: Owner,
+    saved_address: Option<Address>,
+    keyring_available: RwSignal<Option<bool>, LocalStorage>,
+    has_saved: RwSignal<bool, LocalStorage>,
     fields: RwSignal<Option<Fields>, LocalStorage>,
 }
 
 impl Fields {
-    fn new(protocol: Protocol, address: Option<&Address>) -> Self {
+    fn new(
+        protocol: Protocol,
+        address: Option<&Address>,
+        initial_auth: Option<&InitialAuth>,
+        remember_default: bool,
+    ) -> Self {
         let user = address.map(Address::username).unwrap_or_default();
         let user = if user.is_empty() && protocol == Protocol::Sftp {
             std::env::var("USER").unwrap_or_default()
@@ -175,22 +218,27 @@ impl Fields {
         };
         let password = Authentication::Password(RwSignal::new_local(String::new()));
         let (authentication, methods) = match protocol {
-            Protocol::Sftp => (
-                Authentication::Agent,
-                vec![
-                    Authentication::Agent,
-                    password,
-                    Authentication::Key {
-                        path: RwSignal::new_local(String::new()),
-                        passphrase: RwSignal::new_local(String::new()),
-                    },
-                ],
-            ),
+            Protocol::Sftp => {
+                let key_path = match initial_auth {
+                    Some(InitialAuth::Key { path }) => path.clone(),
+                    _ => String::new(),
+                };
+                let key_method = Authentication::Key {
+                    path: RwSignal::new_local(key_path),
+                    passphrase: RwSignal::new_local(String::new()),
+                };
+                let initial = match initial_auth {
+                    Some(InitialAuth::Password) => password.clone(),
+                    Some(InitialAuth::Key { .. }) => key_method.clone(),
+                    None => Authentication::Agent,
+                };
+                (initial, vec![Authentication::Agent, password, key_method])
+            }
             Protocol::Smb => (
-                if user.eq_ignore_ascii_case("guest") {
-                    Authentication::Guest
-                } else {
-                    password.clone()
+                match initial_auth {
+                    Some(InitialAuth::Password) => password.clone(),
+                    _ if user.eq_ignore_ascii_case("guest") => Authentication::Guest,
+                    _ => password.clone(),
                 },
                 vec![password, Authentication::Guest],
             ),
@@ -222,10 +270,11 @@ impl Fields {
             user: RwSignal::new_local(user),
             authentication: RwSignal::new_local(authentication),
             methods,
+            remember: RwSignal::new_local(remember_default),
         }
     }
 
-    fn request(&self) -> Result<Request, Error> {
+    fn request(&self, keyring_available: Option<bool>) -> Result<Request, Error> {
         let authentication = self.authentication.get_untracked();
         let user = if matches!(authentication, Authentication::Guest) {
             "guest".to_owned()
@@ -243,6 +292,10 @@ impl Fields {
             path: self.path.get_untracked(),
         }
         .address()?;
+        let can_remember = matches!(
+            authentication,
+            Authentication::Password(_) | Authentication::Key { .. }
+        );
         let credentials = match authentication {
             Authentication::Agent | Authentication::Guest => Credentials::default(),
             Authentication::Password(password) => Credentials {
@@ -262,17 +315,23 @@ impl Fields {
                 }
             }
         };
+        let remember =
+            can_remember && keyring_available != Some(false) && self.remember.get_untracked();
         Ok(Request {
             address,
             credentials,
+            remember,
         })
     }
 
     fn view(
         &self,
         auto_focus: bool,
+        keyring_available: RwSignal<Option<bool>, LocalStorage>,
+        has_saved: RwSignal<bool, LocalStorage>,
         choose_protocol: impl Fn() + 'static,
         submit: Rc<dyn Fn()>,
+        forget: Rc<dyn Fn()>,
     ) -> AnyView {
         install_form_stylesheet();
         let host_node = self.host_node;
@@ -289,6 +348,7 @@ impl Fields {
         }
 
         let auth = self.authentication;
+        let remember_sig = self.remember;
         let protocol = self.protocol;
         let (protocol_label, path_label, user_label) = match protocol {
             Protocol::Sftp => ("SFTP", "remote-folder", "remote-username"),
@@ -345,6 +405,49 @@ impl Fields {
         let on_host_key = make_enter_handler(submit.clone());
         let on_port_key = make_enter_handler(submit.clone());
         let on_path_key = make_enter_handler(submit.clone());
+
+        let render_remember_controls = move || {
+            let box_ref = NodeRef::new();
+            let label_ref = NodeRef::new();
+            let disabled = Signal::derive_local(move || keyring_available.get() == Some(false));
+            let checked = Binding::controlled(
+                Signal::derive_local(move || {
+                    if remember_sig.get() && keyring_available.get() != Some(false) {
+                        Checked::Yes
+                    } else {
+                        Checked::No
+                    }
+                }),
+                move |next: Checked| {
+                    remember_sig.set(matches!(next, Checked::Yes));
+                },
+            );
+            view! {
+                column(class = "gds-connect-form__keyring") {
+                    row(class = "gds-connect-form__remember") {
+                        Checkbox(
+                            node_ref = box_ref,
+                            checked = checked,
+                            disabled = disabled,
+                            labelled_by = label_ref,
+                        )
+                        Label(node_ref = label_ref, control = box_ref) {
+                            {i18n::text("remote-remember-credentials")}
+                        }
+                    }
+                    {move || {
+                        (keyring_available.get() == Some(false)).then(|| {
+                            view! {
+                                text(class = "gds-connect-form__hint") {
+                                    {i18n::text("remote-keyring-unavailable")}
+                                }
+                            }
+                            .into_view()
+                        })
+                    }}
+                }
+            }
+        };
 
         AnyView::new(view! {
             column(
@@ -411,6 +514,7 @@ impl Fields {
                         Authentication::Password(password) => {
                             let on_user_key = make_enter_handler(submit_inner.clone());
                             let on_pw_key = make_enter_handler(submit_inner);
+                            let remember_controls = render_remember_controls();
                             AnyView::new(view! {
                                 column(class = "gds-connect-form") {
                                     FormField(label = i18n::text(user_label)) {
@@ -426,6 +530,7 @@ impl Fields {
                                             on:key_down = on_pw_key,
                                         )
                                     }
+                                    {remember_controls}
                                 }
                             })
                         }
@@ -433,6 +538,7 @@ impl Fields {
                             let on_user_key = make_enter_handler(submit_inner.clone());
                             let on_path_key = make_enter_handler(submit_inner.clone());
                             let on_pass_key = make_enter_handler(submit_inner);
+                            let remember_controls = render_remember_controls();
                             AnyView::new(view! {
                                 column(class = "gds-connect-form") {
                                     FormField(label = i18n::text(user_label)) {
@@ -455,11 +561,27 @@ impl Fields {
                                             on:key_down = on_pass_key,
                                         )
                                     }
+                                    {remember_controls}
                                 }
                             })
                         }
                         Authentication::Guest => AnyView::new(view! { box() }),
                     }
+                }}
+                {move || {
+                    let forget_click = forget.clone();
+                    has_saved.get().then(|| {
+                        view! {
+                            row(class = "gds-connect-form__saved-actions") {
+                                Button(
+                                    variant = ButtonVariant::Ghost,
+                                    icon = IconName::Trash,
+                                    on:click = move |_| forget_click(),
+                                ) {{i18n::text("remote-forget-credentials")}}
+                            }
+                        }
+                        .into_view()
+                    })
                 }}
             }
         })
@@ -477,16 +599,42 @@ fn FormField(#[prop(into)] label: String, children: Children) -> impl IntoView {
 }
 
 impl Form {
-    pub fn new(address: Option<Address>) -> Self {
+    pub fn new(
+        address: Option<Address>,
+        keyring_available: Option<bool>,
+        has_saved: bool,
+        initial_auth: Option<InitialAuth>,
+    ) -> Self {
         let owner = Owner::current().expect("connection form belongs to a window");
         Self {
             owner,
-            fields: RwSignal::new_local(
-                address
-                    .as_ref()
-                    .map(|address| Fields::new(address.protocol(), Some(address))),
-            ),
+            saved_address: address.clone(),
+            keyring_available: RwSignal::new_local(keyring_available),
+            has_saved: RwSignal::new_local(has_saved),
+            fields: RwSignal::new_local(address.as_ref().map(|address| {
+                Fields::new(
+                    address.protocol(),
+                    Some(address),
+                    initial_auth.as_ref(),
+                    has_saved,
+                )
+            })),
         }
+    }
+
+    pub fn set_keyring_available(&self, available: bool) {
+        self.keyring_available.set(Some(available));
+    }
+
+    pub fn set_has_saved(&self, saved: bool) {
+        self.has_saved.set(saved);
+        if !saved && let Some(fields) = self.fields.get_untracked() {
+            fields.remember.set(false);
+        }
+    }
+
+    pub fn saved_address(&self) -> Option<Address> {
+        self.saved_address.clone()
     }
 
     pub fn ready(&self) -> bool {
@@ -497,16 +645,31 @@ impl Form {
         self.fields
             .get_untracked()
             .ok_or(Error::Protocol)?
-            .request()
+            .request(self.keyring_available.get_untracked())
     }
 
-    pub fn view(&self, auto_focus: bool, submit: impl Fn() + 'static) -> AnyView {
+    pub fn view(
+        &self,
+        auto_focus: bool,
+        submit: impl Fn() + 'static,
+        forget: impl Fn() + 'static,
+    ) -> AnyView {
         install_form_stylesheet();
         let submit: Rc<dyn Fn()> = Rc::new(submit);
+        let forget: Rc<dyn Fn()> = Rc::new(forget);
         let fields = self.fields;
+        let keyring_available = self.keyring_available;
+        let has_saved = self.has_saved;
         let owner = self.owner.clone();
         AnyView::new(move || match fields.get() {
-            Some(current) => current.view(auto_focus, move || fields.set(None), submit.clone()),
+            Some(current) => current.view(
+                auto_focus,
+                keyring_available,
+                has_saved,
+                move || fields.set(None),
+                submit.clone(),
+                forget.clone(),
+            ),
             None => {
                 let outer_owner = owner.clone();
                 let options = [
@@ -523,7 +686,7 @@ impl Form {
                             a11y:label = label,
                             on:click = move |_| {
                                 click_owner.with(|| {
-                                    fields.set(Some(Fields::new(protocol, None)));
+                                    fields.set(Some(Fields::new(protocol, None, None, false)));
                                 });
                             },
                         ) {

@@ -58,3 +58,9 @@ remote-network-empty = Add a network location to connect to a server.
 
 remote-not-open = This location is not open
 remote-back-network = Back to Network
+remote-remember-credentials = Remember credentials in system keyring
+remote-keyring-unavailable = System keyring service (org.freedesktop.secrets) is unavailable
+remote-forget-credentials = Forget saved credentials
+remote-credentials-forgotten = Saved credentials removed from system keyring
+remote-credentials-not-found = No saved credentials found for this server
+remote-saved-auth-failed = Saved credentials were rejected. Enter new credentials or forget the saved ones.

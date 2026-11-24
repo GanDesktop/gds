@@ -4,12 +4,22 @@ pub use address::{Address, Protocol};
 use std::{path::PathBuf, time::SystemTime};
 use tokio::sync::oneshot;
 
-/// Connection secrets are memory-only and intentionally have no Debug/Serialize implementation.
+/// Connection secrets intentionally have no Debug/Serialize implementation;
+/// optional persistence goes through [`keyring`](crate::service::remote::keyring).
 #[derive(Default, Clone)]
 pub struct Credentials {
     pub password: String,
     pub private_key: Option<PathBuf>,
     pub key_passphrase: Option<String>,
+}
+
+impl Credentials {
+    /// Returns whether these credentials carry a secret or private key path
+    /// that can be stored in the system keyring.
+    #[must_use]
+    pub fn has_secret(&self) -> bool {
+        !self.password.is_empty() || self.private_key.is_some()
+    }
 }
 
 pub struct ConnectOptions {
