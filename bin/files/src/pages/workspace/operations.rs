@@ -36,7 +36,7 @@ use crate::{
         file_operations::{
             Batch, Kind as DeleteKind, history, names, new_folder,
             paste::{self, Inspection, PassOutcome, PasteJob},
-            recycle, rename, transfer,
+            recycle, rename, templates, transfer,
         },
         pick_files,
     },
@@ -99,6 +99,7 @@ struct PasteContext {
     record_history: bool,
     snapshot: Option<clipboard::Snapshot>,
     drop_handle: Rc<RefCell<Option<DropHandle>>>,
+    inhibit: Rc<RefCell<Option<gds::service::desktop::InhibitGuard>>>,
 }
 
 impl PasteContext {
@@ -113,7 +114,16 @@ impl PasteContext {
             record_history,
             snapshot,
             drop_handle: Rc::new(RefCell::new(drop_handle)),
+            inhibit: Rc::new(RefCell::new(None)),
         }
+    }
+
+    fn attach_inhibit(&self, guard: gds::service::desktop::InhibitGuard) {
+        *self.inhibit.borrow_mut() = Some(guard);
+    }
+
+    fn release_inhibit(&self) {
+        let _ = self.inhibit.borrow_mut().take();
     }
 
     fn settle_drop(&self, succeeded: bool) {
@@ -636,6 +646,149 @@ impl Browser {
         }
     }
 
+    pub(super) fn create_from_template(&self, directory: PathBuf, template: PathBuf) {
+        if self.0.volumes.removal_in_progress(&directory)
+            || self.read_untracked(|state| {
+                state.operation.busy() || state.tab().navigation.is_loading()
+            })
+        {
+            return;
+        }
+        let Some(cancel) = self.begin_operation(&i18n::text_untracked("template-create-working"))
+        else {
+            return;
+        };
+        let parent = directory.clone();
+        let request = templates::Request {
+            template,
+            directory,
+        };
+        let task = request.spawn(&self.scope(), cancel);
+        let weak = self.downgrade();
+        self.0.owner.with(|| {
+            drop(spawn_local(async move {
+                let result = task.await;
+                let Some(browser) = weak.upgrade() else {
+                    return;
+                };
+                browser.end_operation();
+                match result {
+                    Ok(Ok(created)) => {
+                        let label = created
+                            .path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        if recycle::supported()
+                            && let Some(expected) = created.snapshot
+                        {
+                            browser.record_history(history::Entry::new(
+                                history::Kind::NewFile,
+                                vec![history::Step::trash(created.path.clone(), expected)],
+                            ));
+                        }
+                        browser.reveal_paths(vec![created.path.clone()]);
+                        browser.refresh_affected(&[parent]);
+                        browser.report_success(gds::t_untracked!(
+                            "template-create-done",
+                            name = label
+                        ));
+                        browser.focus_content();
+                    }
+                    Ok(Err(error)) => {
+                        browser.report_notice(gds::t_untracked!(
+                            "template-create-failed",
+                            error = error.to_string()
+                        ));
+                    }
+                    Err(error) => {
+                        browser.report_notice(gds::t_untracked!(
+                            "template-create-failed",
+                            error = error.to_string()
+                        ));
+                    }
+                }
+            }));
+        });
+    }
+
+    #[cfg(unix)]
+    pub(super) fn create_symlink(&self, target: PathBuf) {
+        let directory = self.read_untracked(|state| {
+            if state.operation.busy() {
+                return None;
+            }
+            let tab = state.tab();
+            if !matches!(tab.contents, Contents::Directory) || tab.navigation.is_loading() {
+                return None;
+            }
+            tab.navigation.path().map(Path::to_path_buf)
+        });
+        let Some(directory) = directory else {
+            return;
+        };
+        if self.0.volumes.removal_in_progress(&directory) {
+            return;
+        }
+        let Some(cancel) = self.begin_operation(&i18n::text_untracked("create-symlink-working"))
+        else {
+            return;
+        };
+        let parent = directory.clone();
+        let request = crate::features::file_operations::symlink::Request {
+            target,
+            directory,
+            link_suffix: i18n::text_untracked("create-symlink-suffix"),
+        };
+        let task = request.spawn(&self.scope(), cancel);
+        let weak = self.downgrade();
+        self.0.owner.with(|| {
+            drop(spawn_local(async move {
+                let result = task.await;
+                let Some(browser) = weak.upgrade() else {
+                    return;
+                };
+                browser.end_operation();
+                match result {
+                    Ok(Ok(created)) => {
+                        let label = created
+                            .path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        if let Some(expected) = created.snapshot {
+                            browser.record_history(history::Entry::new(
+                                history::Kind::CreateLink,
+                                vec![history::Step::RemoveSymlink {
+                                    path: created.path.clone(),
+                                    target: created.target,
+                                    expected,
+                                }],
+                            ));
+                        }
+                        browser.reveal_paths(vec![created.path.clone()]);
+                        browser.refresh_affected(&[parent]);
+                        browser
+                            .report_success(gds::t_untracked!("create-symlink-done", name = label));
+                        browser.focus_content();
+                    }
+                    Ok(Err(error)) => {
+                        browser.report_notice(gds::t_untracked!(
+                            "create-symlink-failed",
+                            error = error.to_string()
+                        ));
+                    }
+                    Err(error) => {
+                        browser.report_notice(gds::t_untracked!(
+                            "create-symlink-failed",
+                            error = error.to_string()
+                        ));
+                    }
+                }
+            }));
+        });
+    }
+
     pub(super) fn rename(&self) {
         let target = self.read_untracked(|state| {
             if state.operation.busy() {
@@ -875,6 +1028,11 @@ impl Browser {
         let Some(cancel) = self.begin_operation(&label) else {
             return;
         };
+        let inhibit = gds::service::desktop::InhibitGuard::delayed(
+            &self.scope(),
+            gds::service::desktop::DEFAULT_INHIBIT_DELAY,
+            i18n::text_untracked("transfer-inhibit-reason"),
+        );
         let affected = batch.paths().to_vec();
         let task = self.scope().spawn_blocking_named("Delete files", move || {
             batch.execute_cancellable(kind, &cancel)
@@ -883,6 +1041,7 @@ impl Browser {
         self.0.owner.with(|| {
             drop(spawn_local(async move {
                 let result = task.await;
+                drop(inhibit);
                 let Some(browser) = weak.upgrade() else {
                     return;
                 };
@@ -1012,7 +1171,10 @@ impl Browser {
                 let has_inverse = !report.inverse.is_empty();
                 let trash_affected = matches!(
                     kind,
-                    history::Kind::Trash | history::Kind::Restore | history::Kind::NewFolder
+                    history::Kind::Trash
+                        | history::Kind::Restore
+                        | history::Kind::NewFolder
+                        | history::Kind::NewFile
                 );
                 browser.update(|state| {
                     state.history.finish(direction, &mut report);
@@ -1264,6 +1426,11 @@ impl Browser {
             self.report_notice(i18n::text_untracked("file-operation-busy"));
             return;
         };
+        context.attach_inhibit(gds::service::desktop::InhibitGuard::delayed(
+            &self.scope(),
+            gds::service::desktop::DEFAULT_INHIBIT_DELAY,
+            i18n::text_untracked("transfer-inhibit-reason"),
+        ));
         self.inspect_paste_step(job, context, cancel);
     }
 
@@ -1277,11 +1444,13 @@ impl Browser {
                 let result = task.await;
                 let Some(browser) = weak.upgrade() else {
                     context.settle_drop(false);
+                    context.release_inhibit();
                     return;
                 };
                 let Ok(inspection) = result else {
                     browser.end_operation();
                     context.settle_drop(false);
+                    context.release_inhibit();
                     if let Err(error) = result {
                         browser.report_notice(error.to_string());
                     }
@@ -1298,6 +1467,7 @@ impl Browser {
                         if !job.has_disk_progress() {
                             browser.end_operation();
                             context.settle_drop(false);
+                            context.release_inhibit();
                             browser.report_notice(error.to_string());
                         } else {
                             let mut failed_job = job;
@@ -1353,6 +1523,7 @@ impl Browser {
                 cancelled_job.abort_remaining();
                 if cancelled_job.succeeded.is_empty() && cancelled_job.failures.is_empty() {
                     browser_cancel.end_operation();
+                    cancel_context.release_inhibit();
                     browser_cancel.report_notice(i18n::text_untracked("paste-cancelled"));
                 } else {
                     browser_cancel.finish_paste_job(cancelled_job, cancel_context.clone(), true);
@@ -1383,6 +1554,7 @@ impl Browser {
                 if !job.has_disk_progress() {
                     self.end_operation();
                     context.settle_drop(false);
+                    context.release_inhibit();
                     self.report_notice(error.to_string());
                 } else {
                     job.record_abort(error.to_string());
@@ -1411,6 +1583,7 @@ impl Browser {
                 let result = task.await;
                 let Some(browser) = weak.upgrade() else {
                     context.settle_drop(false);
+                    context.release_inhibit();
                     return;
                 };
                 match result {
@@ -1423,6 +1596,7 @@ impl Browser {
                     Err(error) => {
                         browser.end_operation();
                         context.settle_drop(false);
+                        context.release_inhibit();
                         browser.report_notice(error.to_string());
                     }
                 }
@@ -1476,6 +1650,7 @@ impl Browser {
             && summary.skipped == 0
             && (!summary.succeeded.is_empty() || summary.merged_dirs > 0);
         context.settle_drop(whole_batch_succeeded);
+        context.release_inhibit();
 
         self.end_operation();
         let mut changed_paths = vec![destination];
@@ -1516,11 +1691,17 @@ impl Browser {
                 details.push(gds::t_untracked!("clipboard-update-failed", error = err));
             }
             let message = if details.is_empty() {
-                headline
+                headline.clone()
             } else {
                 format!("{headline}\n{}", details.join("\n"))
             };
             self.report_notice(message);
+            self.notify_if_unfocused(
+                "local-transfer",
+                i18n::text_untracked("transfer-notify-failed-title"),
+                headline,
+                true,
+            );
         } else if !summary.succeeded.is_empty() && summary.skipped > 0 {
             let message = if summary.mode == transfer::Mode::Move {
                 gds::t_untracked!(
@@ -1535,19 +1716,36 @@ impl Browser {
                     skipped = summary.skipped as i64
                 )
             };
-            self.report_success(message);
+            self.report_success(message.clone());
+            self.notify_if_unfocused(
+                "local-transfer",
+                i18n::text_untracked("transfer-notify-title"),
+                message,
+                false,
+            );
         } else if !summary.succeeded.is_empty() {
             let key = if summary.mode == transfer::Mode::Move {
                 "move-done"
             } else {
                 "copy-done"
             };
-            self.report_success(gds_i18n::count_untracked(key, summary.succeeded.len()));
+            let message = gds_i18n::count_untracked(key, summary.succeeded.len());
+            self.report_success(message.clone());
+            self.notify_if_unfocused(
+                "local-transfer",
+                i18n::text_untracked("transfer-notify-title"),
+                message,
+                false,
+            );
         } else if summary.merged_dirs > 0 && summary.skipped == 0 {
-            self.report_success(gds_i18n::count_untracked(
-                "paste-merged",
-                summary.merged_dirs,
-            ));
+            let message = gds_i18n::count_untracked("paste-merged", summary.merged_dirs);
+            self.report_success(message.clone());
+            self.notify_if_unfocused(
+                "local-transfer",
+                i18n::text_untracked("transfer-notify-title"),
+                message,
+                false,
+            );
         } else if summary.skipped > 0 {
             self.report_info(gds_i18n::count_untracked("paste-skipped", summary.skipped));
         }

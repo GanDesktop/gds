@@ -1,6 +1,7 @@
 details-format = Format
 details-mime = MIME type
 details-created = Created
+details-origin = Origin
 details-target = Target
 details-dimensions = Dimensions
 details-aspect = Aspect ratio

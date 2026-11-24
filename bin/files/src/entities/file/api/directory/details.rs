@@ -216,6 +216,8 @@ pub enum ContentCategory {
 /// How a [`ContentType`] classification was produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetectionSource {
+    /// Explicit FreeDesktop `user.mime_type` extended attribute override.
+    Xattr,
     /// Matched from filename rules (`mime.cache` / `globs2`).
     Filename,
     /// Matched from generated GitHub Linguist source-code rules.

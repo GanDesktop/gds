@@ -11,6 +11,17 @@ new-folder-done = 已创建文件夹“{ $name }”
 new-folder-failed = 无法创建文件夹：{ $error }
 new-folder-exists = 已存在名为“{ $name }”的项目。
 
+new-from-template = 从模板新建
+template-create-working = 正在创建文件…
+template-create-done = 已创建“{ $name }”
+template-create-failed = 无法创建文件：{ $error }
+
+create-symlink = 创建符号链接
+create-symlink-suffix = 链接
+create-symlink-working = 正在创建符号链接…
+create-symlink-done = 已创建符号链接“{ $name }”
+create-symlink-failed = 无法创建符号链接：{ $error }
+
 transfer-name-empty = 请输入名称。
 transfer-name-separator = 名称不能包含路径分隔符。
 transfer-name-reserved = 不能使用“.”或“..”作为名称。
@@ -64,6 +75,9 @@ paste-skipped = 已跳过 { $count } 个项目
 paste-merged = 已合并 { $count } 个文件夹
 copy-done-skipped = 已复制 { $succeeded } 个项目，跳过 { $skipped } 个。
 move-done-skipped = 已移动 { $succeeded } 个项目，跳过 { $skipped } 个。
+transfer-inhibit-reason = 正在进行文件传输
+transfer-notify-title = 文件传输已完成
+transfer-notify-failed-title = 文件传输存在错误
 drop-into-self = 无法将文件夹移动或复制到其自身或子文件夹中。
 drop-unsupported-destination = 只能将文件拖放到本地文件夹中。
 drop-no-local-files = 无法从拖放项目中读取本地文件。
@@ -77,6 +91,8 @@ history-copy = 复制
 history-move = 移动
 history-rename = 重命名
 history-new-folder = 新建文件夹
+history-new-file = 新建文件
+history-create-link = 创建符号链接
 history-trash = 移入回收站
 history-restore = 恢复
 help-history = 撤销与重做

@@ -51,7 +51,9 @@ rustPlatform.buildRustPackage {
     desktopName = labels.default.Name;
     genericName = labels.default.GenericName;
     comment = labels.default.Comment;
-    extraConfig = (desktopItem.extraConfig or { }) // translations;
+    extraConfig = (desktopItem.extraConfig or { })
+      // (lib.optionalAttrs (labels.default ? Keywords) { Keywords = labels.default.Keywords; })
+      // translations;
     terminal = false;
     startupWMClass = desktopItem.name;
   })) ];

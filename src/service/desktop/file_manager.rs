@@ -15,6 +15,8 @@ pub const LAUNCHER_INTERFACE: &str = "io.github.GanDesktop.Files";
 pub enum Request {
     /// Open one directory in a new window.
     NewWindow { directory: PathBuf },
+    /// Open one or more target URIs (`file://`, `trash:///`, `sftp://`, etc.), optionally forcing a new window.
+    OpenLocations { uris: Vec<String>, new_window: bool },
     /// Open the directories themselves, reusing a window when possible.
     ShowFolders { directories: Vec<PathBuf> },
     /// Reveal and select these files or folders in their parent directories.
@@ -119,6 +121,25 @@ impl Launcher {
             Request::NewWindow {
                 directory: local_path(&uri)?,
             },
+            startup_id,
+        )
+        .await
+    }
+
+    async fn open_locations(
+        &self,
+        uris: Vec<String>,
+        new_window: bool,
+        startup_id: String,
+    ) -> zbus::fdo::Result<()> {
+        if uris.is_empty() {
+            return Err(zbus::fdo::Error::InvalidArgs(
+                "at least one URI is required".into(),
+            ));
+        }
+        dispatch(
+            &self.sender,
+            Request::OpenLocations { uris, new_window },
             startup_id,
         )
         .await
@@ -241,6 +262,32 @@ impl Server {
                 Some(LAUNCHER_INTERFACE),
                 "OpenWindow",
                 &(uri.as_str(), startup_id),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Forward one or more target URIs to the running Files instance, optionally opening a new window.
+    ///
+    /// # Errors
+    /// Reports empty URI lists or failures contacting the running Files process.
+    pub async fn open_existing_locations(
+        app_bus_name: &str,
+        uris: &[String],
+        new_window: bool,
+        startup_id: &str,
+    ) -> Result<(), Error> {
+        if uris.is_empty() {
+            return Err(Error::InvalidUri(String::new()));
+        }
+        let connection = Connection::session().await?;
+        connection
+            .call_method(
+                Some(app_bus_name),
+                OBJECT_PATH,
+                Some(LAUNCHER_INTERFACE),
+                "OpenLocations",
+                &(uris, new_window, startup_id),
             )
             .await?;
         Ok(())

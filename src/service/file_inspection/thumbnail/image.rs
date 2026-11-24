@@ -5,16 +5,34 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage};
+use image::{
+    DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage, metadata::Orientation,
+};
 
 use super::{EDGE, Error};
 
 const MAX_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 const SVG_PREFIX_BYTES: usize = 4 * 1024;
 
+/// A generated thumbnail image paired with optional original source pixel dimensions
+/// for FreeDesktop `Thumb::Image::Width` / `Thumb::Image::Height` cache metadata.
+pub(in crate::service::file_inspection) struct Generated {
+    pub(super) image: RgbaImage,
+    pub(super) source_dimensions: Option<(u32, u32)>,
+}
+
+impl Generated {
+    pub(super) fn image_only(image: RgbaImage) -> Self {
+        Self {
+            image,
+            source_dimensions: None,
+        }
+    }
+}
+
 /// # Errors
 /// Reports unreadable, unsupported or oversized images.
-pub(super) fn load(path: &Path, max_source_bytes: u64) -> Result<RgbaImage, Error> {
+pub(super) fn load(path: &Path, max_source_bytes: u64) -> Result<Generated, Error> {
     let max_source_bytes = max_source_bytes.max(1);
     let file = File::open(path)?;
     if file.metadata()?.len() > max_source_bytes {
@@ -34,7 +52,7 @@ pub(super) fn load_bytes(
     bytes: &[u8],
     path: Option<&Path>,
     max_source_bytes: u64,
-) -> Result<RgbaImage, Error> {
+) -> Result<Generated, Error> {
     let max_source_bytes = max_source_bytes.max(1);
     if bytes.len() as u64 > max_source_bytes {
         return Err(Error::TooLarge);
@@ -56,10 +74,26 @@ pub(super) fn load_bytes(
     if decoder.total_bytes() > MAX_DECODE_BYTES {
         return Err(Error::TooLarge);
     }
+    let (raw_w, raw_h) = decoder.dimensions();
     let orientation = decoder.orientation()?;
+    let source_dimensions = if matches!(
+        orientation,
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    ) {
+        (raw_h, raw_w)
+    } else {
+        (raw_w, raw_h)
+    };
     let mut image = DynamicImage::from_decoder(decoder)?.thumbnail(EDGE, EDGE);
     image.apply_orientation(orientation);
-    Ok(image.to_rgba8())
+    Ok(Generated {
+        image: image.to_rgba8(),
+        source_dimensions: (source_dimensions.0 > 0 && source_dimensions.1 > 0)
+            .then_some(source_dimensions),
+    })
 }
 
 /// Strictly decode an external thumbnailer's PNG output under bounded memory limits, scaling
@@ -87,7 +121,7 @@ pub(super) fn load_png_bounded(bytes: &[u8]) -> Result<RgbaImage, Error> {
 
 /// # Errors
 /// Reports malformed SVGs or an unavailable raster allocation.
-fn render_svg(bytes: &[u8]) -> Result<RgbaImage, Error> {
+fn render_svg(bytes: &[u8]) -> Result<Generated, Error> {
     use resvg::{tiny_skia, usvg};
     static FONTS: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
     let fonts = FONTS.get_or_init(|| {
@@ -139,8 +173,14 @@ fn render_svg(bytes: &[u8]) -> Result<RgbaImage, Error> {
             [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]
         })
         .collect();
-    Ok(RgbaImage::from_raw(width, height, pixels)
-        .expect("pixmap dimensions match its pixel buffer"))
+    let image = RgbaImage::from_raw(width, height, pixels)
+        .expect("pixmap dimensions match its pixel buffer");
+    let orig_w = source_width.round() as u32;
+    let orig_h = source_height.round() as u32;
+    Ok(Generated {
+        image,
+        source_dimensions: (orig_w > 0 && orig_h > 0).then_some((orig_w, orig_h)),
+    })
 }
 
 fn is_svg(bytes: &[u8]) -> bool {

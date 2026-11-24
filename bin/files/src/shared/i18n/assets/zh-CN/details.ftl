@@ -1,6 +1,7 @@
 details-format = 格式
 details-mime = MIME 类型
 details-created = 创建时间
+details-origin = 下载来源
 details-target = 目标
 details-dimensions = 尺寸
 details-aspect = 宽高比

@@ -10,4 +10,6 @@ pub(crate) mod recycle;
 #[cfg(unix)]
 pub(crate) mod permissions;
 
-pub(crate) use api::{new_folder, rename};
+#[cfg(unix)]
+pub(crate) use api::symlink;
+pub(crate) use api::{new_folder, rename, templates};

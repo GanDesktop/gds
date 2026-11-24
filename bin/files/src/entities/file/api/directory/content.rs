@@ -119,6 +119,15 @@ impl ContentType {
     }
 
     fn detect_with_database(db: &MimeDatabase, name: &OsStr, path: &Path) -> Option<Self> {
+        if let Some(xattr_mime) = gds::service::file_tags::read_mime_type(path) {
+            let canonical = db.unalias(&xattr_mime);
+            return Some(Self::build_from_mime(
+                db,
+                &canonical,
+                Some(name),
+                DetectionSource::Xattr,
+            ));
+        }
         match Self::classify_filename_with_database(db, name) {
             FilenameClassification::Resolved(content) => Some(content),
             FilenameClassification::Ambiguous(fallback) => {
@@ -164,6 +173,15 @@ impl ContentType {
     }
 
     fn probe_content_with_database(db: &MimeDatabase, name: &OsStr, path: &Path) -> Option<Self> {
+        if let Some(xattr_mime) = gds::service::file_tags::read_mime_type(path) {
+            let canonical = db.unalias(&xattr_mime);
+            return Some(Self::build_from_mime(
+                db,
+                &canonical,
+                Some(name),
+                DetectionSource::Xattr,
+            ));
+        }
         let candidates = db.filename_candidates(&name.to_string_lossy());
         if !candidates.is_empty()
             && disambiguation::detect_conflict(db, name, &candidates) != ConflictKind::None

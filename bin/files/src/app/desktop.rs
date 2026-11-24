@@ -36,11 +36,32 @@ impl DesktopIntegration {
         match Server::claim_app(APP_ID, sender).await {
             Ok(server) => Ok(Acquire::Continue(Some(Self { server, receiver }))),
             Err(Error::AlreadyRunning) => {
-                if let Mode::Browser { start } = mode {
+                if let Mode::Browser {
+                    start,
+                    locations,
+                    new_window,
+                } = mode
+                {
                     let startup_id = std::env::var("XDG_ACTIVATION_TOKEN")
                         .or_else(|_| std::env::var("DESKTOP_STARTUP_ID"))
                         .unwrap_or_default();
-                    Server::open_existing(APP_ID, start, &startup_id).await?;
+                    if locations.is_empty() {
+                        Server::open_existing(APP_ID, start, &startup_id).await?;
+                    } else {
+                        let uris: Vec<String> =
+                            locations.iter().filter_map(|loc| loc.uri().ok()).collect();
+                        if uris.is_empty() {
+                            Server::open_existing(APP_ID, start, &startup_id).await?;
+                        } else {
+                            Server::open_existing_locations(
+                                APP_ID,
+                                &uris,
+                                *new_window,
+                                &startup_id,
+                            )
+                            .await?;
+                        }
+                    }
                 }
                 Ok(Acquire::Delegated)
             }

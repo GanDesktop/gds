@@ -1078,12 +1078,48 @@ impl Browser {
             }
         };
 
-        let mut entries = vec![
-            item(
-                DirectoryAction::NewFolder,
-                IconName::FolderPlus,
-                Some(Command::NewFolder),
-            ),
+        let mut entries = vec![item(
+            DirectoryAction::NewFolder,
+            IconName::FolderPlus,
+            Some(Command::NewFolder),
+        )];
+        let templates = crate::features::file_operations::templates::discover_user();
+        if !templates.is_empty() {
+            let disabled = !DirectoryAction::NewFolder.available(self, &target);
+            let template_entries = templates
+                .into_iter()
+                .map(|template| {
+                    let browser = self.clone();
+                    let target_run = target.clone();
+                    let template_path = template.path;
+                    MenuEntry::Item {
+                        label: template.label,
+                        icon: Some(IconName::FileText),
+                        shortcut: None,
+                        disabled,
+                        destructive: false,
+                        on_select: UnsyncCallback::new(move |()| {
+                            browser.0.owner.with(|| {
+                                if !target_run.still_current_untracked(&browser) {
+                                    browser.report_notice(i18n::text_untracked("location-changed"));
+                                    return;
+                                }
+                                browser.create_from_template(
+                                    target_run.path.clone(),
+                                    template_path.clone(),
+                                );
+                            });
+                        }),
+                    }
+                })
+                .collect();
+            entries.push(MenuEntry::Submenu {
+                label: i18n::text_untracked("new-from-template"),
+                icon: Some(IconName::FileText),
+                entries: template_entries,
+            });
+        }
+        entries.extend([
             MenuEntry::Separator,
             item(
                 DirectoryAction::Paste,
@@ -1091,7 +1127,7 @@ impl Browser {
                 Some(Command::Paste),
             ),
             MenuEntry::Separator,
-        ];
+        ]);
         if self.0.preferences.snapshot().terminal_enabled() {
             if self.read_untracked(|state| state.picker.is_none()) {
                 entries.push(item(
@@ -1639,10 +1675,12 @@ impl Browser {
             |browser| browser.copy(true),
             busy,
         ));
+        let paste_dir_unavailable = current_dir
+            .as_ref()
+            .is_none_or(|path| self.0.volumes.removal_in_progress(path));
         if !many {
-            let paste_disabled = busy
-                || current_dir.is_none_or(|path| self.0.volumes.removal_in_progress(&path))
-                || !Clipboard::current().can_paste_untracked();
+            let paste_disabled =
+                busy || paste_dir_unavailable || !Clipboard::current().can_paste_untracked();
             entries.push(self.menu_item_entry(
                 "paste-files",
                 Some(IconName::ClipboardPaste),
@@ -1669,6 +1707,17 @@ impl Browser {
                 busy || !cfg!(any(target_os = "linux", target_os = "freebsd"))
                     || entry.path.file_name().is_none(),
             ));
+            #[cfg(unix)]
+            if current_dir.is_some() {
+                let entry_link = entry.path.clone();
+                entries.push(self.menu_item_entry(
+                    "create-symlink",
+                    Some(IconName::Link),
+                    None,
+                    busy || unavailable || paste_dir_unavailable,
+                    move |browser| browser.create_symlink(entry_link.clone()),
+                ));
+            }
             if self.tags_enabled_untracked() {
                 entries.push(self.menu_item_entry(
                     "tags-edit",

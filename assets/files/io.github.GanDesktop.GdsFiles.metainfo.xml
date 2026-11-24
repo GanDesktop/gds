@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.GanDesktop.GdsFiles</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>Files</name>
+  <name xml:lang="zh-CN">文件</name>
+  <summary>Browse files and folders</summary>
+  <summary xml:lang="zh-CN">浏览文件与文件夹</summary>
+  <description>
+    <p>
+      GDS Files is a native Wayland and X11 file manager for Linux desktops. It supports local
+      directories, removable volumes, Trash, Recent files, SFTP and SMB network locations,
+      document previews, tags, and embedded terminals.
+    </p>
+    <p xml:lang="zh-CN">
+      GDS 文件是一款面向 Linux 桌面的原生 Wayland/X11 文件管理器，支持本地目录、可移动设备、回收站、最近使用的文件、SFTP/SMB 网络位置、文件预览、标签与内嵌终端。
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.GanDesktop.GdsFiles.desktop</launchable>
+  <developer id="io.github.GanDesktop">
+    <name>GanDesktop</name>
+  </developer>
+  <url type="homepage">https://github.com/GanDesktop/gds</url>
+  <url type="bugtracker">https://github.com/GanDesktop/gds/issues</url>
+  <url type="vcs-browser">https://github.com/GanDesktop/gds</url>
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </recommends>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.0.5" date="2026-11-17"/>
+  </releases>
+</component>

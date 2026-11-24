@@ -34,6 +34,5 @@ Building on the shipped `russh-sftp` and `smb` browse/copy foundation ([Network 
 ## 3. Local Workflow & Interoperability Milestones
 
 - **Recursive directory search** and **multi-file batch renaming** (`F2` currently enforces single-item rename).
-- **Whole-device storage actions**: Expose UDisks2 USB drive power-off and optical media eject in the Volumes UI (already supported in the backend layer).
 - [Cross-window file drag and drop on Wayland](wayland-file-drag-and-drop.md) covers native drag initiation, copy and move handling, and acceptance tests with Nautilus and Dolphin.
 - **Cross-desktop interoperability verification**: Ongoing test matrix with Nautilus and Dolphin across Wayland, XWayland, and X11 for bidirectional copy/cut/paste, URI drag-and-drop with special/non-UTF-8 filenames, cross-manager Trash restoration, and `FileManager1` / `GDS Portal` modal parenting.

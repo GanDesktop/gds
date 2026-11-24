@@ -120,6 +120,7 @@ impl Request {
         }
         Self::ensure_absent(&destination)?;
         Self::rename_no_replace(&self.source, &destination)?;
+        gds::service::file_inspection::invalidate_thumbnail_cache(&self.source);
         let snapshot =
             crate::features::file_operations::history::Snapshot::capture(&destination).ok();
         Ok(Renamed {

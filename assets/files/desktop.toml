@@ -2,8 +2,10 @@
 Name = "Files"
 GenericName = "File Manager"
 Comment = "Browse files and folders"
+Keywords = "folder;manager;explore;disk;filesystem;files;"
 
 [zh_CN]
 Name = "文件"
 GenericName = "文件管理器"
 Comment = "浏览文件与文件夹"
+Keywords = "文件夹;管理器;浏览;磁盘;文件系统;文件;"

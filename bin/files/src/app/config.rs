@@ -1,14 +1,25 @@
 //! Startup configuration resolution and runtime mode selection.
 
 use super::cli;
-use crate::{entities::preferences as configuration, features::pick_files as picker};
+use crate::{
+    entities::{
+        location::{Location, scheme},
+        preferences as configuration,
+    },
+    features::pick_files as picker,
+};
 use anyhow::Context as _;
 use directories::BaseDirs;
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
 
 pub(super) enum Mode {
     Browser {
         start: PathBuf,
+        locations: Vec<Location>,
+        new_window: bool,
     },
     Picker {
         start: PathBuf,
@@ -61,12 +72,74 @@ impl Mode {
                         .or_else(|| request.current_folder.as_ref().map(PathBuf::from))
                 })
                 .filter(|path| path.is_absolute() && path.is_dir());
-            let start = Self::resolve_start(arguments.directory, suggested, home)?;
+            let first = arguments
+                .targets
+                .into_iter()
+                .next()
+                .map(Self::parse_picker_path)
+                .transpose()?;
+            let start = Self::resolve_start(first, suggested, home)?;
             return Ok(Self::Picker { start, options });
         }
 
-        let start = Self::resolve_start(arguments.directory, None, home)?;
-        Ok(Self::Browser { start })
+        let new_window = arguments.new_window;
+        let locations = Self::resolve_targets(arguments.targets)?;
+        let start = locations
+            .iter()
+            .find_map(|loc| loc.local_path().map(Path::to_path_buf))
+            .unwrap_or_else(|| home.to_path_buf());
+        Ok(Self::Browser {
+            start,
+            locations,
+            new_window,
+        })
+    }
+
+    fn parse_picker_path(raw: OsString) -> anyhow::Result<PathBuf> {
+        if let Some(text) = raw.to_str()
+            && scheme::recognizes(text)
+            && let Ok(location) = Location::from_uri(text)
+            && let Some(path) = location.local_path()
+        {
+            return Ok(path.to_path_buf());
+        }
+        Ok(PathBuf::from(raw))
+    }
+
+    fn resolve_targets(targets: Vec<OsString>) -> anyhow::Result<Vec<Location>> {
+        let mut resolved = Vec::with_capacity(targets.len());
+        for raw in targets {
+            let location = if let Some(text) = raw.to_str()
+                && scheme::recognizes(text)
+            {
+                Location::from_uri(text).map_err(|error| anyhow::anyhow!(error.to_string()))?
+            } else {
+                let path = PathBuf::from(raw);
+                let abs = if path.is_absolute() {
+                    path
+                } else {
+                    std::env::current_dir()?.join(path)
+                };
+                Location::from(abs.as_path())
+            };
+            let normalized = match location {
+                Location::Directory(ref raw_path) => {
+                    let path = Path::new(raw_path);
+                    if path.is_file()
+                        && let Some(parent) = path.parent()
+                    {
+                        Location::from(parent)
+                    } else {
+                        location
+                    }
+                }
+                other => other,
+            };
+            if !resolved.contains(&normalized) {
+                resolved.push(normalized);
+            }
+        }
+        Ok(resolved)
     }
 
     /// # Errors
@@ -127,5 +200,61 @@ impl Config {
             enable_logs,
             mode,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser as _;
+
+    #[test]
+    fn resolves_multi_uri_targets_normalizes_files_and_honors_new_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sub = dir.path().join("folder");
+        std::fs::create_dir(&sub).expect("create subfolder");
+        let file = sub.join("note.txt");
+        std::fs::write(&file, "hello").expect("write file");
+
+        let file_uri = url::Url::from_file_path(&file)
+            .expect("file URI")
+            .to_string();
+        let args = cli::Arguments::try_parse_from([
+            "gds-files",
+            "--new-window",
+            "--",
+            "trash:///",
+            &file_uri,
+            sub.to_str().expect("utf8 path"),
+            "recent:///",
+        ])
+        .expect("parse CLI args");
+
+        let mode = Mode::resolve(args, dir.path()).expect("resolve mode");
+        let Mode::Browser {
+            start,
+            locations,
+            new_window,
+        } = mode
+        else {
+            panic!("expected Browser mode");
+        };
+        assert!(new_window);
+        assert_eq!(start, sub);
+        assert_eq!(
+            locations,
+            vec![
+                Location::Trash,
+                Location::from(sub.as_path()),
+                Location::Recent,
+            ]
+        );
+    }
+
+    #[test]
+    fn new_window_conflicts_with_picker_mode() {
+        let err = cli::Arguments::try_parse_from(["gds-files", "--new-window", "--pick-file"])
+            .expect_err("--new-window must conflict with --pick-file");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 }

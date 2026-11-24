@@ -95,10 +95,13 @@ fn videos_delegate_to_external_thumbnailers_when_configured() {
     };
     assert!(video_source.supports_thumbnail(&options));
 
-    let img = video_source
+    let generated = video_source
         .generate_cancellable_with_options(&options, &tokio_util::sync::CancellationToken::new())
         .expect("external video thumbnail");
-    assert_eq!((img.width(), img.height()), (64, 48));
+    assert_eq!(
+        (generated.image.width(), generated.image.height()),
+        (64, 48)
+    );
 
     // A helper exiting non-zero reports ExternalFailed.
     let failing = directory.path().join("failing-thumb");

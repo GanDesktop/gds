@@ -663,12 +663,19 @@ impl Browser {
             let finish_key = task_key.clone();
             let progress_key = task_key.clone();
             let to_delete = resources.clone();
+            let inhibit_scope = browser.scope();
+            let inhibit_reason = i18n::text_untracked("transfer-inhibit-reason");
             let (tx, mut rx) = mpsc::unbounded_channel();
             let (updates_tx, mut updates_rx) = watch::channel(remote_transfer::Progress::default());
             drop(
                 browser
                     .scope()
                     .spawn_named("Delete remote files", async move {
+                        let _inhibit = gds::service::desktop::InhibitGuard::delayed(
+                            &inhibit_scope,
+                            gds::service::desktop::DEFAULT_INHIBIT_DELAY,
+                            inhibit_reason,
+                        );
                         let report = remote_transfer::delete(to_delete, cancel, updates_tx).await;
                         let _ = tx.send(report);
                     }),
@@ -1091,9 +1098,16 @@ impl Browser {
             .remote_buffer_bytes();
         let scope = self.scope();
         let spawn_scope = scope.clone();
+        let inhibit_scope = scope.clone();
+        let inhibit_reason = i18n::text_untracked("transfer-inhibit-reason");
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (updates_tx, mut updates_rx) = watch::channel(remote_transfer::Progress::default());
         drop(spawn_scope.spawn_named("Remote file transfer", async move {
+            let _inhibit = gds::service::desktop::InhibitGuard::delayed(
+                &inhibit_scope,
+                gds::service::desktop::DEFAULT_INHIBIT_DELAY,
+                inhibit_reason,
+            );
             let report = remote_transfer::copy(
                 scope,
                 sources,
@@ -1164,13 +1178,23 @@ impl Browser {
                         .map(|(item, err)| format!("{item}: {err}"))
                         .collect();
                     browser.report_notice(format!("{headline}\n{}", details.join("\n")));
+                    browser.notify_if_unfocused(
+                        "remote-transfer",
+                        i18n::text_untracked("transfer-notify-failed-title"),
+                        headline,
+                        true,
+                    );
                 } else if let Some(path) = open_after {
                     browser.open_file(path, OpenMode::DefaultApplication);
                 } else {
-                    browser.report_success(gds_i18n::count_untracked(
-                        "copy-done",
-                        report.completed.len(),
-                    ));
+                    let message = gds_i18n::count_untracked("copy-done", report.completed.len());
+                    browser.report_success(message.clone());
+                    browser.notify_if_unfocused(
+                        "remote-transfer",
+                        i18n::text_untracked("transfer-notify-title"),
+                        message,
+                        false,
+                    );
                 }
                 browser.focus_content();
             }));
@@ -1181,9 +1205,48 @@ impl Browser {
         if self.read_untracked(|state| state.picker.is_some()) {
             return;
         }
+        if let Request::OpenLocations { uris, new_window } = command.request {
+            self.show_files();
+            let mut locations = Vec::with_capacity(uris.len());
+            for uri in uris {
+                match Location::from_uri(&uri) {
+                    Ok(location) => {
+                        if !locations.contains(&location) {
+                            locations.push(location);
+                        }
+                    }
+                    Err(error) => self.report_notice(error.to_string()),
+                }
+            }
+            for (index, location) in locations.into_iter().enumerate() {
+                if new_window && index == 0 {
+                    self.open(location);
+                    continue;
+                }
+                let existing = self.read_untracked(|state| {
+                    state
+                        .tabs
+                        .iter()
+                        .position(|tab| tab.navigation.location() == &location)
+                });
+                if let Some(tab_index) = existing {
+                    self.select_tab(tab_index);
+                } else {
+                    self.new_tab(Some(location));
+                }
+            }
+            self.focus_content();
+            if !command.startup_id.is_empty()
+                && let Some(window) = &self.0.window
+            {
+                gds::ui::window::activate_with_token(window, &command.startup_id);
+            }
+            return;
+        }
         let properties = matches!(command.request, Request::ShowProperties { .. });
         let targets = match command.request {
             Request::NewWindow { directory } => Target::folders(vec![directory]),
+            Request::OpenLocations { .. } => unreachable!("handled above"),
             Request::ShowFolders { directories } => Target::folders(directories),
             Request::ShowItems { paths } | Request::ShowProperties { paths } => {
                 Target::items(paths)

@@ -11,6 +11,17 @@ new-folder-done = Created folder “{ $name }”
 new-folder-failed = Could not create the folder: { $error }
 new-folder-exists = An item named “{ $name }” already exists.
 
+new-from-template = New from template
+template-create-working = Creating file…
+template-create-done = Created “{ $name }”
+template-create-failed = Could not create the file: { $error }
+
+create-symlink = Create symbolic link
+create-symlink-suffix = link
+create-symlink-working = Creating symbolic link…
+create-symlink-done = Created symbolic link “{ $name }”
+create-symlink-failed = Could not create symbolic link: { $error }
+
 transfer-name-empty = Enter a name.
 transfer-name-separator = The name cannot contain a path separator.
 transfer-name-reserved = “.” and “..” cannot be used as names.
@@ -73,6 +84,9 @@ paste-merged = { $count ->
     }
 copy-done-skipped = Copied { $succeeded } items; skipped { $skipped }.
 move-done-skipped = Moved { $succeeded } items; skipped { $skipped }.
+transfer-inhibit-reason = File transfer in progress
+transfer-notify-title = File transfer complete
+transfer-notify-failed-title = File transfer finished with errors
 drop-into-self = Cannot move or copy a folder into itself or a subfolder.
 drop-unsupported-destination = Files can only be dropped into a local folder.
 drop-no-local-files = Could not read local files from the dropped item.
@@ -86,6 +100,8 @@ history-copy = Copy
 history-move = Move
 history-rename = Rename
 history-new-folder = New Folder
+history-new-file = New File
+history-create-link = Create Symbolic Link
 history-trash = Move to Trash
 history-restore = Restore
 help-history = Undo and redo

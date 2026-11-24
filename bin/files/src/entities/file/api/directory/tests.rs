@@ -424,3 +424,70 @@ fn streaming_base_read_gates_on_delay_and_min_entries_without_trailing_duplicate
     );
     assert_eq!(slow_final.entries.len(), 50);
 }
+
+#[test]
+fn dot_hidden_file_hides_direct_children_and_marks_them_hidden_when_shown() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    fs::write(root.path().join("visible.txt"), "ok").expect("write visible");
+    fs::write(root.path().join("secret.txt"), "shh").expect("write hidden file");
+    fs::create_dir(root.path().join("lost+found")).expect("create hidden dir");
+    fs::write(
+        root.path().join(".hidden"),
+        "secret.txt\r\n\nlost+found\nsub/ignored\n..\n.\n",
+    )
+    .expect("write .hidden");
+
+    let filtered = read_directory(root.path(), ReadOptions { show_hidden: false })
+        .expect("read filtered directory");
+    let names: Vec<&str> = filtered
+        .entries
+        .iter()
+        .map(|e| e.display_name.as_str())
+        .collect();
+    assert_eq!(names, ["visible.txt"]);
+
+    let shown = read_directory(root.path(), ReadOptions { show_hidden: true })
+        .expect("read directory with hidden entries");
+    assert!(
+        shown
+            .entry_for_path(&root.path().join("secret.txt"))
+            .expect("secret.txt present")
+            .is_hidden
+    );
+    assert!(
+        shown
+            .entry_for_path(&root.path().join("lost+found"))
+            .expect("lost+found present")
+            .is_hidden
+    );
+    assert!(
+        !shown
+            .entry_for_path(&root.path().join("visible.txt"))
+            .expect("visible.txt present")
+            .is_hidden
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn user_mime_type_xattr_overrides_filename_detection() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    let path = root.path().join("notes.txt");
+    fs::write(&path, "plain content").expect("write file");
+    rustix::fs::setxattr(
+        &path,
+        gds::service::file_tags::MIME_TYPE_ATTRIBUTE,
+        b"text/markdown",
+        rustix::fs::XattrFlags::empty(),
+    )
+    .expect("set user.mime_type xattr");
+
+    let entry = Entry::inspect(&path).expect("inspect file with user.mime_type");
+    let content = entry
+        .details
+        .content
+        .as_ref()
+        .expect("detected content type");
+    assert_eq!(content.mime.as_deref(), Some("text/markdown"));
+    assert_eq!(content.source, DetectionSource::Xattr);
+}

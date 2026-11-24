@@ -41,6 +41,8 @@ def main():
         app_id = "io.github.GanDesktop.GdsFiles"
         install(project / "assets/files/icon-desktop.svg",
                 f"usr/share/icons/hicolor/scalable/apps/{app_id}.svg")
+        install(project / f"assets/files/{app_id}.metainfo.xml",
+                f"usr/share/metainfo/{app_id}.metainfo.xml")
         install(project / "src/appearance/theme/provider/system/noctalia/assets/gds.json",
                 "usr/share/gds-files/noctalia/gds.json")
         labels = tomllib.loads((project / "assets/files/desktop.toml").read_text())
@@ -49,9 +51,15 @@ def main():
             suffix = "" if locale == "default" else f"[{locale}]"
             desktop.extend(f"{key}{suffix}={value}" for key, value in entries.items())
         desktop.extend([
-            "Exec=gds-files -- %f", f"Icon={app_id}",
+            "Exec=gds-files -- %U", f"Icon={app_id}",
             "Categories=System;FileTools;FileManager;", "MimeType=inode/directory;",
+            "Actions=new-window;",
+            "StartupNotify=true",
             f"StartupWMClass={app_id}", "Terminal=false", "",
+            "[Desktop Action new-window]",
+            "Name=New Window",
+            "Name[zh_CN]=新建窗口",
+            "Exec=gds-files --new-window", "",
         ])
         write(f"usr/share/applications/{app_id}.desktop", "\n".join(desktop))
     if args.component == "files":

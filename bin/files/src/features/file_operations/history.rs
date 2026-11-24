@@ -270,6 +270,8 @@ pub enum Kind {
     Move,
     Rename,
     NewFolder,
+    NewFile,
+    CreateLink,
     Trash,
     Restore,
 }
@@ -281,6 +283,8 @@ impl Kind {
             Self::Move => "history-move",
             Self::Rename => "history-rename",
             Self::NewFolder => "history-new-folder",
+            Self::NewFile => "history-new-file",
+            Self::CreateLink => "history-create-link",
             Self::Trash => "history-trash",
             Self::Restore => "history-restore",
         }
@@ -307,6 +311,17 @@ pub enum Step {
         policy: TrashPolicy,
     },
     Restore(recycle::Entry),
+    #[cfg(unix)]
+    RemoveSymlink {
+        path: PathBuf,
+        target: PathBuf,
+        expected: Snapshot,
+    },
+    #[cfg(unix)]
+    CreateSymlink {
+        path: PathBuf,
+        target: PathBuf,
+    },
 }
 
 impl Step {
@@ -346,6 +361,10 @@ impl Step {
             } => vec![source.clone(), destination.clone()],
             Self::Trash { path, .. } => vec![path.clone()],
             Self::Restore(entry) => vec![entry.original_path.clone()],
+            #[cfg(unix)]
+            Self::RemoveSymlink { path, .. } | Self::CreateSymlink { path, .. } => {
+                vec![path.clone()]
+            }
         }
     }
 
@@ -443,6 +462,42 @@ impl Step {
                     previous: Some(entry.id.clone()),
                     expected,
                     policy,
+                })
+            }
+            #[cfg(unix)]
+            Self::RemoveSymlink {
+                path,
+                target,
+                expected,
+            } => {
+                expected.verify_unmodified(path)?;
+                fs::remove_file(path).map_err(|source| Error::TargetInspection {
+                    path: path.clone(),
+                    source,
+                })?;
+                gds::service::file_inspection::invalidate_thumbnail_cache(path);
+                Ok(Self::CreateSymlink {
+                    path: path.clone(),
+                    target: target.clone(),
+                })
+            }
+            #[cfg(unix)]
+            Self::CreateSymlink { path, target } => {
+                std::os::unix::fs::symlink(target, path).map_err(|source| {
+                    if source.kind() == io::ErrorKind::AlreadyExists {
+                        Error::TargetChanged { path: path.clone() }
+                    } else {
+                        Error::TargetInspection {
+                            path: path.clone(),
+                            source,
+                        }
+                    }
+                })?;
+                let expected = Snapshot::inspect(path)?;
+                Ok(Self::RemoveSymlink {
+                    path: path.clone(),
+                    target: target.clone(),
+                    expected,
                 })
             }
         }

@@ -153,3 +153,39 @@ fn full_rescan_uses_base_scan_and_reuses_unchanged_secondary_probes() {
     assert_eq!(added_blob_entry.details.content, None);
     assert!(added_blob_entry.needs_enrichment(content_need));
 }
+
+#[test]
+fn modifying_dot_hidden_rescans_and_updates_entry_visibility() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    let keep = root.path().join("keep.txt");
+    let toggle = root.path().join("toggle.txt");
+    let dot_hidden = root.path().join(".hidden");
+    std::fs::write(&keep, "1").expect("write keep");
+    std::fs::write(&toggle, "2").expect("write toggle");
+
+    let before =
+        directory::read_directory(root.path(), ReadOptions { show_hidden: false }).expect("read");
+    assert!(before.entry_for_path(&toggle).is_some());
+
+    // Creating `.hidden` listing `toggle.txt` hides it immediately on watch reconciliation.
+    std::fs::write(&dot_hidden, "toggle.txt\n").expect("write .hidden");
+    let mut changes = Changes::default();
+    changes.push(
+        notify::Event::new(EventKind::Create(notify::event::CreateKind::File))
+            .add_path(dot_hidden.clone()),
+    );
+    let hidden_after = changes.apply(before).expect("apply .hidden creation");
+    assert!(hidden_after.entry_for_path(&toggle).is_none());
+    assert!(hidden_after.entry_for_path(&keep).is_some());
+
+    // Removing `.hidden` restores `toggle.txt`.
+    std::fs::remove_file(&dot_hidden).expect("remove .hidden");
+    let mut remove_changes = Changes::default();
+    remove_changes.push(
+        notify::Event::new(EventKind::Remove(notify::event::RemoveKind::File)).add_path(dot_hidden),
+    );
+    let restored = remove_changes
+        .apply(hidden_after)
+        .expect("apply .hidden removal");
+    assert!(restored.entry_for_path(&toggle).is_some());
+}

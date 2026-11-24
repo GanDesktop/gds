@@ -3,10 +3,13 @@ mod cache;
 pub(super) mod external;
 mod image;
 
+use std::path::Path;
+
 use super::{Error, Kind, Source};
 pub use external::{
     ExternalProbeReport, ExternalThumbnailers, SandboxError, SandboxMode, ThumbnailerInfo,
 };
+pub(super) use image::Generated;
 
 pub const EDGE: u32 = 512;
 #[cfg(test)]
@@ -51,7 +54,7 @@ impl Source {
     }
 
     #[cfg(test)]
-    pub(super) fn generate(&self) -> Result<::image::RgbaImage, Error> {
+    pub(super) fn generate(&self) -> Result<Generated, Error> {
         self.generate_cancellable_with_options(
             &super::Options::default(),
             &tokio_util::sync::CancellationToken::new(),
@@ -62,14 +65,16 @@ impl Source {
         &self,
         options: &super::Options,
         cancel: &tokio_util::sync::CancellationToken,
-    ) -> Result<::image::RgbaImage, Error> {
+    ) -> Result<Generated, Error> {
         if cancel.is_cancelled() {
             return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
         }
         if let Some(external) = options.external_thumbnailers.as_deref()
             && external.has_user_override(self.mime.as_deref(), &self.mime_ancestors)
         {
-            return external.generate(self, options.external_thumbnail_timeout, cancel, true);
+            return external
+                .generate(self, options.external_thumbnail_timeout, cancel, true)
+                .map(Generated::image_only);
         }
         let builtin = match self.kind {
             Kind::Image => Some(image::load(&self.path, options.max_thumbnail_source_bytes)),
@@ -78,7 +83,9 @@ impl Source {
                 if cancel.is_cancelled() {
                     return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
                 }
-                image::load_bytes(&bytes, None, options.max_thumbnail_source_bytes)
+                let generated =
+                    image::load_bytes(&bytes, None, options.max_thumbnail_source_bytes)?;
+                Ok(Generated::image_only(generated.image))
             })()),
             _ => None,
         };
@@ -92,12 +99,9 @@ impl Source {
                     && let Some(external) = options.external_thumbnailers.as_deref()
                     && external.has_match(self.mime.as_deref(), &self.mime_ancestors)
                 {
-                    return external.generate(
-                        self,
-                        options.external_thumbnail_timeout,
-                        cancel,
-                        false,
-                    );
+                    return external
+                        .generate(self, options.external_thumbnail_timeout, cancel, false)
+                        .map(Generated::image_only);
                 }
                 Err(err)
             }
@@ -105,12 +109,9 @@ impl Source {
                 if let Some(external) = options.external_thumbnailers.as_deref()
                     && external.has_match(self.mime.as_deref(), &self.mime_ancestors)
                 {
-                    return external.generate(
-                        self,
-                        options.external_thumbnail_timeout,
-                        cancel,
-                        false,
-                    );
+                    return external
+                        .generate(self, options.external_thumbnail_timeout, cancel, false)
+                        .map(Generated::image_only);
                 }
                 Err(Error::NoCover)
             }
@@ -118,11 +119,16 @@ impl Source {
     }
 }
 
+/// Remove cached desktop thumbnails and failure markers for `path` (best effort).
+pub fn invalidate_thumbnail_cache(path: &Path) {
+    cache::invalidate_user_path(path);
+}
+
 /// # Errors
 /// Reports thumbnail cache and generation failures.
 pub(super) fn load_with(
     source: &Source,
-    generate: impl FnOnce() -> Result<::image::RgbaImage, Error>,
+    generate: impl FnOnce() -> Result<Generated, Error>,
 ) -> Result<Thumbnail, Error> {
     cache::load_with(source, cache::Cache::for_user().as_ref(), generate)
 }
@@ -132,9 +138,10 @@ pub(super) fn load_with(
 pub(super) fn cover(
     file: &lofty::file::TaggedFile,
     max_source_bytes: u64,
-) -> Result<::image::RgbaImage, Error> {
+) -> Result<Generated, Error> {
     let picture = super::audio::picture(file).ok_or(Error::NoCover)?;
-    image::load_bytes(picture.data(), None, max_source_bytes)
+    let generated = image::load_bytes(picture.data(), None, max_source_bytes)?;
+    Ok(Generated::image_only(generated.image))
 }
 
 #[cfg(test)]

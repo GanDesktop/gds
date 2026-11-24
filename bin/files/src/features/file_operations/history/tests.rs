@@ -204,3 +204,60 @@ fn new_folder_undo_rejects_non_empty_or_replaced_directories() {
     assert_eq!(replaced_undo.errors.len(), 1);
     assert!(created.path.is_dir());
 }
+
+#[test]
+fn create_symlink_supports_undo_redo_and_rejects_replacement() {
+    let root = tempfile::tempdir().expect("isolated history tempdir");
+    let target = root.path().join("doc.txt");
+    fs::write(&target, b"content").expect("write target");
+
+    let created = crate::features::file_operations::symlink::Request {
+        target: target.clone(),
+        directory: root.path().to_path_buf(),
+        link_suffix: "link".to_owned(),
+    }
+    .execute()
+    .expect("create symlink");
+    let link_path = created.path.clone();
+
+    let mut history = History::default();
+    history.record(Entry::new(
+        Kind::CreateLink,
+        vec![Step::RemoveSymlink {
+            path: link_path.clone(),
+            target: created.target,
+            expected: created.snapshot.expect("symlink snapshot"),
+        }],
+    ));
+
+    let cancel = CancellationToken::new();
+    let mut undo_report = history
+        .take(Direction::Undo)
+        .expect("undo entry")
+        .execute_cancellable(&cancel);
+    assert!(undo_report.errors.is_empty());
+    assert!(fs::symlink_metadata(&link_path).is_err());
+    assert!(target.exists(), "undoing symlink must not remove target");
+    history.finish(Direction::Undo, &mut undo_report);
+
+    let mut redo_report = history
+        .take(Direction::Redo)
+        .expect("redo entry")
+        .execute_cancellable(&cancel);
+    assert!(redo_report.errors.is_empty());
+    assert_eq!(fs::read_link(&link_path).expect("recreated link"), target);
+    history.finish(Direction::Redo, &mut redo_report);
+
+    // Replace symlink with a regular file; undo must refuse to delete it.
+    fs::remove_file(&link_path).expect("remove symlink");
+    fs::write(&link_path, b"user data").expect("write unrelated file");
+    let failed_undo = history
+        .take(Direction::Undo)
+        .expect("undo entry after redo")
+        .execute_cancellable(&cancel);
+    assert_eq!(failed_undo.errors.len(), 1);
+    assert_eq!(
+        fs::read(&link_path).expect("unrelated file intact"),
+        b"user data"
+    );
+}

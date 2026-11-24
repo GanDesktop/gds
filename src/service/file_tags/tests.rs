@@ -119,3 +119,55 @@ fn copy_from_writes_files_and_dirs_and_rejects_symlink_or_fifo_destinations() {
     let err = copy_from(&source_file, &fifo).unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn copy_from_preserves_portable_user_xattrs_and_reads_origin_and_mime() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("downloaded.bin");
+    std::fs::write(&source, b"hello").unwrap();
+    write(&source, &["work".into()]).unwrap();
+    rustix::fs::setxattr(
+        &source,
+        ORIGIN_URL_ATTRIBUTE,
+        b"https://example.com/files/report.pdf",
+        rustix::fs::XattrFlags::empty(),
+    )
+    .unwrap();
+    rustix::fs::setxattr(
+        &source,
+        MIME_TYPE_ATTRIBUTE,
+        b"application/pdf",
+        rustix::fs::XattrFlags::empty(),
+    )
+    .unwrap();
+    rustix::fs::setxattr(
+        &source,
+        "user.xdg.comment",
+        b"Quarterly summary",
+        rustix::fs::XattrFlags::empty(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        read_origin_url(&source).as_deref(),
+        Some("https://example.com/files/report.pdf")
+    );
+    assert_eq!(read_mime_type(&source).as_deref(), Some("application/pdf"));
+
+    let dest = dir.path().join("copied.bin");
+    std::fs::write(&dest, b"hello").unwrap();
+    let source_file = std::fs::File::open(&source).unwrap();
+    copy_from(&source_file, &dest).unwrap();
+
+    assert_eq!(read(&dest).unwrap(), ["work"]);
+    assert_eq!(
+        read_origin_url(&dest).as_deref(),
+        Some("https://example.com/files/report.pdf")
+    );
+    assert_eq!(read_mime_type(&dest).as_deref(), Some("application/pdf"));
+    assert_eq!(
+        read_named_raw(&dest, "user.xdg.comment").as_deref(),
+        Some(b"Quarterly summary".as_slice())
+    );
+}

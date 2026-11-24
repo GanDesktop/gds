@@ -300,7 +300,7 @@ which = { version = "8", optional = true }
 clap = { version = "4", features = ["derive", "env"], optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "open_uri"], optional = true }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "open_uri", "inhibit", "notification"], optional = true }
 fontconfig-sys = { package = "yeslogic-fontconfig-sys", version = "6.0", optional = true }
 zbus = { version = "5.19", default-features = false, features = ["tokio"], optional = true }
 rustix = { version = "1.1", features = ["fs", "event"], optional = true }

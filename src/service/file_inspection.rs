@@ -18,7 +18,7 @@ pub use metadata::{
 };
 pub use thumbnail::{
     EDGE, ExternalProbeReport, ExternalThumbnailers, SandboxError, SandboxMode, Thumbnail,
-    ThumbnailerInfo,
+    ThumbnailerInfo, invalidate_thumbnail_cache,
 };
 
 pub const DEFAULT_MAX_THUMBNAIL_SOURCE_MIB: u64 = 32;

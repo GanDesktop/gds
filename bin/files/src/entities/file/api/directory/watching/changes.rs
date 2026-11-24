@@ -87,13 +87,17 @@ impl Changes {
         if cancel.is_cancelled() {
             return Err(directory::Error::Cancelled);
         }
-        if self.full || self.paths.contains(&snapshot.path) {
+        if self.full
+            || self.paths.contains(&snapshot.path)
+            || self.paths.contains(&snapshot.path.join(".hidden"))
+        {
             return Self::rescan_shared(snapshot, cancel);
         }
         if self.paths.is_empty() {
             return Ok(None);
         }
 
+        let dot_hidden = directory::read_hidden_names(&snapshot.path);
         let index_by_path: HashMap<&Path, usize> = snapshot
             .entries
             .iter()
@@ -118,11 +122,10 @@ impl Changes {
             if warnings.len() != before_warnings {
                 touched = true;
             }
-            if !snapshot.options.show_hidden
-                && path
-                    .file_name()
-                    .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."))
-            {
+            let is_hidden = path
+                .file_name()
+                .is_some_and(|name| directory::is_entry_hidden(name, &dot_hidden));
+            if !snapshot.options.show_hidden && is_hidden {
                 if let Some(&index) = index_by_path.get(path.as_path())
                     && entries[index].take().is_some()
                 {
@@ -132,6 +135,7 @@ impl Changes {
             }
             match directory::Entry::inspect_base_with_identities(&path, &mut identities) {
                 Ok(entry) => {
+                    let entry = entry.with_hidden(is_hidden);
                     if let Some(&index) = index_by_path.get(path.as_path()) {
                         let entry = match entries[index].as_ref() {
                             Some(previous) => entry.with_reused_probes(previous),

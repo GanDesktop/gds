@@ -98,8 +98,25 @@ impl Host {
         &self,
         places: Result<Places, PlacesError>,
         start: PathBuf,
+        locations: Vec<crate::entities::location::Location>,
         picker: Option<picker::Options>,
     ) {
+        let command = if locations.len() > 1
+            || locations
+                .first()
+                .is_some_and(|loc| loc.local_path() != Some(start.as_path()))
+        {
+            let uris: Vec<String> = locations.iter().filter_map(|loc| loc.uri().ok()).collect();
+            (!uris.is_empty()).then(|| Command {
+                request: Request::OpenLocations {
+                    uris,
+                    new_window: true,
+                },
+                startup_id: String::new(),
+            })
+        } else {
+            None
+        };
         self.open(
             LaunchOptions {
                 places,
@@ -107,11 +124,12 @@ impl Host {
                 home: self.0.home.clone(),
                 picker,
             },
-            None,
+            command,
+            true,
         );
     }
 
-    fn open(&self, launch: LaunchOptions, command: Option<Command>) {
+    fn open(&self, launch: LaunchOptions, command: Option<Command>, initial: bool) {
         if self.0.tasks.token().is_cancelled() {
             return;
         }
@@ -130,17 +148,13 @@ impl Host {
             .map(|request| (request.parent_window.clone(), request.modal))
             .filter(|(parent, _)| !parent.is_empty());
         let picking = launch.picker.is_some();
-        let startup_token = self.0.startup_token.borrow_mut().take();
+        let startup_token = initial
+            .then(|| self.0.startup_token.borrow_mut().take())
+            .flatten();
         let activation_token = command
             .as_ref()
             .and_then(|cmd| (!cmd.startup_id.is_empty()).then(|| cmd.startup_id.clone()))
-            .or_else(|| {
-                if command.is_none() {
-                    startup_token
-                } else {
-                    None
-                }
-            });
+            .or(startup_token);
         let app_id = if picking { PICKER_APP_ID } else { APP_ID };
         let mut options = gds::ui::window::workspace_options(title, Some(app_id));
         if let Some((parent, modal)) = parent {
@@ -232,6 +246,7 @@ impl Host {
                             picker: None,
                         },
                         command,
+                        false,
                     );
                 },
             );
@@ -239,7 +254,15 @@ impl Host {
     }
 
     pub fn dispatch_desktop(&self, command: Command) {
-        if !matches!(command.request, Request::NewWindow { .. }) {
+        let force_new_window = matches!(
+            command.request,
+            Request::NewWindow { .. }
+                | Request::OpenLocations {
+                    new_window: true,
+                    ..
+                }
+        );
+        if !force_new_window {
             let candidates = self.0.state.borrow().windows.clone();
             if let Some(window) = candidates
                 .iter()
@@ -256,15 +279,26 @@ impl Host {
                 return;
             }
         }
-        let start = match &command.request {
-            Request::NewWindow { directory } => Some(directory.as_path()),
-            Request::ShowFolders { directories } => directories.first().map(|path| path.as_path()),
-            Request::ShowItems { paths } | Request::ShowProperties { paths } => {
-                paths.first().map(|path| path.parent().unwrap_or(path))
-            }
+        let mut command = command;
+        if let Request::OpenLocations {
+            ref mut new_window, ..
+        } = command.request
+        {
+            *new_window = true;
         }
-        .unwrap_or(&self.0.home)
-        .to_owned();
+        let start = match &command.request {
+            Request::NewWindow { directory } => Some(directory.clone()),
+            Request::OpenLocations { uris, .. } => uris.iter().find_map(|uri| {
+                crate::entities::location::Location::from_uri(uri)
+                    .ok()
+                    .and_then(|loc| loc.local_path().map(std::path::Path::to_path_buf))
+            }),
+            Request::ShowFolders { directories } => directories.first().cloned(),
+            Request::ShowItems { paths } | Request::ShowProperties { paths } => paths
+                .first()
+                .map(|path| path.parent().unwrap_or(path).to_path_buf()),
+        }
+        .unwrap_or_else(|| self.0.home.clone());
         self.request(start, Some(command));
     }
 

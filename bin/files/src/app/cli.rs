@@ -2,7 +2,7 @@
 
 use crate::features::pick_files::{Filter, Options};
 use clap::{ArgGroup, Parser};
-use std::path::PathBuf;
+use std::ffi::OsString;
 
 #[derive(Clone, Debug, Parser)]
 #[command(
@@ -15,8 +15,11 @@ use std::path::PathBuf;
     after_help = "Run inside a graphical Wayland or X11 session.\nPicker exit status: 0 selected, 1 cancelled, 2 output or argument failure."
 )]
 pub(super) struct Arguments {
-    /// Directory to open (default: home). Use -- before names starting with '-'.
-    pub directory: Option<PathBuf>,
+    /// Directories or URIs to open (default: home). Use -- before names starting with '-'.
+    pub targets: Vec<OsString>,
+    /// Always open a new window instead of reusing an existing one.
+    #[arg(long, conflicts_with_all = ["picker_mode", "dbus_service"])]
+    pub new_window: bool,
     /// Pick files, print one JSON result on stdout and exit.
     #[arg(long)]
     pick_file: bool,

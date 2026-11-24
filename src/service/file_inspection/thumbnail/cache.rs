@@ -12,7 +12,7 @@ use directories::BaseDirs;
 use image::RgbaImage;
 use md5::{Digest, Md5};
 
-use super::{EDGE, Error, Source, Thumbnail};
+use super::{EDGE, Error, Generated, Source, Thumbnail};
 
 const FLAVORS: [(&str, u32); 4] = [
     ("normal", 128),
@@ -65,6 +65,13 @@ pub(super) enum CacheError {
     Size,
 }
 
+/// Optional FreeDesktop thumbnail metadata written alongside mandatory `Thumb::URI`/`MTime`.
+#[derive(Clone, Copy, Default)]
+struct ExtraMeta<'a> {
+    mime: Option<&'a str>,
+    dimensions: Option<(u32, u32)>,
+}
+
 /// # Errors
 /// Reports unreadable sources and thumbnail generation failures. Cache failures
 /// are diagnosed separately and never prevent displaying a generated thumbnail.
@@ -78,7 +85,7 @@ pub(super) fn load(source: &Source, cache: Option<&Cache>) -> Result<Thumbnail, 
 pub(super) fn load_with(
     source: &Source,
     cache: Option<&Cache>,
-    generate: impl FnOnce() -> Result<RgbaImage, Error>,
+    generate: impl FnOnce() -> Result<Generated, Error>,
 ) -> Result<Thumbnail, Error> {
     // A cached preview must not bypass the original file's read permissions.
     let file = File::open(&source.path)?;
@@ -102,11 +109,15 @@ pub(super) fn load_with(
         }
     }
     match generate() {
-        Ok(image) => {
+        Ok(generated) => {
             if let (Some(cache), Some(identity)) = (cache, identity.as_ref())
                 && identity.unchanged(&source.path)
             {
-                match encode(&image, Some(identity), None) {
+                let extra = ExtraMeta {
+                    mime: source.mime.as_deref(),
+                    dimensions: generated.source_dimensions,
+                };
+                match encode(&generated.image, Some(identity), extra, None) {
                     Ok(bytes) => {
                         if let Err(error) = cache.store(identity, &bytes) {
                             tracing::warn!(%error, "cannot save thumbnail cache");
@@ -115,7 +126,7 @@ pub(super) fn load_with(
                     Err(error) => tracing::warn!(%error, "cannot encode thumbnail cache"),
                 }
             }
-            Ok(Thumbnail::new(image))
+            Ok(Thumbnail::new(generated.image))
         }
         Err(error) => {
             // Missing tools, timeouts and I/O failures can resolve without the
@@ -254,10 +265,41 @@ impl Cache {
         Ok(())
     }
 
+    /// Remove cached thumbnail PNGs and failure markers for `path` across all standard sizes
+    /// after deletion, trashing, moving, or renaming (FreeDesktop Thumbnail Managing Standard).
+    pub(super) fn invalidate_path(&self, path: &Path) {
+        if self.contains(path) {
+            return;
+        }
+        let Ok(uri) = file_uri(path) else {
+            return;
+        };
+        let filename = format!("{:x}.png", Md5::digest(uri.as_bytes()));
+        for (flavor, _) in FLAVORS {
+            let entry = self.root.join(flavor).join(&filename);
+            if let Err(error) = fs::remove_file(&entry)
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                tracing::debug!(path = %entry.display(), %error, "cannot remove stale thumbnail cache entry");
+            }
+        }
+        let failure = self.root.join("fail").join(APPLICATION).join(&filename);
+        if let Err(error) = fs::remove_file(&failure)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            tracing::debug!(path = %failure.display(), %error, "cannot remove stale thumbnail failure marker");
+        }
+    }
+
     /// # Errors
     /// Reports marker encoding and atomic write failures.
     fn store_failure_kind(&self, identity: &Identity, kind: &str) -> Result<(), CacheError> {
-        let bytes = encode(&RgbaImage::new(1, 1), Some(identity), Some(kind))?;
+        let bytes = encode(
+            &RgbaImage::new(1, 1),
+            Some(identity),
+            ExtraMeta::default(),
+            Some(kind),
+        )?;
         private_directory(&self.root)?;
         private_directory(&self.root.join("fail"))?;
         self.write(
@@ -413,12 +455,22 @@ fn rgba_from_frame(frame: png::OutputInfo, mut pixels: Vec<u8>) -> Result<RgbaIm
     .ok_or(CacheError::Size)
 }
 
+/// Best-effort removal of cached thumbnails for `path` in the current user's desktop cache.
+pub(super) fn invalidate_user_path(path: &Path) {
+    if let Some(cache) = Cache::for_user() {
+        cache.invalidate_path(path);
+    }
+}
+
 fn relevant(key: &str) -> bool {
     matches!(
         key,
         "Thumb::URI"
             | "Thumb::MTime"
             | "Thumb::Size"
+            | "Thumb::Mimetype"
+            | "Thumb::Image::Width"
+            | "Thumb::Image::Height"
             | "Software"
             | "X-GDS::MTimeNS"
             | "X-GDS::Failure"
@@ -430,6 +482,7 @@ fn relevant(key: &str) -> bool {
 fn encode(
     image: &RgbaImage,
     identity: Option<&Identity>,
+    extra: ExtraMeta<'_>,
     failure: Option<&str>,
 ) -> Result<Vec<u8>, png::EncodingError> {
     let mut bytes = Vec::new();
@@ -446,6 +499,13 @@ fn encode(
         ] {
             encoder.add_text_chunk(key.into(), value)?;
         }
+    }
+    if let Some(mime) = extra.mime.filter(|m| !m.is_empty()) {
+        encoder.add_text_chunk("Thumb::Mimetype".into(), mime.to_owned())?;
+    }
+    if let Some((width, height)) = extra.dimensions {
+        encoder.add_text_chunk("Thumb::Image::Width".into(), width.to_string())?;
+        encoder.add_text_chunk("Thumb::Image::Height".into(), height.to_string())?;
     }
     if let Some(failure) = failure {
         encoder.add_text_chunk("X-GDS::Failure".into(), failure.into())?;

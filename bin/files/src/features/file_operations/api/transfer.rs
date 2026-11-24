@@ -323,6 +323,16 @@ impl Batch {
                 } else {
                     item.transfer(mode, buffer_size, &cancel)
                 };
+                if item.result.is_ok() {
+                    if mode == Mode::Move {
+                        gds::service::file_inspection::invalidate_thumbnail_cache(&item.source);
+                    }
+                    if item.replaced {
+                        gds::service::file_inspection::invalidate_thumbnail_cache(
+                            &item.destination,
+                        );
+                    }
+                }
                 item
             })
             .collect();

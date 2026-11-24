@@ -135,6 +135,36 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
                     directory: PathBuf::from("/tmp")
                 }
             );
+            let uris = vec!["trash:///".to_owned(), "file:///tmp".to_owned()];
+            Server::open_existing_locations(APP_BUS_NAME, &uris, false, "multi-token")
+                .await
+                .expect("dispatch multiple URIs to existing window");
+            let request = receiver.recv().await.expect("multi-location request");
+            assert_eq!(request.startup_id, "multi-token");
+            assert_eq!(
+                request.request,
+                Request::OpenLocations {
+                    uris: uris.clone(),
+                    new_window: false,
+                }
+            );
+            Server::open_existing_locations(APP_BUS_NAME, &uris, true, "new-win-token")
+                .await
+                .expect("dispatch multiple URIs to new window");
+            let request = receiver.recv().await.expect("new-window location request");
+            assert_eq!(request.startup_id, "new-win-token");
+            assert_eq!(
+                request.request,
+                Request::OpenLocations {
+                    uris,
+                    new_window: true,
+                }
+            );
+            assert!(
+                Server::open_existing_locations(APP_BUS_NAME, &[], false, "")
+                    .await
+                    .is_err()
+            );
             drop(receiver);
             let closing =
                 Server::open_existing(APP_BUS_NAME, std::path::Path::new("/tmp"), "closed")

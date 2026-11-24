@@ -17,7 +17,7 @@ use zgui::reactive::{
 
 use super::{
     DEFAULT_WINDOW_WIDTH, DragSources, observe_window_title, resolve_initial_widths,
-    sample_workspace_sidebar,
+    sample_workspace_sidebar, should_notify_for_window_focus,
 };
 use crate::{entities::preferences::Preferences, shared::i18n};
 
@@ -160,4 +160,12 @@ fn active_drag_sources_reactively_track_dragged_paths_without_spurious_wakes() {
         assert_eq!(wakes.get(), 3);
     });
     root.unmount();
+}
+
+#[test]
+fn desktop_notifications_only_fire_when_a_real_window_is_unfocused() {
+    assert!(!should_notify_for_window_focus(false, false));
+    assert!(!should_notify_for_window_focus(false, true));
+    assert!(!should_notify_for_window_focus(true, true));
+    assert!(should_notify_for_window_focus(true, false));
 }

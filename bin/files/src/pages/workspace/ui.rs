@@ -69,6 +69,10 @@ pub(super) fn resolve_initial_height(reported_height: Option<f32>) -> f32 {
         .unwrap_or(DEFAULT_WINDOW_HEIGHT)
 }
 
+pub(super) fn should_notify_for_window_focus(has_window: bool, focused: bool) -> bool {
+    has_window && !focused
+}
+
 pub(super) fn sample_workspace_sidebar(
     sidebar: RwSignal<bool, LocalStorage>,
     window_width: RwSignal<f32, LocalStorage>,
@@ -702,6 +706,41 @@ impl Browser {
 
     pub(super) fn report_info(&self, message: impl Into<String>) {
         gds::ui::feedback::notifications::info(message);
+    }
+
+    pub(super) fn should_notify_background_untracked(&self) -> bool {
+        let has_window = self.0.window.is_some();
+        let focused = self
+            .0
+            .window
+            .as_ref()
+            .is_some_and(|window| window.focused().get_untracked());
+        should_notify_for_window_focus(has_window, focused)
+    }
+
+    pub(super) fn notify_if_unfocused(
+        &self,
+        id: impl Into<String>,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        urgent: bool,
+    ) {
+        if !self.should_notify_background_untracked() {
+            return;
+        }
+        gds::service::desktop::notify_background(
+            &self.scope(),
+            gds::service::desktop::DesktopNotification {
+                id: id.into(),
+                title: title.into(),
+                body: body.into(),
+                urgency: if urgent {
+                    gds::service::desktop::NotificationUrgency::High
+                } else {
+                    gds::service::desktop::NotificationUrgency::Normal
+                },
+            },
+        );
     }
 
     pub(super) fn scope(&self) -> Scope {

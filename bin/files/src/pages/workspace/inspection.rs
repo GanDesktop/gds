@@ -676,6 +676,7 @@ struct PropertiesInner {
     cache: Cache,
     entry: RwSignal<EntryState, LocalStorage>,
     tags: RwSignal<Option<Result<Vec<String>, String>>, LocalStorage>,
+    origin_url: RwSignal<Option<String>, LocalStorage>,
     description_version: RwSignal<u64, LocalStorage>,
     tags_enabled: bool,
 }
@@ -697,6 +698,7 @@ impl Properties {
             cache,
             entry: RwSignal::new_local(EntryState::Loading),
             tags: RwSignal::new_local(None),
+            origin_url: RwSignal::new_local(None),
             description_version: RwSignal::new_local(0),
             tags_enabled,
         });
@@ -707,6 +709,7 @@ impl Properties {
 
     fn from_entry(entry: Entry, cache: Cache, scope: Scope, tags_enabled: bool) -> Self {
         let path = entry.path.clone();
+        let is_file = entry.kind == EntryKind::File;
         let missing_mime = entry
             .details
             .display_content()
@@ -719,12 +722,16 @@ impl Properties {
             cache,
             entry: RwSignal::new_local(EntryState::Ready(entry)),
             tags: RwSignal::new_local(None),
+            origin_url: RwSignal::new_local(None),
             description_version: RwSignal::new_local(0),
             tags_enabled,
         });
         let props = Self(inner);
         if let Some(mime) = missing_mime {
             props.load_description(mime);
+        }
+        if is_file {
+            props.load_origin_url();
         }
         if tags_enabled {
             props.load_tags();
@@ -836,7 +843,11 @@ impl Properties {
             let target = Self(inner);
             match result {
                 Ok(entry) => {
+                    let is_file = entry.kind == EntryKind::File;
                     target.0.entry.set(EntryState::Ready(entry));
+                    if is_file {
+                        target.load_origin_url();
+                    }
                     if target.0.tags_enabled {
                         target.load_tags();
                     }
@@ -845,6 +856,26 @@ impl Properties {
                     target.0.entry.set(EntryState::Failed(message));
                 }
             }
+        }));
+    }
+
+    fn load_origin_url(&self) {
+        let weak = Rc::downgrade(&self.0);
+        let path = self.0.path.clone();
+        let task = self
+            .0
+            .scope
+            .spawn_blocking_named("Read file origin URL", move || {
+                file_tags::read_origin_url(&path)
+            });
+        drop(spawn_local(async move {
+            let Ok(origin) = task.await else {
+                return;
+            };
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            inner.origin_url.set(origin);
         }));
     }
 
@@ -926,6 +957,9 @@ impl Properties {
         rows.push(text_row("group", EntryPresentation::group(entry)));
         if let Some(perms) = entry.details.permissions.as_ref() {
             rows.push(text_row("permissions", info::permissions(perms)));
+        }
+        if let Some(origin) = self.0.origin_url.get() {
+            rows.push(text_row("details-origin", origin));
         }
         rows
     }

@@ -218,6 +218,7 @@ fn cache_identity_checks_uri_and_optional_size_before_serving_pixels() {
     let bytes = encode(
         &RgbaImage::from_pixel(2, 2, Rgba([0, 0, 200, 255])),
         Some(&wrong_size),
+        ExtraMeta::default(),
         None,
     )
     .expect("wrong size PNG");
@@ -343,4 +344,50 @@ fn external_rgb_cache_entries_decode_to_rgba() {
     let loaded = fixture.load().expect("reused RGB cache entry");
     assert_eq!((loaded.width(), loaded.height()), (512, 256));
     assert_eq!(color(&loaded), [10, 20, 30, 255]);
+}
+
+#[test]
+fn cache_writes_optional_mimetype_and_dimensions_and_invalidates_stale_entries() {
+    let fixture = Fixture::new();
+    fixture.image([120, 40, 200], UNIX_EPOCH + Duration::from_secs(10));
+    let mut source = fixture.source();
+    source.mime = Some(std::sync::Arc::from("image/bmp"));
+    let thumb = load(&source, Some(&fixture.cache)).expect("generated thumbnail");
+    assert_eq!((thumb.width(), thumb.height()), (512, 256));
+
+    let cached = read_png(&fixture.cached(), EDGE)
+        .expect("read cached PNG")
+        .expect("saved PNG");
+    assert_eq!(
+        cached.attributes.get("Thumb::Mimetype").map(String::as_str),
+        Some("image/bmp")
+    );
+    assert_eq!(
+        cached
+            .attributes
+            .get("Thumb::Image::Width")
+            .map(String::as_str),
+        Some("1200")
+    );
+    assert_eq!(
+        cached
+            .attributes
+            .get("Thumb::Image::Height")
+            .map(String::as_str),
+        Some("600")
+    );
+
+    // Also place a sibling flavor and failure marker, then invalidate_path must remove all of them.
+    let identity = fixture.identity();
+    let normal_path = fixture.cache.root.join("normal").join(identity.filename());
+    private_directory(normal_path.parent().expect("normal dir")).expect("create normal dir");
+    fs::write(&normal_path, b"placeholder").expect("write normal placeholder");
+    let fail_path = fixture.cache.failure_path(&identity);
+    private_directory(fail_path.parent().expect("fail dir")).expect("create fail dir");
+    fs::write(&fail_path, b"placeholder").expect("write fail placeholder");
+
+    fixture.cache.invalidate_path(&fixture.path);
+    assert!(!fixture.cached().exists());
+    assert!(!normal_path.exists());
+    assert!(!fail_path.exists());
 }

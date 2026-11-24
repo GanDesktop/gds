@@ -233,9 +233,14 @@ impl PreparedIo {
             config.mode.keep_alive(),
         );
         match (config.mode, places) {
-            (Mode::Browser { start }, Some(places)) => windows.open_initial(places, start, None),
+            (
+                Mode::Browser {
+                    start, locations, ..
+                },
+                Some(places),
+            ) => windows.open_initial(places, start, locations, None),
             (Mode::Picker { start, options }, Some(places)) => {
-                windows.open_initial(places, start, Some(options))
+                windows.open_initial(places, start, Vec::new(), Some(options))
             }
             _ => {}
         }

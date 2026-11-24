@@ -15,14 +15,19 @@ pub use self::enrich::*;
 pub use self::watching::{DEFAULT_WATCH_DEBOUNCE_MS, DEFAULT_WATCH_INCREMENTAL_LIMIT};
 
 use std::{
+    collections::HashSet,
     ffi::{OsStr, OsString},
     fs::{self, DirEntry, FileType},
-    io,
+    io::{self, Read},
     ops::Deref,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
+
+/// Upper bound on `.hidden` file bytes read per directory so malformed or huge files cannot stall listings.
+const MAX_DOT_HIDDEN_BYTES: u64 = 256 * 1024;
+const DOT_HIDDEN_FILE: &str = ".hidden";
 
 use tokio_util::sync::CancellationToken;
 
@@ -297,6 +302,7 @@ impl DirectorySnapshot {
         let mut collected = Vec::new();
         let mut warnings = Vec::new();
         let mut identities = IdentityCache::new();
+        let dot_hidden = read_hidden_names(&path);
         let mut next_emit_at = stream
             .as_ref()
             .map(|(opts, _)| Instant::now() + opts.initial_delay);
@@ -307,7 +313,8 @@ impl DirectorySnapshot {
             }
             match result {
                 Ok(entry) => {
-                    let hidden = entry.file_name().as_encoded_bytes().first() == Some(&b'.');
+                    let entry_name = entry.file_name();
+                    let hidden = is_entry_hidden(&entry_name, &dot_hidden);
                     if !options.show_hidden && hidden {
                         continue;
                     }
@@ -333,7 +340,8 @@ impl DirectorySnapshot {
                         Entry::from_dir_entry(entry, &mut identities, &mut warnings)
                     } else {
                         Entry::from_dir_entry_base(entry, &mut identities, &mut warnings)
-                    };
+                    }
+                    .with_hidden(hidden);
                     collected.push(item);
                 }
                 Err(error) => warnings.push(EntryWarning {
@@ -580,6 +588,13 @@ impl Entry {
         self
     }
 
+    pub(super) fn with_hidden(mut self, hidden: bool) -> Self {
+        if self.is_hidden != hidden {
+            Arc::make_mut(&mut self.0).is_hidden = hidden;
+        }
+        self
+    }
+
     pub(crate) fn reuse_probes(&mut self, previous: &Self) {
         if self.kind == EntryKind::SymbolicLink
             || (self.modified.is_none() && self.details.changed.is_none())
@@ -733,6 +748,65 @@ impl From<FileType> for EntryKind {
             Self::Other
         }
     }
+}
+
+/// Read direct child names listed in a directory's FreeDesktop `.hidden` file.
+///
+/// Only regular files within [`MAX_DOT_HIDDEN_BYTES`] are read. Blank lines, `.`, `..`, and
+/// entries containing path separators or NUL bytes are ignored.
+pub(super) fn read_hidden_names(directory: &Path) -> HashSet<OsString> {
+    let path = directory.join(DOT_HIDDEN_FILE);
+    let Ok(metadata) = fs::metadata(&path) else {
+        return HashSet::new();
+    };
+    if !metadata.is_file() {
+        return HashSet::new();
+    }
+    let Ok(file) = fs::File::open(&path) else {
+        return HashSet::new();
+    };
+    let mut raw = Vec::new();
+    if file
+        .take(MAX_DOT_HIDDEN_BYTES)
+        .read_to_end(&mut raw)
+        .is_err()
+    {
+        return HashSet::new();
+    }
+    parse_hidden_names(&raw)
+}
+
+fn parse_hidden_names(raw: &[u8]) -> HashSet<OsString> {
+    let mut names = HashSet::new();
+    for line in raw.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty()
+            || line == b"."
+            || line == b".."
+            || line.contains(&b'/')
+            || line.contains(&0)
+        {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt as _;
+            names.insert(OsString::from_vec(line.to_vec()));
+        }
+        #[cfg(not(unix))]
+        {
+            if let Ok(text) = std::str::from_utf8(line)
+                && !text.contains('\\')
+            {
+                names.insert(OsString::from(text));
+            }
+        }
+    }
+    names
+}
+
+pub(super) fn is_entry_hidden(name: &OsStr, dot_hidden: &HashSet<OsString>) -> bool {
+    name.as_encoded_bytes().starts_with(b".") || dot_hidden.contains(name)
 }
 
 #[cfg(test)]

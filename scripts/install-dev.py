@@ -121,13 +121,21 @@ def main():
         for path, backup in backups:
             save_original(path, backup)
         write(launcher, f'#!/usr/bin/env bash\n{MARKER}\nexec {command} "$@"\n', 0o755)
-        arguments = " -- %f" if app in ("files", "images") else ""
+        arguments = " -- %U" if app == "files" else (" -- %f" if app == "images" else "")
         if app == "files":
-            mime = "MimeType=inode/directory;\n"
+            extra_entries = "MimeType=inode/directory;\nActions=new-window;\nStartupNotify=true\n"
+            extra_sections = f"""
+[Desktop Action new-window]
+Name=New Window
+Name[zh_CN]=新建窗口
+Exec={desktop_argument(launcher)} --new-window
+"""
         elif app == "images":
-            mime = "MimeType=image/png;image/jpeg;image/webp;image/gif;image/svg+xml;image/bmp;image/tiff;image/x-icon;image/x-tga;image/x-portable-anymap;image/qoi;\n"
+            extra_entries = "MimeType=image/png;image/jpeg;image/webp;image/gif;image/svg+xml;image/bmp;image/tiff;image/x-icon;image/x-tga;image/x-portable-anymap;image/qoi;\n"
+            extra_sections = ""
         else:
-            mime = ""
+            extra_entries = ""
+            extra_sections = ""
         write(desktop, f"""{MARKER}
 [Desktop Entry]
 Type=Application
@@ -137,7 +145,7 @@ Icon={icon}
 Categories={categories}
 StartupWMClass={app_id}
 Terminal=false
-{mime}""", 0o644)
+{extra_entries}{extra_sections}""", 0o644)
         print(f"Installed {title} development launcher: {launcher} -> {binary}")
 
 

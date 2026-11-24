@@ -7,7 +7,9 @@ callPackage ../../package.nix {
   # tmpfs, which does not support user.* extended attributes (EOPNOTSUPP).
   checkFlags = [
     "--skip=directory::tests::permissions_owner_group_and_access_time_come_from_real_metadata"
+    "--skip=directory::tests::user_mime_type_xattr_overrides_filename_detection"
     "--skip=service::file_tags::tests::associations_and_copy_preserve_other_tags"
+    "--skip=service::file_tags::tests::copy_from_preserves_portable_user_xattrs_and_reads_origin_and_mime"
     "--skip=service::file_tags::tests::editor_delta_retains_unrelated_external_changes"
     "--skip=service::file_tags::tests::apply_edit_works_on_directories_and_clears_removed_tags"
     "--skip=service::file_tags::tests::apply_edit_rejects_symlinks_and_fifos_without_blocking_or_following"
@@ -18,12 +20,20 @@ callPackage ../../package.nix {
   ];
   desktopItem = {
     name = "io.github.GanDesktop.GdsFiles";
-    exec = "gds-files -- %f";
+    exec = "gds-files -- %U";
     icon = "io.github.GanDesktop.GdsFiles";
     categories = [ "System" "FileTools" "FileManager" ];
     mimeTypes = [ "inode/directory" ];
+    startupNotify = true;
+    actions = {
+      "new-window" = {
+        name = "New Window";
+        exec = "gds-files --new-window";
+      };
+    };
   };
   postInstall = ''
+    install -Dm644 assets/files/io.github.GanDesktop.GdsFiles.metainfo.xml "$out/share/metainfo/io.github.GanDesktop.GdsFiles.metainfo.xml"
     install -Dm644 ${./niri.kdl} "$out/share/gds-files/niri.kdl"
   '';
 }

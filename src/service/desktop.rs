@@ -10,9 +10,18 @@ mod client;
 #[cfg(feature = "desktop")]
 mod error;
 #[cfg(feature = "desktop")]
+mod session;
+#[cfg(feature = "desktop")]
 pub use client::{Desktop, OpenMode, OpenOutcome};
 #[cfg(feature = "desktop")]
 pub use error::Error;
+#[cfg(feature = "desktop")]
+pub use session::{
+    DEFAULT_INHIBIT_DELAY, DesktopNotification, InhibitRelease, NotificationUrgency,
+    hold_inhibit_after, send_notification,
+};
+#[cfg(all(feature = "desktop", feature = "task-manager"))]
+pub use session::{InhibitGuard, notify_background};
 #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
 pub mod file_manager;
 #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
