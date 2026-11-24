@@ -5176,4 +5176,218 @@ pub(super) mod tests {
             })
             .expect("typeahead and auto-focus search harness");
     }
+
+    #[test]
+    fn item_properties_dialog_keeps_stable_height_across_tabs_and_recursive_toggle() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let pictures = home.join("Pictures");
+        std::fs::create_dir_all(&pictures).expect("create Pictures");
+
+        let supervisor = Supervisor::new(false).expect("tokio supervisor");
+        let bg_scope = supervisor.scope();
+        let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
+        let slot_for_view = Rc::clone(&browser_slot);
+        let start = home;
+
+        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+            let mut harness = Harness::new(handler);
+            let offscreen = harness
+                .platform()
+                .offscreens()
+                .first()
+                .cloned()
+                .expect("primary offscreen");
+            offscreen.set_a11y_listener(true);
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(1280.0),
+                DevicePx(800.0),
+            )));
+            harness.settle(16);
+
+            let browser = browser_slot.borrow().clone().expect("browser constructed");
+            browser.edit_preferences(|prefs| prefs.tags.enabled = true);
+            zgui::reactive::flush();
+            harness.settle(8);
+
+            let entry = crate::entities::file::directory::Entry::inspect(&pictures)
+                .expect("inspect Pictures");
+            browser.edit_item_properties(entry, None);
+            zgui::reactive::flush();
+            for _ in 0..8 {
+                harness.advance(Duration::from_millis(25));
+                harness.pump();
+                zgui::reactive::flush();
+                harness.settle(4);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+
+            let find_bounds = |h: &Harness<Box<dyn AppHandler>>,
+                               role: Role,
+                               label: Option<&str>|
+             -> Option<(f64, f64, f64, f64)> {
+                let surface = h.platform().offscreens().first().cloned()?;
+                let mut nodes = HashMap::new();
+                let mut root = None;
+                for update in surface.a11y_log() {
+                    if let Some(tree) = update.tree {
+                        root = Some(tree.root);
+                    }
+                    for (id, node) in update.nodes {
+                        nodes.insert(id, node);
+                    }
+                }
+                let root_id = root?;
+                let mut stack = vec![(root_id, 0.0_f64, 0.0_f64)];
+                let mut seen = HashSet::new();
+                while let Some((id, ox, oy)) = stack.pop() {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let Some(node) = nodes.get(&id) else {
+                        continue;
+                    };
+                    let (nx, ny) = match node.transform() {
+                        Some(t) => {
+                            let c = t.as_coeffs();
+                            (ox + c[4], oy + c[5])
+                        }
+                        None => (ox, oy),
+                    };
+                    let label_ok = label.is_none_or(|want| {
+                        node.label() == Some(want)
+                            || node.value() == Some(want)
+                            || node.labelled_by().iter().any(|lid| {
+                                nodes.get(lid).is_some_and(|labelled| {
+                                    labelled.label() == Some(want) || labelled.value() == Some(want)
+                                })
+                            })
+                    });
+                    if node.role() == role
+                        && label_ok
+                        && let Some(rect) = node.bounds()
+                    {
+                        return Some((
+                            nx + rect.x0,
+                            ny + rect.y0,
+                            rect.x1 - rect.x0,
+                            rect.y1 - rect.y0,
+                        ));
+                    }
+                    for &child in node.children().iter().rev() {
+                        stack.push((child, nx, ny));
+                    }
+                }
+                None
+            };
+
+            let click_at = |h: &mut Harness<Box<dyn AppHandler>>, x: f64, y: f64, ms: u64| {
+                let pos = Point::new(CssPx(x as f32), CssPx(y as f32));
+                h.deliver_to_first(SurfaceEvent::Pointer {
+                    action: PointerAction::Pressed,
+                    event: PointerEvent::mouse(pos).with_button(PointerButton::Primary),
+                    modifiers: Modifiers::NONE,
+                    timestamp: Timestamp::from_origin(Duration::from_millis(ms)),
+                });
+                h.deliver_to_first(SurfaceEvent::Pointer {
+                    action: PointerAction::Released,
+                    event: PointerEvent::mouse(pos).with_button(PointerButton::Primary),
+                    modifiers: Modifiers::NONE,
+                    timestamp: Timestamp::from_origin(Duration::from_millis(ms + 10)),
+                });
+                zgui::reactive::flush();
+                h.settle(8);
+            };
+
+            let (_, _, base_w, base_h) = find_bounds(&harness, Role::Dialog, None)
+                .expect("unified properties dialog bounds on Tags tab");
+
+            // Switch to Permissions tab -> dialog geometry must remain identical.
+            let (px, py, pw, ph) = find_bounds(&harness, Role::Tab, Some("Permissions"))
+                .expect("Permissions tab trigger");
+            click_at(&mut harness, px + pw / 2.0, py + ph / 2.0, 100);
+            let (_, _, perm_w, perm_h) = find_bounds(&harness, Role::Dialog, None)
+                .expect("dialog bounds on Permissions tab");
+            assert!(
+                (perm_w - base_w).abs() < 0.5 && (perm_h - base_h).abs() < 0.5,
+                "switching Tags -> Permissions must not jump dialog size: base={base_w:.1}x{base_h:.1}, perm={perm_w:.1}x{perm_h:.1}"
+            );
+
+            // Toggle recursive checkbox inside Permissions -> dialog height must stay identical.
+            let recursive_label = gds::i18n::text_untracked("permissions-recursive");
+            let recursive_hint = gds::i18n::text_untracked("permissions-recursive-hint");
+            assert!(
+                find_bounds(
+                    &harness,
+                    Role::GenericContainer,
+                    Some(recursive_hint.as_str())
+                )
+                .is_none(),
+                "recursive hint should not be visible before toggling"
+            );
+            let (rx, ry, rw, rh) =
+                find_bounds(&harness, Role::CheckBox, Some(recursive_label.as_str()))
+                    .expect("recursive permissions checkbox");
+            click_at(&mut harness, rx + rw / 2.0, ry + rh / 2.0, 200);
+            assert!(
+                find_bounds(
+                    &harness,
+                    Role::GenericContainer,
+                    Some(recursive_hint.as_str())
+                )
+                .is_some(),
+                "clicking recursive checkbox should toggle it and reveal recursive hint"
+            );
+            let (_, _, rec_w, rec_h) = find_bounds(&harness, Role::Dialog, None)
+                .expect("dialog bounds after toggling recursive checkbox");
+            assert!(
+                (rec_w - base_w).abs() < 0.5 && (rec_h - base_h).abs() < 0.5,
+                "toggling recursive permissions must not jump dialog size: base={base_w:.1}x{base_h:.1}, rec={rec_w:.1}x{rec_h:.1}"
+            );
+
+            // Switch to Comment tab -> dialog height must stay identical.
+            let (cx, cy, cw, ch) =
+                find_bounds(&harness, Role::Tab, Some("Comment")).expect("Comment tab trigger");
+            click_at(&mut harness, cx + cw / 2.0, cy + ch / 2.0, 300);
+            let (_, _, comment_w, comment_h) =
+                find_bounds(&harness, Role::Dialog, None).expect("dialog bounds on Comment tab");
+            assert!(
+                (comment_w - base_w).abs() < 0.5 && (comment_h - base_h).abs() < 0.5,
+                "switching to Comment tab must not jump dialog size: base={base_w:.1}x{base_h:.1}, comment={comment_w:.1}x{comment_h:.1}"
+            );
+
+            harness.shut_down();
+            Ok(())
+        };
+
+        zgui::app()
+            .with_fonts(Fonts::shipped_only())
+            .with_renderer(Box::new(noop_renderer))
+            .with_size(1280.0, 800.0)
+            .run_on(driver, move || {
+                let scope: Scope = bg_scope.clone();
+                let app = Gds::install(scope.clone());
+                app.appearance().motion().set_enabled(false);
+                let _ = app.appearance().install_window_sheet();
+                app.i18n().install_catalog(
+                    files_i18n::prepare(Language::English).expect("English catalog"),
+                );
+                let _prefs =
+                    preferences::Service::install(preferences::Preferences::default(), &scope)
+                        .expect("preferences service");
+                let browser = Browser::new(
+                    LaunchOptions {
+                        places: Ok(Places::default()),
+                        start: start.clone(),
+                        home: start.clone(),
+                        picker: None,
+                    },
+                    volumes::Service::new(scope),
+                    Rc::new(|_| {}),
+                );
+                *slot_for_view.borrow_mut() = Some(browser.clone());
+                browser.view()
+            })
+            .expect("item properties dialog stability harness");
+    }
 }

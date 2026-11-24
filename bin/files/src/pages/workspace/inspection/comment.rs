@@ -6,9 +6,9 @@ use gds::{i18n, service::file_tags};
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, RwSignal, Signal};
 use zgui::view::{FrameHandle, current_host, install_stylesheet, request_frame};
-use zgui::vocab::{Key, NamedKey};
+use zgui::vocab::{Key, Modifiers, NamedKey};
 use zgui::{css, view};
-use zgui_ui::{InputProps, SpinnerProps};
+use zgui_ui::TextareaProps;
 use zgui_ui_primitives::Binding;
 
 use super::super::ui::{Browser, WeakBrowser};
@@ -25,18 +25,18 @@ const COMMENT_CSS: &str = css!(
         min-width: 0;
     }
 
-    .gds-files-comment-editor__status {
-        display: flex;
-        flex-direction: row;
-        align-items: center;
-        gap: 8px;
-        font-size: var(--gds-text-xs, 12px);
-        color: var(--gds-muted-foreground);
+    .gds-files-comment-editor__textarea.zui-textarea {
+        height: 176px;
+        min-height: 176px;
+        max-height: 176px;
+        box-sizing: border-box;
+        overflow-y: auto;
     }
 
     .gds-files-comment-editor__hint {
         font-size: var(--gds-text-xs, 12px);
         color: var(--gds-muted-foreground);
+        min-height: 16px;
     }
 
     .gds-files-comment-editor__error {
@@ -234,59 +234,61 @@ impl CommentEditor {
         let error = self.0.error;
         let input_ref = self.0.input_ref;
         let submit = Rc::new(on_enter_submit);
+        let disabled =
+            Signal::derive_local(move || loading.get() || saving.get() || load_failed.get());
+        let invalid = Signal::derive_local(move || error.get().is_some());
 
         AnyView::new(view! {
             column(class = "gds-files-comment-editor") {
-                {move || if loading.get() {
-                    AnyView::new(view! {
-                        row(class = "gds-files-comment-editor__status") {
-                            Spinner {}
-                            text {{i18n::text("loading")}}
+                Textarea(
+                    node_ref = input_ref,
+                    class = "gds-files-comment-editor__textarea",
+                    value = Binding::controlled(
+                        draft.read_only(),
+                        move |next: String| {
+                            draft.set(next);
+                            error.set(None);
+                        },
+                    ),
+                    placeholder = i18n::text("details-comment-placeholder"),
+                    disabled = disabled,
+                    invalid = invalid,
+                    on:ime_start = move |_| composing.set(true),
+                    on:ime_preedit = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::ImePreedit>| {
+                        composing.set(ev.is_composing());
+                    },
+                    on:ime_commit = move |_| composing.set(false),
+                    on:ime_end = move |_| composing.set(false),
+                    on:key_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::KeyDown>| {
+                        if ev.repeat || composing.get_untracked() {
+                            return;
                         }
-                    })
-                } else {
-                    let submit_key = Rc::clone(&submit);
-                    let disabled = Signal::derive_local(move || saving.get() || load_failed.get());
-                    AnyView::new(view! {
-                        Input(
-                            node_ref = input_ref,
-                            value = Binding::controlled(
-                                draft.read_only(),
-                                move |next: String| {
-                                    draft.set(next);
-                                    error.set(None);
-                                },
-                            ),
-                            placeholder = i18n::text("details-comment-placeholder"),
-                            disabled = disabled,
-                            on:ime_start = move |_| composing.set(true),
-                            on:ime_preedit = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::ImePreedit>| {
-                                composing.set(ev.is_composing());
-                            },
-                            on:ime_commit = move |_| composing.set(false),
-                            on:ime_end = move |_| composing.set(false),
-                            on:key_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::KeyDown>| {
-                                if ev.repeat || composing.get_untracked() {
-                                    return;
-                                }
-                                if ev.key == Key::Named(NamedKey::Enter) && ev.modifiers.is_empty() {
-                                    ev.prevent_default();
-                                    ev.stop_propagation();
-                                    submit_key();
-                                }
-                            },
-                        ) {}
-                        text(class = "gds-files-comment-editor__hint") {
-                            {i18n::text("details-comment-hint")}
+                        if ev.key == Key::Named(NamedKey::Enter)
+                            && ev.modifiers == Modifiers::CONTROL
+                        {
+                            ev.prevent_default();
+                            ev.stop_propagation();
+                            submit();
                         }
-                    })
-                }}
-                {move || error.get().map(|err| {
-                    view! {
-                        text(class = "gds-files-comment-editor__error") {{err}}
+                    },
+                ) {}
+                {move || {
+                    if let Some(err) = error.get() {
+                        AnyView::new(view! {
+                            text(class = "gds-files-comment-editor__error") {{err}}
+                        })
+                    } else if loading.get() {
+                        AnyView::new(view! {
+                            text(class = "gds-files-comment-editor__hint") {{i18n::text("loading")}}
+                        })
+                    } else {
+                        AnyView::new(view! {
+                            text(class = "gds-files-comment-editor__hint") {
+                                {i18n::text("details-comment-hint")}
+                            }
+                        })
                     }
-                    .into_view()
-                })}
+                }}
             }
         })
     }

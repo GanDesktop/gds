@@ -12,7 +12,9 @@ use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, RwSignal};
 use zgui::view::{current_host, install_stylesheet};
 use zgui::{css, view};
-use zgui_ui::{TabsContentProps, TabsListProps, TabsProps, TabsTriggerProps};
+use zgui_ui::{
+    TabsActivation, TabsContentProps, TabsListProps, TabsListVariant, TabsProps, TabsTriggerProps,
+};
 use zgui_ui_primitives::Binding;
 
 use crate::entities::file::directory::Entry;
@@ -29,7 +31,7 @@ const EDITOR_CSS: &str = css!(
     .gds-files-item-editor__tabs {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 14px;
         width: 100%;
         min-width: 0;
     }
@@ -37,29 +39,24 @@ const EDITOR_CSS: &str = css!(
     .gds-files-item-editor__tabs-header {
         display: flex;
         flex-direction: row;
-        align-items: center;
+        align-items: flex-end;
+        width: 100%;
         border-bottom: 1px solid var(--gds-border);
     }
 
-    .gds-files-item-editor__tabs-list.zui-tabs__list {
+    .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"] {
         height: 34px;
+        gap: 20px;
         padding: 0;
-        gap: 16px;
-        border: none;
         border-radius: 0;
-        background: transparent;
+        background-color: transparent;
     }
 
     .gds-files-item-editor__tabs-trigger.zui-tabs__trigger {
         height: 34px;
-        padding: 0 4px;
-        border: none;
-        border-bottom: 2px solid transparent;
-        border-radius: 0;
-        background: transparent;
-        box-shadow: none;
-        color: var(--gds-muted-foreground);
+        padding: 0 2px;
         font-size: var(--gds-text-sm, 14px);
+        color: var(--gds-muted-foreground);
         cursor: pointer;
     }
 
@@ -68,17 +65,34 @@ const EDITOR_CSS: &str = css!(
     }
 
     .gds-files-item-editor__tabs-trigger.zui-tabs__trigger[data-state="active"] {
-        background: transparent;
-        box-shadow: none;
         color: var(--gds-foreground);
-        border-bottom-color: var(--gds-primary);
+    }
+
+    .gds-files-item-editor__tabs-trigger.zui-tabs__trigger::after {
+        bottom: -1px;
+        height: 2px;
+        background-color: var(--gds-primary);
+    }
+
+    .gds-files-item-editor__stage {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 216px;
+        min-height: 216px;
+        max-height: 216px;
+        min-width: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
     }
 
     .gds-files-item-editor__panel {
         display: flex;
         flex-direction: column;
+        flex: 1 1 0%;
         width: 100%;
         min-width: 0;
+        min-height: 0;
     }
     "#
 );
@@ -113,7 +127,7 @@ impl EditTab {
         match self {
             Self::Tags => "tags-title",
             #[cfg(unix)]
-            Self::Permissions => "permissions-title",
+            Self::Permissions => "permissions",
             #[cfg(target_os = "linux")]
             Self::Comment => "details-comment",
         }
@@ -474,7 +488,7 @@ impl ItemEditor {
         let submit = Rc::new(on_enter_submit);
 
         if self.0.tabs.len() == 1 {
-            return match self.0.tabs[0] {
+            let single = match self.0.tabs[0] {
                 EditTab::Tags => self
                     .0
                     .tags
@@ -495,6 +509,11 @@ impl ItemEditor {
                     },
                 ),
             };
+            return AnyView::new(view! {
+                column(class = "gds-files-item-editor__stage") {
+                    {single}
+                }
+            });
         }
 
         let active_tab = self.0.active_tab;
@@ -570,15 +589,24 @@ impl ItemEditor {
         let comment_panel: Option<AnyView> = None;
 
         AnyView::new(view! {
-            Tabs(value = tab_binding, class = "gds-files-item-editor__tabs") {
+            Tabs(
+                value = tab_binding,
+                activation = TabsActivation::Manual,
+                class = "gds-files-item-editor__tabs",
+            ) {
                 box(class = "gds-files-item-editor__tabs-header") {
-                    TabsList(class = "gds-files-item-editor__tabs-list") {
+                    TabsList(
+                        variant = TabsListVariant::Line,
+                        class = "gds-files-item-editor__tabs-list",
+                    ) {
                         {triggers}
                     }
                 }
-                {tags_panel}
-                {permissions_panel}
-                {comment_panel}
+                column(class = "gds-files-item-editor__stage") {
+                    {tags_panel}
+                    {permissions_panel}
+                    {comment_panel}
+                }
             }
         })
     }

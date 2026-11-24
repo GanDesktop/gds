@@ -407,28 +407,50 @@ pub(super) const INSPECTION_CSS: &str = css!(
     .gds-files-permissions-grid {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
+        width: 100%;
+        min-width: 0;
     }
 
-    .gds-files-permissions-group {
-        gap: 6px;
-        padding: 10px;
-        border-radius: var(--gds-radius-control, 6px);
-        background: var(--gds-surface);
+    .gds-files-permissions-table {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
         border: 1px solid var(--gds-border);
+        border-radius: var(--gds-radius-control, 8px);
+        background: var(--gds-surface-container-low, transparent);
+        overflow: hidden;
     }
 
-    .gds-files-permissions-group__title {
+    .gds-files-permissions-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 14px;
+        border-bottom: 1px solid var(--gds-border);
+    }
+
+    .gds-files-permissions-row--last {
+        border-bottom: none;
+    }
+
+    .gds-files-permissions-row__title {
+        width: 68px;
+        flex-shrink: 0;
         font-size: var(--gds-text-xs, 12px);
-        font-weight: 600;
-        color: var(--gds-foreground);
+        font-weight: 500;
+        color: var(--gds-muted-foreground);
     }
 
-    .gds-files-permissions-group__checks {
+    .gds-files-permissions-row__checks {
         display: flex;
         flex-direction: row;
         flex-wrap: wrap;
-        gap: 14px;
+        align-items: center;
+        gap: 16px;
+        flex: 1 1 0%;
+        min-width: 0;
     }
 
     .gds-files-permissions-check {
@@ -436,6 +458,13 @@ pub(super) const INSPECTION_CSS: &str = css!(
         flex-direction: row;
         align-items: center;
         gap: 6px;
+    }
+
+    .gds-files-permissions-recursive {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-height: 44px;
     }
 
     .gds-files-permissions-note {
@@ -1589,14 +1618,19 @@ impl PermissionEditor {
         })
     }
 
-    fn group(&self, title_key: &'static str, shift: u32) -> AnyView {
+    fn group(&self, title_key: &'static str, shift: u32, last: bool) -> AnyView {
         let read = self.bit_checkbox("permissions-read", 0o4 << shift);
         let write = self.bit_checkbox("permissions-write", 0o2 << shift);
         let execute = self.bit_checkbox("permissions-execute", 0o1 << shift);
+        let row_class = if last {
+            "gds-files-permissions-row gds-files-permissions-row--last"
+        } else {
+            "gds-files-permissions-row"
+        };
         AnyView::new(view! {
-            column(class = "gds-files-permissions-group") {
-                text(class = "gds-files-permissions-group__title") {{i18n::text(title_key)}}
-                row(class = "gds-files-permissions-group__checks") {
+            row(class = row_class) {
+                text(class = "gds-files-permissions-row__title") {{i18n::text(title_key)}}
+                row(class = "gds-files-permissions-row__checks") {
                     {read}
                     {write}
                     {execute}
@@ -1613,9 +1647,9 @@ impl PermissionEditor {
         let rec_sig = self.0.recursive;
         let dir_sig = self.0.directory;
 
-        let owner_group = self.group("permissions-owner", 6);
-        let group_group = self.group("permissions-group", 3);
-        let other_group = self.group("permissions-others", 0);
+        let owner_group = self.group("permissions-owner", 6, false);
+        let group_group = self.group("permissions-group", 3, false);
+        let other_group = self.group("permissions-others", 0, true);
 
         let recursive_view = move || {
             dir_sig.get().then(|| {
@@ -1635,7 +1669,7 @@ impl PermissionEditor {
                 let rec_ref = NodeRef::new();
                 let rec_label = NodeRef::new();
                 view! {
-                    column(style:gap = "4px") {
+                    column(class = "gds-files-permissions-recursive") {
                         row(class = "gds-files-permissions-check") {
                             Checkbox(
                                 node_ref = rec_ref,
@@ -1661,9 +1695,11 @@ impl PermissionEditor {
 
         AnyView::new(view! {
             column(class = "gds-files-permissions-grid") {
-                {owner_group}
-                {group_group}
-                {other_group}
+                column(class = "gds-files-permissions-table") {
+                    {owner_group}
+                    {group_group}
+                    {other_group}
+                }
                 {recursive_view}
                 {move || {
                     if loading_sig.get() {

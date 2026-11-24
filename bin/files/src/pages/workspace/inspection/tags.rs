@@ -37,10 +37,11 @@ const TAGS_CSS: &str = css!(
         align-items: center;
         align-content: flex-start;
         gap: 6px;
-        min-height: 38px;
-        max-height: 180px;
+        min-height: 176px;
+        max-height: 184px;
+        align-content: flex-start;
         overflow-y: auto;
-        padding: 6px;
+        padding: 8px;
         border-radius: 6px;
         border: 1px solid var(--gds-border);
         background: var(--gds-content-bg, var(--gds-surface));
