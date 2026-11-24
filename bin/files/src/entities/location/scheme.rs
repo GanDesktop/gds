@@ -34,6 +34,11 @@ pub enum Browse<'a> {
 }
 
 struct LocationScheme;
+struct RootVirtualScheme {
+    name: &'static str,
+    aliases: &'static [&'static str],
+    make: fn() -> Location,
+}
 struct TagsScheme;
 struct FileScheme;
 struct RemoteScheme {
@@ -42,6 +47,31 @@ struct RemoteScheme {
 }
 
 static LOCATION: LocationScheme = LocationScheme;
+static TRASH: RootVirtualScheme = RootVirtualScheme {
+    name: "trash",
+    aliases: &[],
+    make: || Location::Trash,
+};
+static RECENT: RootVirtualScheme = RootVirtualScheme {
+    name: "recent",
+    aliases: &["recentlyused"],
+    make: || Location::Recent,
+};
+static NETWORK: RootVirtualScheme = RootVirtualScheme {
+    name: "network",
+    aliases: &["remote"],
+    make: || Location::Network,
+};
+static COMPUTER: RootVirtualScheme = RootVirtualScheme {
+    name: "computer",
+    aliases: &[],
+    make: || Location::Volumes,
+};
+static STARRED: RootVirtualScheme = RootVirtualScheme {
+    name: "starred",
+    aliases: &[],
+    make: || Location::Favorites,
+};
 static TAGS: TagsScheme = TagsScheme;
 static FILE: FileScheme = FileScheme;
 static SFTP: RemoteScheme = RemoteScheme {
@@ -53,8 +83,10 @@ static SMB: RemoteScheme = RemoteScheme {
     protocol: gds::service::remote::Protocol::Smb,
 };
 
-pub fn registry() -> [&'static dyn Scheme; 5] {
-    [&LOCATION, &TAGS, &FILE, &SFTP, &SMB]
+pub fn registry() -> [&'static dyn Scheme; 10] {
+    [
+        &LOCATION, &TRASH, &RECENT, &NETWORK, &COMPUTER, &STARRED, &TAGS, &FILE, &SFTP, &SMB,
+    ]
 }
 
 pub fn recognizes(input: &str) -> bool {
@@ -78,13 +110,16 @@ pub fn parse(input: &str) -> Result<Location, AddressError> {
 
 fn provider(address: &Location) -> &'static dyn Scheme {
     match address {
+        Location::Trash => &TRASH,
+        Location::Recent => &RECENT,
+        Location::Network => &NETWORK,
         Location::Tags(_) => &TAGS,
         Location::Directory(_) => &FILE,
         Location::Remote(remote) => match remote.protocol() {
             gds::service::remote::Protocol::Sftp => &SFTP,
             gds::service::remote::Protocol::Smb => &SMB,
         },
-        _ => &LOCATION,
+        Location::Favorites | Location::Volumes | Location::Volume { .. } => &LOCATION,
     }
 }
 
@@ -180,6 +215,35 @@ impl Scheme for LocationScheme {
     }
 }
 
+impl Scheme for RootVirtualScheme {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        self.aliases
+    }
+
+    fn parse(&self, input: &str) -> Result<Location, AddressError> {
+        let (scheme, rest) = input
+            .split_once(':')
+            .ok_or_else(|| AddressError::Invalid(input.into()))?;
+        if !self.matches(scheme) {
+            return Err(AddressError::Invalid(input.into()));
+        }
+        // Accept both RFC 3986 path-absolute (`scheme:/`) and empty-authority root (`scheme:///`),
+        // while rejecting non-empty authorities (`scheme://host`) and subpaths/queries/fragments.
+        match rest {
+            "/" | "///" => Ok((self.make)()),
+            _ => Err(AddressError::Invalid(input.into())),
+        }
+    }
+
+    fn parent(&self, _: &Location) -> Option<Location> {
+        None
+    }
+}
+
 impl Scheme for FileScheme {
     fn name(&self) -> &'static str {
         "file"
@@ -246,9 +310,15 @@ impl Scheme for TagsScheme {
     }
 
     fn parse(&self, input: &str) -> Result<Location, AddressError> {
-        let (_, path) = input
+        let (_, raw_path) = input
             .split_once(':')
             .ok_or_else(|| AddressError::Invalid(input.into()))?;
+        // Accept empty-authority `tags:///...` alongside canonical `tags:/...`, while still
+        // rejecting non-empty authorities like `tags://host/path`.
+        let path = raw_path
+            .strip_prefix("//")
+            .filter(|rest| rest.starts_with('/'))
+            .unwrap_or(raw_path);
         if !path.starts_with('/') || path.starts_with("//") || path.contains(['?', '#']) {
             return Err(AddressError::Invalid(input.into()));
         }

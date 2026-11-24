@@ -50,7 +50,7 @@ Registered exclusively while a modal dialog is open, intercepting keys before ba
 | New folder / Rename / Refresh | `Ctrl+Shift+N` / `F2` / `Ctrl+R` (`F5`) | `F2` opens single-item rename dialog |
 | Cut / Copy / Paste / Copy path | `Ctrl+X` / `Ctrl+C` / `Ctrl+V` / `Ctrl+Shift+C` | `Esc` cancels active drag first, then pending cut state |
 | Move to Trash / Delete permanently | `Delete` / `Shift+Delete` | `Shift+Delete` requires destructive confirmation |
-| Trash: Restore / Delete / Empty | `Alt+R` / `Alt+D` / `Alt+Shift+D` | Active only on `location:/trash` |
+| Trash: Restore / Delete / Empty | `Alt+R` / `Alt+D` / `Alt+Shift+D` | Active only on `trash:///` |
 | Clear Recent / Mount / Unmount | `Alt+C` / `Ctrl+M` / `Ctrl+Shift+M` | Scoped to Recent page and Volumes view/directory |
 | Terminal: Copy / Paste / Return focus | `Ctrl+Shift+C` / `Ctrl+Shift+V` / `F6` | Dragging files into terminal pastes shell-quoted paths without `Enter` |
 

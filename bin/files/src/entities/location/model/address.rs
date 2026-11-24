@@ -48,10 +48,10 @@ impl Location {
 
     pub(crate) fn virtual_uri(&self) -> Option<&'static str> {
         match self {
-            Self::Recent => Some("location:/recent"),
+            Self::Recent => Some("recent:///"),
             Self::Favorites => Some("location:/favorites"),
-            Self::Network => Some("location:/network"),
-            Self::Trash => Some("location:/trash"),
+            Self::Network => Some("network:///"),
+            Self::Trash => Some("trash:///"),
             Self::Volumes => Some("location:/volumes"),
             _ => None,
         }

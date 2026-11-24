@@ -2,7 +2,7 @@
 
 GDS Files connects directly to SFTP and SMB servers using pure Rust protocol clients (`russh-sftp` and `smb`) running on the application's Tokio runtime—requiring no GVfs, KIO, SSHFS, rclone, or `libsmbclient` installation. Existing kernel/FUSE mounts remain browsable as ordinary local paths.
 
-## Connecting (`location:/network`)
+## Connecting (`network:///`)
 
 Add a server from the Network page or enter a URI directly via `Ctrl+L`:
 
@@ -12,7 +12,7 @@ smb://user@host/share/folder
 ```
 
 - **Authentication**: SFTP supports SSH agent, password, and private-key auth, storing confirmed host keys in `$XDG_STATE_HOME/gds/files/known_hosts`. SMB supports registered-user and explicit guest access. Passwords stay in process memory only and are never written into saved URIs, favorites, or recent history.
-- **Navigation**: Adding a server validates and saves the entry on `location:/network` (grouped alongside active sessions and system network mounts). Opening navigates in the current tab (`Ctrl/Cmd+Click` opens a new tab) with immediate target display and cancellation.
+- **Navigation**: Adding a server validates and saves the entry on `network:///` (grouped alongside active sessions and system network mounts). Opening navigates in the current tab (`Ctrl/Cmd+Click` opens a new tab) with immediate target display and cancellation.
 
 ## Browsing & Safe Transfers
 

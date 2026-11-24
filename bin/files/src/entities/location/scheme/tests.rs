@@ -23,17 +23,60 @@ fn schemes_keep_distinct_resource_identity() {
         ))
     );
     assert_eq!(
-        parse("location:/recent").expect("parse recent URI"),
+        parse("location:/recent").expect("parse legacy recent URI"),
         Location::Recent
+    );
+    assert_eq!(
+        parse("recent:///").expect("parse standard recent URI"),
+        Location::Recent
+    );
+    assert_eq!(
+        parse("recentlyused:/").expect("parse KIO recent alias"),
+        Location::Recent
+    );
+    assert_eq!(
+        parse("trash:///").expect("parse standard trash URI"),
+        Location::Trash
+    );
+    assert_eq!(
+        parse("trash:/").expect("parse KIO trash URI"),
+        Location::Trash
+    );
+    assert_eq!(
+        parse("network:///").expect("parse standard network URI"),
+        Location::Network
+    );
+    assert_eq!(
+        parse("remote:/").expect("parse KIO remote alias"),
+        Location::Network
+    );
+    assert_eq!(
+        parse("computer:///").expect("parse GVFS computer alias"),
+        Location::Volumes
+    );
+    assert_eq!(
+        parse("starred:///").expect("parse GVFS starred alias"),
+        Location::Favorites
     );
     assert_eq!(
         parse("LOCATION:/Volumes/").expect("case-insensitive location URI"),
         Location::Volumes
     );
+    assert!(recognizes("trash:///"));
+    assert!(recognizes("recent:///"));
+    assert!(recognizes("network:///"));
     assert!(recognizes("tag:/work"));
     assert_eq!(
         parse("tag:/").expect("singular tag root alias"),
         Location::Tags(TagAddress::new("").expect("root tag"))
+    );
+    assert_eq!(
+        parse("tags:///").expect("empty-authority tags root"),
+        Location::Tags(TagAddress::new("").expect("root tag"))
+    );
+    assert_eq!(
+        parse("tags:///工作/设计").expect("empty-authority nested tag"),
+        Location::Tags(TagAddress::new("工作/设计").expect("nested tag"))
     );
     assert_eq!(
         parse("tag:/工作/设计").expect("singular tag alias"),
@@ -41,6 +84,8 @@ fn schemes_keep_distinct_resource_identity() {
     );
     assert!(parse("tag://host/path").is_err());
     assert!(parse("tags://host/path").is_err());
+    assert!(parse("tags:////work").is_err());
+    assert!(parse("trash://host/item").is_err());
     assert!(parse("tags:/a/../b").is_err());
     assert!(parse("tags:/a?query").is_err());
     assert!(

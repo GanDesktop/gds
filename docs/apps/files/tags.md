@@ -31,9 +31,10 @@ GDS Files neither starts nor configures the Baloo daemon or its index scopes. Tr
 | --- | --- |
 | `file:///…` | Local file or directory |
 | `sftp://…`, `smb://…` | Native remote SFTP or SMB location |
-| `location:/recent`, `/favorites`, `/volumes`, `/network`, `/trash` | Built-in virtual pages |
+| `trash:///`, `recent:///`, `network:///` | Standard virtual pages (also accepts `scheme:/`, `recentlyused:/`, `remote:/`, and legacy `location:/…`) |
+| `location:/favorites`, `location:/volumes` | GDS built-in virtual pages (also accepts `starred:///` and `computer:///`) |
 | `location:/volume/<stable\|attachment>/<id>?path=<relative-path>` | Device-identity-bound volume path |
-| `tags:/`, `tags:/work` | Tag catalog and tag contents (`tags://` is invalid) |
+| `tags:/`, `tags:/work` | Tag catalog and tag contents (also accepts `tags:///…`; non-empty host `tags://host/…` is invalid) |
 
 For E2E and opt-in real-Baloo test commands, see [Files Testing](testing.md).
 

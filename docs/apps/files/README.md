@@ -20,7 +20,8 @@ Every browsable target has a canonical URI and participates in per-tab back/forw
 | --- | --- |
 | `file:///…` (displayed as OS paths for local folders) | Local filesystem directories |
 | `sftp://…`, `smb://…` | Native remote SFTP and SMB directories |
-| `location:/recent`, `/favorites`, `/volumes`, `/network`, `/trash` | Built-in virtual collections (`location://` is invalid) |
+| `trash:///`, `recent:///`, `network:///` | Standard virtual locations (also accepts `trash:/`, `recent:/`, `recentlyused:/`, `network:/`, `remote:/`, and legacy `location:/…`) |
+| `location:/favorites`, `location:/volumes` | GDS built-in virtual collections (also accepts `starred:///` and `computer:///`; `location://` is invalid) |
 | `location:/volume/<stable\|attachment>/<id>?path=<rel>` | Removable/mounted volume paths preserving device identity across remounts |
 | `tags:/`, `tags:/<tag>` | Baloo/KIO hierarchical file tag catalogs |
 
