@@ -46,6 +46,7 @@ use crate::{
 
 pub(super) enum Loaded {
     Unavailable(String),
+    Recent(Vec<directory::Entry>),
     Places(Vec<Location>),
     Network(Result<Vec<PathBuf>, String>),
     Trash(Vec<recycle::Entry>),
@@ -802,6 +803,19 @@ impl Browser {
                     );
                     out
                 }
+                Contents::Recent(entries) => entries
+                    .iter()
+                    .filter(|entry| {
+                        if let Some(projection) = picker_projection.as_ref()
+                            && !projection.keeps(entry)
+                        {
+                            return false;
+                        }
+                        filter_lower.is_empty() || entry.matches_filter(&filter_lower)
+                    })
+                    .cloned()
+                    .map(Row::File)
+                    .collect(),
                 Contents::Places(locations) => locations
                     .iter()
                     .filter(|loc| !in_picker || !matches!(loc, Location::Remote(_)))
@@ -1187,9 +1201,61 @@ impl Browser {
         }
         match location {
             Location::Recent => {
-                let places = self.read_untracked(|state| state.places.recent.clone());
-                self.finish_collection_load(id, &request, Loaded::Places(places.clone()));
-                self.inspect_places_metadata(id, &places);
+                const RECENT_DISPLAY_LIMIT: usize = 200;
+                let work = self.0.tasks.named_child("Load recent files");
+                let scope = (*work).clone();
+                let cancel = work.token();
+                {
+                    let mut state = self.0.state.borrow_mut();
+                    if let Some(tab) = state.tab_by_id(id) {
+                        if !matches!(tab.contents, Contents::Recent(_)) {
+                            tab.contents = Contents::LoadingCollection;
+                            tab.rows.clear();
+                        }
+                        tab.work = Some(work);
+                    }
+                }
+                self.changed();
+                let (tx, mut rx) = mpsc::unbounded_channel();
+                drop(
+                    scope.spawn_blocking_named("Read recently-used.xbel", move || {
+                        let outcome = gds::service::desktop::recent_files::list_default()
+                            .map_err(|err| err.to_string())
+                            .map(|items| {
+                                let mut entries =
+                                    Vec::with_capacity(items.len().min(RECENT_DISPLAY_LIMIT));
+                                for item in items {
+                                    if cancel.is_cancelled()
+                                        || entries.len() >= RECENT_DISPLAY_LIMIT
+                                    {
+                                        break;
+                                    }
+                                    if let Ok(entry) = directory::Entry::inspect(&item.path) {
+                                        entries.push(entry);
+                                    }
+                                }
+                                entries
+                            });
+                        let _ = tx.send(outcome);
+                    }),
+                );
+                let weak = self.downgrade();
+                self.0.owner.with(|| {
+                    drop(spawn_local(async move {
+                        let Some(result) = rx.recv().await else {
+                            return;
+                        };
+                        let Some(browser) = weak.upgrade() else {
+                            return;
+                        };
+                        let loaded = match result {
+                            Ok(entries) => Loaded::Recent(entries),
+                            Err(error) => Loaded::Unavailable(error),
+                        };
+                        browser.finish_collection_load(id, &request, loaded);
+                        browser.start_recent_watch(id);
+                    }));
+                });
             }
             Location::Favorites => {
                 let places = self.read_untracked(|state| state.places.favorites.clone());
@@ -1527,6 +1593,7 @@ impl Browser {
             };
             tab.contents = match loaded {
                 Loaded::Unavailable(message) => Contents::Unavailable(message),
+                Loaded::Recent(entries) => Contents::Recent(entries),
                 Loaded::Places(places) => Contents::Places(places),
                 Loaded::Network(Ok(mounts)) => Contents::Network {
                     mounts,
@@ -1688,6 +1755,89 @@ impl Browser {
         });
         PLACE_ENTRIES.with(|slot| {
             slot.borrow_mut().remove(&key);
+        });
+    }
+
+    fn start_recent_watch(&self, id: u64) {
+        let Some(xbel_path) = gds::service::desktop::recent_files::default_path() else {
+            return;
+        };
+        let is_recent = self.read_untracked(|state| {
+            state
+                .tabs
+                .iter()
+                .find(|tab| tab.id == id)
+                .is_some_and(|tab| matches!(tab.navigation.location(), Location::Recent))
+        });
+        if !is_recent {
+            return;
+        }
+
+        ensure_watch_cleanup(self);
+        let key = (Rc::as_ptr(&self.0) as usize, id);
+        let owner = self.0.tasks.named_child("Watch recently-used.xbel");
+        let scope = (*owner).clone();
+        let cancel = owner.token();
+        WATCHES.with(|slot| {
+            slot.borrow_mut().insert(key, owner);
+        });
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        drop(scope.spawn_named("Recent files watcher", async move {
+            let (raw_tx, mut raw_rx) = mpsc::channel(4);
+            let mut sources = gds::service::desktop::watch::Sources::new(raw_tx);
+            if sources.set_paths(vec![xbel_path]).is_err() {
+                return;
+            }
+            loop {
+                tokio::select! {
+                    () = cancel.cancelled() => return,
+                    event = raw_rx.recv() => {
+                        if event.is_none() {
+                            return;
+                        }
+                    }
+                }
+                let deadline = tokio::time::Instant::now() + Duration::from_millis(250);
+                loop {
+                    tokio::select! {
+                        () = cancel.cancelled() => return,
+                        () = tokio::time::sleep_until(deadline) => break,
+                        event = raw_rx.recv() => {
+                            if event.is_none() {
+                                return;
+                            }
+                        }
+                    }
+                }
+                let _ = sources.refresh();
+                if tx.send(()).is_err() {
+                    return;
+                }
+            }
+        }));
+
+        let weak = self.downgrade();
+        self.0.owner.with(|| {
+            drop(spawn_local(async move {
+                while rx.recv().await.is_some() {
+                    let Some(browser) = weak.upgrade() else {
+                        break;
+                    };
+                    let still_recent = browser.read_untracked(|state| {
+                        state
+                            .tabs
+                            .iter()
+                            .find(|tab| tab.id == id)
+                            .is_some_and(|tab| {
+                                matches!(tab.navigation.location(), Location::Recent)
+                            })
+                    });
+                    if still_recent {
+                        browser.refresh_tab(id);
+                    }
+                }
+            }));
         });
     }
 }
@@ -1935,6 +2085,7 @@ fn sortable_columns_for(state: &State) -> Vec<Column> {
             vec![Column::Name, Column::Modified, Column::Type, Column::Size]
         }
         Contents::Trash(_)
+        | Contents::Recent(_)
         | Contents::Places(_)
         | Contents::Network { .. }
         | Contents::Tags { .. }

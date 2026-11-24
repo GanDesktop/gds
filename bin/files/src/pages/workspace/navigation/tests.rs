@@ -244,9 +244,15 @@ fn trash_and_places_columns_are_unsortable_while_directories_expose_all_columns(
 
     let recent_places = Places::default();
     let mut recent_tab = Tab::new(1, Location::Recent, &recent_places, false);
-    recent_tab.contents = Contents::Places(Vec::new());
+    recent_tab.contents = Contents::Recent(Vec::new());
     let recent_state = make_state(vec![recent_tab], 0, recent_places);
     assert!(sortable_columns_for(&recent_state).is_empty());
+
+    let fav_places = Places::default();
+    let mut fav_tab = Tab::new(1, Location::Favorites, &fav_places, false);
+    fav_tab.contents = Contents::Places(Vec::new());
+    let fav_state = make_state(vec![fav_tab], 0, fav_places);
+    assert!(sortable_columns_for(&fav_state).is_empty());
 
     let dir_places = Places::default();
     let dir_tab = Tab::new(

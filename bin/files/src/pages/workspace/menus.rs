@@ -2,7 +2,11 @@
 
 mod pages;
 
-use std::{cell::Cell, path::PathBuf, rc::Rc};
+use std::{
+    cell::Cell,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use gds::app::Gds;
 use gds::i18n;
@@ -1458,6 +1462,13 @@ impl Browser {
             {
                 self.place_entries(row)
             }
+            Row::File(entry)
+                if self.read_untracked(|state| {
+                    matches!(state.tab().navigation.location(), Location::Recent)
+                }) =>
+            {
+                self.recent_file_entries(entry)
+            }
             Row::File(entry) => self.file_entries(entry),
         }
     }
@@ -1598,6 +1609,126 @@ impl Browser {
             entries.push(MenuEntry::Separator);
             entries.push(self.command_item(Command::Refresh, Browser::refresh));
         }
+        entries
+    }
+
+    fn recent_file_entries(
+        &self,
+        entry: &crate::entities::file::directory::Entry,
+    ) -> Vec<MenuEntry> {
+        let (selected, picker, busy) = self.read_untracked(|state| {
+            let tab = state.tab();
+            (
+                tab.selected(),
+                state.picker.is_some(),
+                state.operation.busy() || tab.navigation.is_loading(),
+            )
+        });
+        let count = selected.len();
+        let many = count > 1;
+        let is_dir = FileIcon::is_directory(entry);
+        let selected_paths: Vec<PathBuf> = selected
+            .iter()
+            .filter_map(|row| row.path().map(Path::to_path_buf))
+            .collect();
+        let location = Location::from(entry.path.as_path());
+        let favorite = self.read_untracked(|state| state.places.is_favorite(&location));
+
+        let mut entries = Vec::new();
+        if !many {
+            entries.push(self.command_item(Command::Open, Browser::open_selected));
+            if !is_dir && !picker {
+                entries.push(self.menu_item_entry(
+                    "open-with",
+                    Some(IconName::ExternalLink),
+                    None,
+                    false,
+                    Browser::open_selected_with,
+                ));
+            }
+            entries.push(self.menu_item_entry(
+                "tags-show-parent",
+                Some(IconName::FolderOpen),
+                None,
+                false,
+                Browser::show_selected_parent,
+            ));
+            entries.push(MenuEntry::Separator);
+        }
+        entries.push(MenuEntry::Item {
+            label: if many {
+                i18n::count_untracked("copy-selected-files", count)
+            } else {
+                i18n::text_untracked(Command::Copy.label_id())
+            },
+            icon: command_icon(Command::Copy),
+            shortcut: Some(Command::Copy.shortcut()),
+            disabled: busy,
+            destructive: false,
+            on_select: self.menu_action(Command::Copy.label_id(), |browser| browser.copy(false)),
+        });
+        entries.push(MenuEntry::Item {
+            label: if many {
+                i18n::count_untracked("copy-selected-paths", count)
+            } else {
+                i18n::text_untracked("copy-path")
+            },
+            icon: command_icon(Command::CopyPaths),
+            shortcut: Some(Command::CopyPaths.shortcut()),
+            disabled: selected_paths.iter().any(|p| p.to_str().is_none()),
+            destructive: false,
+            on_select: self
+                .menu_action(Command::CopyPaths.label_id(), Browser::copy_selected_paths),
+        });
+        entries.push(MenuEntry::Separator);
+        if !many {
+            let saved = location;
+            entries.push(self.menu_item_entry(
+                if favorite {
+                    "place-favorite-remove"
+                } else {
+                    "place-favorite-add"
+                },
+                Some(IconName::Star),
+                Some(Command::Favorite),
+                false,
+                move |browser| {
+                    browser.update(|state| state.places.toggle_favorite(saved.clone()));
+                    browser.save_places();
+                    browser.refresh_location(&Location::Favorites);
+                },
+            ));
+            if self.tags_enabled_untracked() {
+                entries.push(self.menu_item_entry(
+                    "tags-edit",
+                    Some(IconName::Tag),
+                    None,
+                    busy,
+                    Browser::edit_selected_tags,
+                ));
+            }
+            entries.push(MenuEntry::Separator);
+        }
+        let remove_paths = selected_paths;
+        entries.push(self.menu_item_entry(
+            "recent-remove",
+            Some(IconName::X),
+            None,
+            busy || remove_paths.is_empty(),
+            move |browser| browser.remove_from_recent(remove_paths.clone()),
+        ));
+        entries.push(MenuEntry::Item {
+            label: if many {
+                i18n::count_untracked("trash-selected", count)
+            } else {
+                i18n::text_untracked(Command::Trash.label_id())
+            },
+            icon: command_icon(Command::Trash),
+            shortcut: Some(Command::Trash.shortcut()),
+            disabled: busy,
+            destructive: false,
+            on_select: self.menu_action(Command::Trash.label_id(), |browser| browser.delete(false)),
+        });
         entries
     }
 

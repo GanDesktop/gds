@@ -2136,7 +2136,10 @@ fn materialize_file_drag(browser: &Browser, tab_id: u64, entry: &Entry) -> Optio
             return None;
         }
         let tab = state.tabs.iter().find(|tab| tab.id == tab_id)?;
-        if !matches!(tab.contents, Contents::Directory | Contents::Tags { .. }) {
+        if !matches!(
+            tab.contents,
+            Contents::Directory | Contents::Recent(_) | Contents::Tags { .. }
+        ) {
             return None;
         }
         let entries: Arc<[Entry]> = tab

@@ -125,21 +125,7 @@ impl Browser {
             Command::RestoreSelection => self.restore_trash(false, false),
             Command::PurgeSelection => self.restore_trash(true, false),
             Command::EmptyTrash => self.restore_trash(true, true),
-            Command::ClearRecent => {
-                let recent_tabs: Vec<u64> = self.update(|state| {
-                    state.places.clear_recent();
-                    state
-                        .tabs
-                        .iter()
-                        .filter(|tab| matches!(tab.navigation.location(), Location::Recent))
-                        .map(|tab| tab.id)
-                        .collect()
-                });
-                self.save_places();
-                for id in recent_tabs {
-                    self.refresh_tab(id);
-                }
-            }
+            Command::ClearRecent => self.clear_recent(),
             Command::MountVolume => {
                 let volume = self
                     .read_untracked(|state| {

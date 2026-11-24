@@ -31,6 +31,7 @@ pub(super) enum Contents {
     LoadingCollection,
     Unavailable(String),
     Directory,
+    Recent(Vec<directory::Entry>),
     Places(Vec<Location>),
     Network {
         mounts: Vec<PathBuf>,

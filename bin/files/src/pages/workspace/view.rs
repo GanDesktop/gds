@@ -1536,7 +1536,7 @@ impl Browser {
         self.read_structure(|state| {
             let tab = state.tab();
             match tab.contents {
-                Contents::Directory | Contents::Places(_) => true,
+                Contents::Directory | Contents::Places(_) | Contents::Recent(_) => true,
                 Contents::Tags { .. } => !tab.is_pure_tag_catalogue(),
                 Contents::LoadingCollection
                 | Contents::Unavailable(_)
@@ -2245,6 +2245,7 @@ impl Browser {
                     matches!(
                         state.tab().contents,
                         Contents::Places(_)
+                            | Contents::Recent(_)
                             | Contents::Trash(_)
                             | Contents::Tags { .. }
                             | Contents::Remote { .. }
@@ -2943,6 +2944,7 @@ impl Browser {
                 let total = match &tab.contents {
                     Contents::Directory => tab.navigation.directory().map(|dir| dir.entries.len()),
                     Contents::Places(items) => Some(items.len()),
+                    Contents::Recent(entries) => Some(entries.len()),
                     Contents::Remote { listing, .. } => Some(listing.entries.len()),
                     Contents::Tags { entries, .. } if !tab.is_pure_tag_catalogue() => {
                         Some(entries.len())

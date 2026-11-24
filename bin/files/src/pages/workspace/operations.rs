@@ -280,6 +280,9 @@ impl Browser {
                     Contents::Trash(_) if trash_affected => {
                         trash_tabs.push(tab.id);
                     }
+                    Contents::Recent(_) => {
+                        dir_tabs.push(tab.id);
+                    }
                     Contents::Tags { .. } => {
                         has_tag_tabs = true;
                     }
@@ -403,6 +406,7 @@ impl Browser {
 
     pub(super) fn open_file(&self, path: PathBuf, mode: OpenMode) {
         let cancel = self.0.tasks.token();
+        let record_path = path.clone();
         self.work(
             "Open file",
             async move {
@@ -415,11 +419,104 @@ impl Browser {
                     }
                 }
             },
-            |browser, result| match result {
-                Ok(OpenOutcome::Opened | OpenOutcome::Cancelled) => {}
+            move |browser, result| match result {
+                Ok(OpenOutcome::Opened) => browser.record_recent_file(record_path),
+                Ok(OpenOutcome::Cancelled) => {}
                 Err(error) => browser.report_notice(error),
             },
         );
+    }
+
+    fn record_recent_file(&self, path: PathBuf) {
+        let mime = crate::entities::file::directory::Entry::inspect(&path)
+            .ok()
+            .and_then(|entry| {
+                entry
+                    .details
+                    .display_content()
+                    .and_then(|c| c.mime.as_ref().map(|m| m.to_string()))
+            });
+        self.blocking(
+            "Record recent file",
+            move || {
+                if let Err(error) = gds::service::desktop::recent_files::record_default(
+                    &path,
+                    mime.as_deref(),
+                    "GDS Files",
+                    "'gds-files' %u",
+                ) {
+                    tracing::debug!(%error, "failed to record recently-used.xbel entry");
+                }
+                Ok(())
+            },
+            |browser, _| {
+                browser.refresh_location(&Location::Recent);
+            },
+        );
+    }
+
+    pub(super) fn remove_from_recent(&self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        self.blocking(
+            "Remove recent files",
+            move || {
+                for path in &paths {
+                    gds::service::desktop::recent_files::remove_default(path)
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(())
+            },
+            |browser, result| match result {
+                Ok(()) => browser.refresh_location(&Location::Recent),
+                Err(error) => browser.report_notice(error),
+            },
+        );
+    }
+
+    pub(super) fn clear_recent(&self) {
+        let title = i18n::text_untracked("clear-recent-confirm-title");
+        let message = i18n::text_untracked("clear-recent-confirm-message");
+        let primary = i18n::text_untracked("clear-recent-confirm-ok");
+        let options = ConfirmOptions {
+            icon: Some(IconName::Broom),
+            primary_icon: Some(IconName::Broom),
+            destructive: true,
+            items: Vec::new(),
+            overflow_count: 0,
+        };
+        let browser = self.clone();
+        self.confirm_with_options(title, message, primary, options, move || {
+            let recent_tabs: Vec<u64> = browser.update(|state| {
+                state.places.clear_recent();
+                state
+                    .tabs
+                    .iter()
+                    .filter(|tab| matches!(tab.navigation.location(), Location::Recent))
+                    .map(|tab| tab.id)
+                    .collect()
+            });
+            browser.save_places();
+            browser.blocking(
+                "Clear recent files",
+                || {
+                    gds::service::desktop::recent_files::clear_default()
+                        .map_err(|error| error.to_string())
+                },
+                move |browser, result| {
+                    for id in &recent_tabs {
+                        browser.refresh_tab(*id);
+                    }
+                    match result {
+                        Ok(()) => {
+                            browser.report_success(i18n::text_untracked("clear-recent-done"));
+                        }
+                        Err(error) => browser.report_notice(error),
+                    }
+                },
+            );
+        });
     }
 
     pub(super) fn new_folder(&self) {
@@ -942,7 +1039,7 @@ impl Browser {
                 Contents::Tags { .. } if selected.iter().any(|r| matches!(r, Row::Tag(_))) => {
                     DeleteTarget::Tags(selected)
                 }
-                Contents::Directory | Contents::Tags { .. } => {
+                Contents::Directory | Contents::Recent(_) | Contents::Tags { .. } => {
                     let paths = selected
                         .into_iter()
                         .filter_map(|row| row.path().map(Path::to_path_buf))

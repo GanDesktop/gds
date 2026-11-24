@@ -89,7 +89,8 @@ watch = ["dep:notify", "dep:tokio", "dep:tracing"]
 desktop = [
     "desktop-protocol", "watch", "dep:tokio", "dep:tracing", "dep:infer",
     "dep:open", "dep:thiserror", "dep:url", "dep:ashpd", "dep:zbus",
-    "dep:rustix",
+    "dep:rustix", "dep:chrono", "dep:directories", "dep:percent-encoding",
+    "dep:roxmltree", "dep:tempfile",
 ]
 file-tags = ["desktop", "dep:rustix"]
 storage = [

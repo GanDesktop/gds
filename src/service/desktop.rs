@@ -10,6 +10,8 @@ mod client;
 #[cfg(feature = "desktop")]
 mod error;
 #[cfg(feature = "desktop")]
+pub mod recent_files;
+#[cfg(feature = "desktop")]
 mod session;
 #[cfg(feature = "desktop")]
 pub use client::{Desktop, OpenMode, OpenOutcome};

@@ -1021,7 +1021,9 @@ impl Browser {
                 return Some("empty-filter");
             }
             match &tab.contents {
-                Contents::Places(_) | Contents::Tags { .. } => Some("empty-collection"),
+                Contents::Places(_) | Contents::Recent(_) | Contents::Tags { .. } => {
+                    Some("empty-collection")
+                }
                 Contents::Trash(_) => Some("recycle-empty"),
                 Contents::Remote { .. } => Some("empty-directory"),
                 Contents::Volumes => Some("device-none"),
@@ -1037,7 +1039,7 @@ impl Browser {
         self.read_structure(|state| {
             let tab = state.tab();
             match &tab.contents {
-                Contents::Places(_) => {
+                Contents::Places(_) | Contents::Recent(_) => {
                     Some(vec!["name", "modified", "type", "size", "place-location"])
                 }
                 Contents::Trash(_) => Some(vec![
@@ -1080,7 +1082,7 @@ impl Browser {
         let state = self.0.state.borrow();
         let tab = state.tab();
         match &tab.contents {
-            Contents::Places(_) => {
+            Contents::Places(_) | Contents::Recent(_) => {
                 let (viewport, compact) = dimensions();
                 Some(location_table_columns(viewport, compact))
             }
