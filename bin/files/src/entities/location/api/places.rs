@@ -24,6 +24,14 @@ const MIGRATIONS: MigrationSet = MigrationSet::new(&[
         "002-quick-access.sql",
         include_str!("places/assets/002-quick-access.sql"),
     ),
+    // Databases created before migrations 001..005 were squashed into 001 already
+    // recorded id = 2..5 in `__toasty_migrations`, causing Toasty to skip id = 2.
+    // Re-running with IF NOT EXISTS at id = 6 heals those databases idempotently.
+    MigrationFile::new(
+        6,
+        "006-quick-access-compat.sql",
+        include_str!("places/assets/006-quick-access-compat.sql"),
+    ),
 ]);
 
 fn resolve_default_quick_access(

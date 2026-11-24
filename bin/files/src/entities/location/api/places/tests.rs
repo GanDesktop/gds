@@ -258,6 +258,65 @@ async fn migration_v1_to_v2_preserves_saved_locations_and_seeds_quick_access_onc
     assert_eq!(snapshot.quick_access, defaults);
 }
 
+#[tokio::test]
+async fn migration_heals_pre_squash_databases_with_legacy_ids_1_through_5() {
+    let root = tempfile::tempdir().expect("create fixture directory");
+    let path = root.path().join("presquash.sqlite");
+    let scope =
+        gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false);
+
+    // Simulate a database migrated through historical 001..005 before the squash:
+    // `saved_locations` and `view_settings` exist, `__toasty_migrations` has ids 1..5,
+    // and neither `quick_access` nor `places_meta` exists yet.
+    const V1_MIGRATIONS: MigrationSet = MigrationSet::new(&[MigrationFile::new(
+        1,
+        "001-places.sql",
+        include_str!("assets/001-places.sql"),
+    )]);
+    let mut db = Options::new(V1_MIGRATIONS)
+        .models(models!(SavedLocation, ViewSettings))
+        .open(&scope, &path)
+        .await
+        .expect("open pre-squash database");
+    for (id, name) in [
+        (2, "002-location-views.sql"),
+        (3, "003-remote-locations.sql"),
+        (4, "004-unified-places.sql"),
+        (5, "005-location-pins.sql"),
+    ] {
+        toasty::sql::query(format!(
+            "INSERT INTO __toasty_migrations (id, name, applied_at) VALUES ({id}, '{name}', '2026-11-10 00:00:00')"
+        ))
+        .exec(&mut db)
+        .await
+        .expect("seed legacy migration row");
+    }
+    let existing_pin = Address::from(Path::new("/pre-squash-pin"));
+    let key = record::ViewKey::new(&crate::entities::location::ViewScope::Location(
+        existing_pin.clone(),
+    ))
+    .expect("encode pre-squash pin");
+    SavedLocation::upsert_by_kind_and_location_kind_and_identity_and_path(
+        record::Kind::Pin,
+        key.kind,
+        key.identity,
+        key.path,
+    )
+    .position(0)
+    .exec(&mut db)
+    .await
+    .expect("insert pre-squash pin");
+    drop(db);
+
+    let defaults = vec![Address::from(Path::new("/home/user/Desktop"))];
+    let store = Store::open_at_with_quick_access(&scope, &path, &defaults)
+        .await
+        .expect("upgrade pre-squash store");
+    let snapshot = store.read().await.expect("read healed store");
+    assert_eq!(snapshot.pinned, vec![existing_pin]);
+    assert_eq!(snapshot.quick_access, defaults);
+}
+
 #[test]
 fn resolve_default_quick_access_handles_xdg_fallbacks_and_skips_home_or_missing() {
     let root = tempfile::tempdir().expect("create fixture home");
