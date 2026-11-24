@@ -1,5 +1,5 @@
 //! Shared XDG Settings Portal snapshot and change stream.
-use super::theme::Mode;
+use super::theme::{Contrast, Mode};
 use futures_lite::StreamExt as _;
 use std::{
     cell::Cell,
@@ -18,6 +18,7 @@ const NAMESPACE: &str = "org.freedesktop.appearance";
 const REDUCED_MOTION_KEY: &str = "reduced-motion";
 const COLOR_SCHEME_KEY: &str = "color-scheme";
 const ACCENT_COLOR_KEY: &str = "accent-color";
+const CONTRAST_KEY: &str = "contrast";
 const PRIME_TIMEOUT: Duration = Duration::from_millis(300);
 
 type Settings = HashMap<String, HashMap<String, OwnedValue>>;
@@ -26,6 +27,7 @@ type Settings = HashMap<String, HashMap<String, OwnedValue>>;
 pub(crate) struct Snapshot {
     pub color_scheme: Option<Mode>,
     pub accent_color: Option<Color>,
+    pub contrast: Contrast,
     pub primed: bool,
 }
 
@@ -39,6 +41,7 @@ struct State {
 struct Update {
     reduced_motion: bool,
     appearance_changed: bool,
+    contrast_changed: bool,
 }
 
 static APPEARANCE: OnceLock<RwLock<Snapshot>> = OnceLock::new();
@@ -53,17 +56,23 @@ pub(crate) fn snapshot() -> Snapshot {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn update_appearance(next: Snapshot) -> bool {
+fn update_appearance(next: Snapshot) -> (bool, bool) {
     let mut guard = appearance_lock()
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let changed = if guard.primed {
-        guard.color_scheme != next.color_scheme || guard.accent_color != next.accent_color
+    let (appearance_changed, contrast_changed) = if guard.primed {
+        (
+            guard.color_scheme != next.color_scheme || guard.accent_color != next.accent_color,
+            guard.contrast != next.contrast,
+        )
     } else {
-        next.color_scheme.is_some() || next.accent_color.is_some()
+        (
+            next.color_scheme.is_some() || next.accent_color.is_some(),
+            next.contrast.is_more(),
+        )
     };
     *guard = next;
-    changed
+    (appearance_changed, contrast_changed)
 }
 
 /// Prime the initial portal appearance snapshot before synchronous GNOME theme resolution.
@@ -121,8 +130,10 @@ pub(crate) fn follow() {
         app.appearance()
             .motion()
             .system_changed(update.reduced_motion);
-        if update.appearance_changed {
-            app.appearance().theme().refresh_for_portal();
+        if update.appearance_changed || update.contrast_changed {
+            app.appearance()
+                .theme()
+                .refresh_for_portal(update.contrast_changed);
         }
     }));
 }
@@ -157,7 +168,7 @@ async fn listen_on(
         if namespace == NAMESPACE
             && matches!(
                 key.as_str(),
-                REDUCED_MOTION_KEY | COLOR_SCHEME_KEY | ACCENT_COLOR_KEY
+                REDUCED_MOTION_KEY | COLOR_SCHEME_KEY | ACCENT_COLOR_KEY | CONTRAST_KEY
             )
         {
             // Read the current values rather than replay a possibly queued signal
@@ -173,10 +184,11 @@ async fn publish(
     sender: &watch::Sender<Option<Update>>,
 ) -> zbus::Result<()> {
     let state = read(proxy).await?;
-    let appearance_changed = update_appearance(state.appearance);
+    let (appearance_changed, contrast_changed) = update_appearance(state.appearance);
     sender.send_replace(Some(Update {
         reduced_motion: state.reduced_motion,
         appearance_changed,
+        contrast_changed,
     }));
     Ok(())
 }
@@ -193,6 +205,7 @@ fn parse_settings(settings: &Settings) -> State {
             appearance: Snapshot {
                 color_scheme: None,
                 accent_color: None,
+                contrast: Contrast::Normal,
                 primed: true,
             },
         };
@@ -210,11 +223,21 @@ fn parse_settings(settings: &Settings) -> State {
             _ => None,
         });
     let accent_color = namespace.get(ACCENT_COLOR_KEY).and_then(parse_accent_color);
+    let contrast = if namespace
+        .get(CONTRAST_KEY)
+        .and_then(|value| u32::try_from(value).ok())
+        == Some(1)
+    {
+        Contrast::More
+    } else {
+        Contrast::Normal
+    };
     State {
         reduced_motion,
         appearance: Snapshot {
             color_scheme,
             accent_color,
+            contrast,
             primed: true,
         },
     }

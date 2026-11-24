@@ -206,6 +206,7 @@ fn dms_preserves_surface_levels_boundaries_and_paired_selection_in_native_compon
             .expect("default typography"),
         crate::appearance::motion::Policy::default(),
         true,
+        crate::appearance::theme::Contrast::Normal,
     );
     assert_eq!(tokens.color.border, "#444444");
     assert_eq!(tokens.color.input, "#888888");
@@ -416,9 +417,13 @@ fn dms_full_material3_export_maps_all_50_roles_and_contrasting_neutral_control()
     assert_eq!(light.palette.scrim, color(0x010101));
     assert_eq!(light.palette.source_color, color(0xecccc2));
 
-    let light_tokens = light
-        .palette
-        .tokens_theme(Mode::Light, &typo, motion, false);
+    let light_tokens = light.palette.tokens_theme(
+        Mode::Light,
+        &typo,
+        motion,
+        false,
+        crate::appearance::theme::Contrast::Normal,
+    );
     assert_eq!(light_tokens.color.secondary, "#ffdbcf");
     assert_eq!(light_tokens.color.secondary_foreground, "#2c160e");
 

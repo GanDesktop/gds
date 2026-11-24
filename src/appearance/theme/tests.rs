@@ -191,3 +191,116 @@ fn reactive_appearance_emits_gds_and_zui_css_tokens() {
     });
     root.unmount();
 }
+
+#[test]
+fn contrast_more_lifts_all_builtin_themes_to_wcag_floors_and_forces_opaque_surfaces() {
+    use super::provider::color::{color_css, contrast_ratio};
+    use super::{BuiltinTheme, Contrast};
+
+    let typo = crate::appearance::typography::Preferences::default()
+        .resolve()
+        .expect("default typography");
+    let motion = crate::appearance::motion::Policy::default();
+
+    for theme in BuiltinTheme::ALL {
+        for mode in [Mode::Light, Mode::Dark] {
+            let appearance = Appearance {
+                source: Source::Builtin,
+                builtin: theme,
+                mode: match mode {
+                    Mode::Light => ModePreference::Light,
+                    Mode::Dark => ModePreference::Dark,
+                },
+                content_opacity: 0.65,
+                sidebar_opacity: 0.45,
+                rounded_corners: false,
+            };
+            let normal = appearance
+                .prepare_with_contrast(mode, Contrast::Normal)
+                .expect("normal contrast palette");
+            let enhanced = appearance
+                .prepare_with_contrast(mode, Contrast::More)
+                .expect("high contrast palette");
+
+            assert_eq!(normal.contrast(), Contrast::Normal);
+            assert_eq!(enhanced.contrast(), Contrast::More);
+
+            // Opacity is forced opaque under Contrast::More without altering saved preferences.
+            assert!((enhanced.appearance().content_opacity - 0.65).abs() < 1e-4);
+            assert!(!enhanced.material().is_translucent());
+            assert!((enhanced.material().content_opacity - 1.0).abs() < 1e-4);
+            assert!((enhanced.material().sidebar_opacity - 1.0).abs() < 1e-4);
+
+            let c = enhanced.colors();
+            assert!(
+                contrast_ratio(c.foreground, c.content) >= 6.95,
+                "{theme:?} {mode:?} foreground contrast"
+            );
+            assert!(
+                contrast_ratio(c.sidebar_foreground, c.sidebar) >= 6.95,
+                "{theme:?} {mode:?} sidebar_foreground contrast"
+            );
+            assert!(
+                contrast_ratio(c.muted_foreground, c.content) >= 4.95,
+                "{theme:?} {mode:?} muted_foreground contrast"
+            );
+            assert!(
+                contrast_ratio(c.border, c.content) >= 3.45,
+                "{theme:?} {mode:?} border contrast"
+            );
+            assert!(
+                contrast_ratio(c.outline, c.content) >= 4.95,
+                "{theme:?} {mode:?} outline contrast"
+            );
+            assert!(
+                contrast_ratio(c.primary, c.content) >= 4.45,
+                "{theme:?} {mode:?} primary contrast"
+            );
+            assert!(
+                contrast_ratio(c.primary_foreground, c.primary) >= 6.95,
+                "{theme:?} {mode:?} primary_foreground contrast"
+            );
+            assert!(
+                contrast_ratio(c.selection, c.content) >= 1.34,
+                "{theme:?} {mode:?} selection surface contrast"
+            );
+            assert!(
+                contrast_ratio(c.selection_foreground, c.selection) >= 6.95,
+                "{theme:?} {mode:?} selection_foreground contrast"
+            );
+            assert!(
+                contrast_ratio(c.link, c.content) >= 5.45,
+                "{theme:?} {mode:?} link contrast"
+            );
+            assert!(
+                contrast_ratio(c.error, c.content) >= 4.45,
+                "{theme:?} {mode:?} error contrast"
+            );
+            assert!(
+                contrast_ratio(c.success, c.content) >= 4.45,
+                "{theme:?} {mode:?} success contrast"
+            );
+            assert!(
+                contrast_ratio(c.warning, c.content) >= 4.45,
+                "{theme:?} {mode:?} warning contrast"
+            );
+
+            // CSS tokens reflect stronger focus outline and full control outline border.
+            let tokens = enhanced.tokens_theme(&typo, motion);
+            assert_eq!(tokens.focus.ring_outline, "2px solid var(--zui-color-ring)");
+            assert_eq!(tokens.focus.ring_offset, "-2px");
+            assert_eq!(tokens.control.outline_border, color_css(c.outline));
+            let css = enhanced.gds_stylesheet_css(&typo, motion);
+            assert!(css.contains("--gds-contrast: more;"));
+            assert!(css.contains("--gds-content-opacity: 1;"));
+
+            // Dedicated HighContrast theme already exceeds core floors and passes through untouched.
+            if theme == BuiltinTheme::HighContrast {
+                assert_eq!(c.content, normal.colors().content);
+                assert_eq!(c.foreground, normal.colors().foreground);
+                assert_eq!(c.border, normal.colors().border);
+                assert_eq!(c.outline, normal.colors().outline);
+            }
+        }
+    }
+}

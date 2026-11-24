@@ -72,6 +72,27 @@ impl Mode {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+pub enum Contrast {
+    #[default]
+    Normal,
+    More,
+}
+
+impl Contrast {
+    pub const fn is_more(self) -> bool {
+        matches!(self, Self::More)
+    }
+
+    const fn css_keyword(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::More => "more",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum ModePreference {
     #[default]
     System,
@@ -172,6 +193,7 @@ impl Error {
 pub struct Prepared {
     pub(crate) appearance: Appearance,
     loaded: Loaded,
+    contrast: Contrast,
 }
 
 impl Prepared {
@@ -194,16 +216,28 @@ impl Prepared {
         self.loaded.mode
     }
 
+    pub fn contrast(&self) -> Contrast {
+        self.contrast
+    }
+
     pub fn appearance(&self) -> &Appearance {
         &self.appearance
     }
 
     pub fn material(&self) -> Material {
+        let (content_opacity, sidebar_opacity) = if self.contrast.is_more() {
+            (1.0, 1.0)
+        } else {
+            (
+                self.appearance.content_opacity,
+                self.appearance.sidebar_opacity,
+            )
+        };
         Material {
             content: self.loaded.palette.content,
             sidebar: self.loaded.palette.sidebar,
-            content_opacity: self.appearance.content_opacity,
-            sidebar_opacity: self.appearance.sidebar_opacity,
+            content_opacity,
+            sidebar_opacity,
         }
     }
 
@@ -225,6 +259,7 @@ impl Prepared {
             typography,
             motion,
             self.appearance.rounded_corners,
+            self.contrast,
         )
     }
 
@@ -236,6 +271,7 @@ impl Prepared {
     ) -> String {
         let mut out = String::from(":root {\n");
         let _ = writeln!(out, "    color-scheme: {};", self.loaded.mode.css_keyword());
+        let _ = writeln!(out, "    --gds-contrast: {};", self.contrast.css_keyword());
         let window_radius = if self.appearance.rounded_corners {
             tokens::WINDOW_CORNER_RADIUS
         } else {
@@ -247,7 +283,9 @@ impl Prepared {
             "    --gds-radius-control: {}px;",
             tokens::DataListStyle::ROW_RADIUS
         );
-        self.loaded.palette.write_css_declarations(&mut out);
+        self.loaded
+            .palette
+            .write_css_declarations(self.contrast, &mut out);
         self.material().write_css_declarations(&mut out);
         tokens::write_css_declarations(&mut out, typography.scale());
         typography.write_css_declarations(&mut out);
@@ -280,13 +318,11 @@ pub(crate) fn validate_opacity(name: &'static str, value: f32) -> Result<(), Err
 }
 
 impl Appearance {
-    /// Prime asynchronous desktop session state (such as the XDG Settings Portal on GNOME)
-    /// before resolving the initial theme synchronously on the UI thread.
+    /// Prime asynchronous desktop session state (XDG Settings Portal color scheme, accent, and
+    /// high-contrast preference) before resolving the initial theme synchronously on the UI thread.
     pub async fn prime_session(&self) {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        if self.source == Source::System || self.mode == ModePreference::System {
-            super::portal::prime().await;
-        }
+        super::portal::prime().await;
     }
 
     /// Provider inputs; a prepared palette adds its resolved palette file.
@@ -294,16 +330,44 @@ impl Appearance {
         self.source.source_paths()
     }
 
+    pub(crate) fn platform_contrast() -> Contrast {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            super::portal::snapshot().contrast
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        {
+            Contrast::Normal
+        }
+    }
+
     /// Read and validate one complete palette for a known platform appearance.
     ///
     /// # Errors
     /// Reports invalid opacity, unavailable source files or malformed palette data.
     pub fn prepare(&self, window_appearance: Mode) -> Result<Prepared, Error> {
+        self.prepare_with_contrast(window_appearance, Self::platform_contrast())
+    }
+
+    /// Read and validate one complete palette using an explicit contrast preference.
+    ///
+    /// # Errors
+    /// Reports invalid opacity, unavailable source files or malformed palette data.
+    pub fn prepare_with_contrast(
+        &self,
+        window_appearance: Mode,
+        contrast: Contrast,
+    ) -> Result<Prepared, Error> {
         validate_opacity("content_opacity", self.content_opacity)?;
         validate_opacity("sidebar_opacity", self.sidebar_opacity)?;
+        let mut loaded = self.load_for(window_appearance)?;
+        if contrast.is_more() {
+            loaded.palette.enhance_contrast(loaded.mode);
+        }
         Ok(Prepared {
             appearance: self.clone(),
-            loaded: self.load_for(window_appearance)?,
+            loaded,
+            contrast,
         })
     }
 

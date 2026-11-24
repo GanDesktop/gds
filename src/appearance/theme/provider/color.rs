@@ -81,3 +81,72 @@ impl ColorExt for Color {
         (r.max(g).max(b) + r.min(g).min(b)) * 0.5
     }
 }
+
+fn linearize_srgb(channel: f32) -> f32 {
+    let c = channel.clamp(0.0, 1.0);
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// WCAG 2.1 relative luminance in `[0.0, 1.0]` for an opaque sRGB color.
+pub(crate) fn relative_luminance(color: Color) -> f32 {
+    let [r, g, b] = color.to_space(ColorSpace::Srgb).components();
+    0.2126 * linearize_srgb(r) + 0.7152 * linearize_srgb(g) + 0.0722 * linearize_srgb(b)
+}
+
+/// WCAG 2.1 contrast ratio in `[1.0, 21.0]` between two opaque colors.
+pub(crate) fn contrast_ratio(a: Color, b: Color) -> f32 {
+    let la = relative_luminance(a);
+    let lb = relative_luminance(b);
+    let (lighter, darker) = if la >= lb { (la, lb) } else { (lb, la) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+fn mix_srgb(from: Color, to: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let [fr, fg, fb] = from.to_space(ColorSpace::Srgb).components();
+    let [tr, tg, tb] = to.to_space(ColorSpace::Srgb).components();
+    Color::srgb(
+        fr + (tr - fr) * t,
+        fg + (tg - fg) * t,
+        fb + (tb - fb) * t,
+        1.0,
+    )
+}
+
+/// Ensure `color` achieves at least `min_ratio` WCAG contrast against `against` while preserving
+/// its original hue as closely as possible. Translucent colors are composited over `against` first.
+pub(crate) fn ensure_contrast(color: Color, against: Color, min_ratio: f32) -> Color {
+    let actual = if color.to_space(ColorSpace::Srgb).alpha() >= 1.0 - 1e-4 {
+        color
+    } else {
+        against.overlay(color)
+    };
+    if contrast_ratio(actual, against) >= min_ratio {
+        return actual;
+    }
+    let white = rgb(0xffffff);
+    let black = rgb(0x000000);
+    let target = if contrast_ratio(white, against) >= contrast_ratio(black, against) {
+        white
+    } else {
+        black
+    };
+    if contrast_ratio(target, against) <= min_ratio {
+        return target;
+    }
+    let mut lo = 0.0_f32;
+    let mut hi = 1.0_f32;
+    for _ in 0..22 {
+        let mid = 0.5 * (lo + hi);
+        if contrast_ratio(mix_srgb(actual, target, mid), against) >= min_ratio {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    mix_srgb(actual, target, hi)
+}

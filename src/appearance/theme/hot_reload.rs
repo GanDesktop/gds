@@ -115,8 +115,8 @@ impl HotReload {
         self.0.request();
     }
 
-    pub fn refresh_for_portal(&self) {
-        let should_reload = {
+    pub fn refresh_for_portal(&self, contrast_changed: bool) {
+        let should_reload = contrast_changed || {
             let appearance = self.0.appearance.borrow();
             appearance.mode == super::ModePreference::System
                 && appearance.source.uses_platform_mode()

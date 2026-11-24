@@ -193,12 +193,20 @@ impl Theme {
         theme::Mode::Dark
     }
 
+    pub fn platform_contrast() -> theme::Contrast {
+        theme::Appearance::platform_contrast()
+    }
+
     pub fn prepared(&self) -> ReadSignal<theme::Prepared, LocalStorage> {
         self.prepared.read_only()
     }
 
     pub fn mode(&self) -> theme::Mode {
         self.prepared.with(theme::Prepared::mode)
+    }
+
+    pub fn contrast(&self) -> theme::Contrast {
+        self.prepared.with(theme::Prepared::contrast)
     }
 
     pub fn mode_untracked(&self) -> theme::Mode {
@@ -277,9 +285,14 @@ impl Theme {
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    pub(crate) fn refresh_for_portal(&self) {
+    pub(crate) fn refresh_for_portal(&self, contrast_changed: bool) {
         if let Some(reload) = self.reload.borrow().as_ref() {
-            reload.refresh_for_portal();
+            reload.refresh_for_portal(contrast_changed);
+        } else if contrast_changed {
+            let appearance = self.prepared.with_untracked(|p| p.appearance().clone());
+            if let Ok(prepared) = appearance.prepare(Self::platform_mode()) {
+                let _ = self.install(prepared);
+            }
         }
     }
 }

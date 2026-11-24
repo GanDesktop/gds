@@ -3,7 +3,9 @@ use std::fmt::Write as _;
 use zgui::canvas::zgui_color::{Color, ColorSpace};
 use zgui_ui_tokens::Theme;
 
-use super::provider::color::{ColorExt as _, color_css, rgb};
+use super::provider::color::{
+    ColorExt as _, color_css, contrast_ratio, ensure_contrast, relative_luminance, rgb,
+};
 use crate::appearance::{motion, typography};
 
 const HOVER_OPACITY: f32 = 0.08;
@@ -12,7 +14,41 @@ const DRAG_OPACITY: f32 = 0.12;
 const CONTROL_BORDER_OUTLINE_MIX: f32 = 0.35;
 const SWITCH_OFF_TINT_LIGHT: f32 = 0.14;
 const SWITCH_OFF_TINT_DARK: f32 = 0.16;
+const SWITCH_OFF_TINT_HIGH_CONTRAST: f32 = 0.28;
 const SWITCH_THUMB_INK_LIGHT: f32 = 0.28;
+
+// WCAG 2.1 contrast ratio floors applied under `Contrast::More` (XDG Portal `contrast = 1`).
+const HC_PRIMARY_TEXT_RATIO: f32 = 7.0;
+const HC_MUTED_TEXT_RATIO: f32 = 5.0;
+const HC_BORDER_RATIO: f32 = 3.5;
+const HC_OUTLINE_RATIO: f32 = 5.0;
+const HC_ACCENT_RATIO: f32 = 4.5;
+const HC_LINK_RATIO: f32 = 5.5;
+const HC_SELECTION_SURFACE_RATIO: f32 = 1.35;
+
+fn enhance_accent_pair(
+    bg: Color,
+    fg: Color,
+    surface: Color,
+    min_bg_vs_surface: f32,
+    min_fg_vs_bg: f32,
+) -> (Color, Color) {
+    let mut bg = ensure_contrast(bg, surface, min_bg_vs_surface);
+    let white = rgb(0xffffff);
+    let black = rgb(0x000000);
+    // Avoid the mid-luminance dead zone where neither pure black nor pure white ink can achieve
+    // `min_fg_vs_bg`: push the accent further away from `surface` while preserving its hue.
+    if contrast_ratio(white, bg).max(contrast_ratio(black, bg)) < min_fg_vs_bg {
+        let ink = if relative_luminance(surface) >= 0.5 {
+            white
+        } else {
+            black
+        };
+        bg = ensure_contrast(bg, ink, min_fg_vs_bg);
+    }
+    let fg = ensure_contrast(fg, bg, min_fg_vs_bg);
+    (bg, fg)
+}
 
 fn contrasting_ink(fill: Color) -> Color {
     let [r, g, b] = fill.to_space(ColorSpace::Srgb).components();
@@ -195,6 +231,120 @@ impl Palette {
         self.control_foreground = self.foreground;
     }
 
+    /// Lift text, boundary, accent, and status contrast floors across any theme source while
+    /// preserving each palette's hue identity (`org.freedesktop.appearance.contrast == 1`).
+    pub(super) fn enhance_contrast(&mut self, mode: super::Mode) {
+        let _ = mode;
+        // 1. Primary text roles (WCAG AAA >= 7:1).
+        self.foreground = ensure_contrast(self.foreground, self.content, HC_PRIMARY_TEXT_RATIO);
+        self.sidebar_foreground =
+            ensure_contrast(self.sidebar_foreground, self.sidebar, HC_PRIMARY_TEXT_RATIO);
+        self.surface_foreground =
+            ensure_contrast(self.surface_foreground, self.surface, HC_PRIMARY_TEXT_RATIO);
+        self.panel_foreground =
+            ensure_contrast(self.panel_foreground, self.panel, HC_PRIMARY_TEXT_RATIO);
+        self.control_foreground =
+            ensure_contrast(self.control_foreground, self.control, HC_PRIMARY_TEXT_RATIO);
+        self.tooltip_foreground =
+            ensure_contrast(self.tooltip_foreground, self.tooltip, HC_PRIMARY_TEXT_RATIO);
+
+        // 2. Secondary / muted text (>= 5:1 across content, surface, and panel).
+        self.muted_foreground =
+            ensure_contrast(self.muted_foreground, self.content, HC_MUTED_TEXT_RATIO);
+        self.muted_foreground =
+            ensure_contrast(self.muted_foreground, self.surface, HC_MUTED_TEXT_RATIO);
+        self.muted_foreground =
+            ensure_contrast(self.muted_foreground, self.panel, HC_MUTED_TEXT_RATIO);
+
+        // 3. Structural boundaries: crisp separators (>= 3.5:1) and control outlines (>= 5:1).
+        self.border = ensure_contrast(self.border, self.content, HC_BORDER_RATIO);
+        self.border = ensure_contrast(self.border, self.surface, HC_BORDER_RATIO);
+        self.border = ensure_contrast(self.border, self.panel, HC_BORDER_RATIO);
+        self.outline = ensure_contrast(self.outline, self.content, HC_OUTLINE_RATIO);
+        self.outline = ensure_contrast(self.outline, self.surface, HC_OUTLINE_RATIO);
+        self.outline = ensure_contrast(self.outline, self.control, HC_OUTLINE_RATIO);
+
+        // 4. Accents, selection, links, and semantic status pairs.
+        (self.primary, self.primary_foreground) = enhance_accent_pair(
+            self.primary,
+            self.primary_foreground,
+            self.content,
+            HC_ACCENT_RATIO,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+        self.selection = ensure_contrast(self.selection, self.content, HC_SELECTION_SURFACE_RATIO);
+        self.selection_foreground = ensure_contrast(
+            self.selection_foreground,
+            self.selection,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+        self.link = ensure_contrast(self.link, self.content, HC_LINK_RATIO);
+        (self.error, self.error_foreground) = enhance_accent_pair(
+            self.error,
+            self.error_foreground,
+            self.content,
+            HC_ACCENT_RATIO,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+        (self.success, self.success_foreground) = enhance_accent_pair(
+            self.success,
+            self.success_foreground,
+            self.content,
+            HC_ACCENT_RATIO,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+        (self.warning, self.warning_foreground) = enhance_accent_pair(
+            self.warning,
+            self.warning_foreground,
+            self.content,
+            HC_ACCENT_RATIO,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+
+        // 5. Keep Material 3 mirrors and terminal defaults synchronized with enhanced roles.
+        self.on_background = self.foreground;
+        self.on_surface = self.foreground;
+        self.on_surface_variant = self.muted_foreground;
+        self.outline_variant = self.border;
+        self.on_primary = self.primary_foreground;
+        self.primary_container = self.selection;
+        self.on_primary_container = self.selection_foreground;
+        self.on_secondary =
+            ensure_contrast(self.on_secondary, self.secondary, HC_PRIMARY_TEXT_RATIO);
+        self.on_secondary_container = ensure_contrast(
+            self.on_secondary_container,
+            self.secondary_container,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+        self.on_tertiary = ensure_contrast(self.on_tertiary, self.tertiary, HC_PRIMARY_TEXT_RATIO);
+        self.on_tertiary_container = ensure_contrast(
+            self.on_tertiary_container,
+            self.tertiary_container,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+        self.on_error = self.error_foreground;
+        self.on_error_container = ensure_contrast(
+            self.on_error_container,
+            self.error_container,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+        self.terminal.foreground = ensure_contrast(
+            self.terminal.foreground,
+            self.terminal.background,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+        self.terminal.cursor = ensure_contrast(
+            self.terminal.cursor,
+            self.terminal.background,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+        self.terminal.selection_text = ensure_contrast(
+            self.terminal.selection_text,
+            self.terminal.selection,
+            HC_PRIMARY_TEXT_RATIO,
+        );
+    }
+
     /// Sources without terminal data share ANSI defaults and their own paired
     /// text/surface roles. Call after resolving the source's UI roles.
     pub(super) fn terminal_fallback(&mut self, mode: super::Mode) {
@@ -259,11 +409,27 @@ impl Palette {
     /// and pairing cleanly with `outline` borders and `switch_thumb_off_for(mode)` thumbs.
     #[must_use]
     pub fn switch_off_for(self, mode: super::Mode) -> Color {
-        let tint = match mode {
-            super::Mode::Light => SWITCH_OFF_TINT_LIGHT,
-            super::Mode::Dark => SWITCH_OFF_TINT_DARK,
+        self.switch_off_with_contrast(mode, super::Contrast::Normal)
+    }
+
+    fn switch_off_with_contrast(self, mode: super::Mode, contrast: super::Contrast) -> Color {
+        let tint = if contrast.is_more() {
+            SWITCH_OFF_TINT_HIGH_CONTRAST
+        } else {
+            match mode {
+                super::Mode::Light => SWITCH_OFF_TINT_LIGHT,
+                super::Mode::Dark => SWITCH_OFF_TINT_DARK,
+            }
         };
         self.panel.overlay(self.outline.with_alpha(tint))
+    }
+
+    fn control_border_for(self, contrast: super::Contrast) -> Color {
+        if contrast.is_more() {
+            self.outline
+        } else {
+            self.control_border()
+        }
     }
 
     /// Unchecked toggle thumb fill resolved for `mode` (high-contrast neutral ink on light tracks,
@@ -288,7 +454,8 @@ impl Palette {
         self.switch_thumb_off_for(self.inferred_mode())
     }
 
-    pub(crate) fn write_css_declarations(self, out: &mut String) {
+    pub(crate) fn write_css_declarations(self, contrast: super::Contrast, out: &mut String) {
+        let mode = self.inferred_mode();
         let colors = [
             // GDS semantic & interactive tokens.
             ("--gds-content", self.content),
@@ -304,7 +471,7 @@ impl Palette {
             ("--gds-control-foreground", self.control_foreground),
             ("--gds-control-hover", self.control_hover()),
             ("--gds-control-pressed", self.control_pressed()),
-            ("--gds-control-border", self.control_border()),
+            ("--gds-control-border", self.control_border_for(contrast)),
             ("--gds-border", self.border),
             ("--gds-outline", self.outline),
             ("--gds-shadow", self.shadow),
@@ -327,7 +494,10 @@ impl Palette {
             ("--gds-pressed", self.pressed()),
             ("--gds-sidebar-hover", self.sidebar_hover()),
             ("--gds-drag-target", self.drag_target()),
-            ("--gds-switch-off", self.switch_off()),
+            (
+                "--gds-switch-off",
+                self.switch_off_with_contrast(mode, contrast),
+            ),
             ("--gds-switch-thumb-off", self.switch_thumb_off()),
             // Complete Material 3 / DMS aligned tokens.
             ("--gds-background", self.background),
@@ -403,6 +573,7 @@ impl Palette {
         typography: &typography::Resolved,
         motion: motion::Policy,
         rounded_corners: bool,
+        contrast: super::Contrast,
     ) -> Theme {
         let mut theme = match mode {
             super::Mode::Light => Theme::light(),
@@ -448,9 +619,9 @@ impl Palette {
         theme.color.sidebar_ring = color_css(self.primary);
 
         theme.control.ghost_hover = color_css(self.hover());
-        theme.control.outline_border = color_css(self.control_border());
+        theme.control.outline_border = color_css(self.control_border_for(contrast));
         theme.control.outline_hover = color_css(self.control_hover());
-        theme.control.switch_off = color_css(self.switch_off_for(mode));
+        theme.control.switch_off = color_css(self.switch_off_with_contrast(mode, contrast));
         theme.control.switch_thumb = color_css(self.switch_thumb_off_for(mode));
         theme.control.switch_thumb_on = color_css(self.primary_foreground);
 
@@ -462,8 +633,13 @@ impl Palette {
         "8px".clone_into(&mut theme.radius.base);
 
         theme.focus.disable_ring_shadows();
-        "1px solid var(--zui-color-ring)".clone_into(&mut theme.focus.ring_outline);
-        "-1px".clone_into(&mut theme.focus.ring_offset);
+        if contrast.is_more() {
+            "2px solid var(--zui-color-ring)".clone_into(&mut theme.focus.ring_outline);
+            "-2px".clone_into(&mut theme.focus.ring_offset);
+        } else {
+            "1px solid var(--zui-color-ring)".clone_into(&mut theme.focus.ring_outline);
+            "-1px".clone_into(&mut theme.focus.ring_offset);
+        }
 
         let scale = typography.scale();
         theme.typography.family_sans = typography.sans_css_stack();

@@ -12,6 +12,7 @@ struct Portal {
     reduced_motion: Arc<AtomicU32>,
     color_scheme: Arc<AtomicU32>,
     accent_color: Arc<Mutex<(f64, f64, f64)>>,
+    contrast: Arc<AtomicU32>,
 }
 
 #[zbus::interface(name = "org.freedesktop.portal.Settings")]
@@ -34,6 +35,10 @@ impl Portal {
                     self.color_scheme.load(Ordering::SeqCst).into(),
                 ),
                 (ACCENT_COLOR_KEY.into(), accent_value),
+                (
+                    CONTRAST_KEY.into(),
+                    self.contrast.load(Ordering::SeqCst).into(),
+                ),
             ]),
         )])
     }
@@ -55,6 +60,7 @@ async fn portal_snapshot_and_live_changes_share_one_subscription() {
     let reduced = Arc::new(AtomicU32::new(1));
     let color_scheme = Arc::new(AtomicU32::new(1));
     let accent_color = Arc::new(Mutex::new((0.2, 0.5, 0.9)));
+    let contrast = Arc::new(AtomicU32::new(0));
     let server = zbus::connection::Builder::unix_stream(server_socket)
         .server(zbus::Guid::generate())
         .expect("server guid")
@@ -65,6 +71,7 @@ async fn portal_snapshot_and_live_changes_share_one_subscription() {
                 reduced_motion: reduced.clone(),
                 color_scheme: color_scheme.clone(),
                 accent_color: accent_color.clone(),
+                contrast: contrast.clone(),
             },
         )
         .expect("portal interface")
@@ -88,6 +95,7 @@ async fn portal_snapshot_and_live_changes_share_one_subscription() {
     assert!(initial.primed);
     assert_eq!(initial.color_scheme, Some(Mode::Dark));
     assert_eq!(initial.accent_color, Some(Color::srgb(0.2, 0.5, 0.9, 1.0)));
+    assert_eq!(initial.contrast, Contrast::Normal);
 
     let interface = service
         .object_server()
@@ -96,31 +104,56 @@ async fn portal_snapshot_and_live_changes_share_one_subscription() {
         .expect("private portal fixture");
 
     for (
+        signal_key,
         next_reduced,
         next_scheme,
         next_accent,
+        next_contrast,
         expected_reduced,
         expected_scheme,
         expected_accent,
+        expected_contrast,
+        expected_contrast_changed,
     ) in [
-        (0, 2, (-1.0, -1.0, -1.0), false, Some(Mode::Light), None),
         (
+            COLOR_SCHEME_KEY,
+            0,
+            2,
+            (-1.0, -1.0, -1.0),
+            1,
+            false,
+            Some(Mode::Light),
+            None,
+            Contrast::More,
+            true,
+        ),
+        (
+            CONTRAST_KEY,
             1,
             0,
             (0.8, 0.3, 0.1),
+            0,
             true,
             None,
             Some(Color::srgb(0.8, 0.3, 0.1, 1.0)),
+            Contrast::Normal,
+            true,
         ),
     ] {
         reduced.store(next_reduced, Ordering::SeqCst);
         color_scheme.store(next_scheme, Ordering::SeqCst);
         *accent_color.lock().expect("accent lock") = next_accent;
+        contrast.store(next_contrast, Ordering::SeqCst);
+        let signal_value: OwnedValue = if signal_key == CONTRAST_KEY {
+            next_contrast.into()
+        } else {
+            next_scheme.into()
+        };
         Portal::setting_changed(
             interface.signal_emitter(),
             NAMESPACE,
-            COLOR_SCHEME_KEY,
-            next_scheme.into(),
+            signal_key,
+            signal_value,
         )
         .await
         .expect("private portal signal");
@@ -132,9 +165,11 @@ async fn portal_snapshot_and_live_changes_share_one_subscription() {
         let update = receiver.borrow_and_update().expect("portal update");
         assert_eq!(update.reduced_motion, expected_reduced);
         assert!(update.appearance_changed);
+        assert_eq!(update.contrast_changed, expected_contrast_changed);
         let current = snapshot();
         assert_eq!(current.color_scheme, expected_scheme);
         assert_eq!(current.accent_color, expected_accent);
+        assert_eq!(current.contrast, expected_contrast);
     }
 
     task.abort();

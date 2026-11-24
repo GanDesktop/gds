@@ -32,6 +32,7 @@ fn portal_color_scheme_and_accent_color_drive_primary_and_contrast() {
     let bright_accent = PortalSnapshot {
         color_scheme: Some(Mode::Dark),
         accent_color: Some(Color::srgb(0.95, 0.85, 0.25, 1.0)),
+        contrast: crate::appearance::theme::Contrast::Normal,
         primed: true,
     };
 

@@ -23,6 +23,7 @@ use crate::appearance::portal::Snapshot as PortalSnapshot;
 struct PortalSnapshot {
     color_scheme: Option<Mode>,
     accent_color: Option<Color>,
+    contrast: crate::appearance::theme::Contrast,
     primed: bool,
 }
 
