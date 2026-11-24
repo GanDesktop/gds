@@ -1154,7 +1154,7 @@ impl Properties {
                         };
                         let icon = FileIcon::for_entry(&entry);
                         let is_dir = FileIcon::is_directory(&entry);
-                        let stage = if let Some(thumb_src) = entry.thumbnail_source() {
+                        let stage = if let Some(thumb_src) = entry.thumbnail_source(&props.0.cache) {
                             let _ = props.0.cache.request(&thumb_src, Request::Thumbnail);
                             details_stage_media_view(props.0.cache.clone(), thumb_src, icon, is_dir)
                         } else {
@@ -1993,35 +1993,35 @@ impl Browser {
             _ => false,
         };
 
-        if let Row::File(entry) = row
-            && let Some(source) = entry.thumbnail_source()
-        {
-            let icon = FileIcon::for_entry(entry);
+        if let Row::File(entry) = row {
             let cache = self.0.inspections.get_untracked();
-            let _ = cache.request(&source, Request::Thumbnail);
-            let badge_overlay = icon
-                .badge()
-                .map(|badge_icon| badge_pill_view(badge_icon, icon_size));
-            let thumb_ref = NodeRef::new();
-            #[cfg(test)]
-            tests::record_tile_thumb_node(&entry.display_name, thumb_ref);
-            return AnyView::new(Either::<_, ()>::Left(view! {
-                box(
-                    node_ref = thumb_ref,
-                    class = "gds-files-tile-thumb-wrap",
-                    attr:data-directory = move || is_directory.then(|| "true".to_owned()),
-                    attr:data-selected = move || (selected.get() > 0.5).then(|| "true".to_owned()),
-                ) {
-                    Thumbnail(
-                        cache = cache,
-                        source = source,
-                        fallback = ViewFn::new(move || file_artwork_view(icon, icon_size, is_directory)),
-                        show_status = false,
-                        class = "gds-files-tile-thumb",
-                    ) {}
-                    {badge_overlay}
-                }
-            }));
+            if let Some(source) = entry.thumbnail_source(&cache) {
+                let icon = FileIcon::for_entry(entry);
+                let _ = cache.request(&source, Request::Thumbnail);
+                let badge_overlay = icon
+                    .badge()
+                    .map(|badge_icon| badge_pill_view(badge_icon, icon_size));
+                let thumb_ref = NodeRef::new();
+                #[cfg(test)]
+                tests::record_tile_thumb_node(&entry.display_name, thumb_ref);
+                return AnyView::new(Either::<_, ()>::Left(view! {
+                    box(
+                        node_ref = thumb_ref,
+                        class = "gds-files-tile-thumb-wrap",
+                        attr:data-directory = move || is_directory.then(|| "true".to_owned()),
+                        attr:data-selected = move || (selected.get() > 0.5).then(|| "true".to_owned()),
+                    ) {
+                        Thumbnail(
+                            cache = cache,
+                            source = source,
+                            fallback = ViewFn::new(move || file_artwork_view(icon, icon_size, is_directory)),
+                            show_status = false,
+                            class = "gds-files-tile-thumb",
+                        ) {}
+                        {badge_overlay}
+                    }
+                }));
+            }
         }
 
         let icon = match row {
@@ -2062,10 +2062,10 @@ impl Browser {
         let inner = match row {
             Row::File(entry) => {
                 let icon = FileIcon::for_entry(entry);
+                let cache = self.0.inspections.get_untracked();
                 if size >= 32.0
-                    && let Some(source) = entry.thumbnail_source()
+                    && let Some(source) = entry.thumbnail_source(&cache)
                 {
-                    let cache = self.0.inspections.get_untracked();
                     let _ = cache.request(&source, Request::Thumbnail);
                     let badge_overlay = icon
                         .badge()

@@ -19,3 +19,9 @@
 
 - **Context**: `scripts/install.sh --nix` supports installing `github:GanDesktop/gds#gds-files` onto non-NixOS distributions that have Nix installed.
 - **Compromise**: Nix-built GUI binaries link against Nixpkgs' Mesa/Vulkan loader rather than the host distribution's `/usr/lib` graphics drivers (`nixGL` / `nix-gl-host` territory). On non-NixOS Wayland desktops (Ubuntu, Fedora, Debian, Arch), native distro packages (`.deb`, `.rpm`, `.pkg.tar.zst`) are therefore always the primary path in `install.sh`, reserving `--nix` for NixOS or users who explicitly manage non-NixOS GPU wrappers.
+
+## 4. FreeDesktop `.thumbnailer` Helpers with Optional Bubblewrap Sandboxing
+
+- **Context**: Common raster images (`image`), SVG (`resvg`), and embedded audio covers (`lofty`) render in-process in pure Rust without external dependencies. Video frames, PDFs, fonts, 3D models, RAW/HEIC/PSD, and other formats rely on specialized native parsers that GDS should not bundle or maintain in-tree.
+- **Compromise**: GDS Files discovers standard XDG FreeDesktop `.thumbnailer` descriptors (`$XDG_DATA_HOME/thumbnailers` overriding `$XDG_DATA_DIRS/thumbnailers`), parses `Exec=` directly without a shell, enforces process-group timeouts and bounded PNG decoding, and delegates video thumbnails to external tools such as `ffmpegthumbnailer` rather than invoking `ffmpeg` directly. On Linux, Bubblewrap (`bwrap`) sandboxing defaults to enabled and is recommended in distro packaging; users may explicitly disable sandboxing in **Settings → Extensions** (and non-Linux Unix platforms such as FreeBSD default to unsandboxed execution with an explicit notice).
+- **Retirement condition**: Revisit if a cross-platform unprivileged sandbox or standardized portal-based thumbnailing service replaces `.thumbnailer` helpers across Linux and BSD desktops.

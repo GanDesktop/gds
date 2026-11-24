@@ -162,6 +162,8 @@ pub(in crate::pages::workspace::ui) fn entry_inspection_source(entry: &CatalogEn
     Source {
         path: entry.path.clone(),
         kind: InspectionKind::Image,
+        mime: None,
+        mime_ancestors: Vec::new(),
         size: entry.meta.bytes,
         modified: entry.meta.modified,
     }

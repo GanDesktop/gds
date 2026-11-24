@@ -157,7 +157,8 @@ pub struct PreviewPreferences {
     pub cache_entries: usize,
     pub cache_mib: usize,
     pub max_thumbnail_source_mib: u64,
-    pub video_thumbnail_timeout_secs: u64,
+    #[serde(alias = "video_thumbnail_timeout_secs")]
+    pub external_thumbnail_timeout_secs: u64,
 }
 
 impl Default for PreviewPreferences {
@@ -168,8 +169,8 @@ impl Default for PreviewPreferences {
             cache_mib: gds::ui::file_inspection::DEFAULT_CACHE_MIB,
             max_thumbnail_source_mib:
                 gds::service::file_inspection::DEFAULT_MAX_THUMBNAIL_SOURCE_MIB,
-            video_thumbnail_timeout_secs:
-                gds::service::file_inspection::DEFAULT_VIDEO_THUMBNAIL_TIMEOUT_SECS,
+            external_thumbnail_timeout_secs:
+                gds::service::file_inspection::DEFAULT_EXTERNAL_THUMBNAIL_TIMEOUT_SECS,
         }
     }
 }
@@ -180,6 +181,15 @@ impl PreviewPreferences {
     }
 
     pub fn cache_options(&self) -> gds::ui::file_inspection::Options {
+        self.cache_options_with(None)
+    }
+
+    pub fn cache_options_with(
+        &self,
+        external_thumbnailers: Option<
+            std::sync::Arc<gds::service::file_inspection::ExternalThumbnailers>,
+        >,
+    ) -> gds::ui::file_inspection::Options {
         gds::ui::file_inspection::Options {
             capacity: self.cache_entries.max(1),
             byte_budget: self.cache_mib.max(1).saturating_mul(1024 * 1024),
@@ -189,9 +199,10 @@ impl PreviewPreferences {
                     .max_thumbnail_source_mib
                     .max(1)
                     .saturating_mul(1024 * 1024),
-                video_thumbnail_timeout: std::time::Duration::from_secs(
-                    self.video_thumbnail_timeout_secs.max(1),
+                external_thumbnail_timeout: std::time::Duration::from_secs(
+                    self.external_thumbnail_timeout_secs.max(1),
                 ),
+                external_thumbnailers,
             },
         }
     }
@@ -287,6 +298,37 @@ impl Default for SidebarPreferences {
     }
 }
 
+const fn default_thumbnailer_sandbox() -> bool {
+    gds::service::file_inspection::ExternalThumbnailers::BWRAP_SUPPORTED
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, gds::ConfigEditor)]
+#[serde(default)]
+pub struct ThumbnailerCommands {
+    #[setting(label = "thumbnailers-bwrap-command", help = "thumbnailers-bwrap-hint")]
+    pub bwrap: Option<std::path::PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThumbnailerPreferences {
+    pub enabled: bool,
+    #[serde(default = "default_thumbnailer_sandbox")]
+    pub use_bwrap: bool,
+    #[serde(flatten)]
+    pub commands: ThumbnailerCommands,
+}
+
+impl Default for ThumbnailerPreferences {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            use_bwrap: default_thumbnailer_sandbox(),
+            commands: ThumbnailerCommands::default(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, gds::ConfigEditor)]
 #[serde(default)]
 pub struct Preferences {
@@ -305,6 +347,7 @@ pub struct Preferences {
     pub font: typography::Preferences,
     pub files: FilesPreferences,
     pub tags: crate::entities::tags::x::preferences::Preferences,
+    pub thumbnailers: ThumbnailerPreferences,
     pub terminal: gds::ui::terminal::Preferences,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_enabled: Option<bool>,
@@ -357,7 +400,7 @@ mod tests {
             cache_entries: 512,
             cache_mib: 256,
             max_thumbnail_source_mib: 64,
-            video_thumbnail_timeout_secs: 20,
+            external_thumbnail_timeout_secs: 20,
         };
         custom.files.watching = WatchingPreferences {
             debounce_ms: 300,
@@ -389,15 +432,42 @@ mod tests {
     fn sidebar_preferences_default_quick_access_visible_for_legacy_toml() {
         let legacy: Preferences = toml::from_str(
             r#"
+[files.preview]
+video_thumbnail_timeout_secs = 24
+
 [files.sidebar]
 show_volumes = true
 locations_collapsed = true
 "#,
         )
         .expect("deserialize legacy sidebar preferences");
+        assert_eq!(legacy.files.preview.external_thumbnail_timeout_secs, 24);
         assert!(legacy.files.sidebar.show_quick_access);
         assert!(!legacy.files.sidebar.quick_access_collapsed);
         assert!(legacy.files.sidebar.show_volumes);
         assert!(legacy.files.sidebar.locations_collapsed);
+        assert!(!legacy.thumbnailers.enabled);
+        assert_eq!(
+            legacy.thumbnailers.use_bwrap,
+            gds::service::file_inspection::ExternalThumbnailers::BWRAP_SUPPORTED
+        );
+        assert_eq!(legacy.thumbnailers.commands.bwrap, None);
+    }
+
+    #[test]
+    fn thumbnailer_preferences_roundtrip_toml() {
+        let mut prefs = Preferences::default();
+        prefs.thumbnailers.enabled = true;
+        prefs.thumbnailers.use_bwrap = false;
+        prefs.thumbnailers.commands.bwrap =
+            Some(std::path::PathBuf::from("/run/wrappers/bin/bwrap"));
+        let encoded = toml::to_string_pretty(&prefs).expect("serialize thumbnailer preferences");
+        assert!(encoded.contains("[thumbnailers]"));
+        assert!(encoded.contains("enabled = true"));
+        assert!(encoded.contains("use_bwrap = false"));
+        assert!(encoded.contains("/run/wrappers/bin/bwrap"));
+        let decoded: Preferences =
+            toml::from_str(&encoded).expect("deserialize thumbnailer preferences");
+        assert_eq!(decoded.thumbnailers, prefs.thumbnailers);
     }
 }

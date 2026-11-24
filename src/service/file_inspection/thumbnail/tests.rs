@@ -1,11 +1,13 @@
 use super::*;
-use std::{fs, path::PathBuf, process::Command};
+use std::{fs, path::PathBuf, sync::Arc};
 
 fn source(path: PathBuf, kind: Kind) -> Source {
     let metadata = fs::metadata(&path).expect("fixture metadata");
     Source {
         path,
         kind,
+        mime: None,
+        mime_ancestors: Vec::new(),
         size: Some(metadata.len()),
         modified: metadata.modified().ok(),
     }
@@ -52,41 +54,73 @@ fn svg_content_is_supported_without_an_svg_extension_and_large_images_are_reject
     ));
 }
 
+#[cfg(unix)]
 #[test]
-fn videos_extract_one_frame_and_corrupt_media_reports_failure() {
+fn videos_delegate_to_external_thumbnailers_when_configured() {
+    use std::os::unix::fs::PermissionsExt as _;
+
     let directory = tempfile::tempdir().expect("video directory");
     let path = directory.path().join("视频 [one].mp4");
-    let output = Command::new("ffmpeg")
-        .args([
-            "-nostdin",
-            "-v",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "color=c=blue:s=64x48:d=0.12",
-            "-c:v",
-            "mpeg4",
-            "-threads",
-            "1",
-            "-y",
-        ])
-        .arg(&path)
-        .output()
-        .expect("ffmpeg is part of the development and test environment");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    fs::write(&path, b"not a real video").expect("video fixture");
+    let mut video_source = source(path, Kind::Video);
+    video_source.mime = Some(Arc::from("video/mp4"));
+
+    // Without an external thumbnailer, videos are not handled built-in.
+    assert!(!video_source.supports_thumbnail(&super::super::Options::default()));
+
+    let fixture_png = directory.path().join("frame.png");
+    ::image::RgbaImage::from_pixel(64, 48, ::image::Rgba([0, 0, 255, 255]))
+        .save(&fixture_png)
+        .expect("fixture png");
+
+    let script = directory.path().join("mock-ffmpegthumbnailer");
+    fs::write(
+        &script,
+        format!("#!/bin/sh\ncp '{}' \"$2\"\n", fixture_png.display()),
+    )
+    .expect("write helper");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod +x");
+
+    let runner = ExternalThumbnailers::from_specs_for_test(
+        SandboxMode::Unsandboxed,
+        "ffmpegthumbnailer",
+        script.clone(),
+        vec![script.display().to_string(), "%i".into(), "%o".into()],
+        vec!["video/mp4".into()],
+        false,
     );
-    let thumbnail = source(path.clone(), Kind::Video)
-        .thumbnail()
-        .expect("short video preview");
-    assert!(thumbnail.width() <= EDGE && thumbnail.height() <= EDGE);
-    assert_eq!(thumbnail.width() * 3, thumbnail.height() * 4);
-    fs::write(&path, b"not a video").expect("corrupt video");
+    let options = super::super::Options {
+        external_thumbnailers: Some(Arc::new(runner)),
+        ..super::super::Options::default()
+    };
+    assert!(video_source.supports_thumbnail(&options));
+
+    let img = video_source
+        .generate_cancellable_with_options(&options, &tokio_util::sync::CancellationToken::new())
+        .expect("external video thumbnail");
+    assert_eq!((img.width(), img.height()), (64, 48));
+
+    // A helper exiting non-zero reports ExternalFailed.
+    let failing = directory.path().join("failing-thumb");
+    fs::write(&failing, "#!/bin/sh\necho bad stream >&2\nexit 1\n").expect("write failing");
+    fs::set_permissions(&failing, fs::Permissions::from_mode(0o755)).expect("chmod +x");
+    let failing_runner = ExternalThumbnailers::from_specs_for_test(
+        SandboxMode::Unsandboxed,
+        "ffmpegthumbnailer",
+        failing.clone(),
+        vec![failing.display().to_string(), "%i".into(), "%o".into()],
+        vec!["video/mp4".into()],
+        false,
+    );
+    let failing_options = super::super::Options {
+        external_thumbnailers: Some(Arc::new(failing_runner)),
+        ..super::super::Options::default()
+    };
     assert!(matches!(
-        source(path, Kind::Video).thumbnail(),
-        Err(Error::Video(_))
+        video_source.generate_cancellable_with_options(
+            &failing_options,
+            &tokio_util::sync::CancellationToken::new()
+        ),
+        Err(Error::ExternalFailed(_))
     ));
 }

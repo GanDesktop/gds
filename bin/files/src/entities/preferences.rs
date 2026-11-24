@@ -5,5 +5,5 @@ mod presentation;
 mod service;
 
 pub use api::load;
-pub use model::{FilesPreferences, Preferences};
+pub use model::{FilesPreferences, Preferences, ThumbnailerCommands};
 pub(crate) use service::*;

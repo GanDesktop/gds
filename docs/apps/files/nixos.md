@@ -81,6 +81,20 @@ The `zgui` platform backends support Wayland `xdg-foreign-v2` parent relationshi
 
 Only applications using the desktop Portal follow this routing; applications drawing their own chooser retain it. Existing system or user Portal preferences may override module defaults. `services.gds-portal.desktops` selects additional desktop-specific configurations; the common configuration is always included. Other interfaces such as screen capture keep their configured providers.
 
+## External thumbnailers
+
+Built-in thumbnails cover common raster images, SVG, and embedded audio cover art in-process in pure Rust. Previews for videos, PDFs, fonts, 3D models, and other formats use standard FreeDesktop `.thumbnailer` entries enabled under **Settings → Extensions**.
+
+On NixOS, install `bubblewrap` (recommended for sandboxing) together with any `.thumbnailer` packages you want, and link `/share/thumbnailers` into the system environment:
+
+```nix
+environment.systemPackages = with pkgs; [
+  bubblewrap
+  ffmpegthumbnailer
+];
+environment.pathsToLink = [ "/share/thumbnailers" ];
+```
+
 ## Picker window rules
 
 The picker uses `io.github.GanDesktop.GdsFiles.Picker`. For a floating picker in Niri:

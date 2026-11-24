@@ -282,12 +282,16 @@ mod tests {
                 let image_src = Source {
                     path: PathBuf::from("/tmp/unrequested-huge.png"),
                     kind: Kind::Image,
+                    mime: None,
+                    mime_ancestors: Vec::new(),
                     size: Some(64),
                     modified: None,
                 };
                 let folder_src = Source {
                     path: PathBuf::from("/tmp/folder"),
                     kind: Kind::Directory,
+                    mime: None,
+                    mime_ancestors: Vec::new(),
                     size: None,
                     modified: None,
                 };

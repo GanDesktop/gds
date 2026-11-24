@@ -19,7 +19,7 @@ nix profile add .#gds-files
 nix run .#gds-files -- "$HOME"
 ```
 
-`nix build` and `nix run` default to `gds-files`. Install either individual package in a profile; `just install` installs `gds-files`, `just install portal` installs `xdg-desktop-portal-gds`, `just install all` installs both, and `just uninstall` removes all GDS profile entries (or `just uninstall files` / `just uninstall portal`). Packaged executables include their library wrappers; optional runtime helpers such as `xdg-terminal-exec`, `xdg-utils`, and `ffmpeg` are resolved from your environment `PATH` when needed.
+`nix build` and `nix run` default to `gds-files`. Install either individual package in a profile; `just install` installs `gds-files`, `just install portal` installs `xdg-desktop-portal-gds`, `just install all` installs both, and `just uninstall` removes all GDS profile entries (or `just uninstall files` / `just uninstall portal`). Packaged executables include their library wrappers; optional runtime helpers such as `xdg-terminal-exec`, `xdg-utils`, `bubblewrap`, and external `.thumbnailer` providers (e.g. `ffmpegthumbnailer`) are resolved from your environment `PATH` and XDG data directories when needed.
 
 ## Home Manager
 

@@ -6,6 +6,7 @@ mod thumbnail;
 
 use std::{
     path::PathBuf,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -15,23 +16,30 @@ pub use metadata::{
     AudioFacts, AudioKind, DirectoryFacts, FileFacts, ImageFacts, ImageKind, LineEndings, Metadata,
     PixelSize, SymlinkFacts, TextEncoding, TextFacts, VideoFacts, VideoKind,
 };
-pub use thumbnail::{EDGE, Thumbnail};
+pub use thumbnail::{
+    EDGE, ExternalProbeReport, ExternalThumbnailers, SandboxError, SandboxMode, Thumbnail,
+    ThumbnailerInfo,
+};
 
 pub const DEFAULT_MAX_THUMBNAIL_SOURCE_MIB: u64 = 32;
-pub const DEFAULT_VIDEO_THUMBNAIL_TIMEOUT_SECS: u64 = 10;
+pub const DEFAULT_EXTERNAL_THUMBNAIL_TIMEOUT_SECS: u64 = 10;
 
 /// Tunable bounds for on-demand thumbnail decoding and metadata inspection.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Options {
     pub max_thumbnail_source_bytes: u64,
-    pub video_thumbnail_timeout: Duration,
+    pub external_thumbnail_timeout: Duration,
+    pub external_thumbnailers: Option<Arc<ExternalThumbnailers>>,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
             max_thumbnail_source_bytes: DEFAULT_MAX_THUMBNAIL_SOURCE_MIB * 1024 * 1024,
-            video_thumbnail_timeout: Duration::from_secs(DEFAULT_VIDEO_THUMBNAIL_TIMEOUT_SECS),
+            external_thumbnail_timeout: Duration::from_secs(
+                DEFAULT_EXTERNAL_THUMBNAIL_TIMEOUT_SECS,
+            ),
+            external_thumbnailers: None,
         }
     }
 }
@@ -49,7 +57,7 @@ pub enum Kind {
 
 impl Kind {
     pub fn supports_thumbnail(self) -> bool {
-        matches!(self, Self::Image | Self::Video | Self::Audio)
+        matches!(self, Self::Image | Self::Audio)
     }
 }
 
@@ -58,8 +66,23 @@ impl Kind {
 pub struct Source {
     pub path: PathBuf,
     pub kind: Kind,
+    pub mime: Option<Arc<str>>,
+    pub mime_ancestors: Vec<Arc<str>>,
     pub size: Option<u64>,
     pub modified: Option<SystemTime>,
+}
+
+impl Source {
+    pub fn supports_thumbnail(&self, options: &Options) -> bool {
+        if self.kind.supports_thumbnail() {
+            return true;
+        }
+        matches!(self.kind, Kind::Video | Kind::Text | Kind::Other)
+            && options
+                .external_thumbnailers
+                .as_deref()
+                .is_some_and(|ext| ext.has_match(self.mime.as_deref(), &self.mime_ancestors))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -121,10 +144,14 @@ impl Source {
         }
         let mut result = Inspection::default();
         if request.thumbnail() {
-            result.thumbnail = if !self.kind.supports_thumbnail() {
+            result.thumbnail = if !self.supports_thumbnail(&options) {
                 Field::Unavailable
             } else {
-                let thumbnail = if self.kind == Kind::Audio && request.metadata() {
+                let thumbnail = if self.kind == Kind::Audio
+                    && request.metadata()
+                    && !options.external_thumbnailers.as_deref().is_some_and(|ext| {
+                        ext.has_user_override(self.mime.as_deref(), &self.mime_ancestors)
+                    }) {
                     // The generator runs only on a disk-cache miss. Reuse its parse for
                     // metadata; on a cache hit the later metadata read skips artwork.
                     thumbnail::load_with(self, || {
@@ -139,7 +166,7 @@ impl Source {
                     })
                 } else {
                     thumbnail::load_with(self, || {
-                        self.generate_cancellable_with_options(options, cancel)
+                        self.generate_cancellable_with_options(&options, cancel)
                     })
                 };
                 match thumbnail {

@@ -1,5 +1,5 @@
 //! Project filesystem entries onto the shared content inspection service.
-use super::{ContentCategory, Entry, EntryKind};
+use super::{ContentCategory, ContentType, Entry, EntryKind};
 use gds::service::file_inspection::{Kind, Source};
 
 impl Entry {
@@ -15,16 +15,30 @@ impl Entry {
                 _ => Kind::Other,
             },
         };
+        let mime = self
+            .details
+            .content
+            .as_ref()
+            .and_then(|content| content.mime.clone());
+        let mime_ancestors = mime
+            .as_deref()
+            .map(ContentType::mime_ancestors)
+            .unwrap_or_default();
         Source {
             path: self.path.clone(),
             kind,
+            mime,
+            mime_ancestors,
             size: self.size,
             modified: self.modified,
         }
     }
 
-    pub fn thumbnail_source(&self) -> Option<Source> {
+    pub fn thumbnail_source(&self, cache: &gds::ui::file_inspection::Cache) -> Option<Source> {
+        if self.kind != EntryKind::File {
+            return None;
+        }
         let source = self.inspection_source();
-        (self.kind == EntryKind::File && source.kind.supports_thumbnail()).then_some(source)
+        cache.supports_thumbnail(&source).then_some(source)
     }
 }

@@ -6,11 +6,37 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub struct ChildGuard(Child);
+pub struct ChildGuard {
+    child: Child,
+    process_group: bool,
+}
+
 impl ChildGuard {
     pub fn new(child: Child) -> Self {
-        Self(child)
+        Self {
+            child,
+            process_group: false,
+        }
     }
+
+    /// Spawn `command` in its own Unix process group so cancellation, timeouts,
+    /// and drops terminate child helper processes along with the direct child.
+    ///
+    /// # Errors
+    /// Reports process spawn failures.
+    pub fn spawn_in_process_group(command: &mut std::process::Command) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt as _;
+            command.process_group(0);
+        }
+        let child = command.spawn()?;
+        Ok(Self {
+            child,
+            process_group: true,
+        })
+    }
+
     /// # Errors
     /// Reports wait I/O failures, cancellation (`ErrorKind::Interrupted`), or timeout (`ErrorKind::TimedOut`).
     pub fn wait(
@@ -20,7 +46,7 @@ impl ChildGuard {
     ) -> io::Result<ExitStatus> {
         let start = Instant::now();
         loop {
-            if let Some(status) = self.0.try_wait()? {
+            if let Some(status) = self.child.try_wait()? {
                 return Ok(status);
             }
             if cancel.is_cancelled() {
@@ -33,15 +59,24 @@ impl ChildGuard {
         }
     }
 }
+
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        if matches!(self.0.try_wait(), Ok(Some(_))) {
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
             return;
         }
-        if let Err(error) = self.0.kill() {
+        #[cfg(unix)]
+        if self.process_group {
+            let pid = self.child.id();
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(pid as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+        if let Err(error) = self.child.kill() {
             eprintln!("Cannot stop child during cleanup: {error}");
         }
-        if let Err(error) = self.0.wait() {
+        if let Err(error) = self.child.wait() {
             eprintln!("Cannot reap child during cleanup: {error}");
         }
     }

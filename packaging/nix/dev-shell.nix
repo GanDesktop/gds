@@ -4,7 +4,7 @@ let
   libraries = with pkgs; [
     wayland libxkbcommon libx11 libxcursor libxi libxrandr fontconfig freetype libGL vulkan-loader libxcb sqlite alsa-lib
   ];
-  runtimePrograms = with pkgs; [ ffmpeg-headless xdg-terminal-exec ];
+  runtimePrograms = with pkgs; [ xdg-terminal-exec ];
   libraryPath = "/run/opengl-driver/lib:${pkgs.lib.makeLibraryPath libraries}";
   runtime = pkgs.writeShellScript "gds-development-runtime" ''
     export PATH="${pkgs.lib.makeBinPath runtimePrograms}''${PATH:+:$PATH}"

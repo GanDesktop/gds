@@ -1,9 +1,12 @@
 //! Local media thumbnails, independent of the UI and its image cache.
 mod cache;
+pub(super) mod external;
 mod image;
-mod video;
 
 use super::{Error, Kind, Source};
+pub use external::{
+    ExternalProbeReport, ExternalThumbnailers, SandboxError, SandboxMode, ThumbnailerInfo,
+};
 
 pub const EDGE: u32 = 512;
 #[cfg(test)]
@@ -41,7 +44,7 @@ impl Source {
     /// Load a valid desktop thumbnail, or generate and cache a bounded PNG.
     ///
     /// # Errors
-    /// Reports unreadable or unsupported media, image limits and video extraction failures.
+    /// Reports unreadable or unsupported media, image limits and thumbnail generation failures.
     #[cfg(test)]
     pub(super) fn thumbnail(&self) -> Result<Thumbnail, Error> {
         cache::load(self, cache::Cache::for_user().as_ref())
@@ -50,30 +53,67 @@ impl Source {
     #[cfg(test)]
     pub(super) fn generate(&self) -> Result<::image::RgbaImage, Error> {
         self.generate_cancellable_with_options(
-            super::Options::default(),
+            &super::Options::default(),
             &tokio_util::sync::CancellationToken::new(),
         )
     }
 
     pub(super) fn generate_cancellable_with_options(
         &self,
-        options: super::Options,
+        options: &super::Options,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<::image::RgbaImage, Error> {
         if cancel.is_cancelled() {
             return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
         }
-        match self.kind {
-            Kind::Image => image::load(&self.path, options.max_thumbnail_source_bytes),
-            Kind::Video => video::load(&self.path, options.video_thumbnail_timeout, cancel),
-            Kind::Audio => {
+        if let Some(external) = options.external_thumbnailers.as_deref()
+            && external.has_user_override(self.mime.as_deref(), &self.mime_ancestors)
+        {
+            return external.generate(self, options.external_thumbnail_timeout, cancel, true);
+        }
+        let builtin = match self.kind {
+            Kind::Image => Some(image::load(&self.path, options.max_thumbnail_source_bytes)),
+            Kind::Audio => Some((|| {
                 let bytes = super::audio::cover(&self.path)?.ok_or(Error::NoCover)?;
                 if cancel.is_cancelled() {
                     return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
                 }
                 image::load_bytes(&bytes, None, options.max_thumbnail_source_bytes)
+            })()),
+            _ => None,
+        };
+        match builtin {
+            Some(Ok(img)) => Ok(img),
+            Some(Err(err)) => {
+                let can_fallback = (self.kind == Kind::Image
+                    && matches!(err, Error::Image(_) | Error::Svg(_)))
+                    || (self.kind == Kind::Audio && matches!(err, Error::Audio(_)));
+                if can_fallback
+                    && let Some(external) = options.external_thumbnailers.as_deref()
+                    && external.has_match(self.mime.as_deref(), &self.mime_ancestors)
+                {
+                    return external.generate(
+                        self,
+                        options.external_thumbnail_timeout,
+                        cancel,
+                        false,
+                    );
+                }
+                Err(err)
             }
-            _ => Err(Error::NoCover),
+            None => {
+                if let Some(external) = options.external_thumbnailers.as_deref()
+                    && external.has_match(self.mime.as_deref(), &self.mime_ancestors)
+                {
+                    return external.generate(
+                        self,
+                        options.external_thumbnail_timeout,
+                        cancel,
+                        false,
+                    );
+                }
+                Err(Error::NoCover)
+            }
         }
     }
 }

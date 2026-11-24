@@ -39,7 +39,7 @@ rustPlatform.buildRustPackage {
   cargoLock = import ./cargo-lock.nix;
 
   nativeBuildInputs = [ pkg-config python3 makeWrapper copyDesktopItems ] ++ extraNativeBuildInputs;
-  nativeCheckInputs = [ pkgs.dbus pkgs.ffmpeg-headless pkgs.util-linux ] ++ extraNativeCheckInputs;
+  nativeCheckInputs = [ pkgs.dbus pkgs.util-linux ] ++ extraNativeCheckInputs;
   buildInputs = libraries;
   dontUseCmakeConfigure = true;
   cargoBuildFlags = [ "--bin" binary ];

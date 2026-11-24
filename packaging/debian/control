@@ -15,7 +15,7 @@ Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, libwayland-client0, libxkbcommon0,
  libfontconfig1, libxkbcommon-x11-0, libegl1, libvulkan1, xdg-desktop-portal,
  shared-mime-info
-Suggests: ffmpeg, udisks2, xdg-terminal-exec, xdg-utils, xdg-desktop-portal-gds
+Suggests: bubblewrap, ffmpegthumbnailer, udisks2, xdg-terminal-exec, xdg-utils, xdg-desktop-portal-gds
 Description: native zgui file manager for Linux desktops
  Browse local folders, mounted volumes and SFTP/SMB locations,
  with file operations, previews and embedded terminals.

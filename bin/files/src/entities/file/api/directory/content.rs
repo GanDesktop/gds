@@ -86,6 +86,28 @@ impl ContentType {
         Self::classify_filename_with_database(&MIME_DB, name).into_content()
     }
 
+    /// Breadth-first MIME superclasses from `shared-mime-info` for external thumbnailer matching.
+    pub(super) fn mime_ancestors(mime: &str) -> Vec<Arc<str>> {
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        let mut ancestors = Vec::new();
+        let canonical = MIME_DB.unalias(mime).into_owned();
+        visited.insert(canonical.clone());
+        queue.push_back(canonical);
+        while let Some(current) = queue.pop_front() {
+            for parent in MIME_DB.direct_parents(&current) {
+                if visited.insert(parent.clone()) {
+                    ancestors.push(Arc::from(parent.as_str()));
+                    if ancestors.len() >= 8 {
+                        return ancestors;
+                    }
+                    queue.push_back(parent);
+                }
+            }
+        }
+        ancestors
+    }
+
     /// Bounded 8 KiB content probe for ambiguous or unmatched regular files during
     /// background enrichment. Also preloads the resolved MIME's XML description.
     pub(super) fn probe_content(name: &OsStr, path: &Path) -> Option<Self> {

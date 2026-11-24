@@ -233,6 +233,10 @@ pub(super) struct Workspace {
     pub preferences: preferences::Service,
     pub new_window: Rc<dyn Fn(PathBuf)>,
     pub inspections: RwSignal<gds::ui::file_inspection::Cache, LocalStorage>,
+    pub external_thumbnailers:
+        RefCell<Option<std::sync::Arc<gds::service::file_inspection::ExternalThumbnailers>>>,
+    pub external_thumbnailer_probe: RefCell<Option<TaskOwner>>,
+    pub external_thumbnailer_gen: Cell<u64>,
     pub terminals: super::terminals::Dock,
     pub connector: crate::features::connect_server::Connector,
     pub menus: super::menus::Menus,
@@ -413,6 +417,9 @@ impl Browser {
             tasks,
             connector,
             inspections,
+            external_thumbnailers: RefCell::new(None),
+            external_thumbnailer_probe: RefCell::new(None),
+            external_thumbnailer_gen: Cell::new(0),
             terminals,
             menus: super::menus::Menus::new(),
             picker_result,
@@ -435,6 +442,7 @@ impl Browser {
             if let Some(browser) = weak.0.upgrade() {
                 browser.alive.set(false);
                 *browser.pending_focus.borrow_mut() = None;
+                *browser.external_thumbnailer_probe.borrow_mut() = None;
                 browser.drag_sources.clear();
                 browser
                     .background_tasks
@@ -876,19 +884,86 @@ impl Browser {
             .collect()
     }
 
+    fn sync_external_thumbnailers(&self, preferences: &preferences::Preferences) {
+        let probe_gen = self.0.external_thumbnailer_gen.get().wrapping_add(1);
+        self.0.external_thumbnailer_gen.set(probe_gen);
+        drop(self.0.external_thumbnailer_probe.borrow_mut().take());
+
+        if !preferences.thumbnailers.enabled {
+            let had_runner = self.0.external_thumbnailers.borrow_mut().take().is_some();
+            if had_runner {
+                self.0.inspections.set(gds::ui::file_inspection::Cache::new(
+                    preferences.files.preview.cache_options_with(None),
+                ));
+                self.changed();
+            }
+            return;
+        }
+
+        let probe_owner = self.0.tasks.named_child("Load external thumbnailers");
+        let cancel = probe_owner.token();
+        let use_bwrap = preferences.thumbnailers.use_bwrap;
+        let bwrap = preferences.thumbnailers.commands.bwrap.clone();
+        let task = probe_owner.spawn_cancellable_named("Load external thumbnailers", async move {
+            gds::service::file_inspection::ExternalThumbnailers::load(
+                use_bwrap,
+                bwrap.as_deref(),
+                &cancel,
+            )
+            .await
+        });
+        *self.0.external_thumbnailer_probe.borrow_mut() = Some(probe_owner);
+        let weak = self.downgrade();
+        self.0.owner.with(move || {
+            drop(zgui::reactive::spawn_local(async move {
+                let result = task.await;
+                let Some(browser) = weak.upgrade() else {
+                    return;
+                };
+                if browser.0.external_thumbnailer_gen.get() != probe_gen {
+                    return;
+                }
+                drop(browser.0.external_thumbnailer_probe.borrow_mut().take());
+                let prefs = browser.0.preferences.snapshot();
+                if !prefs.thumbnailers.enabled {
+                    return;
+                }
+                let next = result.ok().and_then(Result::ok).map(std::sync::Arc::new);
+                let changed = *browser.0.external_thumbnailers.borrow() != next;
+                *browser.0.external_thumbnailers.borrow_mut() = next.clone();
+                if changed {
+                    browser
+                        .0
+                        .inspections
+                        .set(gds::ui::file_inspection::Cache::new(
+                            prefs.files.preview.cache_options_with(next),
+                        ));
+                    browser.changed();
+                }
+            }));
+        });
+    }
+
     fn observe_services(&self) {
-        let previous = RefCell::new(self.0.preferences.snapshot());
+        let initial_prefs = self.0.preferences.snapshot();
+        if initial_prefs.thumbnailers.enabled {
+            self.sync_external_thumbnailers(&initial_prefs);
+        }
+        let previous = RefCell::new(initial_prefs);
         let browser = self.clone();
         let pref_fx = RenderEffect::new(move |_| {
             let preferences = browser.0.preferences.state().get();
             let prior = previous.replace(preferences.clone());
             browser.apply_terminal_preferences(&preferences);
-            if prior.files.preview != preferences.files.preview {
+            if prior.thumbnailers != preferences.thumbnailers {
+                browser.sync_external_thumbnailers(&preferences);
+            } else if prior.files.preview != preferences.files.preview {
+                let external = browser.0.external_thumbnailers.borrow().clone();
                 browser
                     .0
                     .inspections
                     .set(gds::ui::file_inspection::Cache::new(
-                        preferences.files.preview.cache_options(),
+                        preferences.files.preview.cache_options_with(external),
                     ));
             }
             if prior.files.show_hidden != preferences.files.show_hidden

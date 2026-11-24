@@ -18,12 +18,12 @@ pub enum Error {
     TooLarge,
     #[error("the preview source is not a regular file")]
     NotFile,
-    #[error("video preview requires ffmpeg")]
-    VideoUnavailable,
-    #[error("video preview timed out")]
-    VideoTimeout,
-    #[error("cannot extract video frame: {0}")]
-    Video(String),
+    #[error("external thumbnailers require the Bubblewrap (bwrap) sandbox")]
+    SandboxUnavailable,
+    #[error("external thumbnailer timed out")]
+    ExternalTimeout,
+    #[error("external thumbnailer failed: {0}")]
+    ExternalFailed(String),
 }
 
 impl From<::image::ImageError> for Error {

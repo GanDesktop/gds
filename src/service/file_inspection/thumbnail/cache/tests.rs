@@ -43,6 +43,8 @@ impl Fixture {
         Source {
             path: self.path.clone(),
             kind: Kind::Image,
+            mime: None,
+            mime_ancestors: Vec::new(),
             size: None,
             modified: None,
         }

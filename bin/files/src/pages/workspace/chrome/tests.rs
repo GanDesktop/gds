@@ -2130,3 +2130,159 @@ fn quick_access_sidebar_tall_and_accordion_gpu_preview() {
         })
         .expect("quick access sidebar GPU test ran");
 }
+
+#[cfg(feature = "files-e2e")]
+#[test]
+fn extensions_page_renders_tags_and_external_thumbnailers_cleanly() {
+    use std::path::PathBuf;
+
+    use zgui_render_wgpu::{SharedGraphics, wgpu};
+
+    let graphics = SharedGraphics::new();
+    if graphics.open_gpu().is_err() {
+        return;
+    }
+
+    let preview_dir = std::env::var_os("GDS_EXTENSIONS_PREVIEW_DIR").map(PathBuf::from);
+    let run_case = |use_bwrap: bool, preview_name: &str| -> f64 {
+        let window_graphics = graphics.clone();
+        let offscreen_graphics = graphics.clone();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let start = temp.path().to_path_buf();
+        let preview_dir = preview_dir.clone();
+        let preview_name = preview_name.to_owned();
+
+        let supervisor = Supervisor::new(false).expect("tokio supervisor");
+        let bg_scope = supervisor.scope();
+        let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
+        let slot_for_view = Rc::clone(&browser_slot);
+        let handle_slot: Rc<RefCell<Option<WindowHandle>>> = Rc::default();
+        let handle_view = Rc::clone(&handle_slot);
+        let handle_driver = Rc::clone(&handle_slot);
+        let thumb_y0: Rc<std::cell::Cell<f64>> = Rc::new(std::cell::Cell::new(0.0));
+        let thumb_y0_driver = Rc::clone(&thumb_y0);
+
+        let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+            let mut harness = Harness::new(handler);
+            if let Some(offscreen) = harness.platform().offscreens().first() {
+                offscreen.set_a11y_listener(true);
+            }
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(1100.0),
+                DevicePx(920.0),
+            )));
+            harness.settle(16);
+
+            let browser = browser_slot.borrow().clone().expect("browser constructed");
+            browser.toggle_settings();
+            flush();
+            harness.settle(16);
+
+            let surface = harness.platform().offscreens()[0].clone();
+            let ext_label = gds::i18n::text_untracked("settings-extensions");
+            click_button(&mut harness, &ext_label);
+            harness.advance(Duration::from_millis(200));
+            harness.settle(20);
+
+            let buttons = collect_live_buttons(&surface);
+            let tags_detect = gds::i18n::text_untracked("tags-detect");
+            let thumb_detect = gds::i18n::text_untracked("thumbnailers-detect");
+            let tags_btn = find_button_by_label(&buttons, &tags_detect)
+                .expect("Baloo tags re-check button on Extensions page");
+            let thumb_btn = find_button_by_label(&buttons, &thumb_detect)
+                .expect("External thumbnailers re-check button on Extensions page");
+            assert!(
+                thumb_btn.y0 > tags_btn.y1 + 20.0,
+                "external thumbnailers section must appear cleanly below tags section: tags={tags_btn:?}, thumb={thumb_btn:?}"
+            );
+            thumb_y0_driver.set(thumb_btn.y0);
+
+            if let Some(dir) = &preview_dir {
+                let window_guard = handle_driver.borrow();
+                if let Some(window) = window_guard.as_ref() {
+                    let snap_browser = browser.clone();
+                    if let Ok(rendered) = window.render_view(
+                        zgui::prelude::ViewSnapshotOptions::new().with_max_size(1100.0, 920.0),
+                        move || {
+                            view! {
+                                box(style:width = "1100px", style:height = "920px") {
+                                    {snap_browser.view()}
+                                }
+                            }
+                        },
+                    ) {
+                        let _ = std::fs::create_dir_all(dir);
+                        let img = image::RgbaImage::from_raw(
+                            rendered.image.width(),
+                            rendered.image.height(),
+                            rendered.image.rgba().to_vec(),
+                        )
+                        .expect("valid rgba");
+                        img.save(dir.join(&preview_name))
+                            .expect("save extensions preview png");
+                    }
+                }
+            }
+
+            harness.shut_down();
+            Ok(())
+        };
+
+        zgui::app()
+            .with_fonts(Fonts::system())
+            .with_size(1100.0, 920.0)
+            .with_renderer(Box::new(move |_, target: RenderTarget| {
+                let mut r = window_graphics.renderer_offscreen(
+                    target,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    false,
+                )?;
+                zgui_render_vector_vello::attach(&mut r, target.size);
+                Ok::<_, AppError>(Box::new(r) as Box<dyn Renderer>)
+            }))
+            .with_offscreen_renderer(Box::new(move |target: RenderTarget| {
+                let mut r = offscreen_graphics.renderer_offscreen(
+                    target,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    false,
+                )?;
+                zgui_render_vector_vello::attach(&mut r, target.size);
+                Ok::<_, AppError>(Box::new(r) as Box<dyn Renderer>)
+            }))
+            .run_on(driver, move || {
+                let scope = bg_scope.clone();
+                let app = Gds::install(scope.clone());
+                app.appearance().motion().set_enabled(false);
+                let _ = app.appearance().install_window_sheet();
+                app.i18n()
+                    .install_catalog(i18n::prepare(Language::Chinese).expect("Chinese catalog"));
+                let mut initial = preferences::Preferences::default();
+                initial.thumbnailers.use_bwrap = use_bwrap;
+                let _prefs =
+                    preferences::Service::install(initial, &scope).expect("preferences service");
+                *handle_view.borrow_mut() = Some(use_window());
+                let browser = Browser::new(
+                    LaunchOptions {
+                        places: Ok(Places::default()),
+                        start: start.clone(),
+                        home: start.clone(),
+                        picker: None,
+                    },
+                    volumes::Service::new(scope),
+                    Rc::new(|_| {}),
+                );
+                *slot_for_view.borrow_mut() = Some(browser.clone());
+                browser.view()
+            })
+            .expect("extensions page GPU test ran");
+
+        thumb_y0.get()
+    };
+
+    let y_sandboxed = run_case(true, "extensions-page.png");
+    let y_unsandboxed = run_case(false, "extensions-page-unsandboxed.png");
+    assert!(
+        y_unsandboxed > y_sandboxed + 16.0,
+        "unsandboxed mode must render the warning banner above the probe row: sandboxed={y_sandboxed}, unsandboxed={y_unsandboxed}"
+    );
+}

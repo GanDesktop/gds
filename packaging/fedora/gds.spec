@@ -19,7 +19,8 @@ Requires:       mesa-libEGL
 Requires:       vulkan-loader
 Requires:       xdg-desktop-portal
 Requires:       shared-mime-info
-Suggests:       ffmpeg-free
+Suggests:       bubblewrap
+Suggests:       ffmpegthumbnailer
 Suggests:       udisks2
 Suggests:       xdg-terminal-exec
 Suggests:       xdg-utils

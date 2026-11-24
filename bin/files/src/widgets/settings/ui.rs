@@ -3,6 +3,7 @@
 mod appearance;
 mod pages;
 mod tags;
+mod thumbnailers;
 
 use std::rc::Rc;
 
@@ -96,6 +97,14 @@ const SETTINGS_CSS: &str = css!(
         min-width: 0;
     }
 
+    .gds-settings-extensions__divider {
+        width: 100%;
+        height: 1px;
+        margin: 24px 0;
+        background-color: var(--gds-border);
+        flex-shrink: 0;
+    }
+
     .gds-settings-label-trigger {
         display: inline-flex;
         align-self: flex-start;
@@ -116,6 +125,7 @@ pub struct View {
     page: RwSignal<Page, LocalStorage>,
     themes: appearance::Themes,
     tags: tags::Probe,
+    thumbnailers: thumbnailers::Probe,
     nav_refs: [NodeRef; Page::ALL.len()],
     page_focus: NodeRef,
     performance_unlocked: RwSignal<bool, LocalStorage>,
@@ -132,6 +142,7 @@ impl View {
             page: RwSignal::new_local(Page::General),
             themes: appearance::Themes::new(&preferences.get_untracked()),
             tags: tags::Probe::new(preferences),
+            thumbnailers: thumbnailers::Probe::new(preferences),
             nav_refs: std::array::from_fn(|_| NodeRef::new()),
             page_focus: NodeRef::new(),
             performance_unlocked: RwSignal::new_local(false),
@@ -448,7 +459,13 @@ impl View {
                     }
                 })
             }
-            Page::Extensions => self.extensions(),
+            Page::Extensions => AnyView::new(view! {
+                column(class = "gds-settings-col") {
+                    {self.tags_section()}
+                    box(class = "gds-settings-extensions__divider") {}
+                    {self.thumbnailers_section()}
+                }
+            }),
             Page::Performance => self.performance(),
         }
     }

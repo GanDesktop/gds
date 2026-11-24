@@ -41,7 +41,8 @@ package_gds-files() {
     depends=(libgcc glibc wayland libxkbcommon libxkbcommon-x11 fontconfig
              freetype2 libxcb libglvnd vulkan-icd-loader xdg-desktop-portal
              shared-mime-info hicolor-icon-theme)
-    optdepends=('ffmpeg: video thumbnails'
+    optdepends=('bubblewrap: sandbox isolation for external thumbnailers'
+                'ffmpegthumbnailer: video thumbnails via external thumbnailers'
                 'udisks2: removable drive management'
                 'xdg-terminal-exec: open folders in external terminal'
                 'xdg-utils: open external web links'

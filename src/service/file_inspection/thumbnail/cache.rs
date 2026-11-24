@@ -52,7 +52,7 @@ struct CachedPng {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum CacheError {
+pub(super) enum CacheError {
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -123,7 +123,7 @@ pub(super) fn load_with(
             // Persist only content/format failures.
             if matches!(
                 error,
-                Error::Image(_) | Error::Svg(_) | Error::Video(_) | Error::NoCover
+                Error::Image(_) | Error::Svg(_) | Error::ExternalFailed(_) | Error::NoCover
             ) && let (Some(cache), Some(identity)) = (cache, identity.as_ref())
                 && identity.unchanged(&source.path)
                 && let Err(cache_error) = cache.store_failure_kind(
@@ -287,7 +287,7 @@ impl Cache {
 
 /// # Errors
 /// Reports invalid paths; file URIs preserve raw Unix filename bytes.
-fn file_uri(path: &Path) -> Result<String, CacheError> {
+pub(super) fn file_uri(path: &Path) -> Result<String, CacheError> {
     url::Url::from_file_path(std::path::absolute(path)?)
         .map(String::from)
         .map_err(|_| CacheError::Uri)

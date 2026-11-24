@@ -52,7 +52,7 @@ Without `just` installed on the host, invoke `nix develop --impure --expr 'impor
 
 ### Rapid Iteration (`install-dev`)
 
-When iterating on desktop integration or UI, `just install-dev files` builds `target/debug/gds-files` incrementally and installs a lightweight user-level launcher (`Files (Dev)`) that executes the workspace binary directly with required runtime libraries and helpers (`xdg-terminal-exec`, `ffmpeg`, `terminfo`) while preserving your desktop session's `SHELL`, `WAYLAND_DISPLAY`, `DISPLAY`, and D-Bus environment. Run `just uninstall-dev` to restore any prior release launchers.
+When iterating on desktop integration or UI, `just install-dev files` builds `target/debug/gds-files` incrementally and installs a lightweight user-level launcher (`Files (Dev)`) that executes the workspace binary directly with required runtime libraries and helpers (`xdg-terminal-exec`, `terminfo`) while preserving your desktop session's `SHELL`, `WAYLAND_DISPLAY`, `DISPLAY`, and D-Bus environment. Run `just uninstall-dev` to restore any prior release launchers.
 
 ## Crate Features & Capability Isolation
 

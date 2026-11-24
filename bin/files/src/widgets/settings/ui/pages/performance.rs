@@ -225,15 +225,15 @@ pub(in crate::widgets::settings::ui) struct PerformanceForm {
     )]
     pub max_thumbnail_source_mib: u64,
     #[setting(
-        label = "files-advanced-video-timeout",
-        help = "files-advanced-video-timeout-help",
+        label = "files-advanced-external-thumbnail-timeout",
+        help = "files-advanced-external-thumbnail-timeout-help",
         group = "files-advanced-group-preview",
         min = 2.0,
         max = 60.0,
         step = 2.0,
         unit = " s"
     )]
-    pub video_thumbnail_timeout_secs: u64,
+    pub external_thumbnail_timeout_secs: u64,
 
     #[setting(
         label = "files-advanced-watch-debounce",
@@ -295,7 +295,7 @@ impl From<&FilesPreferences> for PerformanceForm {
             preview_cache_entries: files.preview.cache_entries,
             preview_cache_mib: files.preview.cache_mib,
             max_thumbnail_source_mib: files.preview.max_thumbnail_source_mib,
-            video_thumbnail_timeout_secs: files.preview.video_thumbnail_timeout_secs,
+            external_thumbnail_timeout_secs: files.preview.external_thumbnail_timeout_secs,
             watch_debounce_ms: files.watching.debounce_ms,
             watch_incremental_limit: files.watching.incremental_limit,
             local_copy_buffer_kib: files.transfer.local_buffer_kib,
@@ -336,7 +336,7 @@ impl PerformanceForm {
         files.preview.cache_entries = self.preview_cache_entries;
         files.preview.cache_mib = self.preview_cache_mib;
         files.preview.max_thumbnail_source_mib = self.max_thumbnail_source_mib;
-        files.preview.video_thumbnail_timeout_secs = self.video_thumbnail_timeout_secs;
+        files.preview.external_thumbnail_timeout_secs = self.external_thumbnail_timeout_secs;
         files.watching.debounce_ms = self.watch_debounce_ms;
         files.watching.incremental_limit = self.watch_incremental_limit;
         files.transfer.local_buffer_kib = self.local_copy_buffer_kib;
@@ -457,7 +457,7 @@ mod tests {
         source.preview.cache_entries = 512;
         source.preview.cache_mib = 256;
         source.preview.max_thumbnail_source_mib = 64;
-        source.preview.video_thumbnail_timeout_secs = 20;
+        source.preview.external_thumbnail_timeout_secs = 20;
         source.watching.debounce_ms = 250;
         source.watching.incremental_limit = 512;
         source.transfer.local_buffer_kib = 128;

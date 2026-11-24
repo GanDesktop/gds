@@ -62,6 +62,29 @@ pub(super) fn load_bytes(
     Ok(image.to_rgba8())
 }
 
+/// Strictly decode an external thumbnailer's PNG output under bounded memory limits, scaling
+/// down only when it exceeds `EDGE`.
+///
+/// # Errors
+/// Reports malformed or oversized PNG outputs.
+pub(super) fn load_png_bounded(bytes: &[u8]) -> Result<RgbaImage, Error> {
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), ImageFormat::Png);
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(MAX_DECODE_BYTES);
+    reader.limits(limits);
+    let decoder = reader.into_decoder()?;
+    if decoder.total_bytes() > MAX_DECODE_BYTES {
+        return Err(Error::TooLarge);
+    }
+    let image = DynamicImage::from_decoder(decoder)?;
+    let image = if image.width() > EDGE || image.height() > EDGE {
+        image.thumbnail(EDGE, EDGE)
+    } else {
+        image
+    };
+    Ok(image.to_rgba8())
+}
+
 /// # Errors
 /// Reports malformed SVGs or an unavailable raster allocation.
 fn render_svg(bytes: &[u8]) -> Result<RgbaImage, Error> {

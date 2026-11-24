@@ -206,7 +206,7 @@ impl Probe {
 }
 
 impl View {
-    pub(super) fn extensions(&self) -> AnyView {
+    pub(super) fn tags_section(&self) -> AnyView {
         install_stylesheet(TAGS_SHEET, TAGS_CSS);
         let probe = self.tags.clone();
         let probe_ready = self.tags.clone();

@@ -24,7 +24,7 @@ pub const DEFAULT_CACHE_MIB: usize = 128;
 pub const DEFAULT_WORKERS: usize = 2;
 
 /// Configurable cache bounds and worker options for [`Cache`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Options {
     pub capacity: usize,
     pub byte_budget: usize,
@@ -215,7 +215,7 @@ impl Cache {
     /// Returns the currently active cache options.
     #[must_use]
     pub fn options(&self) -> Options {
-        self.inner.borrow().options
+        self.inner.borrow().options.clone()
     }
 
     /// Updates cache options, trims excess cached entries, and schedules queued jobs if needed.
@@ -246,6 +246,13 @@ impl Cache {
             contents.touch_lru(source);
         }
         snap
+    }
+
+    /// Returns whether `source` can produce a thumbnail via built-in decoders or active external
+    /// thumbnailers configured on this cache.
+    #[must_use]
+    pub fn supports_thumbnail(&self, source: &Source) -> bool {
+        source.supports_thumbnail(&self.inner.borrow().options.inspection)
     }
 
     /// Returns the reactive snapshot for `(source, request)`, scheduling background inspection when
@@ -284,7 +291,7 @@ impl Cache {
             let mut missing_thumb =
                 request.thumbnail() && matches!(next_snapshot.thumbnail, State::NotRequested);
 
-            if !source.kind.supports_thumbnail() && missing_thumb {
+            if !source.supports_thumbnail(&contents.options.inspection) && missing_thumb {
                 next_snapshot.thumbnail = State::Unavailable;
                 missing_thumb = false;
             }
@@ -459,7 +466,7 @@ impl Cache {
                     Some((
                         job,
                         token,
-                        contents.options.inspection,
+                        contents.options.inspection.clone(),
                         contents.scope.clone(),
                         contents.owner.clone(),
                         contents.generation,

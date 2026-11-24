@@ -16,6 +16,8 @@ fn write_test_png(dir: &Path, name: &str, color: [u8; 4], size: u32) -> Source {
     Source {
         path,
         kind: Kind::Image,
+        mime: None,
+        mime_ancestors: Vec::new(),
         size: Some(len),
         modified: None,
     }
