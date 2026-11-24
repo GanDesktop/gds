@@ -494,6 +494,7 @@ impl TagEditor {
                         browser.report_success(i18n::text_untracked("tags-saved"));
                         browser.refresh_affected(&[refresh_path]);
                         browser.refresh_tag_tabs();
+                        super::bump_details_revision(browser);
                         if let Some(callback) = done.borrow_mut().take() {
                             callback();
                         }

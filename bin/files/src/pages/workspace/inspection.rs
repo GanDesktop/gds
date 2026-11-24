@@ -1,7 +1,7 @@
-//! Properties, content inspection, permissions, and tags dialogs share existing services.
+//! Properties, content inspection, permissions, comment, and tags dialogs share existing services.
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-mod default_app;
+#[cfg(target_os = "linux")]
+mod comment;
 mod info;
 pub(super) mod tags;
 
@@ -20,7 +20,7 @@ use gds::app::Gds;
 use gds::service::file_inspection::{FileFacts, Metadata, Request, Source as InspectionSource};
 use gds::service::file_tags;
 use gds::service::task_manager::Scope;
-use gds::ui::button::{ButtonSize, ButtonVariant};
+use gds::ui::button::ButtonVariant;
 use gds::ui::capacity::CapacityBarProps;
 use gds::ui::feedback::dialog::{
     DialogActionsProps, DialogDecision, DialogDescriptionProps, DialogFooterProps,
@@ -44,7 +44,7 @@ use zgui::runtime::{WindowHandle, try_use_windows};
 use zgui::view::{Either, EventCx, current_host, events, install_stylesheet};
 use zgui::vocab::{Key, Modifiers, NamedKey};
 use zgui::{css, view};
-use zgui_ui::{ButtonProps, CheckboxProps, Checked, InputProps, LabelProps, SpinnerProps};
+use zgui_ui::{ButtonProps, CheckboxProps, Checked, LabelProps, SpinnerProps};
 use zgui_ui_primitives::Binding;
 
 use crate::entities::file::{
@@ -312,12 +312,12 @@ pub(super) const INSPECTION_CSS: &str = css!(
         border-top: 1px solid var(--gds-border);
     }
 
-    .gds-files-details__tags-header {
-        display: flex;
-        flex-direction: row;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
+    .gds-files-details__comment-text {
+        font-size: var(--gds-text-xs, 12px);
+        color: var(--gds-foreground);
+        text-align: left;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
     }
 
     .gds-files-details__tags-list {
@@ -422,21 +422,6 @@ pub(super) const INSPECTION_CSS: &str = css!(
         font-size: var(--gds-text-xs, 12px);
         color: var(--gds-error);
     }
-
-    .gds-files-details__comment-editor {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        width: 100%;
-        min-width: 0;
-    }
-
-    .gds-files-details__comment-actions {
-        display: flex;
-        flex-direction: row;
-        justify-content: flex-end;
-        gap: 6px;
-    }
     "#
 );
 
@@ -451,13 +436,20 @@ struct DialogSlots {
     browser: WeakBrowser,
     tags: RwSignal<Option<TagEditor>, LocalStorage>,
     permissions: RwSignal<Option<PermissionEditor>, LocalStorage>,
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    default_app: RwSignal<Option<default_app::DefaultAppEditor>, LocalStorage>,
+    #[cfg(target_os = "linux")]
+    comment: RwSignal<Option<comment::CommentEditor>, LocalStorage>,
+    details_revision: RwSignal<u64, LocalStorage>,
 }
 
 thread_local! {
     static DIALOGS: RefCell<HashMap<usize, DialogSlots>> = RefCell::new(HashMap::new());
     static PROPERTIES_WINDOWS: RefCell<HashMap<PathBuf, WindowHandle>> = RefCell::new(HashMap::new());
+}
+
+fn bump_details_revision(browser: &Browser) {
+    dialog_slots(browser)
+        .details_revision
+        .update(|rev| *rev = rev.wrapping_add(1));
 }
 
 fn dialog_slots(browser: &Browser) -> DialogSlots {
@@ -484,8 +476,9 @@ fn dialog_slots(browser: &Browser) -> DialogSlots {
             browser: browser.downgrade(),
             tags: RwSignal::new_local(None),
             permissions: RwSignal::new_local(None),
-            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-            default_app: RwSignal::new_local(None),
+            #[cfg(target_os = "linux")]
+            comment: RwSignal::new_local(None),
+            details_revision: RwSignal::new_local(0),
         }
     });
     DIALOGS.with(|map| {
@@ -699,13 +692,6 @@ struct PropertiesInner {
     tags: RwSignal<Option<Result<Vec<String>, String>>, LocalStorage>,
     origin_url: RwSignal<Option<String>, LocalStorage>,
     comment: RwSignal<Option<Result<Option<String>, String>>, LocalStorage>,
-    comment_editing: RwSignal<bool, LocalStorage>,
-    comment_draft: RwSignal<String, LocalStorage>,
-    comment_saving: RwSignal<bool, LocalStorage>,
-    comment_error: RwSignal<Option<String>, LocalStorage>,
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    default_app:
-        RwSignal<Option<Option<gds::service::desktop::mime_apps::DesktopApp>>, LocalStorage>,
     description_version: RwSignal<u64, LocalStorage>,
     tags_enabled: bool,
 }
@@ -729,12 +715,6 @@ impl Properties {
             tags: RwSignal::new_local(None),
             origin_url: RwSignal::new_local(None),
             comment: RwSignal::new_local(None),
-            comment_editing: RwSignal::new_local(false),
-            comment_draft: RwSignal::new_local(String::new()),
-            comment_saving: RwSignal::new_local(false),
-            comment_error: RwSignal::new_local(None),
-            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-            default_app: RwSignal::new_local(None),
             description_version: RwSignal::new_local(0),
             tags_enabled,
         });
@@ -747,10 +727,6 @@ impl Properties {
         let path = entry.path.clone();
         let is_file = entry.kind == EntryKind::File;
         let is_symlink = entry.kind == EntryKind::SymbolicLink;
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let mime_for_default = is_file
-            .then(|| EntryPresentation::mime_type(&entry).map(ToOwned::to_owned))
-            .flatten();
         let missing_mime = entry
             .details
             .display_content()
@@ -765,12 +741,6 @@ impl Properties {
             tags: RwSignal::new_local(None),
             origin_url: RwSignal::new_local(None),
             comment: RwSignal::new_local(None),
-            comment_editing: RwSignal::new_local(false),
-            comment_draft: RwSignal::new_local(String::new()),
-            comment_saving: RwSignal::new_local(false),
-            comment_error: RwSignal::new_local(None),
-            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-            default_app: RwSignal::new_local(None),
             description_version: RwSignal::new_local(0),
             tags_enabled,
         });
@@ -780,10 +750,6 @@ impl Properties {
         }
         if is_file {
             props.load_origin_url();
-        }
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        if let Some(mime) = mime_for_default {
-            props.load_default_app(mime);
         }
         if cfg!(target_os = "linux") && !is_symlink {
             props.load_comment();
@@ -842,7 +808,7 @@ impl Properties {
                 }));
             }
 
-            let props_body = props.view(None, false);
+            let props_body = props.view(false);
             view! {
                 box(
                     node_ref = root_ref,
@@ -900,17 +866,9 @@ impl Properties {
                 Ok(entry) => {
                     let is_file = entry.kind == EntryKind::File;
                     let is_symlink = entry.kind == EntryKind::SymbolicLink;
-                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                    let mime_for_default = is_file
-                        .then(|| EntryPresentation::mime_type(&entry).map(ToOwned::to_owned))
-                        .flatten();
                     target.0.entry.set(EntryState::Ready(entry));
                     if is_file {
                         target.load_origin_url();
-                    }
-                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                    if let Some(mime) = mime_for_default {
-                        target.load_default_app(mime);
                     }
                     if cfg!(target_os = "linux") && !is_symlink {
                         target.load_comment();
@@ -923,27 +881,6 @@ impl Properties {
                     target.0.entry.set(EntryState::Failed(message));
                 }
             }
-        }));
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    fn load_default_app(&self, mime: String) {
-        let weak = Rc::downgrade(&self.0);
-        let task =
-            self.0
-                .scope
-                .spawn_blocking_named("Resolve default MIME application", move || {
-                    gds::service::desktop::mime_apps::resolve_system(&mime)
-                        .and_then(|assoc| assoc.default_app)
-                });
-        drop(spawn_local(async move {
-            let Ok(app) = task.await else {
-                return;
-            };
-            let Some(inner) = weak.upgrade() else {
-                return;
-            };
-            inner.default_app.set(Some(app));
         }));
     }
 
@@ -985,49 +922,6 @@ impl Properties {
                 return;
             };
             inner.comment.set(Some(result));
-        }));
-    }
-
-    fn save_comment(&self) {
-        if self.0.comment_saving.get_untracked() {
-            return;
-        }
-        let draft = self.0.comment_draft.get_untracked();
-        let normalized = {
-            let trimmed = draft.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_owned())
-        };
-        self.0.comment_saving.set(true);
-        self.0.comment_error.set(None);
-        let weak = Rc::downgrade(&self.0);
-        let path = self.0.path.clone();
-        let write_value = normalized.clone();
-        let task = self
-            .0
-            .scope
-            .spawn_blocking_named("Write file comment", move || {
-                file_tags::write_comment(&path, write_value.as_deref())
-                    .map_err(|err| err.to_string())
-            });
-        drop(spawn_local(async move {
-            let result = task
-                .await
-                .map_err(|err| err.to_string())
-                .and_then(std::convert::identity);
-            let Some(inner) = weak.upgrade() else {
-                return;
-            };
-            inner.comment_saving.set(false);
-            match result {
-                Ok(()) => {
-                    inner.comment.set(Some(Ok(normalized)));
-                    inner.comment_editing.set(false);
-                    inner.comment_error.set(None);
-                }
-                Err(err) => {
-                    inner.comment_error.set(Some(err));
-                }
-            }
         }));
     }
 
@@ -1223,219 +1117,51 @@ impl Properties {
         rows
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    fn default_app_section(&self, browser: Option<&Browser>, entry: &Entry) -> Option<AnyView> {
-        if entry.kind != EntryKind::File {
-            return None;
-        }
-        let mime = EntryPresentation::mime_type(entry)?.to_owned();
-        let default_app_sig = self.0.default_app;
-        let edit_browser = browser.cloned();
-
-        Some(AnyView::new(view! {
-            column(class = "gds-files-details__tags-section") {
-                row(class = "gds-files-details__tags-header") {
-                    text(class = "gds-files-details__label") {{i18n::text("details-default-app")}}
-                    {edit_browser.map(|b| {
-                        let edit_mime = mime.clone();
-                        view! {
-                            Button(
-                                variant = ButtonVariant::Ghost,
-                                size = ButtonSize::Sm,
-                                on:click = move |_| {
-                                    let sig = default_app_sig;
-                                    b.edit_default_app(edit_mime.clone(), move |app| {
-                                        let _ = sig.try_set(Some(Some(app)));
-                                    });
-                                },
-                            ) {{i18n::text("details-default-app-change")}}
-                        }
-                        .into_view()
-                    })}
-                }
-                {move || match default_app_sig.get() {
-                    None => AnyView::new(view! {
-                        text(class = "gds-files-details__label") {{i18n::text("loading")}}
-                    }),
-                    Some(None) => AnyView::new(view! {
-                        text(class = "gds-files-details__label") {{i18n::text("details-default-app-none")}}
-                    }),
-                    Some(Some(app)) => AnyView::new(view! {
-                        text(class = "gds-files-details__value") {{app.name}}
-                    }),
-                }}
-            }
-        }))
-    }
-
     fn comment_section(&self, entry_kind: EntryKind) -> Option<AnyView> {
         if !cfg!(target_os = "linux") || entry_kind == EntryKind::SymbolicLink {
             return None;
         }
         let comment_sig = self.0.comment;
-        let editing_sig = self.0.comment_editing;
-        let draft_sig = self.0.comment_draft;
-        let saving_sig = self.0.comment_saving;
-        let error_sig = self.0.comment_error;
-        let props_save = self.clone();
-        let props_enter = self.clone();
-
-        Some(AnyView::new(view! {
-            column(class = "gds-files-details__tags-section") {
-                row(class = "gds-files-details__tags-header") {
+        Some(AnyView::new(move || match comment_sig.get() {
+            Some(Ok(Some(comment))) => AnyView::new(view! {
+                column(class = "gds-files-details__tags-section") {
                     text(class = "gds-files-details__label") {{i18n::text("details-comment")}}
-                    {move || (!editing_sig.get()).then(|| {
-                        view! {
-                            Button(
-                                variant = ButtonVariant::Ghost,
-                                size = ButtonSize::Sm,
-                                on:click = move |_| {
-                                    let initial = comment_sig
-                                        .get_untracked()
-                                        .and_then(Result::ok)
-                                        .flatten()
-                                        .unwrap_or_default();
-                                    draft_sig.set(initial);
-                                    error_sig.set(None);
-                                    editing_sig.set(true);
-                                },
-                            ) {{i18n::text("details-comment-edit")}}
-                        }
-                        .into_view()
-                    })}
+                    text(class = "gds-files-details__comment-text") {{comment}}
                 }
-                {move || if editing_sig.get() {
-                    let save_click = props_save.clone();
-                    let save_key = props_enter.clone();
-                    let disabled = Signal::derive_local(move || saving_sig.get());
-                    AnyView::new(view! {
-                        column(class = "gds-files-details__comment-editor") {
-                            Input(
-                                value = Binding::controlled(
-                                    draft_sig.read_only(),
-                                    move |next: String| draft_sig.set(next),
-                                ),
-                                placeholder = i18n::text("details-comment-placeholder"),
-                                disabled = disabled,
-                                on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
-                                    if ev.repeat {
-                                        return;
-                                    }
-                                    if ev.key == Key::Named(NamedKey::Enter) && ev.modifiers.is_empty() {
-                                        ev.prevent_default();
-                                        ev.stop_propagation();
-                                        save_key.save_comment();
-                                    } else if ev.key == Key::Named(NamedKey::Escape)
-                                        && ev.modifiers.is_empty()
-                                        && !saving_sig.get_untracked()
-                                    {
-                                        ev.prevent_default();
-                                        ev.stop_propagation();
-                                        editing_sig.set(false);
-                                        error_sig.set(None);
-                                    }
-                                },
-                            ) {}
-                            {move || error_sig.get().map(|err| {
-                                view! {
-                                    text(class = "gds-files-permissions-error") {{err}}
-                                }
-                                .into_view()
-                            })}
-                            row(class = "gds-files-details__comment-actions") {
-                                Button(
-                                    variant = ButtonVariant::Ghost,
-                                    size = ButtonSize::Sm,
-                                    disabled = disabled,
-                                    on:click = move |_| {
-                                        editing_sig.set(false);
-                                        error_sig.set(None);
-                                    },
-                                ) {{i18n::text("operation-cancel")}}
-                                Button(
-                                    variant = ButtonVariant::Default,
-                                    size = ButtonSize::Sm,
-                                    disabled = disabled,
-                                    on:click = move |_| save_click.save_comment(),
-                                ) {{i18n::text("permissions-save")}}
-                            }
-                        }
-                    })
-                } else {
-                    match comment_sig.get() {
-                        None => AnyView::new(view! {
-                            text(class = "gds-files-details__label") {{i18n::text("loading")}}
-                        }),
-                        Some(Err(err)) => AnyView::new(view! {
-                            text(class = "gds-files-permissions-error") {{err}}
-                        }),
-                        Some(Ok(None)) => AnyView::new(view! {
-                            text(class = "gds-files-details__label") {{i18n::text("details-comment-none")}}
-                        }),
-                        Some(Ok(Some(comment))) => AnyView::new(view! {
-                            text(class = "gds-files-details__value") {{comment}}
-                        }),
-                    }
-                }}
-            }
+            }),
+            _ => AnyView::new(()),
         }))
     }
 
-    fn tags_section(&self, browser: Option<&Browser>, entry_kind: EntryKind) -> Option<AnyView> {
+    fn tags_section(&self, entry_kind: EntryKind) -> Option<AnyView> {
         if !self.0.tags_enabled || entry_kind == EntryKind::SymbolicLink {
             return None;
         }
         let tags_sig = self.0.tags;
-        let path = self.0.path.clone();
-        let edit_browser = browser.cloned();
-
-        Some(AnyView::new(view! {
-            column(class = "gds-files-details__tags-section") {
-                row(class = "gds-files-details__tags-header") {
-                    text(class = "gds-files-details__label") {{i18n::text("tags-title")}}
-                    {edit_browser.map(|b| {
-                        let edit_path = path.clone();
-                        view! {
-                            Button(
-                                variant = ButtonVariant::Ghost,
-                                size = ButtonSize::Sm,
-                                on:click = move |_| b.edit_tags(edit_path.clone()),
-                            ) {{i18n::text("tags-edit")}}
-                        }
-                        .into_view()
-                    })}
-                }
-                {move || match tags_sig.get() {
-                    None => AnyView::new(view! {
-                        text(class = "gds-files-details__label") {{i18n::text("tags-loading")}}
-                    }),
-                    Some(Err(err)) => AnyView::new(view! {
-                        text(class = "gds-files-permissions-error") {{err}}
-                    }),
-                    Some(Ok(list)) if list.is_empty() => AnyView::new(view! {
-                        text(class = "gds-files-details__label") {{i18n::text("tags-none")}}
-                    }),
-                    Some(Ok(list)) => {
-                        let chips: Vec<AnyView> = list
-                            .into_iter()
-                            .map(|tag| {
-                                AnyView::new(view! {
-                                    text(class = "gds-files-details__tag-chip") {{tag}}
-                                })
-                            })
-                            .collect();
+        Some(AnyView::new(move || match tags_sig.get() {
+            Some(Ok(list)) if !list.is_empty() => {
+                let chips: Vec<AnyView> = list
+                    .into_iter()
+                    .map(|tag| {
                         AnyView::new(view! {
-                            row(class = "gds-files-details__tags-list") {
-                                {chips}
-                            }
+                            text(class = "gds-files-details__tag-chip") {{tag}}
                         })
+                    })
+                    .collect();
+                AnyView::new(view! {
+                    column(class = "gds-files-details__tags-section") {
+                        text(class = "gds-files-details__label") {{i18n::text("tags-title")}}
+                        row(class = "gds-files-details__tags-list") {
+                            {chips}
+                        }
                     }
-                }}
+                })
             }
+            _ => AnyView::new(()),
         }))
     }
 
-    fn view(&self, browser: Option<Browser>, panel_chrome: bool) -> AnyView {
+    fn view(&self, panel_chrome: bool) -> AnyView {
         install_inspection_stylesheet();
         let entry_sig = self.0.entry;
         let desc_ver = self.0.description_version;
@@ -1510,17 +1236,12 @@ impl Properties {
                         if let Some(meta) = metadata_ref {
                             all_rows.extend(Self::fact_rows(meta));
                         }
-                        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                        let default_app_view = props.default_app_section(browser.as_ref(), &entry);
-                        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-                        let default_app_view: Option<AnyView> = None;
                         let comment_view = props.comment_section(entry.kind);
-                        let tags_view = props.tags_section(browser.as_ref(), entry.kind);
+                        let tags_view = props.tags_section(entry.kind);
                         let body = AnyView::new(view! {
                             column(class = "gds-files-details__rows") {
                                 {all_rows}
                             }
-                            {default_app_view}
                             {comment_view}
                             {tags_view}
                         });
@@ -2080,13 +1801,13 @@ fn static_row_details(browser: &Browser, row: &Row) -> AnyView {
 impl Browser {
     pub(super) fn has_open_inspection_dialog(&self) -> bool {
         let slots = dialog_slots(self);
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let has_default_app = slots.default_app.get_untracked().is_some();
-        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-        let has_default_app = false;
+        #[cfg(target_os = "linux")]
+        let has_comment = slots.comment.get_untracked().is_some();
+        #[cfg(not(target_os = "linux"))]
+        let has_comment = false;
         slots.tags.get_untracked().is_some()
             || slots.permissions.get_untracked().is_some()
-            || has_default_app
+            || has_comment
     }
 
     pub(super) fn cancel_inspection_dialog(&self) -> bool {
@@ -2103,68 +1824,68 @@ impl Browser {
             }
             return true;
         }
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        if let Some(editor) = slots.default_app.get_untracked() {
+        #[cfg(target_os = "linux")]
+        if let Some(editor) = slots.comment.get_untracked() {
             if !editor.is_saving_untracked() {
-                slots.default_app.set(None);
+                slots.comment.set(None);
             }
             return true;
         }
         false
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    pub(super) fn edit_default_app(
-        &self,
-        mime: String,
-        on_updated: impl Fn(gds::service::desktop::mime_apps::DesktopApp) + 'static,
-    ) {
+    #[cfg(target_os = "linux")]
+    pub(super) fn edit_comment(&self, path: PathBuf) {
         self.0.menus.close();
         let slots = dialog_slots(self);
         if slots
-            .default_app
+            .comment
             .get_untracked()
             .as_ref()
-            .is_some_and(default_app::DefaultAppEditor::is_saving_untracked)
+            .is_some_and(comment::CommentEditor::is_saving_untracked)
         {
             return;
         }
-        let editor = default_app::DefaultAppEditor::new(self, mime, on_updated);
-        slots.default_app.set(Some(editor));
+        let editor = comment::CommentEditor::new(self, path);
+        slots.comment.set(Some(editor.clone()));
+        editor.focus();
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    pub(super) fn default_app_dialog(&self) -> AnyView {
+    #[cfg(target_os = "linux")]
+    pub(super) fn comment_dialog(&self) -> AnyView {
         install_inspection_stylesheet();
         let slots = dialog_slots(self);
-        let app_sig = slots.default_app;
-        let open = Signal::derive_local(move || app_sig.get().is_some());
+        let comment_sig = slots.comment;
+        let open = Signal::derive_local(move || comment_sig.get().is_some());
         let can_dismiss = Signal::derive_local(move || {
-            !app_sig
+            !comment_sig
                 .get()
                 .as_ref()
-                .is_some_and(default_app::DefaultAppEditor::is_saving)
+                .is_some_and(comment::CommentEditor::is_saving)
         });
         let modal_disabled = Signal::derive_local(move || {
-            !app_sig
+            !comment_sig
                 .get()
                 .as_ref()
-                .is_some_and(default_app::DefaultAppEditor::can_save)
+                .is_some_and(|editor| editor.available() && !editor.is_saving())
         });
         let on_modal_decision =
             UnsyncCallback::new(move |decision: DialogDecision| match decision {
                 DialogDecision::Confirm => {
-                    if let Some(editor) = app_sig.get_untracked() {
-                        editor.save(move || app_sig.set(None));
+                    if let Some(editor) = comment_sig.get_untracked()
+                        && editor.available_untracked()
+                        && !editor.is_saving_untracked()
+                    {
+                        editor.save(move || comment_sig.set(None));
                     }
                 }
                 DialogDecision::Cancel | DialogDecision::Dismiss => {
-                    if !app_sig
+                    if !comment_sig
                         .get_untracked()
                         .as_ref()
-                        .is_some_and(default_app::DefaultAppEditor::is_saving_untracked)
+                        .is_some_and(comment::CommentEditor::is_saving_untracked)
                     {
-                        app_sig.set(None);
+                        comment_sig.set(None);
                     }
                 }
             });
@@ -2173,12 +1894,12 @@ impl Browser {
             ModalDialog(
                 open = Binding::controlled(open, move |next: bool| {
                     if !next
-                        && !app_sig
+                        && !comment_sig
                             .get_untracked()
                             .as_ref()
-                            .is_some_and(default_app::DefaultAppEditor::is_saving_untracked)
+                            .is_some_and(comment::CommentEditor::is_saving_untracked)
                     {
-                        app_sig.set(None);
+                        comment_sig.set(None);
                     }
                 }),
                 size = DialogSize::Md,
@@ -2188,31 +1909,46 @@ impl Browser {
                 close_on_confirm = false,
                 on_decision = on_modal_decision,
             ) {
-                {move || match app_sig.get() {
+                {move || match comment_sig.get() {
                     None => AnyView::new(()),
                     Some(editor) => {
-                        let mime_label = editor.mime().to_owned();
-                        let fields = editor.fields();
-                        let save_disabled = Signal::derive_local(move || {
-                            !app_sig
-                                .get()
-                                .as_ref()
-                                .is_some_and(default_app::DefaultAppEditor::can_save)
+                        let full_path = editor.path().display().to_string();
+                        let title_path = editor
+                            .path()
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| full_path.clone());
+                        let submit_sig = comment_sig;
+                        let fields = editor.fields(move || {
+                            if let Some(active) = submit_sig.get_untracked()
+                                && active.available_untracked()
+                                && !active.is_saving_untracked()
+                            {
+                                active.save(move || submit_sig.set(None));
+                            }
+                        });
+                        let disabled = Signal::derive_local(move || {
+                            !editor.available() || editor.is_saving()
                         });
                         AnyView::new(view! {
                             column(class = "gds-files-dialog-body") {
                                 DialogHeader {
-                                    DialogTitle {{i18n::text("details-default-app-title")}}
-                                    DialogDescription(class = "gds-files-dialog-desc") {
-                                        {mime_label}
+                                    DialogTitle {{i18n::text("details-comment-title")}}
+                                    box(class = "gds-files-dialog-desc-wrap") {
+                                        HintTooltip(text = full_path) {
+                                            DialogDescription(class = "gds-files-dialog-desc") {
+                                                {title_path}
+                                            }
+                                        }
                                     }
                                 }
                                 {fields}
                                 DialogFooter {
                                     DialogActions(
-                                        primary_label = i18n::text("details-default-app-confirm"),
+                                        primary_label = i18n::text("permissions-save"),
                                         cancel_label = i18n::text("operation-cancel"),
-                                        disabled = save_disabled,
+                                        disabled = disabled,
                                         on_decision = on_modal_decision,
                                     )
                                 }
@@ -2600,8 +2336,10 @@ impl Browser {
     pub(super) fn details_view(&self) -> AnyView {
         install_inspection_stylesheet();
         let browser = self.clone();
-        let cached_entry: Rc<RefCell<Option<(PathBuf, Option<(i64, i64)>, bool, Properties)>>> =
-            Rc::new(RefCell::new(None));
+        let cached_entry: Rc<
+            RefCell<Option<(PathBuf, Option<(i64, i64)>, bool, u64, Properties)>>,
+        > = Rc::new(RefCell::new(None));
+        let details_rev = dialog_slots(self).details_revision;
         let multi_dir_job = Rc::new(RefCell::new(MultiDirSizeJob::new()));
         let multi_dir_sig = self.0.owner.with(|| {
             let job_cleanup = Rc::clone(&multi_dir_job);
@@ -2803,6 +2541,7 @@ impl Browser {
 
             let row = &selected[0];
             let tags_enabled = browser.tags_enabled();
+            let rev = details_rev.get();
             let local_entry_or_place: Option<Entry> = match row {
                 Row::File(entry) => Some(entry.clone()),
                 Row::Place(Location::Directory(path)) => {
@@ -2811,10 +2550,13 @@ impl Browser {
                         let cache_hit = cached_entry
                             .borrow()
                             .as_ref()
-                            .filter(|(p, rev, enabled, _)| {
-                                *p == path_buf && rev.is_none() && *enabled == tags_enabled
+                            .filter(|(p, changed, enabled, cached_rev, _)| {
+                                *p == path_buf
+                                    && changed.is_none()
+                                    && *enabled == tags_enabled
+                                    && *cached_rev == rev
                             })
-                            .map(|(_, _, _, props)| props.clone());
+                            .map(|(_, _, _, _, props)| props.clone());
                         if let Some(hit) = cache_hit {
                             hit
                         } else {
@@ -2826,11 +2568,11 @@ impl Browser {
                                 Properties::new_with_tags(path_buf.clone(), scope, tags_enabled)
                             });
                             *cached_entry.borrow_mut() =
-                                Some((path_buf, None, tags_enabled, created.clone()));
+                                Some((path_buf, None, tags_enabled, rev, created.clone()));
                             created
                         }
                     };
-                    return props.view(Some(browser.clone()), true);
+                    return props.view(true);
                 }
                 _ => None,
             };
@@ -2840,12 +2582,13 @@ impl Browser {
                     let cache_hit = cached_entry
                         .borrow()
                         .as_ref()
-                        .filter(|(p, rev, enabled, _)| {
+                        .filter(|(p, changed, enabled, cached_rev, _)| {
                             *p == entry.path
-                                && *rev == entry.details.changed
+                                && *changed == entry.details.changed
                                 && *enabled == tags_enabled
+                                && *cached_rev == rev
                         })
-                        .map(|(_, _, _, props)| props.clone());
+                        .map(|(_, _, _, _, props)| props.clone());
                     if let Some(hit) = cache_hit {
                         hit
                     } else {
@@ -2859,12 +2602,13 @@ impl Browser {
                             entry.path.clone(),
                             entry.details.changed,
                             tags_enabled,
+                            rev,
                             created.clone(),
                         ));
                         created
                     }
                 };
-                return props.view(Some(browser.clone()), true);
+                return props.view(true);
             }
 
             static_row_details(&browser, row)

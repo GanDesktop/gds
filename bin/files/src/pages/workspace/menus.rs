@@ -1707,6 +1707,17 @@ impl Browser {
                     Browser::edit_selected_tags,
                 ));
             }
+            #[cfg(target_os = "linux")]
+            if entry.kind != crate::entities::file::directory::EntryKind::SymbolicLink {
+                let comment_path = entry.path.clone();
+                entries.push(self.menu_item_entry(
+                    "details-comment-menu",
+                    Some(IconName::MessageSquare),
+                    None,
+                    busy,
+                    move |browser| browser.edit_comment(comment_path.clone()),
+                ));
+            }
             entries.push(MenuEntry::Separator);
         }
         let remove_paths = selected_paths;
@@ -1856,6 +1867,17 @@ impl Browser {
                     None,
                     busy || unavailable,
                     Browser::edit_selected_tags,
+                ));
+            }
+            #[cfg(target_os = "linux")]
+            if entry.kind != crate::entities::file::directory::EntryKind::SymbolicLink {
+                let entry_comment = entry.path.clone();
+                entries.push(self.menu_item_entry(
+                    "details-comment-menu",
+                    Some(IconName::MessageSquare),
+                    None,
+                    busy || unavailable,
+                    move |browser| browser.edit_comment(entry_comment.clone()),
                 ));
             }
             #[cfg(unix)]
@@ -2300,10 +2322,10 @@ impl Browser {
         let popup_browser = self.clone();
         let permissions_view = self.permissions_dialog();
         let tags_view = self.tags_dialog();
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let default_app_view = self.default_app_dialog();
-        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-        let default_app_view = AnyView::new(());
+        #[cfg(target_os = "linux")]
+        let comment_view = self.comment_dialog();
+        #[cfg(not(target_os = "linux"))]
+        let comment_view = AnyView::new(());
 
         AnyView::new(view! {
             box(class = "gds-files-menu-overlay") {
@@ -2349,7 +2371,7 @@ impl Browser {
                 }
                 {permissions_view}
                 {tags_view}
-                {default_app_view}
+                {comment_view}
             }
         })
     }
