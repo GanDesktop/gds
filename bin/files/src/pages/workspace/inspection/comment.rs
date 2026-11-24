@@ -1,10 +1,6 @@
-//! Modal comment editor backed by FreeDesktop `user.xdg.comment` extended attributes.
+//! Comment tab editor backed by FreeDesktop `user.xdg.comment` extended attributes.
 
-use std::{
-    cell::RefCell,
-    path::{Path, PathBuf},
-    rc::Rc,
-};
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gds::{i18n, service::file_tags};
 use zgui::prelude::*;
@@ -61,6 +57,7 @@ struct CommentEditorInner {
     path: PathBuf,
     input_ref: NodeRef,
     draft: RwSignal<String, LocalStorage>,
+    original: RefCell<Option<String>>,
     loading: RwSignal<bool, LocalStorage>,
     saving: RwSignal<bool, LocalStorage>,
     load_failed: RwSignal<bool, LocalStorage>,
@@ -73,13 +70,14 @@ struct CommentEditorInner {
 pub(super) struct CommentEditor(Rc<CommentEditorInner>);
 
 impl CommentEditor {
-    pub(super) fn new(browser: &Browser, path: PathBuf) -> Self {
+    pub(super) fn new(browser: &Browser, path: PathBuf, auto_focus: bool) -> Self {
         let editor = browser.0.owner.with(|| {
             Self(Rc::new(CommentEditorInner {
                 browser: browser.downgrade(),
                 path,
                 input_ref: NodeRef::new(),
                 draft: RwSignal::new_local(String::new()),
+                original: RefCell::new(None),
                 loading: RwSignal::new_local(true),
                 saving: RwSignal::new_local(false),
                 load_failed: RwSignal::new_local(false),
@@ -88,11 +86,11 @@ impl CommentEditor {
                 pending_focus: RefCell::new(None),
             }))
         });
-        editor.load();
+        editor.load(auto_focus);
         editor
     }
 
-    fn load(&self) {
+    fn load(&self, auto_focus: bool) {
         let Some(browser) = self.0.browser.upgrade() else {
             return;
         };
@@ -109,10 +107,13 @@ impl CommentEditor {
                 editor.0.loading.set(false);
                 match result {
                     Ok(comment) => {
+                        *editor.0.original.borrow_mut() = comment.clone();
                         editor.0.draft.set(comment.unwrap_or_default());
                         editor.0.load_failed.set(false);
                         editor.0.error.set(None);
-                        editor.focus();
+                        if auto_focus {
+                            editor.focus();
+                        }
                     }
                     Err(message) => {
                         editor.0.load_failed.set(true);
@@ -123,8 +124,14 @@ impl CommentEditor {
         );
     }
 
-    pub(super) fn path(&self) -> &Path {
-        &self.0.path
+    fn normalized_draft(&self) -> Option<String> {
+        let draft = self.0.draft.get_untracked();
+        let trimmed = draft.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    }
+
+    pub(super) fn is_loading(&self) -> bool {
+        self.0.loading.get()
     }
 
     pub(super) fn is_saving(&self) -> bool {
@@ -141,6 +148,10 @@ impl CommentEditor {
 
     pub(super) fn available_untracked(&self) -> bool {
         !self.0.loading.get_untracked() && !self.0.load_failed.get_untracked()
+    }
+
+    pub(super) fn has_changes_untracked(&self) -> bool {
+        self.available_untracked() && self.normalized_draft() != *self.0.original.borrow()
     }
 
     pub(super) fn focus(&self) {
@@ -161,33 +172,35 @@ impl CommentEditor {
         }
     }
 
-    pub(super) fn save(&self, complete: impl FnOnce() + 'static) {
+    pub(super) fn save_result(&self, on_done: impl FnOnce(Result<(), ()>) + 'static) {
         if !self.available_untracked() || self.is_saving_untracked() {
+            on_done(Ok(()));
+            return;
+        }
+        let normalized = self.normalized_draft();
+        if normalized == *self.0.original.borrow() {
+            on_done(Ok(()));
             return;
         }
         let Some(browser) = self.0.browser.upgrade() else {
+            on_done(Err(()));
             return;
         };
-        let draft = self.0.draft.get_untracked();
-        let normalized = {
-            let trimmed = draft.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_owned())
-        };
         let save_path = self.0.path.clone();
-        let refresh_path = self.0.path.clone();
+        let write_value = normalized.clone();
         let weak = Rc::downgrade(&self.0);
 
         self.0.saving.set(true);
         self.0.error.set(None);
 
-        let done = RefCell::new(Some(Box::new(complete) as Box<dyn FnOnce()>));
+        let done = RefCell::new(Some(Box::new(on_done) as Box<dyn FnOnce(Result<(), ()>)>));
         browser.blocking(
             "Write file comment",
             move || {
-                file_tags::write_comment(&save_path, normalized.as_deref())
+                file_tags::write_comment(&save_path, write_value.as_deref())
                     .map_err(|err| err.to_string())
             },
-            move |browser, result| {
+            move |_browser, result| {
                 let Some(inner) = weak.upgrade() else {
                     return;
                 };
@@ -195,15 +208,16 @@ impl CommentEditor {
                 editor.0.saving.set(false);
                 match result {
                     Ok(()) => {
-                        browser.report_success(i18n::text_untracked("details-comment-saved"));
-                        browser.refresh_affected(&[refresh_path]);
-                        super::bump_details_revision(browser);
+                        *editor.0.original.borrow_mut() = normalized;
                         if let Some(callback) = done.borrow_mut().take() {
-                            callback();
+                            callback(Ok(()));
                         }
                     }
                     Err(message) => {
                         editor.0.error.set(Some(message));
+                        if let Some(callback) = done.borrow_mut().take() {
+                            callback(Err(()));
+                        }
                     }
                 }
             },

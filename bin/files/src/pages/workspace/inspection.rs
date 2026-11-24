@@ -1,7 +1,8 @@
-//! Properties, content inspection, permissions, comment, and tags dialogs share existing services.
+//! Properties, content inspection, and unified item editor dialog share existing services.
 
 #[cfg(target_os = "linux")]
 mod comment;
+pub(super) mod editor;
 mod info;
 pub(super) mod tags;
 
@@ -20,7 +21,7 @@ use gds::app::Gds;
 use gds::service::file_inspection::{FileFacts, Metadata, Request, Source as InspectionSource};
 use gds::service::file_tags;
 use gds::service::task_manager::Scope;
-use gds::ui::button::ButtonVariant;
+use gds::ui::button::{ButtonProps, ButtonSize, ButtonVariant};
 use gds::ui::capacity::CapacityBarProps;
 use gds::ui::feedback::dialog::{
     DialogActionsProps, DialogDecision, DialogDescriptionProps, DialogFooterProps,
@@ -44,7 +45,7 @@ use zgui::runtime::{WindowHandle, try_use_windows};
 use zgui::view::{Either, EventCx, current_host, events, install_stylesheet};
 use zgui::vocab::{Key, Modifiers, NamedKey};
 use zgui::{css, view};
-use zgui_ui::{ButtonProps, CheckboxProps, Checked, LabelProps, SpinnerProps};
+use zgui_ui::{CheckboxProps, Checked, LabelProps, SpinnerProps};
 use zgui_ui_primitives::Binding;
 
 use crate::entities::file::{
@@ -59,7 +60,7 @@ use super::{
     model::{Contents, Row},
     ui::{Browser, WeakBrowser},
 };
-use tags::TagEditor;
+use editor::EditTab;
 
 const INSPECTION_SHEET: &str = "gds-files-workspace-inspection";
 
@@ -150,11 +151,35 @@ pub(super) const INSPECTION_CSS: &str = css!(
         width: 100%;
         min-width: 0;
         min-height: 0;
-        overflow-y: auto;
-        overflow-x: hidden;
+        overflow: hidden;
         box-sizing: border-box;
         background: transparent;
         border-left: 1px solid var(--gds-border);
+    }
+
+    .gds-files-details__scroll {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0%;
+        width: 100%;
+        min-width: 0;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+
+    .gds-files-details__footer {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        flex-shrink: 0;
+        padding: 10px 14px;
+        border-top: 1px solid var(--gds-border);
+        box-sizing: border-box;
+    }
+
+    .gds-files-details__edit-btn {
+        width: 100%;
     }
 
     .gds-files-details__empty {
@@ -434,10 +459,7 @@ fn install_inspection_stylesheet() {
 #[derive(Clone)]
 struct DialogSlots {
     browser: WeakBrowser,
-    tags: RwSignal<Option<TagEditor>, LocalStorage>,
-    permissions: RwSignal<Option<PermissionEditor>, LocalStorage>,
-    #[cfg(target_os = "linux")]
-    comment: RwSignal<Option<comment::CommentEditor>, LocalStorage>,
+    editor: RwSignal<Option<editor::ItemEditor>, LocalStorage>,
     details_revision: RwSignal<u64, LocalStorage>,
 }
 
@@ -474,10 +496,7 @@ fn dialog_slots(browser: &Browser) -> DialogSlots {
         });
         DialogSlots {
             browser: browser.downgrade(),
-            tags: RwSignal::new_local(None),
-            permissions: RwSignal::new_local(None),
-            #[cfg(target_os = "linux")]
-            comment: RwSignal::new_local(None),
+            editor: RwSignal::new_local(None),
             details_revision: RwSignal::new_local(0),
         }
     });
@@ -667,10 +686,12 @@ fn details_content_view(hero: AnyView, body: AnyView) -> AnyView {
     #[cfg(test)]
     tests::record_details_body_node(body_ref);
     AnyView::new(view! {
-        column(class = "gds-files-details__content") {
-            {hero}
-            column(node_ref = body_ref, class = "gds-files-details__body") {
-                {body}
+        column(class = "gds-files-details__scroll") {
+            column(class = "gds-files-details__content") {
+                {hero}
+                column(node_ref = body_ref, class = "gds-files-details__body") {
+                    {body}
+                }
             }
         }
     })
@@ -808,7 +829,7 @@ impl Properties {
                 }));
             }
 
-            let props_body = props.view(false);
+            let props_body = props.view(None, false);
             view! {
                 box(
                     node_ref = root_ref,
@@ -1161,7 +1182,7 @@ impl Properties {
         }))
     }
 
-    fn view(&self, panel_chrome: bool) -> AnyView {
+    fn view(&self, browser: Option<Browser>, panel_chrome: bool) -> AnyView {
         install_inspection_stylesheet();
         let entry_sig = self.0.entry;
         let desc_ver = self.0.description_version;
@@ -1178,6 +1199,7 @@ impl Properties {
             .map(|name| name.to_string_lossy().into_owned())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| self.0.path.display().to_string());
+        let edit_browser = browser.filter(|_| panel_chrome);
 
         AnyView::new(view! {
             column(class = class_name) {
@@ -1245,8 +1267,38 @@ impl Properties {
                             {comment_view}
                             {tags_view}
                         });
+                        let edit_footer = edit_browser
+                            .as_ref()
+                            .filter(|b| {
+                                entry.kind != EntryKind::SymbolicLink
+                                    && editor::has_editable_tabs(b)
+                            })
+                            .map(|b| {
+                                let click_browser = b.clone();
+                                let click_entry = entry.clone();
+                                view! {
+                                    box(class = "gds-files-details__footer") {
+                                        Button(
+                                            variant = ButtonVariant::Outline,
+                                            size = ButtonSize::Sm,
+                                            icon = IconName::Pencil,
+                                            class = "gds-files-details__edit-btn",
+                                            on:click = move |_| {
+                                                click_browser.edit_item_properties(
+                                                    click_entry.clone(),
+                                                    None,
+                                                );
+                                            },
+                                        ) {{i18n::text("details-edit-properties-action")}}
+                                    }
+                                }
+                                .into_view()
+                            });
 
-                        Either::Right(details_content_view(hero, body))
+                        Either::Right(view! {
+                            {details_content_view(hero, body)}
+                            {edit_footer}
+                        })
                     }
                 }}
             }
@@ -1256,9 +1308,10 @@ impl Properties {
 
 struct PermissionEditorInner {
     browser: WeakBrowser,
-    entry: Entry,
-    directory: bool,
+    path: PathBuf,
+    directory: RwSignal<bool, LocalStorage>,
     mode: RwSignal<u32, LocalStorage>,
+    original_mode: RefCell<u32>,
     recursive: RwSignal<bool, LocalStorage>,
     loading: RwSignal<bool, LocalStorage>,
     saving: RwSignal<bool, LocalStorage>,
@@ -1267,11 +1320,12 @@ struct PermissionEditorInner {
 }
 
 #[derive(Clone)]
-struct PermissionEditor(Rc<PermissionEditorInner>);
+pub(super) struct PermissionEditor(Rc<PermissionEditorInner>);
 
 impl PermissionEditor {
-    fn new(browser: &Browser, entry: Entry) -> Self {
+    pub(super) fn new(browser: &Browser, entry: Entry) -> Self {
         let directory = entry.kind == EntryKind::Directory;
+        let is_symlink = entry.kind == EntryKind::SymbolicLink;
         let initial_mode = entry
             .details
             .permissions
@@ -1280,9 +1334,10 @@ impl PermissionEditor {
         let editor = browser.0.owner.with(|| {
             Self(Rc::new(PermissionEditorInner {
                 browser: browser.downgrade(),
-                entry: entry.clone(),
-                directory,
+                path: entry.path.clone(),
+                directory: RwSignal::new_local(directory),
                 mode: RwSignal::new_local(initial_mode),
+                original_mode: RefCell::new(initial_mode),
                 recursive: RwSignal::new_local(false),
                 loading: RwSignal::new_local(true),
                 saving: RwSignal::new_local(false),
@@ -1291,7 +1346,7 @@ impl PermissionEditor {
             }))
         });
 
-        if entry.kind == EntryKind::SymbolicLink {
+        if is_symlink {
             editor.0.loading.set(false);
             editor.0.load_failed.set(true);
             editor
@@ -1301,11 +1356,44 @@ impl PermissionEditor {
             return editor;
         }
 
-        let weak = Rc::downgrade(&editor.0);
-        let read_path = entry.path.clone();
+        editor.load(browser);
+        editor
+    }
+
+    pub(super) fn from_path(browser: &Browser, path: PathBuf) -> Self {
+        let editor = browser.0.owner.with(|| {
+            Self(Rc::new(PermissionEditorInner {
+                browser: browser.downgrade(),
+                path,
+                directory: RwSignal::new_local(false),
+                mode: RwSignal::new_local(0o644),
+                original_mode: RefCell::new(0o644),
+                recursive: RwSignal::new_local(false),
+                loading: RwSignal::new_local(true),
+                saving: RwSignal::new_local(false),
+                load_failed: RwSignal::new_local(false),
+                error: RwSignal::new_local(None),
+            }))
+        });
+        editor.load(browser);
+        editor
+    }
+
+    fn load(&self, browser: &Browser) {
+        let weak = Rc::downgrade(&self.0);
+        let read_path = self.0.path.clone();
+        let symlink_warning = i18n::text_untracked("permissions-symlink");
         browser.blocking(
             "Read file permissions",
-            move || permissions::read(&read_path).map_err(|err| err.to_string()),
+            move || {
+                let meta = std::fs::symlink_metadata(&read_path).map_err(|err| err.to_string())?;
+                if meta.file_type().is_symlink() {
+                    return Err(symlink_warning);
+                }
+                let is_dir = meta.is_dir();
+                let mode = permissions::read(&read_path).map_err(|err| err.to_string())?;
+                Ok((mode, is_dir))
+            },
             move |_, result| {
                 let Some(inner) = weak.upgrade() else {
                     return;
@@ -1313,8 +1401,10 @@ impl PermissionEditor {
                 let target = Self(inner);
                 target.0.loading.set(false);
                 match result {
-                    Ok(mode) => {
+                    Ok((mode, is_dir)) => {
+                        target.0.directory.set(is_dir);
                         target.0.mode.set(mode);
+                        *target.0.original_mode.borrow_mut() = mode;
                         target.0.load_failed.set(false);
                         target.0.error.set(None);
                     }
@@ -1325,45 +1415,65 @@ impl PermissionEditor {
                 }
             },
         );
-        editor
     }
 
-    fn is_saving_untracked(&self) -> bool {
+    pub(super) fn is_loading(&self) -> bool {
+        self.0.loading.get()
+    }
+
+    pub(super) fn is_saving(&self) -> bool {
+        self.0.saving.get()
+    }
+
+    pub(super) fn is_saving_untracked(&self) -> bool {
         self.0.saving.get_untracked()
     }
 
-    fn can_save(&self) -> bool {
+    pub(super) fn can_save(&self) -> bool {
         !self.0.loading.get() && !self.0.load_failed.get() && !self.0.saving.get()
     }
 
-    fn save(&self, complete: impl FnOnce() + 'static) {
-        if self.0.loading.get_untracked()
-            || self.0.load_failed.get_untracked()
-            || self.0.saving.get_untracked()
-        {
+    fn can_save_untracked(&self) -> bool {
+        !self.0.loading.get_untracked()
+            && !self.0.load_failed.get_untracked()
+            && !self.0.saving.get_untracked()
+    }
+
+    pub(super) fn has_changes_untracked(&self) -> bool {
+        self.can_save_untracked()
+            && (((self.0.mode.get_untracked() & 0o777) != (*self.0.original_mode.borrow() & 0o777))
+                || (self.0.directory.get_untracked() && self.0.recursive.get_untracked()))
+    }
+
+    pub(super) fn save_result(&self, on_done: impl FnOnce(Result<(), ()>) + 'static) {
+        if !self.can_save_untracked() {
+            on_done(Ok(()));
             return;
         }
         let Some(browser) = self.0.browser.upgrade() else {
+            on_done(Err(()));
             return;
         };
-        let path = self.0.entry.path.clone();
+        let path = self.0.path.clone();
         // `permissions::save` and `permissions::apply_cancellable` read fstat and preserve
         // all high bits (`!0o777`, including `0o7000` setuid/setgid/sticky) while applying `access`.
         let access = self.0.mode.get_untracked() & 0o777;
-        let recursive = self.0.directory && self.0.recursive.get_untracked();
+        let recursive = self.0.directory.get_untracked() && self.0.recursive.get_untracked();
         let weak = Rc::downgrade(&self.0);
 
         self.0.saving.set(true);
         self.0.error.set(None);
 
-        let done = RefCell::new(Some(Box::new(complete) as Box<dyn FnOnce()>));
+        let done = RefCell::new(Some(Box::new(on_done) as Box<dyn FnOnce(Result<(), ()>)>));
         if recursive {
             let Some(cancel) = browser.begin_operation(&i18n::text_untracked("permissions-saving"))
             else {
                 self.0.saving.set(false);
+                if let Some(cb) = done.borrow_mut().take() {
+                    cb(Err(()));
+                }
                 return;
             };
-            let refresh_path = path.clone();
             browser.blocking(
                 "Apply recursive permissions",
                 move || Ok(permissions::apply_cancellable(&path, access, true, &cancel)),
@@ -1376,11 +1486,11 @@ impl PermissionEditor {
                     target.0.saving.set(false);
                     match result {
                         Ok(report) => {
-                            browser.refresh_affected(&[refresh_path]);
                             if report.failures.is_empty() {
-                                browser.report_success(i18n::text_untracked("permissions-saved"));
+                                *target.0.original_mode.borrow_mut() = access;
+                                target.0.recursive.set(false);
                                 if let Some(cb) = done.borrow_mut().take() {
-                                    cb();
+                                    cb(Ok(()));
                                 }
                             } else {
                                 for failure in &report.failures {
@@ -1396,20 +1506,25 @@ impl PermissionEditor {
                                     gds::t_untracked!("permissions-partial", succeeded, failed);
                                 browser.report_notice(msg.clone());
                                 target.0.error.set(Some(msg));
+                                if let Some(cb) = done.borrow_mut().take() {
+                                    cb(Err(()));
+                                }
                             }
                         }
                         Err(err) => {
                             target.0.error.set(Some(err));
+                            if let Some(cb) = done.borrow_mut().take() {
+                                cb(Err(()));
+                            }
                         }
                     }
                 },
             );
         } else {
-            let refresh_path = path.clone();
             browser.blocking(
                 "Save file permissions",
                 move || permissions::save(&path, access).map_err(|err| err.to_string()),
-                move |browser, result| {
+                move |_browser, result| {
                     let Some(inner) = weak.upgrade() else {
                         return;
                     };
@@ -1417,14 +1532,16 @@ impl PermissionEditor {
                     target.0.saving.set(false);
                     match result {
                         Ok(()) => {
-                            browser.refresh_affected(&[refresh_path]);
-                            browser.report_success(i18n::text_untracked("permissions-saved"));
+                            *target.0.original_mode.borrow_mut() = access;
                             if let Some(cb) = done.borrow_mut().take() {
-                                cb();
+                                cb(Ok(()));
                             }
                         }
                         Err(err) => {
                             target.0.error.set(Some(err));
+                            if let Some(cb) = done.borrow_mut().take() {
+                                cb(Err(()));
+                            }
                         }
                     }
                 },
@@ -1488,56 +1605,59 @@ impl PermissionEditor {
         })
     }
 
-    fn fields(&self) -> AnyView {
+    pub(super) fn fields(&self) -> AnyView {
         let loading_sig = self.0.loading;
         let saving_sig = self.0.saving;
         let failed_sig = self.0.load_failed;
         let error_sig = self.0.error;
         let rec_sig = self.0.recursive;
+        let dir_sig = self.0.directory;
 
         let owner_group = self.group("permissions-owner", 6);
         let group_group = self.group("permissions-group", 3);
         let other_group = self.group("permissions-others", 0);
 
-        let recursive_view = self.0.directory.then(|| {
-            let disabled = Signal::derive_local(move || {
-                loading_sig.get() || saving_sig.get() || failed_sig.get()
-            });
-            let checked = Binding::controlled(
-                Signal::derive_local(move || {
-                    if rec_sig.get() {
-                        Checked::Yes
-                    } else {
-                        Checked::No
+        let recursive_view = move || {
+            dir_sig.get().then(|| {
+                let disabled = Signal::derive_local(move || {
+                    loading_sig.get() || saving_sig.get() || failed_sig.get()
+                });
+                let checked = Binding::controlled(
+                    Signal::derive_local(move || {
+                        if rec_sig.get() {
+                            Checked::Yes
+                        } else {
+                            Checked::No
+                        }
+                    }),
+                    move |next| rec_sig.set(matches!(next, Checked::Yes)),
+                );
+                let rec_ref = NodeRef::new();
+                let rec_label = NodeRef::new();
+                view! {
+                    column(style:gap = "4px") {
+                        row(class = "gds-files-permissions-check") {
+                            Checkbox(
+                                node_ref = rec_ref,
+                                checked = checked,
+                                disabled = disabled,
+                                labelled_by = rec_label,
+                            )
+                            Label(node_ref = rec_label, control = rec_ref) {{i18n::text("permissions-recursive")}}
+                        }
+                        {move || {
+                            rec_sig.get().then(|| {
+                                view! {
+                                    text(class = "gds-files-permissions-note") {{i18n::text("permissions-recursive-hint")}}
+                                }
+                                .into_view()
+                            })
+                        }}
                     }
-                }),
-                move |next| rec_sig.set(matches!(next, Checked::Yes)),
-            );
-            let rec_ref = NodeRef::new();
-            let rec_label = NodeRef::new();
-            view! {
-                column(style:gap = "4px") {
-                    row(class = "gds-files-permissions-check") {
-                        Checkbox(
-                            node_ref = rec_ref,
-                            checked = checked,
-                            disabled = disabled,
-                            labelled_by = rec_label,
-                        )
-                        Label(node_ref = rec_label, control = rec_ref) {{i18n::text("permissions-recursive")}}
-                    }
-                    {move || {
-                        rec_sig.get().then(|| {
-                            view! {
-                                text(class = "gds-files-permissions-note") {{i18n::text("permissions-recursive-hint")}}
-                            }
-                            .into_view()
-                        })
-                    }}
                 }
-            }
-            .into_view()
-        });
+                .into_view()
+            })
+        };
 
         AnyView::new(view! {
             column(class = "gds-files-permissions-grid") {
@@ -1800,92 +1920,99 @@ fn static_row_details(browser: &Browser, row: &Row) -> AnyView {
 
 impl Browser {
     pub(super) fn has_open_inspection_dialog(&self) -> bool {
-        let slots = dialog_slots(self);
-        #[cfg(target_os = "linux")]
-        let has_comment = slots.comment.get_untracked().is_some();
-        #[cfg(not(target_os = "linux"))]
-        let has_comment = false;
-        slots.tags.get_untracked().is_some()
-            || slots.permissions.get_untracked().is_some()
-            || has_comment
+        dialog_slots(self).editor.get_untracked().is_some()
     }
 
     pub(super) fn cancel_inspection_dialog(&self) -> bool {
         let slots = dialog_slots(self);
-        if let Some(tags) = slots.tags.get_untracked() {
-            if !tags.is_saving_untracked() {
-                slots.tags.set(None);
-            }
-            return true;
-        }
-        if let Some(perms) = slots.permissions.get_untracked() {
-            if !perms.is_saving_untracked() {
-                slots.permissions.set(None);
-            }
-            return true;
-        }
-        #[cfg(target_os = "linux")]
-        if let Some(editor) = slots.comment.get_untracked() {
+        if let Some(editor) = slots.editor.get_untracked() {
             if !editor.is_saving_untracked() {
-                slots.comment.set(None);
+                slots.editor.set(None);
             }
             return true;
         }
         false
     }
 
-    #[cfg(target_os = "linux")]
-    pub(super) fn edit_comment(&self, path: PathBuf) {
+    pub(super) fn can_edit_item_properties(&self) -> bool {
+        editor::has_editable_tabs(self)
+    }
+
+    pub(super) fn edit_item_properties(&self, entry: Entry, initial_tab: Option<EditTab>) {
         self.0.menus.close();
         let slots = dialog_slots(self);
         if slots
-            .comment
+            .editor
             .get_untracked()
             .as_ref()
-            .is_some_and(comment::CommentEditor::is_saving_untracked)
+            .is_some_and(editor::ItemEditor::is_saving_untracked)
         {
             return;
         }
-        let editor = comment::CommentEditor::new(self, path);
-        slots.comment.set(Some(editor.clone()));
-        editor.focus();
+        if let Some(item_editor) = editor::ItemEditor::from_entry(self, entry, initial_tab) {
+            slots.editor.set(Some(item_editor));
+        }
     }
 
-    #[cfg(target_os = "linux")]
-    pub(super) fn comment_dialog(&self) -> AnyView {
+    pub(super) fn edit_path_properties(&self, path: PathBuf, initial_tab: Option<EditTab>) {
+        self.0.menus.close();
+        let slots = dialog_slots(self);
+        if slots
+            .editor
+            .get_untracked()
+            .as_ref()
+            .is_some_and(editor::ItemEditor::is_saving_untracked)
+        {
+            return;
+        }
+        if let Some(item_editor) = editor::ItemEditor::from_path(self, path, initial_tab) {
+            slots.editor.set(Some(item_editor));
+        }
+    }
+
+    #[cfg(feature = "files-e2e")]
+    pub(super) fn edit_tags(&self, path: PathBuf) {
+        self.edit_path_properties(path, Some(EditTab::Tags));
+    }
+
+    #[cfg(all(unix, feature = "files-e2e"))]
+    pub(super) fn edit_permissions(&self, entry: Entry) {
+        self.edit_item_properties(entry, Some(EditTab::Permissions));
+    }
+
+    pub(super) fn item_editor_dialog(&self) -> AnyView {
         install_inspection_stylesheet();
         let slots = dialog_slots(self);
-        let comment_sig = slots.comment;
-        let open = Signal::derive_local(move || comment_sig.get().is_some());
+        let editor_sig = slots.editor;
+        let open = Signal::derive_local(move || editor_sig.get().is_some());
         let can_dismiss = Signal::derive_local(move || {
-            !comment_sig
+            !editor_sig
                 .get()
                 .as_ref()
-                .is_some_and(comment::CommentEditor::is_saving)
+                .is_some_and(editor::ItemEditor::is_saving)
         });
         let modal_disabled = Signal::derive_local(move || {
-            !comment_sig
+            !editor_sig
                 .get()
                 .as_ref()
-                .is_some_and(|editor| editor.available() && !editor.is_saving())
+                .is_some_and(editor::ItemEditor::can_save)
         });
         let on_modal_decision =
             UnsyncCallback::new(move |decision: DialogDecision| match decision {
                 DialogDecision::Confirm => {
-                    if let Some(editor) = comment_sig.get_untracked()
-                        && editor.available_untracked()
+                    if let Some(editor) = editor_sig.get_untracked()
                         && !editor.is_saving_untracked()
                     {
-                        editor.save(move || comment_sig.set(None));
+                        editor.save(move || editor_sig.set(None));
                     }
                 }
                 DialogDecision::Cancel | DialogDecision::Dismiss => {
-                    if !comment_sig
+                    if !editor_sig
                         .get_untracked()
                         .as_ref()
-                        .is_some_and(comment::CommentEditor::is_saving_untracked)
+                        .is_some_and(editor::ItemEditor::is_saving_untracked)
                     {
-                        comment_sig.set(None);
+                        editor_sig.set(None);
                     }
                 }
             });
@@ -1894,12 +2021,12 @@ impl Browser {
             ModalDialog(
                 open = Binding::controlled(open, move |next: bool| {
                     if !next
-                        && !comment_sig
+                        && !editor_sig
                             .get_untracked()
                             .as_ref()
-                            .is_some_and(comment::CommentEditor::is_saving_untracked)
+                            .is_some_and(editor::ItemEditor::is_saving_untracked)
                     {
-                        comment_sig.set(None);
+                        editor_sig.set(None);
                     }
                 }),
                 size = DialogSize::Md,
@@ -1909,7 +2036,7 @@ impl Browser {
                 close_on_confirm = false,
                 on_decision = on_modal_decision,
             ) {
-                {move || match comment_sig.get() {
+                {move || match editor_sig.get() {
                     None => AnyView::new(()),
                     Some(editor) => {
                         let full_path = editor.path().display().to_string();
@@ -1919,22 +2046,24 @@ impl Browser {
                             .map(|n| n.to_string_lossy().into_owned())
                             .filter(|s| !s.is_empty())
                             .unwrap_or_else(|| full_path.clone());
-                        let submit_sig = comment_sig;
+                        let submit_sig = editor_sig;
                         let fields = editor.fields(move || {
                             if let Some(active) = submit_sig.get_untracked()
-                                && active.available_untracked()
                                 && !active.is_saving_untracked()
                             {
                                 active.save(move || submit_sig.set(None));
                             }
                         });
                         let disabled = Signal::derive_local(move || {
-                            !editor.available() || editor.is_saving()
+                            !editor_sig
+                                .get()
+                                .as_ref()
+                                .is_some_and(editor::ItemEditor::can_save)
                         });
                         AnyView::new(view! {
                             column(class = "gds-files-dialog-body") {
                                 DialogHeader {
-                                    DialogTitle {{i18n::text("details-comment-title")}}
+                                    DialogTitle {{i18n::text("details-edit-properties-title")}}
                                     box(class = "gds-files-dialog-desc-wrap") {
                                         HintTooltip(text = full_path) {
                                             DialogDescription(class = "gds-files-dialog-desc") {
@@ -1949,226 +2078,6 @@ impl Browser {
                                         primary_label = i18n::text("permissions-save"),
                                         cancel_label = i18n::text("operation-cancel"),
                                         disabled = disabled,
-                                        on_decision = on_modal_decision,
-                                    )
-                                }
-                            }
-                        })
-                    }
-                }}
-            }
-        })
-    }
-
-    pub(super) fn edit_tags(&self, path: PathBuf) {
-        self.0.menus.close();
-        let slots = dialog_slots(self);
-        if slots
-            .tags
-            .get_untracked()
-            .as_ref()
-            .is_some_and(TagEditor::is_saving_untracked)
-        {
-            return;
-        }
-        let editor = TagEditor::new(self, path);
-        slots.tags.set(Some(editor.clone()));
-        editor.focus();
-    }
-
-    pub(super) fn tags_dialog(&self) -> AnyView {
-        install_inspection_stylesheet();
-        let slots = dialog_slots(self);
-        let tags_sig = slots.tags;
-        let open = Signal::derive_local(move || tags_sig.get().is_some());
-        let can_dismiss = Signal::derive_local(move || {
-            !tags_sig.get().as_ref().is_some_and(TagEditor::is_saving)
-        });
-        let modal_disabled = Signal::derive_local(move || {
-            !tags_sig
-                .get()
-                .as_ref()
-                .is_some_and(|editor| editor.available() && !editor.is_saving())
-        });
-        let on_modal_decision =
-            UnsyncCallback::new(move |decision: DialogDecision| match decision {
-                DialogDecision::Confirm => {
-                    if let Some(editor) = tags_sig.get_untracked()
-                        && editor.available_untracked()
-                        && !editor.is_saving_untracked()
-                    {
-                        editor.save(move || tags_sig.set(None));
-                    }
-                }
-                DialogDecision::Cancel | DialogDecision::Dismiss => {
-                    if !tags_sig
-                        .get_untracked()
-                        .as_ref()
-                        .is_some_and(TagEditor::is_saving_untracked)
-                    {
-                        tags_sig.set(None);
-                    }
-                }
-            });
-
-        AnyView::new(view! {
-            ModalDialog(
-                open = Binding::controlled(open, move |next: bool| {
-                    if !next
-                        && !tags_sig
-                            .get_untracked()
-                            .as_ref()
-                            .is_some_and(TagEditor::is_saving_untracked)
-                    {
-                        tags_sig.set(None);
-                    }
-                }),
-                size = DialogSize::Md,
-                disabled = modal_disabled,
-                dismiss_on_outside_press = can_dismiss,
-                dismiss_on_escape = can_dismiss,
-                close_on_confirm = false,
-                on_decision = on_modal_decision,
-            ) {
-                {move || match tags_sig.get() {
-                    None => AnyView::new(()),
-                    Some(editor) => {
-                        let full_path = editor.path().display().to_string();
-                        let title_path = editor
-                            .path()
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or_else(|| full_path.clone());
-                        let fields = editor.fields();
-                        let disabled = Signal::derive_local(move || {
-                            !editor.available() || editor.is_saving()
-                        });
-                        AnyView::new(view! {
-                            column(class = "gds-files-dialog-body") {
-                                DialogHeader {
-                                    DialogTitle {{i18n::text("tags-editor-title")}}
-                                    box(class = "gds-files-dialog-desc-wrap") {
-                                        HintTooltip(text = full_path) {
-                                            DialogDescription(class = "gds-files-dialog-desc") {
-                                                {title_path}
-                                            }
-                                        }
-                                    }
-                                }
-                                {fields}
-                                DialogFooter {
-                                    DialogActions(
-                                        primary_label = i18n::text("permissions-save"),
-                                        cancel_label = i18n::text("operation-cancel"),
-                                        disabled = disabled,
-                                        on_decision = on_modal_decision,
-                                    )
-                                }
-                            }
-                        })
-                    }
-                }}
-            }
-        })
-    }
-
-    pub(super) fn edit_permissions(&self, entry: Entry) {
-        self.0.menus.close();
-        let slots = dialog_slots(self);
-        if slots
-            .permissions
-            .get_untracked()
-            .as_ref()
-            .is_some_and(PermissionEditor::is_saving_untracked)
-        {
-            return;
-        }
-        let editor = PermissionEditor::new(self, entry);
-        slots.permissions.set(Some(editor));
-    }
-
-    pub(super) fn permissions_dialog(&self) -> AnyView {
-        install_inspection_stylesheet();
-        let slots = dialog_slots(self);
-        let perm_sig = slots.permissions;
-        let open = Signal::derive_local(move || perm_sig.get().is_some());
-        let can_dismiss = Signal::derive_local(move || {
-            !perm_sig
-                .get()
-                .as_ref()
-                .is_some_and(|editor| editor.0.saving.get())
-        });
-        let modal_disabled = Signal::derive_local(move || {
-            !perm_sig
-                .get()
-                .as_ref()
-                .is_some_and(PermissionEditor::can_save)
-        });
-        let on_modal_decision =
-            UnsyncCallback::new(move |decision: DialogDecision| match decision {
-                DialogDecision::Confirm => {
-                    if let Some(editor) = perm_sig.get_untracked() {
-                        editor.save(move || perm_sig.set(None));
-                    }
-                }
-                DialogDecision::Cancel | DialogDecision::Dismiss => {
-                    if !perm_sig
-                        .get_untracked()
-                        .as_ref()
-                        .is_some_and(PermissionEditor::is_saving_untracked)
-                    {
-                        perm_sig.set(None);
-                    }
-                }
-            });
-
-        AnyView::new(view! {
-            ModalDialog(
-                open = Binding::controlled(open, move |next: bool| {
-                    if !next
-                        && !perm_sig
-                            .get_untracked()
-                            .as_ref()
-                            .is_some_and(PermissionEditor::is_saving_untracked)
-                    {
-                        perm_sig.set(None);
-                    }
-                }),
-                size = DialogSize::Md,
-                disabled = modal_disabled,
-                dismiss_on_outside_press = can_dismiss,
-                dismiss_on_escape = can_dismiss,
-                close_on_confirm = false,
-                on_decision = on_modal_decision,
-            ) {
-                {move || match perm_sig.get() {
-                    None => AnyView::new(()),
-                    Some(editor) => {
-                        let name = editor.0.entry.display_name.clone();
-                        let full_path = editor.0.entry.path.display().to_string();
-                        let fields = editor.fields();
-                        let save_disabled = Signal::derive_local(move || {
-                            !perm_sig.get().as_ref().is_some_and(PermissionEditor::can_save)
-                        });
-                        AnyView::new(view! {
-                            column(class = "gds-files-dialog-body") {
-                                DialogHeader {
-                                    DialogTitle {{i18n::text("permissions-title")}}
-                                    box(class = "gds-files-dialog-desc-wrap") {
-                                        HintTooltip(text = full_path) {
-                                            DialogDescription(class = "gds-files-dialog-desc") {
-                                                {name}
-                                            }
-                                        }
-                                    }
-                                }
-                                {fields}
-                                DialogFooter {
-                                    DialogActions(
-                                        primary_label = i18n::text("permissions-save"),
-                                        cancel_label = i18n::text("operation-cancel"),
-                                        disabled = save_disabled,
                                         on_decision = on_modal_decision,
                                     )
                                 }
@@ -2572,7 +2481,7 @@ impl Browser {
                             created
                         }
                     };
-                    return props.view(true);
+                    return props.view(Some(browser.clone()), true);
                 }
                 _ => None,
             };
@@ -2608,7 +2517,7 @@ impl Browser {
                         created
                     }
                 };
-                return props.view(true);
+                return props.view(Some(browser.clone()), true);
             }
 
             static_row_details(&browser, row)

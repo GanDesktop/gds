@@ -1586,13 +1586,16 @@ impl Browser {
                 browser.refresh_location(&Location::Favorites);
             },
         ));
-        if local.is_some() && self.tags_enabled_untracked() {
+        if let Some(path) = local
+            && self.can_edit_item_properties()
+        {
+            let edit_path = path.to_owned();
             entries.push(self.menu_item_entry(
-                "tags-edit",
-                Some(IconName::Tag),
+                "details-edit-properties-menu",
+                Some(IconName::Pencil),
                 None,
                 false,
-                Browser::edit_selected_tags,
+                move |browser| browser.edit_path_properties(edit_path.clone(), None),
             ));
         }
         if matches!(row, Row::Tag(_)) {
@@ -1698,24 +1701,16 @@ impl Browser {
                     browser.refresh_location(&Location::Favorites);
                 },
             ));
-            if self.tags_enabled_untracked() {
+            if entry.kind != crate::entities::file::directory::EntryKind::SymbolicLink
+                && self.can_edit_item_properties()
+            {
+                let edit_entry = entry.clone();
                 entries.push(self.menu_item_entry(
-                    "tags-edit",
-                    Some(IconName::Tag),
+                    "details-edit-properties-menu",
+                    Some(IconName::Pencil),
                     None,
                     busy,
-                    Browser::edit_selected_tags,
-                ));
-            }
-            #[cfg(target_os = "linux")]
-            if entry.kind != crate::entities::file::directory::EntryKind::SymbolicLink {
-                let comment_path = entry.path.clone();
-                entries.push(self.menu_item_entry(
-                    "details-comment-menu",
-                    Some(IconName::MessageSquare),
-                    None,
-                    busy,
-                    move |browser| browser.edit_comment(comment_path.clone()),
+                    move |browser| browser.edit_item_properties(edit_entry.clone(), None),
                 ));
             }
             entries.push(MenuEntry::Separator);
@@ -1860,35 +1855,16 @@ impl Browser {
                     move |browser| browser.create_symlink(entry_link.clone()),
                 ));
             }
-            if self.tags_enabled_untracked() {
-                entries.push(self.menu_item_entry(
-                    "tags-edit",
-                    Some(IconName::Tag),
-                    None,
-                    busy || unavailable,
-                    Browser::edit_selected_tags,
-                ));
-            }
-            #[cfg(target_os = "linux")]
-            if entry.kind != crate::entities::file::directory::EntryKind::SymbolicLink {
-                let entry_comment = entry.path.clone();
-                entries.push(self.menu_item_entry(
-                    "details-comment-menu",
-                    Some(IconName::MessageSquare),
-                    None,
-                    busy || unavailable,
-                    move |browser| browser.edit_comment(entry_comment.clone()),
-                ));
-            }
-            #[cfg(unix)]
+            if entry.kind != crate::entities::file::directory::EntryKind::SymbolicLink
+                && self.can_edit_item_properties()
             {
-                let entry_perm = entry.clone();
+                let edit_entry = entry.clone();
                 entries.push(self.menu_item_entry(
-                    "permissions-title",
-                    Some(IconName::Lock),
+                    "details-edit-properties-menu",
+                    Some(IconName::Pencil),
                     None,
                     busy || unavailable,
-                    move |browser| browser.edit_permissions(entry_perm.clone()),
+                    move |browser| browser.edit_item_properties(edit_entry.clone(), None),
                 ));
             }
             entries.push(MenuEntry::Separator);
@@ -2005,26 +1981,6 @@ impl Browser {
             request: gds::service::desktop::file_manager::Request::ShowItems { paths },
             startup_id: String::new(),
         });
-    }
-
-    fn edit_selected_tags(&self) {
-        let paths = self.read_untracked(|state| {
-            state
-                .tab()
-                .selected()
-                .iter()
-                .filter_map(|row| {
-                    match row {
-                        Row::Place(location) => location.local_path(),
-                        _ => row.path(),
-                    }
-                    .map(ToOwned::to_owned)
-                })
-                .collect::<Vec<_>>()
-        });
-        for path in paths {
-            self.edit_tags(path);
-        }
     }
 
     pub(super) fn copy_selected_paths(&self) {
@@ -2320,12 +2276,7 @@ impl Browser {
         let decision_columns = self.clone();
         let content_columns = self.clone();
         let popup_browser = self.clone();
-        let permissions_view = self.permissions_dialog();
-        let tags_view = self.tags_dialog();
-        #[cfg(target_os = "linux")]
-        let comment_view = self.comment_dialog();
-        #[cfg(not(target_os = "linux"))]
-        let comment_view = AnyView::new(());
+        let item_editor_view = self.item_editor_dialog();
 
         AnyView::new(view! {
             box(class = "gds-files-menu-overlay") {
@@ -2369,9 +2320,7 @@ impl Browser {
                         move || c.columns_dialog()
                     }}
                 }
-                {permissions_view}
-                {tags_view}
-                {comment_view}
+                {item_editor_view}
             }
         })
     }

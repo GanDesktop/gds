@@ -2,11 +2,7 @@
 
 mod history;
 
-use std::{
-    cell::RefCell,
-    path::{Path, PathBuf},
-    rc::Rc,
-};
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gds::i18n;
 use gds::service::file_tags;
@@ -178,7 +174,7 @@ struct TagEditorInner {
 pub(in crate::pages::workspace) struct TagEditor(Rc<TagEditorInner>);
 
 impl TagEditor {
-    pub(super) fn new(browser: &Browser, path: PathBuf) -> Self {
+    pub(super) fn new(browser: &Browser, path: PathBuf, auto_focus: bool) -> Self {
         let inner = browser.0.owner.with(|| {
             Rc::new(TagEditorInner {
                 browser: browser.downgrade(),
@@ -230,7 +226,9 @@ impl TagEditor {
                         target.0.loading.set(false);
                         target.0.load_failed.set(false);
                         target.0.error.set(None);
-                        target.focus();
+                        if auto_focus {
+                            target.focus();
+                        }
                     }
                     Err(message) => {
                         target.0.loading.set(false);
@@ -249,6 +247,10 @@ impl TagEditor {
             && !self.0.saving.get_untracked()
     }
 
+    pub(super) fn is_loading(&self) -> bool {
+        self.0.loading.get()
+    }
+
     pub(in crate::pages::workspace) fn is_saving(&self) -> bool {
         self.0.saving.get()
     }
@@ -263,6 +265,19 @@ impl TagEditor {
 
     pub(super) fn available_untracked(&self) -> bool {
         !self.0.loading.get_untracked() && !self.0.load_failed.get_untracked()
+    }
+
+    pub(super) fn has_changes_untracked(&self) -> bool {
+        self.available_untracked()
+            && (self.0.tags.get_untracked() != *self.0.original.borrow()
+                || !self.0.draft.get_untracked().trim().is_empty())
+    }
+
+    pub(super) fn validate_and_commit_draft(&self) -> Result<(), ()> {
+        if !self.editable() {
+            return Ok(());
+        }
+        self.add().map(|_| ()).map_err(|_| ())
     }
 
     pub(super) fn focus(&self) {
@@ -281,10 +296,6 @@ impl TagEditor {
             });
             *self.0.pending_focus.borrow_mut() = Some(handle);
         }
-    }
-
-    pub(super) fn path(&self) -> &Path {
-        &self.0.path
     }
 
     fn record_input(&self, value: String) {
@@ -455,26 +466,32 @@ impl TagEditor {
         }
     }
 
-    pub(super) fn save(&self, complete: impl FnOnce() + 'static) {
+    pub(super) fn save_result(&self, on_done: impl FnOnce(Result<(), ()>) + 'static) {
         if !self.editable() {
+            on_done(Ok(()));
             return;
         }
         if self.add().is_err() {
+            on_done(Err(()));
             return;
         }
         let Some(browser) = self.0.browser.upgrade() else {
+            on_done(Err(()));
             return;
         };
         let original = self.0.original.borrow().clone();
         let edited = self.0.tags.get_untracked();
+        if edited == original {
+            on_done(Ok(()));
+            return;
+        }
         let save_path = self.0.path.clone();
-        let refresh_path = self.0.path.clone();
         let weak = Rc::downgrade(&self.0);
 
         self.0.saving.set(true);
         self.0.error.set(None);
 
-        let done = RefCell::new(Some(Box::new(complete) as Box<dyn FnOnce()>));
+        let done = RefCell::new(Some(Box::new(on_done) as Box<dyn FnOnce(Result<(), ()>)>));
         browser.blocking(
             "Save file tags",
             move || {
@@ -482,7 +499,7 @@ impl TagEditor {
                     .map(|()| edited)
                     .map_err(|err| err.to_string())
             },
-            move |browser, result| {
+            move |_browser, result| {
                 let Some(inner) = weak.upgrade() else {
                     return;
                 };
@@ -491,16 +508,15 @@ impl TagEditor {
                 match result {
                     Ok(saved) => {
                         *target.0.original.borrow_mut() = saved;
-                        browser.report_success(i18n::text_untracked("tags-saved"));
-                        browser.refresh_affected(&[refresh_path]);
-                        browser.refresh_tag_tabs();
-                        super::bump_details_revision(browser);
                         if let Some(callback) = done.borrow_mut().take() {
-                            callback();
+                            callback(Ok(()));
                         }
                     }
                     Err(message) => {
                         target.0.error.set(Some(message));
+                        if let Some(callback) = done.borrow_mut().take() {
+                            callback(Err(()));
+                        }
                     }
                 }
             },
