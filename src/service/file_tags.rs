@@ -3,8 +3,11 @@
 use std::{io, path::Path};
 
 pub const ATTRIBUTE: &str = "user.xdg.tags";
+pub const COMMENT_ATTRIBUTE: &str = "user.xdg.comment";
 pub const ORIGIN_URL_ATTRIBUTE: &str = "user.xdg.origin.url";
 pub const MIME_TYPE_ATTRIBUTE: &str = "user.mime_type";
+/// Maximum byte length allowed for `user.xdg.comment`.
+pub const MAX_COMMENT_BYTES: usize = 4096;
 #[cfg(target_os = "linux")]
 const MAX_ATTRIBUTE_SIZE: usize = 65536;
 #[cfg(target_os = "linux")]
@@ -220,6 +223,89 @@ pub fn apply_edit(_: &Path, _: &[String], _: &[String]) -> io::Result<()> {
         io::ErrorKind::Unsupported,
         "File tags require Linux",
     ))
+}
+
+/// Read a file's FreeDesktop user comment (`user.xdg.comment`), returning `Ok(None)` when absent
+/// or when the underlying filesystem does not support extended attributes.
+///
+/// # Errors
+/// Returns filesystem errors (other than `ENODATA` / `EOPNOTSUPP` / `ENOSYS`) or invalid UTF-8.
+pub fn read_comment(path: &Path) -> io::Result<Option<String>> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut bytes = vec![0; MAX_ATTRIBUTE_SIZE];
+        match rustix::fs::getxattr(path, COMMENT_ATTRIBUTE, bytes.as_mut_slice()) {
+            Ok(count) => {
+                bytes.truncate(count);
+                let text = std::str::from_utf8(&bytes)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                if text.trim().is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(text.to_owned()))
+                }
+            }
+            Err(
+                rustix::io::Errno::NODATA | rustix::io::Errno::OPNOTSUPP | rustix::io::Errno::NOSYS,
+            ) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        Ok(None)
+    }
+}
+
+/// Write or clear a file's FreeDesktop user comment (`user.xdg.comment`).
+///
+/// Passing `None` or whitespace-only text removes the attribute.
+///
+/// # Errors
+/// Rejects NUL bytes, overly long comments (> [`MAX_COMMENT_BYTES`]), symbolic links and special
+/// files; propagates extended-attribute I/O failures.
+pub fn write_comment(path: &Path, comment: Option<&str>) -> io::Result<()> {
+    let value = comment.map(str::trim).filter(|text| !text.is_empty());
+    if let Some(text) = value {
+        if text.contains('\0') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Comment cannot contain NUL bytes",
+            ));
+        }
+        if text.len() > MAX_COMMENT_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Comment exceeds maximum length of {MAX_COMMENT_BYTES} bytes"),
+            ));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let fd = open_target(path)?;
+        match value {
+            None => match rustix::fs::fremovexattr(&fd, COMMENT_ATTRIBUTE) {
+                Ok(()) | Err(rustix::io::Errno::NODATA) => Ok(()),
+                Err(error) => Err(error.into()),
+            },
+            Some(text) => rustix::fs::fsetxattr(
+                &fd,
+                COMMENT_ATTRIBUTE,
+                text.as_bytes(),
+                rustix::fs::XattrFlags::empty(),
+            )
+            .map_err(Into::into),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "File comments require Linux",
+        ))
+    }
 }
 
 /// Read a file's FreeDesktop download origin URL (`user.xdg.origin.url`), when present.

@@ -9,6 +9,7 @@ callPackage ../../package.nix {
     "--skip=directory::tests::permissions_owner_group_and_access_time_come_from_real_metadata"
     "--skip=directory::tests::user_mime_type_xattr_overrides_filename_detection"
     "--skip=service::file_tags::tests::associations_and_copy_preserve_other_tags"
+    "--skip=service::file_tags::tests::comment_round_trip_clears_validates_and_rejects_symlinks_and_fifos"
     "--skip=service::file_tags::tests::copy_from_preserves_portable_user_xattrs_and_reads_origin_and_mime"
     "--skip=service::file_tags::tests::editor_delta_retains_unrelated_external_changes"
     "--skip=service::file_tags::tests::apply_edit_works_on_directories_and_clears_removed_tags"

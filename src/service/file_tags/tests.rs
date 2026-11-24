@@ -171,3 +171,48 @@ fn copy_from_preserves_portable_user_xattrs_and_reads_origin_and_mime() {
         Some(b"Quarterly summary".as_slice())
     );
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn comment_round_trip_clears_validates_and_rejects_symlinks_and_fifos() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("doc.txt");
+    std::fs::write(&file, b"hello").unwrap();
+
+    assert_eq!(read_comment(&file).unwrap(), None);
+
+    write_comment(&file, Some("  Initial review note  ")).unwrap();
+    assert_eq!(
+        read_comment(&file).unwrap().as_deref(),
+        Some("Initial review note")
+    );
+
+    // Clearing with empty or whitespace removes the attribute.
+    write_comment(&file, Some("   ")).unwrap();
+    assert_eq!(read_comment(&file).unwrap(), None);
+    assert!(read_named_raw(&file, COMMENT_ATTRIBUTE).is_none());
+
+    // Validation rejects NUL bytes and oversized payloads.
+    let nul_err = write_comment(&file, Some("bad\0note")).unwrap_err();
+    assert_eq!(nul_err.kind(), io::ErrorKind::InvalidInput);
+    let big = "a".repeat(MAX_COMMENT_BYTES + 1);
+    let size_err = write_comment(&file, Some(&big)).unwrap_err();
+    assert_eq!(size_err.kind(), io::ErrorKind::InvalidInput);
+
+    // Reject symlinks without following them and FIFOs without blocking.
+    let link = dir.path().join("link.txt");
+    std::os::unix::fs::symlink(&file, &link).unwrap();
+    let link_err = write_comment(&link, Some("via link")).unwrap_err();
+    assert_eq!(link_err.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(read_comment(&file).unwrap(), None);
+
+    let fifo = dir.path().join("pipe");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+    )
+    .unwrap();
+    let fifo_err = write_comment(&fifo, Some("on fifo")).unwrap_err();
+    assert_eq!(fifo_err.kind(), io::ErrorKind::InvalidInput);
+}

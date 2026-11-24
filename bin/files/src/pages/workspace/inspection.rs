@@ -42,7 +42,7 @@ use zgui::runtime::{WindowHandle, try_use_windows};
 use zgui::view::{Either, EventCx, current_host, events, install_stylesheet};
 use zgui::vocab::{Key, Modifiers, NamedKey};
 use zgui::{css, view};
-use zgui_ui::{ButtonProps, CheckboxProps, Checked, LabelProps, SpinnerProps};
+use zgui_ui::{ButtonProps, CheckboxProps, Checked, InputProps, LabelProps, SpinnerProps};
 use zgui_ui_primitives::Binding;
 
 use crate::entities::file::{
@@ -420,6 +420,21 @@ pub(super) const INSPECTION_CSS: &str = css!(
         font-size: var(--gds-text-xs, 12px);
         color: var(--gds-error);
     }
+
+    .gds-files-details__comment-editor {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        width: 100%;
+        min-width: 0;
+    }
+
+    .gds-files-details__comment-actions {
+        display: flex;
+        flex-direction: row;
+        justify-content: flex-end;
+        gap: 6px;
+    }
     "#
 );
 
@@ -677,6 +692,11 @@ struct PropertiesInner {
     entry: RwSignal<EntryState, LocalStorage>,
     tags: RwSignal<Option<Result<Vec<String>, String>>, LocalStorage>,
     origin_url: RwSignal<Option<String>, LocalStorage>,
+    comment: RwSignal<Option<Result<Option<String>, String>>, LocalStorage>,
+    comment_editing: RwSignal<bool, LocalStorage>,
+    comment_draft: RwSignal<String, LocalStorage>,
+    comment_saving: RwSignal<bool, LocalStorage>,
+    comment_error: RwSignal<Option<String>, LocalStorage>,
     description_version: RwSignal<u64, LocalStorage>,
     tags_enabled: bool,
 }
@@ -699,6 +719,11 @@ impl Properties {
             entry: RwSignal::new_local(EntryState::Loading),
             tags: RwSignal::new_local(None),
             origin_url: RwSignal::new_local(None),
+            comment: RwSignal::new_local(None),
+            comment_editing: RwSignal::new_local(false),
+            comment_draft: RwSignal::new_local(String::new()),
+            comment_saving: RwSignal::new_local(false),
+            comment_error: RwSignal::new_local(None),
             description_version: RwSignal::new_local(0),
             tags_enabled,
         });
@@ -710,6 +735,7 @@ impl Properties {
     fn from_entry(entry: Entry, cache: Cache, scope: Scope, tags_enabled: bool) -> Self {
         let path = entry.path.clone();
         let is_file = entry.kind == EntryKind::File;
+        let is_symlink = entry.kind == EntryKind::SymbolicLink;
         let missing_mime = entry
             .details
             .display_content()
@@ -723,6 +749,11 @@ impl Properties {
             entry: RwSignal::new_local(EntryState::Ready(entry)),
             tags: RwSignal::new_local(None),
             origin_url: RwSignal::new_local(None),
+            comment: RwSignal::new_local(None),
+            comment_editing: RwSignal::new_local(false),
+            comment_draft: RwSignal::new_local(String::new()),
+            comment_saving: RwSignal::new_local(false),
+            comment_error: RwSignal::new_local(None),
             description_version: RwSignal::new_local(0),
             tags_enabled,
         });
@@ -732,6 +763,9 @@ impl Properties {
         }
         if is_file {
             props.load_origin_url();
+        }
+        if cfg!(target_os = "linux") && !is_symlink {
+            props.load_comment();
         }
         if tags_enabled {
             props.load_tags();
@@ -844,9 +878,13 @@ impl Properties {
             match result {
                 Ok(entry) => {
                     let is_file = entry.kind == EntryKind::File;
+                    let is_symlink = entry.kind == EntryKind::SymbolicLink;
                     target.0.entry.set(EntryState::Ready(entry));
                     if is_file {
                         target.load_origin_url();
+                    }
+                    if cfg!(target_os = "linux") && !is_symlink {
+                        target.load_comment();
                     }
                     if target.0.tags_enabled {
                         target.load_tags();
@@ -876,6 +914,70 @@ impl Properties {
                 return;
             };
             inner.origin_url.set(origin);
+        }));
+    }
+
+    fn load_comment(&self) {
+        let weak = Rc::downgrade(&self.0);
+        let path = self.0.path.clone();
+        let task = self
+            .0
+            .scope
+            .spawn_blocking_named("Read file comment", move || {
+                file_tags::read_comment(&path).map_err(|err| err.to_string())
+            });
+        drop(spawn_local(async move {
+            let result = task
+                .await
+                .map_err(|err| err.to_string())
+                .and_then(std::convert::identity);
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            inner.comment.set(Some(result));
+        }));
+    }
+
+    fn save_comment(&self) {
+        if self.0.comment_saving.get_untracked() {
+            return;
+        }
+        let draft = self.0.comment_draft.get_untracked();
+        let normalized = {
+            let trimmed = draft.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        };
+        self.0.comment_saving.set(true);
+        self.0.comment_error.set(None);
+        let weak = Rc::downgrade(&self.0);
+        let path = self.0.path.clone();
+        let write_value = normalized.clone();
+        let task = self
+            .0
+            .scope
+            .spawn_blocking_named("Write file comment", move || {
+                file_tags::write_comment(&path, write_value.as_deref())
+                    .map_err(|err| err.to_string())
+            });
+        drop(spawn_local(async move {
+            let result = task
+                .await
+                .map_err(|err| err.to_string())
+                .and_then(std::convert::identity);
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            inner.comment_saving.set(false);
+            match result {
+                Ok(()) => {
+                    inner.comment.set(Some(Ok(normalized)));
+                    inner.comment_editing.set(false);
+                    inner.comment_error.set(None);
+                }
+                Err(err) => {
+                    inner.comment_error.set(Some(err));
+                }
+            }
         }));
     }
 
@@ -1071,6 +1173,119 @@ impl Properties {
         rows
     }
 
+    fn comment_section(&self, entry_kind: EntryKind) -> Option<AnyView> {
+        if !cfg!(target_os = "linux") || entry_kind == EntryKind::SymbolicLink {
+            return None;
+        }
+        let comment_sig = self.0.comment;
+        let editing_sig = self.0.comment_editing;
+        let draft_sig = self.0.comment_draft;
+        let saving_sig = self.0.comment_saving;
+        let error_sig = self.0.comment_error;
+        let props_save = self.clone();
+        let props_enter = self.clone();
+
+        Some(AnyView::new(view! {
+            column(class = "gds-files-details__tags-section") {
+                row(class = "gds-files-details__tags-header") {
+                    text(class = "gds-files-details__label") {{i18n::text("details-comment")}}
+                    {move || (!editing_sig.get()).then(|| {
+                        view! {
+                            Button(
+                                variant = ButtonVariant::Ghost,
+                                size = ButtonSize::Sm,
+                                on:click = move |_| {
+                                    let initial = comment_sig
+                                        .get_untracked()
+                                        .and_then(Result::ok)
+                                        .flatten()
+                                        .unwrap_or_default();
+                                    draft_sig.set(initial);
+                                    error_sig.set(None);
+                                    editing_sig.set(true);
+                                },
+                            ) {{i18n::text("details-comment-edit")}}
+                        }
+                        .into_view()
+                    })}
+                }
+                {move || if editing_sig.get() {
+                    let save_click = props_save.clone();
+                    let save_key = props_enter.clone();
+                    let disabled = Signal::derive_local(move || saving_sig.get());
+                    AnyView::new(view! {
+                        column(class = "gds-files-details__comment-editor") {
+                            Input(
+                                value = Binding::controlled(
+                                    draft_sig.read_only(),
+                                    move |next: String| draft_sig.set(next),
+                                ),
+                                placeholder = i18n::text("details-comment-placeholder"),
+                                disabled = disabled,
+                                on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
+                                    if ev.repeat {
+                                        return;
+                                    }
+                                    if ev.key == Key::Named(NamedKey::Enter) && ev.modifiers.is_empty() {
+                                        ev.prevent_default();
+                                        ev.stop_propagation();
+                                        save_key.save_comment();
+                                    } else if ev.key == Key::Named(NamedKey::Escape)
+                                        && ev.modifiers.is_empty()
+                                        && !saving_sig.get_untracked()
+                                    {
+                                        ev.prevent_default();
+                                        ev.stop_propagation();
+                                        editing_sig.set(false);
+                                        error_sig.set(None);
+                                    }
+                                },
+                            ) {}
+                            {move || error_sig.get().map(|err| {
+                                view! {
+                                    text(class = "gds-files-permissions-error") {{err}}
+                                }
+                                .into_view()
+                            })}
+                            row(class = "gds-files-details__comment-actions") {
+                                Button(
+                                    variant = ButtonVariant::Ghost,
+                                    size = ButtonSize::Sm,
+                                    disabled = disabled,
+                                    on:click = move |_| {
+                                        editing_sig.set(false);
+                                        error_sig.set(None);
+                                    },
+                                ) {{i18n::text("operation-cancel")}}
+                                Button(
+                                    variant = ButtonVariant::Default,
+                                    size = ButtonSize::Sm,
+                                    disabled = disabled,
+                                    on:click = move |_| save_click.save_comment(),
+                                ) {{i18n::text("permissions-save")}}
+                            }
+                        }
+                    })
+                } else {
+                    match comment_sig.get() {
+                        None => AnyView::new(view! {
+                            text(class = "gds-files-details__label") {{i18n::text("loading")}}
+                        }),
+                        Some(Err(err)) => AnyView::new(view! {
+                            text(class = "gds-files-permissions-error") {{err}}
+                        }),
+                        Some(Ok(None)) => AnyView::new(view! {
+                            text(class = "gds-files-details__label") {{i18n::text("details-comment-none")}}
+                        }),
+                        Some(Ok(Some(comment))) => AnyView::new(view! {
+                            text(class = "gds-files-details__value") {{comment}}
+                        }),
+                    }
+                }}
+            }
+        }))
+    }
+
     fn tags_section(&self, browser: Option<&Browser>, entry_kind: EntryKind) -> Option<AnyView> {
         if !self.0.tags_enabled || entry_kind == EntryKind::SymbolicLink {
             return None;
@@ -1200,11 +1415,13 @@ impl Properties {
                         if let Some(meta) = metadata_ref {
                             all_rows.extend(Self::fact_rows(meta));
                         }
+                        let comment_view = props.comment_section(entry.kind);
                         let tags_view = props.tags_section(browser.as_ref(), entry.kind);
                         let body = AnyView::new(view! {
                             column(class = "gds-files-details__rows") {
                                 {all_rows}
                             }
+                            {comment_view}
                             {tags_view}
                         });
 
