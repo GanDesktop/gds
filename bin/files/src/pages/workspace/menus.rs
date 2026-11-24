@@ -968,6 +968,60 @@ impl Browser {
         })
     }
 
+    pub(super) fn sidebar_quick_access_menu(&self, target_view: AnyView, path: PathBuf) -> AnyView {
+        let browser = self.clone();
+        let model = std::rc::Rc::new(move || {
+            let mut menu = gds::ui::menu::MenuModel::new();
+            let open_new = browser.clone();
+            let path_new = path.clone();
+            menu.push(MenuEntry::Item {
+                label: i18n::text_untracked(Command::OpenInNewTab.label_id()),
+                icon: Some(IconName::FolderPlus),
+                shortcut: None,
+                disabled: false,
+                destructive: false,
+                on_select: UnsyncCallback::new(move |()| {
+                    open_new
+                        .0
+                        .owner
+                        .with(|| open_new.open_quick_access(&path_new, true));
+                }),
+            });
+            let open_cur = browser.clone();
+            let path_cur = path.clone();
+            menu.push(MenuEntry::Item {
+                label: i18n::text_untracked("quick-access-open-current"),
+                icon: Some(IconName::FolderOpen),
+                shortcut: None,
+                disabled: false,
+                destructive: false,
+                on_select: UnsyncCallback::new(move |()| {
+                    open_cur
+                        .0
+                        .owner
+                        .with(|| open_cur.open_quick_access_in_current(&path_cur));
+                }),
+            });
+            menu.push(MenuEntry::Separator);
+            let remove = browser.clone();
+            let path_rm = path.clone();
+            menu.push(MenuEntry::Item {
+                label: i18n::text_untracked("quick-access-remove"),
+                icon: Some(IconName::X),
+                shortcut: None,
+                disabled: false,
+                destructive: false,
+                on_select: UnsyncCallback::new(move |()| {
+                    remove.0.owner.with(|| remove.remove_quick_access(&path_rm));
+                }),
+            });
+            menu
+        });
+        AnyView::new(view! {
+            gds::ui::menu::ContextMenuHost(model = model) {{target_view}}
+        })
+    }
+
     pub(super) fn directory_menu(&self, target_view: AnyView) -> AnyView {
         let open = self.clone();
         let trigger = move |x: f32, y: f32| {

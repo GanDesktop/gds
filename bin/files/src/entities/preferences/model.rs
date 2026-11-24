@@ -257,14 +257,34 @@ impl TransferPreferences {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SidebarPreferences {
+    #[serde(default = "default_true")]
+    pub show_quick_access: bool,
     pub show_volumes: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tabs_height: Option<f32>,
+    pub quick_access_collapsed: bool,
     pub volumes_collapsed: bool,
     pub locations_collapsed: bool,
+}
+
+impl Default for SidebarPreferences {
+    fn default() -> Self {
+        Self {
+            show_quick_access: true,
+            show_volumes: false,
+            tabs_height: None,
+            quick_access_collapsed: false,
+            volumes_collapsed: false,
+            locations_collapsed: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, gds::ConfigEditor)]
@@ -363,5 +383,21 @@ mod tests {
         assert_eq!(parsed.files.preview, custom.files.preview);
         assert_eq!(parsed.files.watching, custom.files.watching);
         assert_eq!(parsed.files.transfer, custom.files.transfer);
+    }
+
+    #[test]
+    fn sidebar_preferences_default_quick_access_visible_for_legacy_toml() {
+        let legacy: Preferences = toml::from_str(
+            r#"
+[files.sidebar]
+show_volumes = true
+locations_collapsed = true
+"#,
+        )
+        .expect("deserialize legacy sidebar preferences");
+        assert!(legacy.files.sidebar.show_quick_access);
+        assert!(!legacy.files.sidebar.quick_access_collapsed);
+        assert!(legacy.files.sidebar.show_volumes);
+        assert!(legacy.files.sidebar.locations_collapsed);
     }
 }

@@ -188,9 +188,9 @@ pub(super) struct Workspace {
     pub content_width: RwSignal<f32, LocalStorage>,
     pub footer_filter_open: RwSignal<bool, LocalStorage>,
     pub filter_focus_request: RwSignal<Option<FilterFocusMode>, LocalStorage>,
-    pub micro_locations_expanded: RwSignal<bool, LocalStorage>,
+    pub sidebar_in_accordion: RwSignal<bool, LocalStorage>,
+    pub sidebar_accordion: RwSignal<super::chrome::AccordionSelection, LocalStorage>,
     pub address_presentation: RwSignal<AddressPresentation, LocalStorage>,
-    pub sidebar_tabs_height: RwSignal<Option<f32>, LocalStorage>,
     pub settings: crate::widgets::settings::View,
     pub sidebar: RwSignal<bool, LocalStorage>,
     pub sidebar_presentation: Signal<SidebarPresentation, LocalStorage>,
@@ -217,12 +217,14 @@ pub(super) struct Workspace {
     pub address_node: NodeRef,
     pub filter_node: NodeRef,
     pub tabs_node: NodeRef,
+    pub quick_access_node: NodeRef,
     pub locations_node: NodeRef,
     pub volumes_node: NodeRef,
     pub sidebar_content_node: NodeRef,
     pub locations_region_node: NodeRef,
     pub sidebar_region: RwSignal<Option<super::keyboard::SidebarRegion>, LocalStorage>,
     pub sidebar_cursor: RwSignal<Option<super::keyboard::SidebarRow>, LocalStorage>,
+    pub sidebar_reveal_quick_access: RwSignal<bool, LocalStorage>,
     pub sidebar_reveal_volumes: RwSignal<bool, LocalStorage>,
     pub tasks: TaskOwner,
     pub owner: Owner,
@@ -321,12 +323,6 @@ impl Browser {
             preference_service.snapshot().files.preview.cache_options(),
         ));
         let terminals = super::terminals::Dock::new();
-        let sidebar_tabs_height = preference_service
-            .snapshot()
-            .files
-            .sidebar
-            .tabs_height
-            .filter(|height| height.is_finite() && *height > 0.0);
         let notice = RwSignal::new_local(notice);
         let apply = preference_service.clone();
         let settings =
@@ -377,9 +373,9 @@ impl Browser {
             content_width: RwSignal::new_local(initial_content_width),
             footer_filter_open: RwSignal::new_local(false),
             filter_focus_request: RwSignal::new_local(None),
-            micro_locations_expanded: RwSignal::new_local(false),
+            sidebar_in_accordion: RwSignal::new_local(false),
+            sidebar_accordion: RwSignal::new_local(super::chrome::AccordionSelection::Auto),
             address_presentation: RwSignal::new_local(AddressPresentation::Breadcrumbs),
-            sidebar_tabs_height: RwSignal::new_local(sidebar_tabs_height),
             settings,
             sidebar,
             sidebar_presentation,
@@ -405,12 +401,14 @@ impl Browser {
             address_node: NodeRef::new(),
             filter_node: NodeRef::new(),
             tabs_node: NodeRef::new(),
+            quick_access_node: NodeRef::new(),
             locations_node: NodeRef::new(),
             volumes_node: NodeRef::new(),
             sidebar_content_node: NodeRef::new(),
             locations_region_node: NodeRef::new(),
             sidebar_region: RwSignal::new_local(None),
             sidebar_cursor: RwSignal::new_local(None),
+            sidebar_reveal_quick_access: RwSignal::new_local(false),
             sidebar_reveal_volumes: RwSignal::new_local(false),
             tasks,
             connector,
@@ -578,6 +576,7 @@ impl Browser {
             self.0.sidebar_content_node,
             self.0.locations_region_node,
             self.0.tabs_node,
+            self.0.quick_access_node,
             self.0.volumes_node,
             self.0.locations_node,
         ]

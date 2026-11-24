@@ -54,6 +54,7 @@ pub enum Command {
     ClearRecent,
     MountVolume,
     UnmountVolume,
+    FocusQuickAccess,
     FocusLocations,
     FocusVolumes,
     FocusTabs,
@@ -65,7 +66,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 51] = [
+    pub const ALL: [Self; 52] = [
         Self::Menu,
         Self::Settings,
         Self::Help,
@@ -109,6 +110,7 @@ impl Command {
         Self::ClearRecent,
         Self::MountVolume,
         Self::UnmountVolume,
+        Self::FocusQuickAccess,
         Self::FocusLocations,
         Self::FocusVolumes,
         Self::FocusTabs,
@@ -165,6 +167,7 @@ impl Command {
             Self::ClearRecent => "clear-recent",
             Self::MountVolume => "device-mount",
             Self::UnmountVolume => "device-unmount",
+            Self::FocusQuickAccess => "focus-quick-access",
             Self::FocusLocations => "focus-locations",
             Self::FocusVolumes => "focus-volumes",
             Self::FocusTabs => "focus-tabs",
@@ -238,6 +241,7 @@ impl Command {
             Self::UnmountVolume => {
                 Shortcut::new(Key::character("m"), Modifiers::CONTROL | Modifiers::SHIFT)
             }
+            Self::FocusQuickAccess => Shortcut::new(Key::character("q"), Modifiers::ALT),
             Self::FocusLocations => Shortcut::new(Key::character("l"), Modifiers::ALT),
             Self::FocusVolumes => Shortcut::new(Key::character("v"), Modifiers::ALT),
             Self::FocusTabs => Shortcut::new(Key::character("t"), Modifiers::ALT),

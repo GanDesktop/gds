@@ -96,9 +96,10 @@ const SECTIONS: &[(&str, &[Command])] = &[
     (
         "help-focus",
         &[
-            Command::FocusLocations,
-            Command::FocusVolumes,
             Command::FocusTabs,
+            Command::FocusQuickAccess,
+            Command::FocusVolumes,
+            Command::FocusLocations,
             Command::FocusContent,
         ],
     ),

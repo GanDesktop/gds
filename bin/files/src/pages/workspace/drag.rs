@@ -10,7 +10,8 @@ use std::{
 };
 
 use gds::appearance::tokens::{
-    COLLAPSED_SIDEBAR_WIDTH, ICON_BUTTON_SIZE, ICON_SIZE, SIDEBAR_ICON_SIZE, SIDEBAR_PADDING,
+    COLLAPSED_SIDEBAR_WIDTH, ICON_BUTTON_SIZE, ICON_SIZE, SIDEBAR_ICON_SIZE, SIDEBAR_ITEM_HEIGHT,
+    SIDEBAR_PADDING,
 };
 use gds::ui::{
     IconButtonProps, IconName, IconProps,
@@ -28,8 +29,7 @@ use gds::ui::{
 use zgui::prelude::*;
 use zgui::reactive::{RenderEffect, Signal, UnsyncCallback, on_cleanup_local};
 use zgui::view::{
-    Either, EventCx, ListenerGuard, ListenerOptions, OverlayLayer, Portal, TimeoutHandle, Timers,
-    events,
+    EventCx, ListenerGuard, ListenerOptions, OverlayLayer, Portal, TimeoutHandle, Timers, events,
 };
 use zgui::vocab::{Key, NamedKey, PointerButton};
 use zgui::{component, css, view};
@@ -144,8 +144,26 @@ const DRAG_PREVIEW_CSS: &str = css!(
         pointer-events: none;
     }
 
-    .gds-files-sidebar-row-wrap[data-dragging-tab="true"] {
+    .gds-files-sidebar-row-wrap[data-dragging-tab="true"],
+    .gds-files-sidebar-row-wrap[data-dragging-quick-access="true"] {
         opacity: 0.45;
+    }
+
+    .gds-files-quick-access-drop-zone {
+        display: flex;
+        flex-direction: column;
+        flex: 0 0 auto;
+        width: 100%;
+        min-width: 0px;
+        min-height: 0px;
+        border-radius: var(--gds-radius-control, 6px);
+        transition: background-color var(--gds-motion-fast, 100ms) var(--gds-motion-ease-out, cubic-bezier(0, 0, 0.2, 1));
+    }
+
+    .gds-files-quick-access-drop-zone[data-quick-access-drop="true"] {
+        background-color: color-mix(in srgb, var(--gds-primary) 10%, transparent);
+        outline: 1px solid var(--gds-primary);
+        outline-offset: -1px;
     }
     "#
 );
@@ -332,10 +350,22 @@ struct TabDragPreview {
     grab_offset: (f32, f32),
 }
 
+const QUICK_ACCESS_ZONE_KEY: &str = "quick-access-zone";
+
+#[derive(Clone)]
+struct QuickAccessDragPreview {
+    path: PathBuf,
+    icon: IconName,
+    label: String,
+    selected: bool,
+    grab_offset: (f32, f32),
+}
+
 #[derive(Clone)]
 enum WindowDragPayload {
     Files(FileDrag),
     Tab(TabDragPreview),
+    QuickAccess(QuickAccessDragPreview),
 }
 
 #[derive(Clone)]
@@ -348,6 +378,13 @@ enum ArmedDrag {
     Tab {
         id: u64,
         pinned: bool,
+        start: (f32, f32),
+        grab_offset: (f32, f32),
+    },
+    QuickAccess {
+        path: PathBuf,
+        icon: IconName,
+        label: String,
         start: (f32, f32),
         grab_offset: (f32, f32),
     },
@@ -405,6 +442,13 @@ struct RegisteredTab {
     node: NodeRef,
 }
 
+#[derive(Clone)]
+struct RegisteredQuickAccess {
+    token: u64,
+    path: PathBuf,
+    node: NodeRef,
+}
+
 struct SpringLoad {
     _timer: TimeoutHandle,
 }
@@ -414,6 +458,8 @@ struct DragCoordinator {
     armed: RefCell<Option<ArmedDrag>>,
     targets: RefCell<Vec<RegisteredTarget>>,
     tabs: RefCell<Vec<RegisteredTab>>,
+    quick_access_zones: RefCell<Vec<(u64, NodeRef)>>,
+    quick_access_rows: RefCell<Vec<RegisteredQuickAccess>>,
     spring: RefCell<Option<SpringLoad>>,
     external_spring_key: RefCell<Option<String>>,
     native_drag_session: Cell<Option<DragSessionId>>,
@@ -429,6 +475,8 @@ impl DragCoordinator {
             armed: RefCell::new(None),
             targets: RefCell::new(Vec::new()),
             tabs: RefCell::new(Vec::new()),
+            quick_access_zones: RefCell::new(Vec::new()),
+            quick_access_rows: RefCell::new(Vec::new()),
             spring: RefCell::new(None),
             external_spring_key: RefCell::new(None),
             native_drag_session: Cell::new(None),
@@ -476,6 +524,48 @@ impl DragCoordinator {
 
     fn unregister_tab(&self, token: u64) {
         self.tabs.borrow_mut().retain(|item| item.token != token);
+    }
+
+    fn register_quick_access_zone(&self, node: NodeRef) -> u64 {
+        let token = self.alloc_token();
+        self.quick_access_zones.borrow_mut().push((token, node));
+        token
+    }
+
+    fn unregister_quick_access_zone(&self, token: u64) {
+        self.quick_access_zones
+            .borrow_mut()
+            .retain(|(item_token, _)| *item_token != token);
+    }
+
+    fn hit_quick_access_zone(&self, pos: (f32, f32)) -> bool {
+        self.quick_access_zones
+            .borrow()
+            .iter()
+            .rev()
+            .any(|(_, node)| drop_hit_test(node, pos))
+    }
+
+    fn register_quick_access_row(&self, path: PathBuf, node: NodeRef) -> u64 {
+        let token = self.alloc_token();
+        let mut rows = self.quick_access_rows.borrow_mut();
+        rows.retain(|item| item.path != path);
+        rows.push(RegisteredQuickAccess { token, path, node });
+        token
+    }
+
+    fn unregister_quick_access_row(&self, token: u64) {
+        self.quick_access_rows
+            .borrow_mut()
+            .retain(|item| item.token != token);
+    }
+
+    fn hit_quick_access_row(&self, pos: (f32, f32)) -> Option<RegisteredQuickAccess> {
+        self.quick_access_rows
+            .borrow()
+            .iter()
+            .find(|item| drop_hit_test(&item.node, pos))
+            .cloned()
     }
 
     fn hit_hover_target(
@@ -985,6 +1075,62 @@ fn DraggedTabGhost(
     .layer(OverlayLayer::Popover)
 }
 
+#[component]
+fn DraggedQuickAccessGhost(
+    preview: QuickAccessDragPreview,
+    position: Signal<(f32, f32), LocalStorage>,
+    presentation: Signal<SidebarPresentation, LocalStorage>,
+) -> impl IntoView {
+    gds::ui::drag::install_drag_stylesheet();
+    if zgui::view::current_host().is_some() {
+        zgui::view::install_stylesheet(DRAG_PREVIEW_SHEET, DRAG_PREVIEW_CSS);
+    }
+    let collapsed_width = (COLLAPSED_SIDEBAR_WIDTH - 2.0 * SIDEBAR_PADDING).max(36.0);
+    let item_width = Signal::derive_local(move || {
+        (presentation.get().width() - 2.0 * SIDEBAR_PADDING).max(collapsed_width)
+    });
+    let grab_x = preview.grab_offset.0;
+    let grab_y = preview.grab_offset.1;
+
+    Portal::new(move || {
+        let icon = preview.icon;
+        let label = preview.label.clone();
+        let selected = preview.selected;
+        AnyView::new(view! {
+            box(class = "gds-drag-portal-overlay", a11y:hidden = true) {
+                box(
+                    class = "gds-files-drag-tab-ghost",
+                    attr:data-selected = selected.then(|| "true".to_owned()),
+                    style:left = move || {
+                        let width = item_width.get();
+                        Some(format!("{:.2}px", position.get().0 - grab_x.min(width)))
+                    },
+                    style:top = move || {
+                        Some(format!("{:.2}px", position.get().1 - grab_y.min(SIDEBAR_ITEM_HEIGHT)))
+                    },
+                    style:width = move || Some(format!("{:.2}px", item_width.get())),
+                    style:height = format!("{SIDEBAR_ITEM_HEIGHT}px"),
+                ) {
+                    NavItem(
+                        selected = selected,
+                        presentation = presentation,
+                        class = "gds-files-location-item",
+                        style:height = format!("{SIDEBAR_ITEM_HEIGHT}px"),
+                    ) {
+                        Icon(
+                            name = icon,
+                            size = SIDEBAR_ICON_SIZE,
+                            class = "gds-files-nav-icon",
+                        )
+                        NavItemLabel {{label}}
+                    }
+                }
+            }
+        })
+    })
+    .layer(OverlayLayer::Popover)
+}
+
 impl Browser {
     pub(super) fn has_native_drag_active(&self) -> bool {
         let key = Rc::as_ptr(&self.0) as usize;
@@ -1084,17 +1230,24 @@ impl Browser {
                         let items = drag.preview_items();
                         let copy_hint = copy_mode.get().then(|| i18n::text("copy-files"));
                         let body = render_file_drag_card_body(count, items, copy_hint);
-                        Either::Left(AnyView::new(view! {
+                        AnyView::new(view! {
                             DragCard(position = overlay.position()) {{body}}
-                        }))
+                        })
                     }
-                    WindowDragPayload::Tab(preview) => Either::Right(AnyView::new(view! {
+                    WindowDragPayload::Tab(preview) => AnyView::new(view! {
                         DraggedTabGhost(
                             preview = preview,
                             position = overlay.position(),
                             presentation = sidebar_presentation,
                         )
-                    })),
+                    }),
+                    WindowDragPayload::QuickAccess(preview) => AnyView::new(view! {
+                        DraggedQuickAccessGhost(
+                            preview = preview,
+                            position = overlay.position(),
+                            presentation = sidebar_presentation,
+                        )
+                    }),
                 }
             })}}
         })
@@ -1211,7 +1364,12 @@ impl Browser {
                         let hovered = move_coord
                             .hit_tab(pos)
                             .filter(|tab| tab.pinned == pinned)
-                            .map(|tab| format!("tab:{}", tab.id));
+                            .map(|tab| format!("tab:{}", tab.id))
+                            .or_else(|| {
+                                (move_coord.hit_quick_access_zone(pos)
+                                    && move_browser.tab_local_path(id).is_some())
+                                .then(|| QUICK_ACCESS_ZONE_KEY.to_owned())
+                            });
                         move_coord.overlay.set_hovered_target(hovered);
                     }
                 },
@@ -1236,14 +1394,195 @@ impl Browser {
                     let pos = (ev.position.x.0, ev.position.y.0);
                     if let Some(WindowDragPayload::Tab(TabDragPreview { id: from_id, .. })) =
                         up_coord.overlay.end()
-                        && let Some(target_tab) = up_coord.hit_tab(pos)
-                        && target_tab.id != from_id
-                        && let (Some(from_idx), Some(to_idx)) = (
-                            up_browser.tab_index(from_id),
-                            up_browser.tab_index(target_tab.id),
-                        )
                     {
-                        up_browser.reorder_tab(from_idx, to_idx);
+                        if let Some(target_tab) = up_coord.hit_tab(pos)
+                            && target_tab.id != from_id
+                            && let (Some(from_idx), Some(to_idx)) = (
+                                up_browser.tab_index(from_id),
+                                up_browser.tab_index(target_tab.id),
+                            )
+                        {
+                            up_browser.reorder_tab(from_idx, to_idx);
+                            ev.stop_propagation();
+                        } else if up_coord.hit_quick_access_zone(pos) {
+                            up_browser.add_quick_access_from_tab(from_id);
+                            ev.stop_propagation();
+                        }
+                    }
+                },
+                on:pointer_cancel = move |ev| {
+                    ev.release_pointer();
+                    cancel_coord.cancel_all();
+                },
+            ) {
+                {view}
+            }
+        })
+    }
+
+    pub(super) fn quick_access_drop_zone(&self, view: AnyView) -> AnyView {
+        if zgui::view::current_host().is_some() {
+            zgui::view::install_stylesheet(DRAG_PREVIEW_SHEET, DRAG_PREVIEW_CSS);
+        }
+        let coord = coordinator_for(self);
+        let node = NodeRef::new();
+        let token = coord.register_quick_access_zone(node);
+        let cleanup_coord = Rc::clone(&coord);
+        on_cleanup_local(move || {
+            cleanup_coord.unregister_quick_access_zone(token);
+        });
+        let overlay = coord.overlay;
+        let active = Signal::derive_local(move || {
+            overlay.hovered_target().get().as_deref() == Some(QUICK_ACCESS_ZONE_KEY)
+        });
+
+        AnyView::new(view! {
+            column(
+                node_ref = node,
+                class = "gds-files-quick-access-drop-zone",
+                attr:data-quick-access-drop = move || active.get().then(|| "true".to_owned()),
+            ) {
+                {view}
+            }
+        })
+    }
+
+    pub(super) fn draggable_quick_access(
+        &self,
+        view: AnyView,
+        path: PathBuf,
+        label: String,
+        icon: IconName,
+    ) -> AnyView {
+        let coord = coordinator_for(self);
+        let node = NodeRef::new();
+        let row_key = format!("qa:{}", path.display());
+        let row_token = coord.register_quick_access_row(path.clone(), node);
+        let cleanup_coord = Rc::clone(&coord);
+        on_cleanup_local(move || {
+            cleanup_coord.unregister_quick_access_row(row_token);
+        });
+
+        let overlay = coord.overlay;
+        let hover_key = row_key;
+        let is_hovered = Signal::derive_local(move || {
+            overlay.hovered_target().get().as_deref() == Some(&hover_key)
+        });
+        let dragging_path = path.clone();
+        let is_dragging_self = Signal::derive_local(move || {
+            overlay.payload().with(|payload| {
+                matches!(
+                    payload,
+                    Some(WindowDragPayload::QuickAccess(item)) if item.path == dragging_path
+                )
+            })
+        });
+
+        let down_coord = Rc::clone(&coord);
+        let down_path = path.clone();
+        let down_label = label;
+        let down_presentation = self.sidebar_presentation();
+        let move_coord = Rc::clone(&coord);
+        let move_path = path.clone();
+        let move_browser = self.clone();
+        let up_coord = Rc::clone(&coord);
+        let up_path = path;
+        let up_browser = self.clone();
+        let cancel_coord = Rc::clone(&coord);
+
+        AnyView::new(view! {
+            box(
+                class = "gds-files-sidebar-row-wrap",
+                node_ref = node,
+                attr:data-drop-active = move || is_hovered.get().then(|| "true".to_owned()),
+                attr:data-dragging-quick-access = move || is_dragging_self.get().then(|| "true".to_owned()),
+                on:pointer_down = move |ev| {
+                    if ev.button != Some(PointerButton::Primary) {
+                        return;
+                    }
+                    let pos = (ev.position.x.0, ev.position.y.0);
+                    let grab_offset = row_grab_offset(
+                        &node,
+                        pos,
+                        down_presentation.get_untracked(),
+                        SIDEBAR_ITEM_HEIGHT,
+                    );
+                    *down_coord.armed.borrow_mut() = Some(ArmedDrag::QuickAccess {
+                        path: down_path.clone(),
+                        icon,
+                        label: down_label.clone(),
+                        start: pos,
+                        grab_offset,
+                    });
+                },
+                on:pointer_move = move |ev| {
+                    let pos = (ev.position.x.0, ev.position.y.0);
+                    let mut start_payload = None;
+                    if let Some(ArmedDrag::QuickAccess {
+                        path: armed_path,
+                        icon: armed_icon,
+                        label: armed_label,
+                        start,
+                        grab_offset,
+                    }) = move_coord.armed.borrow().as_ref()
+                        && *armed_path == move_path
+                        && distance(*start, pos) >= DRAG_THRESHOLD
+                    {
+                        let selected = move_browser
+                            .read_untracked(|state| state.tab().navigation.path() == Some(armed_path.as_path()));
+                        start_payload = Some(WindowDragPayload::QuickAccess(QuickAccessDragPreview {
+                            path: armed_path.clone(),
+                            icon: *armed_icon,
+                            label: armed_label.clone(),
+                            selected,
+                            grab_offset: *grab_offset,
+                        }));
+                    }
+                    if let Some(payload) = start_payload {
+                        *move_coord.armed.borrow_mut() = None;
+                        ev.capture_pointer();
+                        move_coord.overlay.begin(payload, pos.0, pos.1);
+                    }
+                    if matches!(
+                        move_coord.overlay.payload().get_untracked(),
+                        Some(WindowDragPayload::QuickAccess(_))
+                    ) {
+                        move_coord.overlay.move_to(pos.0, pos.1);
+                        let hovered = move_coord
+                            .hit_quick_access_row(pos)
+                            .map(|row| format!("qa:{}", row.path.display()));
+                        move_coord.overlay.set_hovered_target(hovered);
+                    }
+                },
+                on:pointer_up = move |ev| {
+                    if ev.button != Some(PointerButton::Primary) {
+                        return;
+                    }
+                    if matches!(
+                        up_coord.armed.borrow().as_ref(),
+                        Some(ArmedDrag::QuickAccess { path: armed_path, .. }) if *armed_path == up_path
+                    ) {
+                        *up_coord.armed.borrow_mut() = None;
+                    }
+                    let is_qa_drag = matches!(
+                        up_coord.overlay.payload().get_untracked(),
+                        Some(WindowDragPayload::QuickAccess(_))
+                    );
+                    if !is_qa_drag {
+                        return;
+                    }
+                    ev.release_pointer();
+                    let pos = (ev.position.x.0, ev.position.y.0);
+                    if let Some(WindowDragPayload::QuickAccess(QuickAccessDragPreview {
+                        path: from_path,
+                        ..
+                    })) = up_coord.overlay.end()
+                    {
+                        if let Some(target) = up_coord.hit_quick_access_row(pos)
+                            && target.path != from_path
+                        {
+                            up_browser.reorder_quick_access_item(&from_path, &target.path);
+                        }
                         ev.stop_propagation();
                     }
                 },
@@ -1260,7 +1599,8 @@ impl Browser {
     pub(super) fn file_drag_target(&self, view: AnyView, destination: PathBuf) -> AnyView {
         let coord = coordinator_for(self);
         let node = NodeRef::new();
-        let target_key = format!("dir:{}", destination.display());
+        let instance = coord.alloc_token();
+        let target_key = format!("dir:{instance}:{}", destination.display());
         let target_token = coord.register_target(
             target_key.clone(),
             node,
@@ -1645,10 +1985,19 @@ fn tab_grab_offset(
     pointer: (f32, f32),
     presentation: SidebarPresentation,
 ) -> (f32, f32) {
+    row_grab_offset(node, pointer, presentation, TAB_HEIGHT)
+}
+
+fn row_grab_offset(
+    node: &NodeRef,
+    pointer: (f32, f32),
+    presentation: SidebarPresentation,
+    default_height: f32,
+) -> (f32, f32) {
     let fallback_w = (presentation.width() - 2.0 * SIDEBAR_PADDING)
         .max(COLLAPSED_SIDEBAR_WIDTH - 2.0 * SIDEBAR_PADDING);
     let Some(bounds) = node.window_bounds() else {
-        return (fallback_w * 0.5, TAB_HEIGHT * 0.5);
+        return (fallback_w * 0.5, default_height * 0.5);
     };
     let scale = node.scale().max(0.01);
     let left = bounds.origin.x.0 / scale;

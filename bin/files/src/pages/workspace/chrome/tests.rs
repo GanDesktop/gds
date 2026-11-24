@@ -30,7 +30,10 @@ use zgui::{
 };
 use zgui_platform_headless::{Harness, OffscreenSurface};
 
-use super::{Breadcrumb, TabCycleTargets, compute_tab_cycle_targets};
+use super::{
+    Breadcrumb, CollapsibleMeta, CollapsibleSection, TabCycleTargets, allocate_collapsible_heights,
+    compute_tab_cycle_targets, default_accordion_section, sidebar_accordion_threshold,
+};
 use crate::pages::workspace::view::tests::send_key_chord;
 use crate::{
     entities::{
@@ -1575,4 +1578,555 @@ fn volumes_page_removes_inline_unmount_buttons_aligns_mount_column_and_renders_s
             browser.view()
         })
         .expect("volumes page GPU test ran");
+}
+
+#[test]
+fn accordion_threshold_default_section_and_water_filling_allocator() {
+    assert_eq!(sidebar_accordion_threshold(1), 0.0);
+    assert!(sidebar_accordion_threshold(2) > 400.0);
+    assert!(sidebar_accordion_threshold(3) > sidebar_accordion_threshold(2));
+
+    // Prefer first visible user-expanded section with items.
+    assert_eq!(
+        default_accordion_section(
+            None,
+            CollapsibleMeta {
+                visible: true,
+                pref_expanded: true,
+                has_items: true,
+            },
+            CollapsibleMeta {
+                visible: false,
+                pref_expanded: true,
+                has_items: false,
+            },
+            CollapsibleMeta {
+                visible: true,
+                pref_expanded: true,
+                has_items: true,
+            },
+        ),
+        Some(CollapsibleSection::QuickAccess)
+    );
+    // When QuickAccess is empty and Volumes has drives, pick Volumes.
+    assert_eq!(
+        default_accordion_section(
+            None,
+            CollapsibleMeta {
+                visible: true,
+                pref_expanded: true,
+                has_items: false,
+            },
+            CollapsibleMeta {
+                visible: true,
+                pref_expanded: true,
+                has_items: true,
+            },
+            CollapsibleMeta {
+                visible: true,
+                pref_expanded: true,
+                has_items: true,
+            },
+        ),
+        Some(CollapsibleSection::Volumes)
+    );
+    // Focused section always wins when visible.
+    assert_eq!(
+        default_accordion_section(
+            Some(CollapsibleSection::Locations),
+            CollapsibleMeta {
+                visible: true,
+                pref_expanded: true,
+                has_items: true,
+            },
+            CollapsibleMeta {
+                visible: true,
+                pref_expanded: true,
+                has_items: true,
+            },
+            CollapsibleMeta {
+                visible: true,
+                pref_expanded: false,
+                has_items: true,
+            },
+        ),
+        Some(CollapsibleSection::Locations)
+    );
+
+    // Water-filling gives exact heights when total fits, and caps only oversized sections.
+    assert_eq!(
+        allocate_collapsible_heights(500.0, [156.0, 0.0, 276.0]),
+        [156.0, 0.0, 276.0]
+    );
+    let capped = allocate_collapsible_heights(400.0, [150.0, 0.0, 400.0]);
+    assert!((capped[0] - 150.0).abs() < 0.01);
+    assert!((capped[2] - 250.0).abs() < 0.01);
+    let equal = allocate_collapsible_heights(300.0, [250.0, 0.0, 250.0]);
+    assert!((equal[0] - 150.0).abs() < 0.01);
+    assert!((equal[2] - 150.0).abs() < 0.01);
+}
+
+#[test]
+fn quick_access_plus_button_tab_drag_new_tab_click_reorder_and_accordion_mode() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let desktop = home.join("Desktop");
+    let downloads = home.join("Downloads");
+    let pictures = home.join("Pictures");
+    let videos = home.join("Videos");
+    let projects = home.join("Projects");
+    for dir in [&desktop, &downloads, &pictures, &videos, &projects] {
+        std::fs::create_dir_all(dir).expect("create fixture dir");
+    }
+    clear_recorded_tab_nodes();
+
+    run_browser_harness(
+        &home,
+        (1240.0, 760.0),
+        volumes::Snapshot::default(),
+        |browser| AnyView::new(browser.view()),
+        |harness, browser| {
+            let surface = harness.platform().offscreens()[0].clone();
+
+            // Seed default 4 Quick Access folders directly into the browser for deterministic test.
+            for dir in [&desktop, &downloads, &pictures, &videos] {
+                assert!(browser.add_quick_access_path(dir.clone()));
+            }
+            flush();
+            harness.settle(12);
+
+            // 1. Tall window (1240x760): Quick Access & Locations are BOTH expanded simultaneously.
+            let qa_bounds_tall = browser
+                .0
+                .quick_access_node
+                .window_bounds()
+                .expect("expanded quick access bounds in tall window");
+            let loc_bounds_tall = browser
+                .0
+                .locations_node
+                .window_bounds()
+                .expect("expanded locations bounds in tall window");
+            assert!(
+                qa_bounds_tall.size.height.0 > 120.0 && loc_bounds_tall.size.height.0 > 150.0,
+                "expected both Quick Access ({:?}) and Locations ({:?}) expanded in tall window",
+                qa_bounds_tall,
+                loc_bounds_tall
+            );
+
+            // 2. Clicking a Quick Access item opens a NEW tab when different from active tab,
+            //    and keeps the current tab when already active at that directory.
+            assert_eq!(browser.read_untracked(|ws| ws.tabs.len()), 1);
+            let buttons = collect_live_buttons(&surface);
+            let dl_btn = find_button_by_label(&buttons, "Downloads")
+                .expect("Downloads quick access button")
+                .clone();
+            click_at(
+                harness,
+                dl_btn.center_x() as f32,
+                dl_btn.center_y() as f32,
+                100,
+            );
+            assert_eq!(
+                browser.read_untracked(|ws| ws.tabs.len()),
+                2,
+                "clicking a different directory in Quick Access must open a new tab"
+            );
+            assert_eq!(
+                browser.read_untracked(|ws| ws.tab().navigation.path().map(Path::to_path_buf)),
+                Some(downloads.clone())
+            );
+            // Clicking Downloads again while active tab is already at Downloads must NOT spawn a 3rd tab.
+            let buttons = collect_live_buttons(&surface);
+            let dl_btn = buttons
+                .iter()
+                .find(|b| b.label == "Downloads" && b.y0 >= qa_bounds_tall.origin.y.0 as f64 - 4.0)
+                .expect("Downloads quick access row")
+                .clone();
+            click_at(
+                harness,
+                dl_btn.center_x() as f32,
+                dl_btn.center_y() as f32,
+                250,
+            );
+            assert_eq!(
+                browser.read_untracked(|ws| ws.tabs.len()),
+                2,
+                "clicking already-active Quick Access directory must not open a duplicate tab"
+            );
+
+            // 3. Trailing `+` button reflects AlreadyAdded on Downloads, CanAdd on Projects, and
+            //    adds Projects cleanly when clicked; reflects NotLocal on location:/volumes.
+            let already_lbl = gds::i18n::text_untracked("quick-access-already-added");
+            let add_lbl = gds::i18n::text_untracked("quick-access-add-current");
+            let local_only_lbl = gds::i18n::text_untracked("quick-access-local-only");
+            let buttons = collect_live_buttons(&surface);
+            assert!(
+                find_button_by_label(&buttons, &already_lbl).is_some(),
+                "expected `+` button to show already-added state on Downloads"
+            );
+
+            browser.open(Location::Volumes);
+            flush();
+            harness.settle(8);
+            let buttons = collect_live_buttons(&surface);
+            assert!(
+                find_button_by_label(&buttons, &local_only_lbl).is_some(),
+                "expected `+` button to show local-only state on location:/volumes"
+            );
+
+            browser.open(Location::from(projects.as_path()));
+            flush();
+            harness.settle(8);
+            click_button(harness, &add_lbl);
+            assert!(
+                browser.quick_access_paths_untracked().contains(&projects),
+                "clicking `+` must add current local directory to Quick Access"
+            );
+            // Remove Projects so we can also test dragging a tab onto collapsed Quick Access!
+            browser.remove_quick_access(&projects);
+            flush();
+            harness.settle(8);
+            assert!(!browser.quick_access_paths_untracked().contains(&projects));
+
+            // 4. Dragging a tab onto collapsed Quick Access adds the directory AND expands Quick Access.
+            let qa_heading = heading_node("quick-access").expect("quick-access heading node");
+            let scale = qa_heading.scale().max(1.0);
+            let h_bounds = qa_heading.window_bounds().expect("heading bounds");
+            click_at(
+                harness,
+                (h_bounds.origin.x.0 + h_bounds.size.width.0 * 0.5) / scale,
+                (h_bounds.origin.y.0 + h_bounds.size.height.0 * 0.5) / scale,
+                400,
+            );
+            // Collapsed: `+` button must be hidden.
+            let buttons = collect_live_buttons(&surface);
+            assert!(
+                find_button_by_label(&buttons, &add_lbl).is_none(),
+                "trailing `+` button must hide when Quick Access is collapsed"
+            );
+
+            let active_tab_id = browser.read_untracked(|ws| ws.tab().id);
+            let tab_node = recorded_tab_node(active_tab_id).expect("active tab node");
+            let tab_bounds = tab_node.window_bounds().expect("active tab bounds");
+            let qa_bounds_collapsed = qa_heading
+                .window_bounds()
+                .expect("collapsed heading bounds");
+            let start = Point::new(
+                CssPx((tab_bounds.origin.x.0 + tab_bounds.size.width.0 * 0.5) / scale),
+                CssPx((tab_bounds.origin.y.0 + tab_bounds.size.height.0 * 0.5) / scale),
+            );
+            let mid = Point::new(CssPx(start.x.0), CssPx(start.y.0 + 18.0));
+            let drop_pt = Point::new(
+                CssPx(
+                    (qa_bounds_collapsed.origin.x.0 + qa_bounds_collapsed.size.width.0 * 0.5)
+                        / scale,
+                ),
+                CssPx(
+                    (qa_bounds_collapsed.origin.y.0 + qa_bounds_collapsed.size.height.0 * 0.5)
+                        / scale,
+                ),
+            );
+            harness.deliver_to_first(SurfaceEvent::Pointer {
+                action: PointerAction::Moved,
+                event: PointerEvent::mouse(start),
+                modifiers: Modifiers::NONE,
+                timestamp: Timestamp::from_origin(Duration::from_millis(500)),
+            });
+            harness.deliver_to_first(SurfaceEvent::Pointer {
+                action: PointerAction::Pressed,
+                event: PointerEvent::mouse(start).with_button(PointerButton::Primary),
+                modifiers: Modifiers::NONE,
+                timestamp: Timestamp::from_origin(Duration::from_millis(510)),
+            });
+            harness.settle(4);
+            harness.deliver_to_first(SurfaceEvent::Pointer {
+                action: PointerAction::Moved,
+                event: PointerEvent::mouse(mid),
+                modifiers: Modifiers::NONE,
+                timestamp: Timestamp::from_origin(Duration::from_millis(530)),
+            });
+            harness.settle(4);
+            harness.deliver_to_first(SurfaceEvent::Pointer {
+                action: PointerAction::Moved,
+                event: PointerEvent::mouse(drop_pt),
+                modifiers: Modifiers::NONE,
+                timestamp: Timestamp::from_origin(Duration::from_millis(550)),
+            });
+            harness.settle(4);
+            harness.deliver_to_first(SurfaceEvent::Pointer {
+                action: PointerAction::Released,
+                event: PointerEvent::mouse(drop_pt).with_button(PointerButton::Primary),
+                modifiers: Modifiers::NONE,
+                timestamp: Timestamp::from_origin(Duration::from_millis(570)),
+            });
+            harness.settle(12);
+            assert!(
+                browser.quick_access_paths_untracked().contains(&projects),
+                "dropping a local tab onto Quick Access heading must add its directory"
+            );
+            assert!(
+                !browser
+                    .0
+                    .preferences
+                    .snapshot()
+                    .files
+                    .sidebar
+                    .quick_access_collapsed,
+                "dropping a tab onto collapsed Quick Access must expand it"
+            );
+
+            // 5. Reordering Quick Access items persists the new order.
+            browser.reorder_quick_access_item(&projects, &desktop);
+            flush();
+            harness.settle(8);
+            assert_eq!(
+                browser.quick_access_paths_untracked().first(),
+                Some(&projects),
+                "reordered Quick Access item must move to target position"
+            );
+
+            // 6. Responsive vertical accordion mode: shrink window to 1240x500 (sidebar < 540px).
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(1240.0),
+                DevicePx(500.0),
+            )));
+            harness.advance(Duration::from_millis(25));
+            harness.settle(16);
+            assert!(
+                browser.0.sidebar_in_accordion.get_untracked(),
+                "short window must activate sidebar accordion mode"
+            );
+            // Initially Quick Access stays expanded while Locations collapses without mutating prefs.
+            let qa_short = browser
+                .0
+                .quick_access_node
+                .window_bounds()
+                .expect("Quick Access stays expanded initially in accordion mode");
+            assert!(qa_short.size.height.0 > 60.0);
+            let loc_short_h = browser
+                .0
+                .locations_node
+                .window_bounds()
+                .map_or(0.0, |r| r.size.height.0);
+            assert!(
+                loc_short_h < 1.0,
+                "Locations must collapse automatically in accordion mode, got height {loc_short_h}"
+            );
+            assert!(
+                !browser
+                    .0
+                    .preferences
+                    .snapshot()
+                    .files
+                    .sidebar
+                    .locations_collapsed,
+                "accordion mode must NOT mutate persisted locations_collapsed preference"
+            );
+
+            // Clicking Locations heading expands Locations and collapses Quick Access!
+            let loc_heading = heading_node("locations").expect("locations heading node");
+            let loc_h_bounds = loc_heading
+                .window_bounds()
+                .expect("locations heading bounds");
+            click_at(
+                harness,
+                (loc_h_bounds.origin.x.0 + loc_h_bounds.size.width.0 * 0.5) / scale,
+                (loc_h_bounds.origin.y.0 + loc_h_bounds.size.height.0 * 0.5) / scale,
+                700,
+            );
+            let loc_after = browser
+                .0
+                .locations_node
+                .window_bounds()
+                .expect("Locations expanded after click in accordion mode");
+            assert!(loc_after.size.height.0 > 60.0);
+            let qa_after_h = browser
+                .0
+                .quick_access_node
+                .window_bounds()
+                .map_or(0.0, |r| r.size.height.0);
+            assert!(
+                qa_after_h < 1.0,
+                "expanding Locations in accordion mode must collapse Quick Access, got height {qa_after_h}"
+            );
+            assert!(
+                !browser
+                    .0
+                    .preferences
+                    .snapshot()
+                    .files
+                    .sidebar
+                    .quick_access_collapsed,
+                "accordion switching must NOT mutate persisted quick_access_collapsed preference"
+            );
+
+            // Resizing back to tall window (1240x760) exits accordion mode and restores BOTH expanded!
+            harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+                DevicePx(1240.0),
+                DevicePx(760.0),
+            )));
+            harness.advance(Duration::from_millis(25));
+            harness.settle(16);
+            assert!(!browser.0.sidebar_in_accordion.get_untracked());
+            let qa_restored = browser
+                .0
+                .quick_access_node
+                .window_bounds()
+                .expect("Quick Access restored in tall window");
+            let loc_restored = browser
+                .0
+                .locations_node
+                .window_bounds()
+                .expect("Locations restored in tall window");
+            assert!(
+                qa_restored.size.height.0 > 120.0 && loc_restored.size.height.0 > 150.0,
+                "resizing back to tall must restore both Quick Access ({qa_restored:?}) and Locations ({loc_restored:?})"
+            );
+        },
+    );
+}
+
+#[cfg(feature = "files-e2e")]
+#[test]
+fn quick_access_sidebar_tall_and_accordion_gpu_preview() {
+    use std::path::PathBuf;
+
+    use zgui_render_wgpu::{SharedGraphics, wgpu};
+
+    let graphics = SharedGraphics::new();
+    if graphics.open_gpu().is_err() {
+        return;
+    }
+    let window_graphics = graphics;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let desktop = home.join("桌面");
+    let downloads = home.join("下载");
+    let pictures = home.join("图片");
+    let videos = home.join("视频");
+    let work = home.join("项目");
+    for dir in [&desktop, &downloads, &pictures, &videos, &work] {
+        std::fs::create_dir_all(dir).expect("create dir");
+    }
+    let preview_dir = std::env::var_os("GDS_SIDEBAR_PREVIEW_DIR").map(PathBuf::from);
+
+    let supervisor = Supervisor::new(false).expect("tokio supervisor");
+    let bg_scope = supervisor.scope();
+    let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
+    let slot_for_view = Rc::clone(&browser_slot);
+    let handle_slot: Rc<RefCell<Option<WindowHandle>>> = Rc::default();
+    let handle_view = Rc::clone(&handle_slot);
+    let handle_driver = Rc::clone(&handle_slot);
+
+    let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+        let mut harness = Harness::new(handler);
+        if let Some(offscreen) = harness.platform().offscreens().first() {
+            offscreen.set_a11y_listener(true);
+        }
+        harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+            DevicePx(1100.0),
+            DevicePx(760.0),
+        )));
+        harness.settle(16);
+        let browser = browser_slot.borrow().clone().expect("browser constructed");
+        for dir in [&desktop, &downloads, &pictures, &videos] {
+            browser.add_quick_access_path(dir.clone());
+        }
+        browser.new_tab(Some(Location::from(work.as_path())));
+        flush();
+        harness.settle(16);
+
+        let save_snap = |name: &str, w: f32, h: f32| {
+            if let Some(dir) = &preview_dir {
+                let window_guard = handle_driver.borrow();
+                if let Some(window) = window_guard.as_ref() {
+                    let snap_browser = browser.clone();
+                    if let Ok(rendered) = window.render_view(
+                        zgui::prelude::ViewSnapshotOptions::new().with_max_size(w, h),
+                        move || {
+                            view! {
+                                box(style:width = format!("{w:.0}px"), style:height = format!("{h:.0}px")) {
+                                    {snap_browser.view()}
+                                }
+                            }
+                        },
+                    ) {
+                        let _ = std::fs::create_dir_all(dir);
+                        let img = image::RgbaImage::from_raw(
+                            rendered.image.width(),
+                            rendered.image.height(),
+                            rendered.image.rgba().to_vec(),
+                        )
+                        .expect("valid rgba");
+                        img.save(dir.join(name)).expect("save sidebar preview png");
+                    }
+                }
+            }
+        };
+
+        // 1. Tall window: Tabs + 常用 + 位置 all expanded cleanly.
+        assert!(!browser.0.sidebar_in_accordion.get_untracked());
+        save_snap("sidebar-tall.png", 1100.0, 760.0);
+
+        // 2. Short window (500px): Accordion mode -> 常用 expanded, 位置 collapsed.
+        harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+            DevicePx(1100.0),
+            DevicePx(500.0),
+        )));
+        harness.advance(Duration::from_millis(25));
+        harness.settle(16);
+        assert!(browser.0.sidebar_in_accordion.get_untracked());
+        save_snap("sidebar-accordion-qa.png", 1100.0, 500.0);
+
+        harness.shut_down();
+        Ok(())
+    };
+
+    let offscreen_graphics = window_graphics.clone();
+    zgui::app()
+        .with_fonts(Fonts::system())
+        .with_size(1100.0, 760.0)
+        .with_renderer(Box::new(move |_, target: RenderTarget| {
+            let mut r = window_graphics.renderer_offscreen(
+                target,
+                wgpu::TextureFormat::Rgba8Unorm,
+                false,
+            )?;
+            zgui_render_vector_vello::attach(&mut r, target.size);
+            Ok::<_, AppError>(Box::new(r) as Box<dyn Renderer>)
+        }))
+        .with_offscreen_renderer(Box::new(move |target: RenderTarget| {
+            let mut r = offscreen_graphics.renderer_offscreen(
+                target,
+                wgpu::TextureFormat::Rgba8Unorm,
+                false,
+            )?;
+            zgui_render_vector_vello::attach(&mut r, target.size);
+            Ok::<_, AppError>(Box::new(r) as Box<dyn Renderer>)
+        }))
+        .run_on(driver, move || {
+            let scope = bg_scope.clone();
+            let app = Gds::install(scope.clone());
+            app.appearance().motion().set_enabled(false);
+            let _ = app.appearance().install_window_sheet();
+            app.i18n()
+                .install_catalog(i18n::prepare(Language::Chinese).expect("Chinese catalog"));
+            let _prefs = preferences::Service::install(preferences::Preferences::default(), &scope)
+                .expect("preferences service");
+            *handle_view.borrow_mut() = Some(use_window());
+            let browser = Browser::new(
+                LaunchOptions {
+                    places: Ok(Places::default()),
+                    start: home.clone(),
+                    home: home.clone(),
+                    picker: None,
+                },
+                volumes::Service::new(scope),
+                Rc::new(|_| {}),
+            );
+            *slot_for_view.borrow_mut() = Some(browser.clone());
+            browser.view()
+        })
+        .expect("quick access sidebar GPU test ran");
 }

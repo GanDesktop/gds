@@ -5,9 +5,14 @@ use super::super::super::model::places::{Change, Places, RECENT_LIMIT};
 use super::super::super::model::view::LocationView;
 use super::{
     Error,
-    record::{self, Kind, SavedLocation, ViewKey, ViewSettings as ViewRecord},
+    record::{
+        self, Kind, PlacesMeta, QuickAccessLocation, SavedLocation, ViewKey,
+        ViewSettings as ViewRecord,
+    },
 };
-use crate::entities::location::{ViewScope, ViewSettings};
+use crate::entities::location::{Location, ViewScope, ViewSettings};
+
+const QUICK_ACCESS_SEEDED_KEY: &str = "quick_access_seeded";
 
 pub(super) struct Accessor<'tx, 'db> {
     tx: &'tx mut Transaction<'db>,
@@ -20,7 +25,10 @@ impl<'tx, 'db> Accessor<'tx, 'db> {
 
     /// # Errors
     /// Reports database failures while creating the application defaults.
-    pub(super) async fn initialize(&mut self) -> Result<(), Error> {
+    pub(super) async fn initialize(
+        &mut self,
+        default_quick_access: &[Location],
+    ) -> Result<(), Error> {
         let defaults = ViewSettings::defaults();
         let key = ViewKey::new(&ViewScope::Defaults)?;
         ViewRecord::upsert_by_kind_and_identity_and_path(key.kind, key.identity, key.path)
@@ -32,6 +40,30 @@ impl<'tx, 'db> Accessor<'tx, 'db> {
             .or_ignore()
             .exec(self.tx)
             .await?;
+
+        let seeded = PlacesMeta::filter_by_key(QUICK_ACCESS_SEEDED_KEY.to_owned())
+            .first()
+            .exec(self.tx)
+            .await?;
+        if seeded.is_none() {
+            for (position, location) in default_quick_access.iter().enumerate() {
+                let key = ViewKey::new(&ViewScope::Location(location.clone()))?;
+                QuickAccessLocation::upsert_by_location_kind_and_identity_and_path(
+                    key.kind,
+                    key.identity,
+                    key.path,
+                )
+                .position(position as i64)
+                .or_ignore()
+                .exec(self.tx)
+                .await?;
+            }
+            PlacesMeta::upsert_by_key(QUICK_ACCESS_SEEDED_KEY.to_owned())
+                .value("1".to_owned())
+                .or_ignore()
+                .exec(self.tx)
+                .await?;
+        }
         Ok(())
     }
 
@@ -69,6 +101,21 @@ impl<'tx, 'db> Accessor<'tx, 'db> {
         }
         places.recent.reverse();
         places.recent.truncate(RECENT_LIMIT);
+        for row in QuickAccessLocation::all()
+            .order_by(QuickAccessLocation::fields().position().asc())
+            .exec(self.tx)
+            .await?
+        {
+            let scope = ViewKey {
+                kind: row.location_kind,
+                identity: row.identity,
+                path: row.path,
+            }
+            .into_scope()?;
+            if let ViewScope::Location(location) = scope {
+                places.quick_access.push(location);
+            }
+        }
         for row in ViewRecord::all()
             .order_by(ViewRecord::fields().identity().asc())
             .order_by(ViewRecord::fields().path().asc())
@@ -114,6 +161,24 @@ impl<'tx, 'db> Accessor<'tx, 'db> {
                     let key = ViewKey::new(&ViewScope::Location(location.clone()))?;
                     SavedLocation::upsert_by_kind_and_location_kind_and_identity_and_path(
                         Kind::Pin,
+                        key.kind,
+                        key.identity,
+                        key.path,
+                    )
+                    .position(position as i64)
+                    .exec(self.tx)
+                    .await?;
+                }
+            }
+            Change::QuickAccess { location, present } => {
+                self.save_quick_access(location, *present).await?;
+            }
+            Change::QuickAccessOrder(order) => {
+                let mut locations = self.snapshot().await?.quick_access;
+                crate::entities::location::model::places::reorder_existing(&mut locations, order);
+                for (position, location) in locations.iter().enumerate() {
+                    let key = ViewKey::new(&ViewScope::Location(location.clone()))?;
+                    QuickAccessLocation::upsert_by_location_kind_and_identity_and_path(
                         key.kind,
                         key.identity,
                         key.path,
@@ -239,6 +304,39 @@ impl<'tx, 'db> Accessor<'tx, 'db> {
         } else {
             insert.exec(self.tx).await?;
         }
+        Ok(())
+    }
+
+    async fn save_quick_access(&mut self, location: &Location, present: bool) -> Result<(), Error> {
+        let key = ViewKey::new(&ViewScope::Location(location.clone()))?;
+        if !present {
+            QuickAccessLocation::filter_by_location_kind_and_identity_and_path(
+                key.kind,
+                key.identity,
+                key.path,
+            )
+            .delete()
+            .exec(self.tx)
+            .await?;
+            return Ok(());
+        }
+        let position = QuickAccessLocation::all()
+            .order_by(QuickAccessLocation::fields().position().desc())
+            .select(QuickAccessLocation::fields().position())
+            .first()
+            .exec(self.tx)
+            .await?
+            .unwrap_or(-1)
+            + 1;
+        QuickAccessLocation::upsert_by_location_kind_and_identity_and_path(
+            key.kind,
+            key.identity,
+            key.path,
+        )
+        .position(position)
+        .or_ignore()
+        .exec(self.tx)
+        .await?;
         Ok(())
     }
 }

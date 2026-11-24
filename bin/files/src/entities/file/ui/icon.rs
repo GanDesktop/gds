@@ -63,7 +63,7 @@ impl FileIcon {
         self.badge
     }
 
-    fn directory_icon(path: &Path) -> IconName {
+    pub(crate) fn directory_icon(path: &Path) -> IconName {
         static DIRECTORIES: OnceLock<Option<UserDirs>> = OnceLock::new();
         let Some(dirs) = DIRECTORIES.get_or_init(UserDirs::new) else {
             return IconName::Folder;

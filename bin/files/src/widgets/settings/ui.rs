@@ -404,6 +404,12 @@ impl View {
             Page::Files => AnyView::new(view! {
                 column(class = "gds-settings-col") {
                     {self.toggle(
+                        "sidebar-show-quick-access",
+                        "",
+                        |p| p.files.sidebar.show_quick_access,
+                        |p, v| p.files.sidebar.show_quick_access = v,
+                    )}
+                    {self.toggle(
                         "sidebar-show-volumes",
                         "",
                         |p| p.files.sidebar.show_volumes,

@@ -18,6 +18,7 @@ pub struct Places {
     pub favorites: Vec<Location>,
     pub recent: Vec<Location>,
     pub pinned: Vec<Location>,
+    pub quick_access: Vec<Location>,
     pub defaults: ViewSettings,
     pub views: Vec<LocationView>,
 }
@@ -28,6 +29,7 @@ impl Default for Places {
             favorites: Vec::new(),
             recent: Vec::new(),
             pinned: Vec::new(),
+            quick_access: Vec::new(),
             defaults: ViewSettings::defaults(),
             views: Vec::new(),
         }
@@ -44,6 +46,10 @@ impl Places {
 
     pub fn is_favorite(&self, location: impl Into<Location>) -> bool {
         self.favorites.contains(&location.into())
+    }
+
+    pub fn contains_quick_access(&self, location: impl Into<Location>) -> bool {
+        self.quick_access.contains(&location.into())
     }
 
     pub fn view(&self, location: impl Into<Location>) -> Option<&ViewSettings> {
@@ -131,6 +137,11 @@ pub(crate) enum Change {
         present: bool,
     },
     PinOrder(Vec<Location>),
+    QuickAccess {
+        location: Location,
+        present: bool,
+    },
+    QuickAccessOrder(Vec<Location>),
     Columns {
         scope: ViewScope,
         layout: Option<Layout>,
@@ -165,6 +176,10 @@ impl Change {
                 set_membership(&mut places.pinned, location, *present)
             }
             Self::PinOrder(order) => reorder_existing(&mut places.pinned, order),
+            Self::QuickAccess { location, present } => {
+                set_membership(&mut places.quick_access, location, *present)
+            }
+            Self::QuickAccessOrder(order) => reorder_existing(&mut places.quick_access, order),
             Self::Columns { scope, layout } => {
                 places.settings_mut(scope.clone()).columns = layout.clone()
             }

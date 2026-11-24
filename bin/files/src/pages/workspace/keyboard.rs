@@ -1,6 +1,9 @@
 //! Files command routing follows focus boundaries; native editors retain editing keys.
 
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use gds::ui::{Shortcut, logs, notifications};
 use zgui::prelude::*;
@@ -25,6 +28,7 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SidebarRegion {
     Tabs,
+    QuickAccess,
     Locations,
     Volumes,
 }
@@ -32,6 +36,7 @@ pub(super) enum SidebarRegion {
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum SidebarRow {
     Tab(u64),
+    QuickAccess(PathBuf),
     Location(LocationTarget),
     Volume(crate::entities::location::volumes::VolumeId),
 }
@@ -189,6 +194,7 @@ impl Browser {
                     self.change_volume(DeviceAction::Unmount(volume.id));
                 }
             }
+            Command::FocusQuickAccess => self.focus_sidebar_region(SidebarRegion::QuickAccess),
             Command::FocusLocations => self.focus_sidebar_region(SidebarRegion::Locations),
             Command::FocusVolumes => self.focus_sidebar_region(SidebarRegion::Volumes),
             Command::FocusTabs => self.focus_sidebar_region(SidebarRegion::Tabs),
@@ -292,6 +298,7 @@ impl Browser {
     pub(super) fn sidebar_node(&self, region: SidebarRegion) -> NodeRef {
         match region {
             SidebarRegion::Tabs => self.0.tabs_node,
+            SidebarRegion::QuickAccess => self.0.quick_access_node,
             SidebarRegion::Locations => self.0.locations_node,
             SidebarRegion::Volumes => self.0.volumes_node,
         }
@@ -591,6 +598,8 @@ impl Browser {
             .and_then(|host| host.focused().try_get_untracked().flatten());
         if focused.is_some_and(|node| self.0.tabs_node.contains(node)) {
             Some(SidebarRegion::Tabs)
+        } else if focused.is_some_and(|node| self.0.quick_access_node.contains(node)) {
+            Some(SidebarRegion::QuickAccess)
         } else if focused.is_some_and(|node| self.0.locations_node.contains(node)) {
             Some(SidebarRegion::Locations)
         } else if focused.is_some_and(|node| self.0.volumes_node.contains(node)) {
@@ -607,8 +616,18 @@ impl Browser {
         if !self.0.sidebar.get_untracked() {
             self.0.sidebar.set(true);
         }
+        if region == SidebarRegion::QuickAccess {
+            self.0.sidebar_reveal_quick_access.set(true);
+        }
         if region == SidebarRegion::Volumes {
             self.0.sidebar_reveal_volumes.set(true);
+        }
+        if self.0.sidebar_in_accordion.get_untracked()
+            && let Some(section) = super::chrome::CollapsibleSection::from_region(region)
+        {
+            self.0
+                .sidebar_accordion
+                .set(super::chrome::AccordionSelection::Expanded(section));
         }
         let rows = self.sidebar_rows(region);
         let current = self.0.sidebar_cursor.get_untracked();
@@ -630,6 +649,11 @@ impl Browser {
                     .map(|tab| SidebarRow::Tab(tab.id))
                     .collect()
             }),
+            SidebarRegion::QuickAccess => self
+                .quick_access_paths_untracked()
+                .into_iter()
+                .map(SidebarRow::QuickAccess)
+                .collect(),
             SidebarRegion::Locations => {
                 let tags_enabled = self.tags_enabled_untracked();
                 LocationTarget::ALL
@@ -737,6 +761,10 @@ impl Browser {
                     self.focus_content();
                 }
             }
+            SidebarRow::QuickAccess(path) => {
+                self.open_quick_access(&path, false);
+                self.focus_content();
+            }
             SidebarRow::Location(target) => {
                 let home = self.read_untracked(|state| state.home.clone());
                 self.open(target.location(&home));
@@ -760,6 +788,7 @@ impl Browser {
                         | Command::Sidebar
                         | Command::Terminal
                         | Command::Filter
+                        | Command::FocusQuickAccess
                         | Command::FocusLocations
                         | Command::FocusVolumes
                         | Command::FocusTabs

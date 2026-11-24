@@ -211,6 +211,18 @@ impl Places {
             present,
         });
     }
+    pub(crate) fn add_quick_access(&mut self, location: impl Into<Location>) {
+        self.set_quick_access(location.into(), true);
+    }
+    pub(crate) fn remove_quick_access(&mut self, location: impl Into<Location>) {
+        self.set_quick_access(location.into(), false);
+    }
+    pub(crate) fn set_quick_access(&mut self, location: Location, present: bool) {
+        self.change(Change::QuickAccess { location, present });
+    }
+    pub(crate) fn reorder_quick_access(&mut self, locations: Vec<Location>) {
+        self.change(Change::QuickAccessOrder(locations));
+    }
     pub(crate) fn set_columns(&mut self, location: impl Into<Location>, layout: Layout) {
         self.change(Change::Columns {
             scope: ViewScope::Location(location.into()),

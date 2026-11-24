@@ -21,6 +21,24 @@ pub(super) struct SavedLocation {
     pub position: i64,
 }
 
+#[derive(Debug, Model)]
+#[table = "quick_access"]
+#[key(location_kind, identity, path)]
+pub(super) struct QuickAccessLocation {
+    pub location_kind: ViewKind,
+    pub identity: String,
+    pub path: Vec<u8>,
+    pub position: i64,
+}
+
+#[derive(Debug, Model)]
+#[table = "places_meta"]
+pub(super) struct PlacesMeta {
+    #[key]
+    pub key: String,
+    pub value: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Embed)]
 #[column(type = text, rename_all = "snake_case")]
 pub(super) enum View {
