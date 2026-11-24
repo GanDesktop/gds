@@ -414,10 +414,11 @@ fn filesystem_breadcrumbs_ignore_curdir_and_mark_only_leaf_as_current() {
     );
     assert_eq!(crumbs.len(), 4);
     assert_eq!(crumbs[0].label, "/");
+    assert!(!crumbs[0].scheme);
     assert!(!crumbs[0].current);
     assert!(!crumbs[0].separated);
     assert_eq!(crumbs[1].label, "mnt/");
-    assert_eq!(crumbs[1].location, Location::from(Path::new("/mnt")));
+    assert_eq!(crumbs[1].location, Some(Location::from(Path::new("/mnt"))));
     assert_eq!(crumbs[2].label, "storage/");
     assert_eq!(crumbs[3].label, "projects");
     assert!(crumbs[3].current);
@@ -438,19 +439,70 @@ fn tag_breadcrumbs_build_clickable_separated_hierarchy_from_root_to_leaf() {
         let work_tag = TagAddress::new("work").expect("work tag");
 
         assert_eq!(crumbs.len(), 3);
-        assert_eq!(crumbs[0].location, Location::Tags(root_tag));
+        assert_eq!(crumbs[0].label, "Tags");
+        assert!(crumbs[0].scheme);
+        assert_eq!(crumbs[0].icon, Some(gds::ui::IconName::Tag));
+        assert_eq!(crumbs[0].location, Some(Location::Tags(root_tag)));
         assert!(!crumbs[0].current);
         assert!(!crumbs[0].separated);
 
         assert_eq!(crumbs[1].label, "work");
-        assert_eq!(crumbs[1].location, Location::Tags(work_tag));
+        assert!(!crumbs[1].scheme);
+        assert_eq!(crumbs[1].location, Some(Location::Tags(work_tag)));
         assert!(!crumbs[1].current);
         assert!(crumbs[1].separated);
 
         assert_eq!(crumbs[2].label, "urgent");
-        assert_eq!(crumbs[2].location, Location::Tags(leaf));
+        assert_eq!(crumbs[2].location, Some(Location::Tags(leaf)));
         assert!(crumbs[2].current);
         assert!(crumbs[2].separated);
+    });
+    root.unmount();
+}
+
+#[test]
+fn virtual_location_and_remote_breadcrumbs_render_localized_scheme_chips() {
+    let _ = install();
+    let root = Mounted::new();
+    root.with(|| {
+        let app = Gds::install(Scope::default());
+        app.i18n()
+            .install_catalog(i18n::prepare(Language::Chinese).expect("Chinese catalog"));
+
+        let vol_crumbs = Breadcrumb::for_location(&Location::Volumes, None);
+        assert_eq!(vol_crumbs.len(), 2);
+        assert_eq!(vol_crumbs[0].label, "位置");
+        assert!(vol_crumbs[0].scheme);
+        assert_eq!(vol_crumbs[0].location, None);
+        assert_eq!(vol_crumbs[0].icon, Some(gds::ui::IconName::Bookmark));
+        assert_eq!(vol_crumbs[1].label, "卷");
+        assert!(!vol_crumbs[1].scheme);
+        assert_eq!(vol_crumbs[1].location, Some(Location::Volumes));
+        assert!(vol_crumbs[1].current);
+        assert!(vol_crumbs[1].separated);
+
+        app.i18n()
+            .install_catalog(i18n::prepare(Language::English).expect("English catalog"));
+        let recent_crumbs = Breadcrumb::for_location(&Location::Recent, None);
+        assert_eq!(recent_crumbs.len(), 2);
+        assert_eq!(recent_crumbs[0].label, "Location");
+        assert!(recent_crumbs[0].scheme);
+        assert_eq!(recent_crumbs[1].label, "Recent");
+        assert!(recent_crumbs[1].current);
+
+        let remote = gds::service::remote::Address::parse("sftp://nas.local/home/atlas/docs")
+            .expect("valid sftp address");
+        let remote_crumbs = Breadcrumb::for_location(&Location::Remote(remote), None);
+        assert_eq!(remote_crumbs.len(), 5);
+        assert_eq!(remote_crumbs[0].label, "SFTP");
+        assert!(remote_crumbs[0].scheme);
+        assert_eq!(remote_crumbs[0].location, None);
+        assert_eq!(remote_crumbs[1].label, "nas.local");
+        assert_eq!(remote_crumbs[2].label, "home");
+        assert_eq!(remote_crumbs[3].label, "atlas");
+        assert_eq!(remote_crumbs[4].label, "docs");
+        assert!(remote_crumbs[4].current);
+        assert!(remote_crumbs[1..].iter().all(|c| c.separated && !c.scheme));
     });
     root.unmount();
 }
@@ -1258,4 +1310,269 @@ fn orthogonal_responsive_tiers_and_proportional_list_scaling_contracts() {
             );
         },
     );
+}
+
+#[cfg(feature = "files-e2e")]
+#[test]
+fn volumes_page_removes_inline_unmount_buttons_aligns_mount_column_and_renders_schema_chip() {
+    use std::path::PathBuf;
+
+    use zgui_render_wgpu::{SharedGraphics, wgpu};
+
+    let graphics = SharedGraphics::new();
+    if graphics.open_gpu().is_err() {
+        return;
+    }
+    let window_graphics = graphics;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let start = temp.path().to_path_buf();
+    let preview_dir = std::env::var_os("GDS_VOLUMES_PREVIEW_DIR").map(PathBuf::from);
+    let snapshot = volumes::Snapshot {
+        drives: vec![
+            volumes::Drive {
+                id: "drive-nvme".into(),
+                name: "NVMe".into(),
+                kind: volumes::DeviceKind::Disk,
+                can_power_off: false,
+                can_eject: false,
+                sibling_id: None,
+            },
+            volumes::Drive {
+                id: "drive-usb".into(),
+                name: "USB".into(),
+                kind: volumes::DeviceKind::Usb,
+                can_power_off: true,
+                can_eject: false,
+                sibling_id: None,
+            },
+        ],
+        volumes: vec![
+            volumes::Volume {
+                id: volumes::VolumeId {
+                    stable: Some("uuid-root".into()),
+                    attachment: "nvme0n1p2".into(),
+                },
+                object: "/org/freedesktop/UDisks2/block_devices/nvme0n1p2".into(),
+                drive: Some("drive-nvme".into()),
+                name: "root".into(),
+                size: 847_800_000_000,
+                label: "root".into(),
+                filesystem: "ext4".into(),
+                read_only: false,
+                locked: false,
+                mountable: true,
+                system_mount: true,
+                mount_points: vec![PathBuf::from("/"), PathBuf::from("/var")],
+                visible: true,
+            },
+            volumes::Volume {
+                id: volumes::VolumeId {
+                    stable: Some("uuid-kioxia".into()),
+                    attachment: "nvme1n1p1".into(),
+                },
+                object: "/org/freedesktop/UDisks2/block_devices/nvme1n1p1".into(),
+                drive: Some("drive-nvme".into()),
+                name: "KIOXIA-EXCERIA G2 SSD".into(),
+                size: 1_863_000_000_000,
+                label: "KIOXIA".into(),
+                filesystem: "ntfs".into(),
+                read_only: false,
+                locked: false,
+                mountable: true,
+                system_mount: false,
+                mount_points: vec![
+                    PathBuf::from("/mnt/nvme1t8"),
+                    PathBuf::from("/mnt/nvme-alt"),
+                ],
+                visible: true,
+            },
+            volumes::Volume {
+                id: volumes::VolumeId {
+                    stable: Some("uuid-n300".into()),
+                    attachment: "sda1".into(),
+                },
+                object: "/org/freedesktop/UDisks2/block_devices/sda1".into(),
+                drive: Some("drive-usb".into()),
+                name: "N300-001".into(),
+                size: 7_452_000_000_000,
+                label: "N300-001".into(),
+                filesystem: "ntfs".into(),
+                read_only: false,
+                locked: false,
+                mountable: true,
+                system_mount: false,
+                mount_points: vec![PathBuf::from("/mnt/n300")],
+                visible: true,
+            },
+            volumes::Volume {
+                id: volumes::VolumeId {
+                    stable: Some("uuid-unmounted".into()),
+                    attachment: "sdb1".into(),
+                },
+                object: "/org/freedesktop/UDisks2/block_devices/sdb1".into(),
+                drive: Some("drive-usb".into()),
+                name: "BACKUP-USB".into(),
+                size: 500_000_000_000,
+                label: "BACKUP-USB".into(),
+                filesystem: "ext4".into(),
+                read_only: false,
+                locked: false,
+                mountable: true,
+                system_mount: false,
+                mount_points: Vec::new(),
+                visible: true,
+            },
+        ],
+    };
+
+    let supervisor = Supervisor::new(false).expect("tokio supervisor");
+    let bg_scope = supervisor.scope();
+    let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
+    let slot_for_view = Rc::clone(&browser_slot);
+    let handle_slot: Rc<RefCell<Option<WindowHandle>>> = Rc::default();
+    let handle_view = Rc::clone(&handle_slot);
+    let handle_driver = Rc::clone(&handle_slot);
+    let snapshot_for_view = snapshot;
+
+    let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+        let mut harness = Harness::new(handler);
+        if let Some(offscreen) = harness.platform().offscreens().first() {
+            offscreen.set_a11y_listener(true);
+        }
+        harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+            DevicePx(1100.0),
+            DevicePx(560.0),
+        )));
+        harness.settle(16);
+        let browser = browser_slot.borrow().clone().expect("browser constructed");
+        browser.open(Location::Volumes);
+        flush();
+        harness.settle(20);
+
+        let surface = harness.platform().offscreens()[0].clone();
+        let buttons = collect_live_buttons(&surface);
+
+        if let Some(dir) = &preview_dir {
+            let window_guard = handle_driver.borrow();
+            if let Some(window) = window_guard.as_ref() {
+                let snap_browser = browser.clone();
+                if let Ok(rendered) = window.render_view(
+                    zgui::prelude::ViewSnapshotOptions::new().with_max_size(1100.0, 560.0),
+                    move || {
+                        view! {
+                            box(style:width = "1100px", style:height = "560px") {
+                                {snap_browser.view()}
+                            }
+                        }
+                    },
+                ) {
+                    let _ = std::fs::create_dir_all(dir);
+                    let img = image::RgbaImage::from_raw(
+                        rendered.image.width(),
+                        rendered.image.height(),
+                        rendered.image.rgba().to_vec(),
+                    )
+                    .expect("valid rgba");
+                    img.save(dir.join("volumes-and-schema.png"))
+                        .expect("save preview png");
+                }
+            }
+        }
+
+        // No inline mount or unmount buttons inside table rows (below the page header bar).
+        let unmount_label = gds::i18n::text_untracked("device-unmount");
+        let mount_label = gds::i18n::text_untracked("device-mount");
+        let row_action_buttons: Vec<_> = buttons
+            .iter()
+            .filter(|b| b.y0 >= 120.0 && (b.label == unmount_label || b.label == mount_label))
+            .collect();
+        assert!(
+            row_action_buttons.is_empty(),
+            "Volumes table rows must not render inline mount/unmount buttons, found: {row_action_buttons:?}"
+        );
+
+        // Both multi-mount dropdown pickers must share the exact same left x coordinate (no
+        // right-shift from space-between + hidden anchors).
+        let row_pickers: Vec<_> = buttons
+            .iter()
+            .filter(|b| b.y0 >= 120.0 && b.y1 <= 500.0 && b.x0 >= 600.0)
+            .collect();
+        assert_eq!(
+            row_pickers.len(),
+            2,
+            "expected exactly 2 multi-mount dropdown picker buttons in column 3, got: {row_pickers:?} (all buttons: {buttons:?})"
+        );
+        assert!(
+            (row_pickers[0].x0 - row_pickers[1].x0).abs() <= 1.5,
+            "multi-mount pickers must align along the same left edge: {row_pickers:?}"
+        );
+        assert!(
+            row_pickers[0].x0 < 980.0,
+            "root mount picker must be left-aligned inside column 3 rather than flushed to the right edge: {:?}",
+            row_pickers[0]
+        );
+
+        // Address bar must display the localized "卷" crumb button (not raw `location:/volumes`).
+        assert!(
+            buttons.iter().any(|b| b.y1 <= 56.0 && b.label == "卷"),
+            "expected localized '卷' breadcrumb in address bar, buttons: {buttons:?}"
+        );
+        assert!(
+            !buttons
+                .iter()
+                .any(|b| b.y1 <= 56.0 && b.label.contains("location:/")),
+            "address bar breadcrumb must not expose raw `location:/` URI"
+        );
+
+        harness.shut_down();
+        Ok(())
+    };
+
+    let offscreen_graphics = window_graphics.clone();
+    zgui::app()
+        .with_fonts(Fonts::system())
+        .with_size(1100.0, 560.0)
+        .with_renderer(Box::new(move |_, target: RenderTarget| {
+            let mut r = window_graphics.renderer_offscreen(
+                target,
+                wgpu::TextureFormat::Rgba8Unorm,
+                false,
+            )?;
+            zgui_render_vector_vello::attach(&mut r, target.size);
+            Ok::<_, AppError>(Box::new(r) as Box<dyn Renderer>)
+        }))
+        .with_offscreen_renderer(Box::new(move |target: RenderTarget| {
+            let mut r = offscreen_graphics.renderer_offscreen(
+                target,
+                wgpu::TextureFormat::Rgba8Unorm,
+                false,
+            )?;
+            zgui_render_vector_vello::attach(&mut r, target.size);
+            Ok::<_, AppError>(Box::new(r) as Box<dyn Renderer>)
+        }))
+        .run_on(driver, move || {
+            let scope = bg_scope.clone();
+            let app = Gds::install(scope.clone());
+            app.appearance().motion().set_enabled(false);
+            let _ = app.appearance().install_window_sheet();
+            app.i18n()
+                .install_catalog(i18n::prepare(Language::Chinese).expect("Chinese catalog"));
+            let _prefs = preferences::Service::install(preferences::Preferences::default(), &scope)
+                .expect("preferences service");
+            *handle_view.borrow_mut() = Some(use_window());
+            let browser = Browser::new(
+                LaunchOptions {
+                    places: Ok(Places::default()),
+                    start: start.clone(),
+                    home: start.clone(),
+                    picker: None,
+                },
+                volumes::Service::with_snapshot(scope, snapshot_for_view.clone()),
+                Rc::new(|_| {}),
+            );
+            *slot_for_view.borrow_mut() = Some(browser.clone());
+            browser.view()
+        })
+        .expect("volumes page GPU test ran");
 }

@@ -58,12 +58,17 @@ impl Location {
     }
 
     pub(crate) fn from_virtual_uri(input: &str) -> Option<Self> {
-        match input.strip_suffix('/').unwrap_or(input) {
-            "location:/recent" => Some(Self::Recent),
-            "location:/favorites" => Some(Self::Favorites),
-            "location:/network" => Some(Self::Network),
-            "location:/trash" => Some(Self::Trash),
-            "location:/volumes" => Some(Self::Volumes),
+        let trimmed = input.strip_suffix('/').unwrap_or(input);
+        let (scheme, rest) = trimmed.split_once(':')?;
+        if !scheme.eq_ignore_ascii_case("location") {
+            return None;
+        }
+        match rest.to_ascii_lowercase().as_str() {
+            "/recent" => Some(Self::Recent),
+            "/favorites" => Some(Self::Favorites),
+            "/network" => Some(Self::Network),
+            "/trash" => Some(Self::Trash),
+            "/volumes" => Some(Self::Volumes),
             _ => None,
         }
     }

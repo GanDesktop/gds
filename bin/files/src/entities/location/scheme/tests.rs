@@ -26,6 +26,20 @@ fn schemes_keep_distinct_resource_identity() {
         parse("location:/recent").expect("parse recent URI"),
         Location::Recent
     );
+    assert_eq!(
+        parse("LOCATION:/Volumes/").expect("case-insensitive location URI"),
+        Location::Volumes
+    );
+    assert!(recognizes("tag:/work"));
+    assert_eq!(
+        parse("tag:/").expect("singular tag root alias"),
+        Location::Tags(TagAddress::new("").expect("root tag"))
+    );
+    assert_eq!(
+        parse("tag:/工作/设计").expect("singular tag alias"),
+        Location::Tags(TagAddress::new("工作/设计").expect("nested tag"))
+    );
+    assert!(parse("tag://host/path").is_err());
     assert!(parse("tags://host/path").is_err());
     assert!(parse("tags:/a/../b").is_err());
     assert!(parse("tags:/a?query").is_err());

@@ -221,6 +221,7 @@ pub(super) const CHROME_CSS: &str = css!(
         display: inline-flex;
         flex: none;
         align-items: center;
+        gap: 4px;
         height: 24px;
         padding: 0px 4px;
         border-radius: 4px;
@@ -237,6 +238,35 @@ pub(super) const CHROME_CSS: &str = css!(
 
     .gds-files-crumb.gds-files-crumb:hover {
         background-color: var(--gds-hover);
+    }
+
+    .gds-files-crumb.gds-files-crumb[data-scheme="true"] {
+        height: 22px;
+        padding: 0px 7px;
+        border-radius: 5px;
+        background-color: color-mix(in srgb, var(--gds-primary) 12%, transparent);
+        border: 1px solid color-mix(in srgb, var(--gds-primary) 24%, transparent);
+        color: var(--gds-primary);
+        font-size: var(--gds-text-xs, 12px);
+        font-weight: 500;
+        box-sizing: border-box;
+    }
+
+    .gds-files-crumb.gds-files-crumb[data-scheme="true"][data-interactive="true"]:hover {
+        background-color: color-mix(in srgb, var(--gds-primary) 18%, transparent);
+    }
+
+    .gds-files-crumb.gds-files-crumb[data-scheme="true"][data-interactive="false"] {
+        cursor: default;
+    }
+
+    .gds-files-crumb.gds-files-crumb[data-scheme="true"][data-interactive="false"]:hover {
+        background-color: color-mix(in srgb, var(--gds-primary) 12%, transparent);
+    }
+
+    .gds-files-crumb-icon {
+        flex: none;
+        color: currentColor;
     }
 
     .gds-files-crumb.gds-files-crumb:focus:not(:focus-visible) {
@@ -679,7 +709,9 @@ pub(super) fn install_chrome_stylesheets() {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Breadcrumb {
     pub label: String,
-    pub location: Location,
+    pub location: Option<Location>,
+    pub icon: Option<IconName>,
+    pub scheme: bool,
     pub current: bool,
     pub separated: bool,
 }
@@ -707,7 +739,9 @@ impl Breadcrumb {
                 };
                 segments.push(Self {
                     label,
-                    location: Location::from(target.as_path()),
+                    location: Some(Location::from(target.as_path())),
+                    icon: None,
+                    scheme: false,
                     current,
                     separated: false,
                 });
@@ -715,26 +749,95 @@ impl Breadcrumb {
             if segments.is_empty() {
                 segments.push(Self {
                     label: path.display().to_string(),
-                    location: Location::from(path),
+                    location: Some(Location::from(path)),
+                    icon: None,
+                    scheme: false,
                     current: true,
                     separated: false,
                 });
             }
             return segments;
         }
-        if let Location::Tags(address) = location {
-            return Self::for_tags(address);
+        match location {
+            Location::Tags(address) => Self::for_tags(address),
+            Location::Remote(address) => Self::for_remote(address),
+            Location::Recent
+            | Location::Favorites
+            | Location::Volumes
+            | Location::Network
+            | Location::Trash => vec![
+                Self::scheme_prefix(i18n::text_untracked("scheme-location"), IconName::Bookmark),
+                Self {
+                    label: location.label(),
+                    location: Some(location.clone()),
+                    icon: None,
+                    scheme: false,
+                    current: true,
+                    separated: true,
+                },
+            ],
+            Location::Volume { identity, relative } => {
+                let mut segments = vec![
+                    Self::scheme_prefix(
+                        i18n::text_untracked("scheme-location"),
+                        IconName::Bookmark,
+                    ),
+                    Self {
+                        label: i18n::text_untracked(Collection::Volumes.label_id()),
+                        location: Some(Location::Volumes),
+                        icon: None,
+                        scheme: false,
+                        current: relative.is_empty(),
+                        separated: true,
+                    },
+                ];
+                if !relative.is_empty() {
+                    let parts: Vec<&std::ffi::OsStr> = Path::new(relative)
+                        .components()
+                        .filter_map(|part| match part {
+                            Component::Normal(seg) => Some(seg),
+                            _ => None,
+                        })
+                        .collect();
+                    let total = parts.len();
+                    let mut acc = PathBuf::new();
+                    for (idx, part) in parts.into_iter().enumerate() {
+                        acc.push(part);
+                        segments.push(Self {
+                            label: part.to_string_lossy().into_owned(),
+                            location: Some(Location::Volume {
+                                identity: identity.clone(),
+                                relative: acc.as_os_str().to_owned(),
+                            }),
+                            icon: None,
+                            scheme: false,
+                            current: idx + 1 == total,
+                            separated: true,
+                        });
+                    }
+                }
+                segments
+            }
+            Location::Directory(_) => vec![Self {
+                label: location.display_address(),
+                location: Some(location.clone()),
+                icon: None,
+                scheme: false,
+                current: true,
+                separated: false,
+            }],
         }
-        let label = match location {
-            Location::Remote(address) => address.to_string(),
-            _ => location.display_address(),
-        };
-        vec![Self {
+    }
+
+    fn scheme_prefix(label: String, icon: IconName) -> Self {
+        Self {
             label,
-            location: location.clone(),
-            current: true,
+            location: None,
+            icon: Some(icon),
+            scheme: true,
+            current: false,
             separated: false,
-        }]
+        }
     }
 
     fn for_tags(address: &TagAddress) -> Vec<Self> {
@@ -750,15 +853,53 @@ impl Breadcrumb {
             .into_iter()
             .enumerate()
             .map(|(index, item)| {
+                let is_root = index == 0;
                 let loc = Location::Tags(item);
                 Self {
-                    label: loc.label(),
-                    location: loc,
+                    label: if is_root {
+                        i18n::text_untracked("scheme-tags")
+                    } else {
+                        loc.label()
+                    },
+                    location: Some(loc),
+                    icon: is_root.then_some(IconName::Tag),
+                    scheme: is_root,
                     current: index + 1 == total,
                     separated: index > 0,
                 }
             })
             .collect()
+    }
+
+    fn for_remote(address: &gds::service::remote::Address) -> Vec<Self> {
+        let (scheme_key, scheme_icon) = match address.protocol() {
+            gds::service::remote::Protocol::Sftp => ("scheme-sftp", IconName::Server),
+            gds::service::remote::Protocol::Smb => ("scheme-smb", IconName::Network),
+        };
+        let mut chain = vec![address.clone()];
+        let mut cursor = address.clone();
+        while let Some(parent) = cursor.parent() {
+            chain.push(parent.clone());
+            cursor = parent;
+        }
+        chain.reverse();
+        let total = chain.len();
+        let mut segments = Vec::with_capacity(total + 1);
+        segments.push(Self::scheme_prefix(
+            i18n::text_untracked(scheme_key),
+            scheme_icon,
+        ));
+        for (index, item) in chain.into_iter().enumerate() {
+            segments.push(Self {
+                label: item.name(),
+                location: Some(Location::Remote(item)),
+                icon: None,
+                scheme: false,
+                current: index + 1 == total,
+                separated: true,
+            });
+        }
+        segments
     }
 }
 
@@ -1144,6 +1285,7 @@ impl Browser {
                             }
                         }))
                     } else {
+                        GdsLang::track();
                         let (location, path, is_pending) = destination.get();
                         let b_click = edit_btn.clone();
                         let body = if is_pending {
@@ -1233,79 +1375,105 @@ impl Browser {
                             )
                         }));
                     }
-                    let click_browser = browser.clone();
-                    let key_browser = browser.clone();
-                    let target_loc = crumb.location;
-                    let key_loc = target_loc.clone();
                     let is_current = crumb.current;
+                    let is_scheme = crumb.scheme;
+                    let icon_view = crumb.icon.map(|icon_name| {
+                        AnyView::new(view! {
+                            Icon(
+                                name = icon_name,
+                                size = 13.0,
+                                class = "gds-files-crumb-icon",
+                                a11y:hidden = true
+                            )
+                        })
+                    });
                     let label = crumb.label;
-                    let a11y_label = label.clone();
-                    let crumb_ref = NodeRef::new();
-                    items.push(AnyView::new(view! {
-                        box(
-                            node_ref = crumb_ref,
-                            class = "gds-files-crumb",
-                            attr:data-current = is_current.then(|| "true".to_owned()),
-                            tabindex = Focus::Sequential,
-                            a11y:role = Role::Button,
-                            a11y:label = a11y_label,
-                            on:focus_in = move |_| {
-                                let (Some(port), Some(item)) =
-                                    (scroller.window_bounds(), crumb_ref.window_bounds())
-                                else {
-                                    return;
-                                };
-                                let port_left = port.origin.x.0;
-                                let port_right = port_left + port.size.width.0;
-                                let item_left = item.origin.x.0;
-                                let item_right = item_left + item.size.width.0;
-                                let dx = if item_left < port_left {
-                                    item_left - port_left
-                                } else if item_right > port_right {
-                                    item_right - port_right
-                                } else {
-                                    0.0
-                                };
-                                if dx.abs() > 0.5 {
-                                    scroller.scroll_to(
-                                        ScrollTarget::By(Point::new(DevicePx(dx), DevicePx(0.0))),
-                                        ScrollBehavior::Instant,
-                                    );
+                    if let Some(target_loc) = crumb.location {
+                        let click_browser = browser.clone();
+                        let key_browser = browser.clone();
+                        let key_loc = target_loc.clone();
+                        let a11y_label = label.clone();
+                        let crumb_ref = NodeRef::new();
+                        items.push(AnyView::new(view! {
+                            box(
+                                node_ref = crumb_ref,
+                                class = "gds-files-crumb",
+                                attr:data-scheme = is_scheme.then(|| "true".to_owned()),
+                                attr:data-interactive = is_scheme.then(|| "true".to_owned()),
+                                attr:data-current = is_current.then(|| "true".to_owned()),
+                                tabindex = Focus::Sequential,
+                                a11y:role = Role::Button,
+                                a11y:label = a11y_label,
+                                on:focus_in = move |_| {
+                                    let (Some(port), Some(item)) =
+                                        (scroller.window_bounds(), crumb_ref.window_bounds())
+                                    else {
+                                        return;
+                                    };
+                                    let port_left = port.origin.x.0;
+                                    let port_right = port_left + port.size.width.0;
+                                    let item_left = item.origin.x.0;
+                                    let item_right = item_left + item.size.width.0;
+                                    let dx = if item_left < port_left {
+                                        item_left - port_left
+                                    } else if item_right > port_right {
+                                        item_right - port_right
+                                    } else {
+                                        0.0
+                                    };
+                                    if dx.abs() > 0.5 {
+                                        scroller.scroll_to(
+                                            ScrollTarget::By(Point::new(DevicePx(dx), DevicePx(0.0))),
+                                            ScrollBehavior::Instant,
+                                        );
+                                    }
+                                },
+                                on:click = move |ev: &mut EventCx<'_, events::Click>| {
+                                    ev.stop_propagation();
+                                    if is_current {
+                                        click_browser.start_address_edit();
+                                    } else if ev.modifiers.primary() {
+                                        click_browser.new_tab(Some(target_loc.clone()));
+                                    } else {
+                                        click_browser.open(target_loc.clone());
+                                        click_browser.focus_content_after_mount();
+                                    }
+                                },
+                                on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
+                                    let is_activate = ev.key == Key::Named(NamedKey::Enter)
+                                        || ev.key == Key::Named(NamedKey::Space)
+                                        || ev.key == Key::character(" ");
+                                    if !is_activate {
+                                        return;
+                                    }
+                                    ev.prevent_default();
+                                    ev.stop_propagation();
+                                    if is_current {
+                                        key_browser.start_address_edit();
+                                    } else if ev.modifiers.primary() {
+                                        key_browser.new_tab(Some(key_loc.clone()));
+                                    } else {
+                                        key_browser.open(key_loc.clone());
+                                        key_browser.focus_content_after_mount();
+                                    }
                                 }
-                            },
-                            on:click = move |ev: &mut EventCx<'_, events::Click>| {
-                                ev.stop_propagation();
-                                if is_current {
-                                    click_browser.start_address_edit();
-                                } else if ev.modifiers.primary() {
-                                    click_browser.new_tab(Some(target_loc.clone()));
-                                } else {
-                                    click_browser.open(target_loc.clone());
-                                    click_browser.focus_content_after_mount();
-                                }
-                            },
-                            on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
-                                let is_activate = ev.key == Key::Named(NamedKey::Enter)
-                                    || ev.key == Key::Named(NamedKey::Space)
-                                    || ev.key == Key::character(" ");
-                                if !is_activate {
-                                    return;
-                                }
-                                ev.prevent_default();
-                                ev.stop_propagation();
-                                if is_current {
-                                    key_browser.start_address_edit();
-                                } else if ev.modifiers.primary() {
-                                    key_browser.new_tab(Some(key_loc.clone()));
-                                } else {
-                                    key_browser.open(key_loc.clone());
-                                    key_browser.focus_content_after_mount();
-                                }
+                            ) {
+                                {icon_view}
+                                text(class = "gds-files-crumb-text") {{label}}
                             }
-                        ) {
-                            text(class = "gds-files-crumb-text") {{label}}
-                        }
-                    }));
+                        }));
+                    } else {
+                        items.push(AnyView::new(view! {
+                            box(
+                                class = "gds-files-crumb",
+                                attr:data-scheme = is_scheme.then(|| "true".to_owned()),
+                                attr:data-interactive = is_scheme.then(|| "false".to_owned()),
+                            ) {
+                                {icon_view}
+                                text(class = "gds-files-crumb-text") {{label}}
+                            }
+                        }));
+                    }
                     items
                 })
                 .collect::<Vec<_>>();

@@ -6,6 +6,16 @@ use url::Url;
 
 pub trait Scheme: Sync {
     fn name(&self) -> &'static str;
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+    fn matches(&self, name: &str) -> bool {
+        self.name().eq_ignore_ascii_case(name)
+            || self
+                .aliases()
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(name))
+    }
     /// # Errors
     /// Rejects malformed addresses or URIs that do not belong to this scheme.
     fn parse(&self, input: &str) -> Result<Location, AddressError>;
@@ -48,11 +58,9 @@ pub fn registry() -> [&'static dyn Scheme; 5] {
 }
 
 pub fn recognizes(input: &str) -> bool {
-    input.split_once(':').is_some_and(|(name, _)| {
-        registry()
-            .iter()
-            .any(|scheme| scheme.name().eq_ignore_ascii_case(name))
-    })
+    input
+        .split_once(':')
+        .is_some_and(|(name, _)| registry().iter().any(|scheme| scheme.matches(name)))
 }
 
 /// Parse a URI using the registered scheme provider for its prefix.
@@ -63,7 +71,7 @@ pub fn parse(input: &str) -> Result<Location, AddressError> {
     let name = input.split_once(':').map(|(s, _)| s).unwrap_or_default();
     registry()
         .into_iter()
-        .find(|scheme| scheme.name().eq_ignore_ascii_case(name))
+        .find(|scheme| scheme.matches(name))
         .ok_or_else(|| AddressError::Invalid(input.into()))?
         .parse(input)
 }
@@ -231,6 +239,10 @@ impl Scheme for TagsScheme {
 
     fn name(&self) -> &'static str {
         "tags"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["tag"]
     }
 
     fn parse(&self, input: &str) -> Result<Location, AddressError> {

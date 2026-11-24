@@ -13,7 +13,7 @@ use gds::ui::feedback::tooltip::{HintTooltipProps, wrap_tokens};
 use gds::ui::menu::MenuFocusParkProps;
 use gds::ui::page::PageNoticeProps;
 use gds::ui::time::Timestamp;
-use gds::ui::{IconButtonProps, IconName, IconProps};
+use gds::ui::{IconName, IconProps};
 use gds::{i18n, t};
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, Signal};
@@ -274,8 +274,9 @@ const SURFACES_CSS: &str = css!(
         color: var(--gds-muted-foreground);
     }
 
-    .gds-files-collection-cell--split {
-        justify-content: space-between;
+    .gds-files-collection-cell--mount {
+        justify-content: flex-start;
+        gap: 0;
     }
 
     .gds-files-collection-cell[data-align="end"] {
@@ -730,74 +731,37 @@ fn volume_mount_point_cell(
     volume: &volumes::Volume,
     col_index: usize,
 ) -> AnyView {
-    let busy = browser.device_is_busy(&volume.id);
-    let action_button = if volume.mountable && volume.mount_points.is_empty() {
-        let b = browser.clone();
-        let id = volume.id.clone();
-        Some(AnyView::new(view! {
-            IconButton(
-                icon = IconName::Plug,
-                label = i18n::text("device-mount"),
-                disabled = busy,
-                on:pointer_down = move |ev| ev.stop_propagation(),
-                on:click = move |ev| {
-                    ev.stop_propagation();
-                    b.request_device_action(volumes::DeviceAction::Mount(id.clone()));
-                },
-            )
-        }))
-    } else if volume.can_unmount() {
-        let b = browser.clone();
-        let id = volume.id.clone();
-        Some(AnyView::new(view! {
-            IconButton(
-                icon = IconName::Unplug,
-                label = i18n::text("device-unmount"),
-                disabled = busy,
-                on:pointer_down = move |ev| ev.stop_propagation(),
-                on:click = move |ev| {
-                    ev.stop_propagation();
-                    b.request_device_action(volumes::DeviceAction::Unmount(id.clone()));
-                },
-            )
-        }))
-    } else {
-        None
-    };
-
-    let lead_view = if volume.mount_points.is_empty() {
+    if volume.mount_points.is_empty() {
         let text = if !volume.mountable && volume.filesystem.is_empty() {
             i18n::text("device-not-browsable")
         } else {
             i18n::text("device-not-mounted")
         };
-        AnyView::new(view! {
-            text(class = "gds-files-collection-cell__text") {{text}}
-        })
-    } else if volume.mount_points.len() == 1 {
+        return meta_text_cell(text, false, false, None, col_index);
+    }
+
+    if volume.mount_points.len() == 1 {
         let path_text = volume.mount_points[0].display().to_string();
-        let tooltip = path_text.clone();
-        AnyView::new(view! {
-            HintTooltip(text = tooltip) {
-                text(
-                    class = "gds-files-collection-cell__text",
-                    attr:data-emphasis = "true",
-                ) {{path_text}}
-            }
-        })
-    } else {
-        let current = active_mount_point(browser, volume);
-        let current_label = current
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| UNKNOWN_VALUE.to_owned());
-        let stable_id = volume.id.stable.clone();
-        let can_select = stable_id.is_some();
+        let tooltip = wrap_tokens(&path_text);
+        return meta_text_cell(path_text, false, true, Some(tooltip), col_index);
+    }
 
-        let mount_points = volume.mount_points.clone();
-        let menu_browser = browser.clone();
+    let current = active_mount_point(browser, volume);
+    let current_label = current
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| UNKNOWN_VALUE.to_owned());
+    let stable_id = volume.id.stable.clone();
+    let can_select = stable_id.is_some();
 
-        let trigger = AnyView::new(view! {
+    let mount_points = volume.mount_points.clone();
+    let menu_browser = browser.clone();
+    let col_class = collection_column_class(col_index);
+
+    let cell = AnyView::new(view! {
+        row(
+            class = format!("gds-files-collection-cell gds-files-collection-cell--mount {col_class}"),
+        ) {
             DropdownMenu {
                 DropdownMenuTrigger(
                     variant = ButtonVariant::Outline,
@@ -842,29 +806,18 @@ fn volume_mount_point_cell(
                         .collect::<Vec<_>>()}
                 }
             }
-        });
-
-        if can_select {
-            trigger
-        } else {
-            AnyView::new(view! {
-                HintTooltip(text = i18n::text("volume-default-unavailable")) {
-                    {trigger}
-                }
-            })
         }
-    };
+    });
 
-    let col_class = collection_column_class(col_index);
-
-    AnyView::new(view! {
-        row(
-            class = format!("gds-files-collection-cell gds-files-collection-cell--split {col_class}"),
-        ) {
-            {lead_view}
-            {action_button}
-        }
-    })
+    if can_select {
+        cell
+    } else {
+        AnyView::new(view! {
+            HintTooltip(text = i18n::text("volume-default-unavailable"), trigger_class = col_class) {
+                {cell}
+            }
+        })
+    }
 }
 
 impl Browser {
