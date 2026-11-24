@@ -2300,6 +2300,10 @@ impl Browser {
         let popup_browser = self.clone();
         let permissions_view = self.permissions_dialog();
         let tags_view = self.tags_dialog();
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let default_app_view = self.default_app_dialog();
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        let default_app_view = AnyView::new(());
 
         AnyView::new(view! {
             box(class = "gds-files-menu-overlay") {
@@ -2345,6 +2349,7 @@ impl Browser {
                 }
                 {permissions_view}
                 {tags_view}
+                {default_app_view}
             }
         })
     }

@@ -1,5 +1,15 @@
 details-format = Format
 details-mime = MIME type
+details-default-app = Default app
+details-default-app-change = Change…
+details-default-app-none = Not set
+details-default-app-title = Default application
+details-default-app-confirm = Set as default
+details-default-app-search = Search applications…
+details-default-app-recommended = Recommended
+details-default-app-other = Other applications
+details-default-app-empty = No matching applications found
+details-default-app-saved = Default application set to “{ $app }”
 details-created = Created
 details-origin = Origin
 details-comment = Comment

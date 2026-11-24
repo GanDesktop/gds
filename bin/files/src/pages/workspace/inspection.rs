@@ -1,5 +1,7 @@
 //! Properties, content inspection, permissions, and tags dialogs share existing services.
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+mod default_app;
 mod info;
 pub(super) mod tags;
 
@@ -449,6 +451,8 @@ struct DialogSlots {
     browser: WeakBrowser,
     tags: RwSignal<Option<TagEditor>, LocalStorage>,
     permissions: RwSignal<Option<PermissionEditor>, LocalStorage>,
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    default_app: RwSignal<Option<default_app::DefaultAppEditor>, LocalStorage>,
 }
 
 thread_local! {
@@ -480,6 +484,8 @@ fn dialog_slots(browser: &Browser) -> DialogSlots {
             browser: browser.downgrade(),
             tags: RwSignal::new_local(None),
             permissions: RwSignal::new_local(None),
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            default_app: RwSignal::new_local(None),
         }
     });
     DIALOGS.with(|map| {
@@ -697,6 +703,9 @@ struct PropertiesInner {
     comment_draft: RwSignal<String, LocalStorage>,
     comment_saving: RwSignal<bool, LocalStorage>,
     comment_error: RwSignal<Option<String>, LocalStorage>,
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    default_app:
+        RwSignal<Option<Option<gds::service::desktop::mime_apps::DesktopApp>>, LocalStorage>,
     description_version: RwSignal<u64, LocalStorage>,
     tags_enabled: bool,
 }
@@ -724,6 +733,8 @@ impl Properties {
             comment_draft: RwSignal::new_local(String::new()),
             comment_saving: RwSignal::new_local(false),
             comment_error: RwSignal::new_local(None),
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            default_app: RwSignal::new_local(None),
             description_version: RwSignal::new_local(0),
             tags_enabled,
         });
@@ -736,6 +747,10 @@ impl Properties {
         let path = entry.path.clone();
         let is_file = entry.kind == EntryKind::File;
         let is_symlink = entry.kind == EntryKind::SymbolicLink;
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let mime_for_default = is_file
+            .then(|| EntryPresentation::mime_type(&entry).map(ToOwned::to_owned))
+            .flatten();
         let missing_mime = entry
             .details
             .display_content()
@@ -754,6 +769,8 @@ impl Properties {
             comment_draft: RwSignal::new_local(String::new()),
             comment_saving: RwSignal::new_local(false),
             comment_error: RwSignal::new_local(None),
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            default_app: RwSignal::new_local(None),
             description_version: RwSignal::new_local(0),
             tags_enabled,
         });
@@ -763,6 +780,10 @@ impl Properties {
         }
         if is_file {
             props.load_origin_url();
+        }
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if let Some(mime) = mime_for_default {
+            props.load_default_app(mime);
         }
         if cfg!(target_os = "linux") && !is_symlink {
             props.load_comment();
@@ -879,9 +900,17 @@ impl Properties {
                 Ok(entry) => {
                     let is_file = entry.kind == EntryKind::File;
                     let is_symlink = entry.kind == EntryKind::SymbolicLink;
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                    let mime_for_default = is_file
+                        .then(|| EntryPresentation::mime_type(&entry).map(ToOwned::to_owned))
+                        .flatten();
                     target.0.entry.set(EntryState::Ready(entry));
                     if is_file {
                         target.load_origin_url();
+                    }
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                    if let Some(mime) = mime_for_default {
+                        target.load_default_app(mime);
                     }
                     if cfg!(target_os = "linux") && !is_symlink {
                         target.load_comment();
@@ -894,6 +923,27 @@ impl Properties {
                     target.0.entry.set(EntryState::Failed(message));
                 }
             }
+        }));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn load_default_app(&self, mime: String) {
+        let weak = Rc::downgrade(&self.0);
+        let task =
+            self.0
+                .scope
+                .spawn_blocking_named("Resolve default MIME application", move || {
+                    gds::service::desktop::mime_apps::resolve_system(&mime)
+                        .and_then(|assoc| assoc.default_app)
+                });
+        drop(spawn_local(async move {
+            let Ok(app) = task.await else {
+                return;
+            };
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            inner.default_app.set(Some(app));
         }));
     }
 
@@ -1173,6 +1223,51 @@ impl Properties {
         rows
     }
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn default_app_section(&self, browser: Option<&Browser>, entry: &Entry) -> Option<AnyView> {
+        if entry.kind != EntryKind::File {
+            return None;
+        }
+        let mime = EntryPresentation::mime_type(entry)?.to_owned();
+        let default_app_sig = self.0.default_app;
+        let edit_browser = browser.cloned();
+
+        Some(AnyView::new(view! {
+            column(class = "gds-files-details__tags-section") {
+                row(class = "gds-files-details__tags-header") {
+                    text(class = "gds-files-details__label") {{i18n::text("details-default-app")}}
+                    {edit_browser.map(|b| {
+                        let edit_mime = mime.clone();
+                        view! {
+                            Button(
+                                variant = ButtonVariant::Ghost,
+                                size = ButtonSize::Sm,
+                                on:click = move |_| {
+                                    let sig = default_app_sig;
+                                    b.edit_default_app(edit_mime.clone(), move |app| {
+                                        let _ = sig.try_set(Some(Some(app)));
+                                    });
+                                },
+                            ) {{i18n::text("details-default-app-change")}}
+                        }
+                        .into_view()
+                    })}
+                }
+                {move || match default_app_sig.get() {
+                    None => AnyView::new(view! {
+                        text(class = "gds-files-details__label") {{i18n::text("loading")}}
+                    }),
+                    Some(None) => AnyView::new(view! {
+                        text(class = "gds-files-details__label") {{i18n::text("details-default-app-none")}}
+                    }),
+                    Some(Some(app)) => AnyView::new(view! {
+                        text(class = "gds-files-details__value") {{app.name}}
+                    }),
+                }}
+            }
+        }))
+    }
+
     fn comment_section(&self, entry_kind: EntryKind) -> Option<AnyView> {
         if !cfg!(target_os = "linux") || entry_kind == EntryKind::SymbolicLink {
             return None;
@@ -1415,12 +1510,17 @@ impl Properties {
                         if let Some(meta) = metadata_ref {
                             all_rows.extend(Self::fact_rows(meta));
                         }
+                        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                        let default_app_view = props.default_app_section(browser.as_ref(), &entry);
+                        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+                        let default_app_view: Option<AnyView> = None;
                         let comment_view = props.comment_section(entry.kind);
                         let tags_view = props.tags_section(browser.as_ref(), entry.kind);
                         let body = AnyView::new(view! {
                             column(class = "gds-files-details__rows") {
                                 {all_rows}
                             }
+                            {default_app_view}
                             {comment_view}
                             {tags_view}
                         });
@@ -1980,7 +2080,13 @@ fn static_row_details(browser: &Browser, row: &Row) -> AnyView {
 impl Browser {
     pub(super) fn has_open_inspection_dialog(&self) -> bool {
         let slots = dialog_slots(self);
-        slots.tags.get_untracked().is_some() || slots.permissions.get_untracked().is_some()
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let has_default_app = slots.default_app.get_untracked().is_some();
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        let has_default_app = false;
+        slots.tags.get_untracked().is_some()
+            || slots.permissions.get_untracked().is_some()
+            || has_default_app
     }
 
     pub(super) fn cancel_inspection_dialog(&self) -> bool {
@@ -1997,7 +2103,125 @@ impl Browser {
             }
             return true;
         }
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if let Some(editor) = slots.default_app.get_untracked() {
+            if !editor.is_saving_untracked() {
+                slots.default_app.set(None);
+            }
+            return true;
+        }
         false
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub(super) fn edit_default_app(
+        &self,
+        mime: String,
+        on_updated: impl Fn(gds::service::desktop::mime_apps::DesktopApp) + 'static,
+    ) {
+        self.0.menus.close();
+        let slots = dialog_slots(self);
+        if slots
+            .default_app
+            .get_untracked()
+            .as_ref()
+            .is_some_and(default_app::DefaultAppEditor::is_saving_untracked)
+        {
+            return;
+        }
+        let editor = default_app::DefaultAppEditor::new(self, mime, on_updated);
+        slots.default_app.set(Some(editor));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub(super) fn default_app_dialog(&self) -> AnyView {
+        install_inspection_stylesheet();
+        let slots = dialog_slots(self);
+        let app_sig = slots.default_app;
+        let open = Signal::derive_local(move || app_sig.get().is_some());
+        let can_dismiss = Signal::derive_local(move || {
+            !app_sig
+                .get()
+                .as_ref()
+                .is_some_and(default_app::DefaultAppEditor::is_saving)
+        });
+        let modal_disabled = Signal::derive_local(move || {
+            !app_sig
+                .get()
+                .as_ref()
+                .is_some_and(default_app::DefaultAppEditor::can_save)
+        });
+        let on_modal_decision =
+            UnsyncCallback::new(move |decision: DialogDecision| match decision {
+                DialogDecision::Confirm => {
+                    if let Some(editor) = app_sig.get_untracked() {
+                        editor.save(move || app_sig.set(None));
+                    }
+                }
+                DialogDecision::Cancel | DialogDecision::Dismiss => {
+                    if !app_sig
+                        .get_untracked()
+                        .as_ref()
+                        .is_some_and(default_app::DefaultAppEditor::is_saving_untracked)
+                    {
+                        app_sig.set(None);
+                    }
+                }
+            });
+
+        AnyView::new(view! {
+            ModalDialog(
+                open = Binding::controlled(open, move |next: bool| {
+                    if !next
+                        && !app_sig
+                            .get_untracked()
+                            .as_ref()
+                            .is_some_and(default_app::DefaultAppEditor::is_saving_untracked)
+                    {
+                        app_sig.set(None);
+                    }
+                }),
+                size = DialogSize::Md,
+                disabled = modal_disabled,
+                dismiss_on_outside_press = can_dismiss,
+                dismiss_on_escape = can_dismiss,
+                close_on_confirm = false,
+                on_decision = on_modal_decision,
+            ) {
+                {move || match app_sig.get() {
+                    None => AnyView::new(()),
+                    Some(editor) => {
+                        let mime_label = editor.mime().to_owned();
+                        let fields = editor.fields();
+                        let save_disabled = Signal::derive_local(move || {
+                            !app_sig
+                                .get()
+                                .as_ref()
+                                .is_some_and(default_app::DefaultAppEditor::can_save)
+                        });
+                        AnyView::new(view! {
+                            column(class = "gds-files-dialog-body") {
+                                DialogHeader {
+                                    DialogTitle {{i18n::text("details-default-app-title")}}
+                                    DialogDescription(class = "gds-files-dialog-desc") {
+                                        {mime_label}
+                                    }
+                                }
+                                {fields}
+                                DialogFooter {
+                                    DialogActions(
+                                        primary_label = i18n::text("details-default-app-confirm"),
+                                        cancel_label = i18n::text("operation-cancel"),
+                                        disabled = save_disabled,
+                                        on_decision = on_modal_decision,
+                                    )
+                                }
+                            }
+                        })
+                    }
+                }}
+            }
+        })
     }
 
     pub(super) fn edit_tags(&self, path: PathBuf) {

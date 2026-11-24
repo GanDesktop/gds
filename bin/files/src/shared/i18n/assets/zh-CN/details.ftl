@@ -1,5 +1,15 @@
 details-format = 格式
 details-mime = MIME 类型
+details-default-app = 默认打开方式
+details-default-app-change = 更改…
+details-default-app-none = 未设置
+details-default-app-title = 默认打开方式
+details-default-app-confirm = 设为默认
+details-default-app-search = 搜索应用…
+details-default-app-recommended = 推荐应用
+details-default-app-other = 其他应用
+details-default-app-empty = 未找到匹配的应用
+details-default-app-saved = 默认打开方式已设为“{ $app }”
 details-created = 创建时间
 details-origin = 下载来源
 details-comment = 备注

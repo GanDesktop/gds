@@ -27,6 +27,8 @@ pub use session::{InhibitGuard, notify_background};
 #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
 pub mod file_manager;
 #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
+pub mod mime_apps;
+#[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
 mod portal;
 #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
 pub use portal::Error as PortalError;
