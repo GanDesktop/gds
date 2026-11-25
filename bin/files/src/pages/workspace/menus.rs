@@ -37,6 +37,7 @@ use zgui_ui::{
 };
 use zgui_ui_primitives::{Align, Binding, Placement, Side};
 
+use super::chrome::QuickAccessAddState;
 use super::geometry::RectF;
 use super::model::{Contents, Pane, Prompt, Row, RowKey, State, TRASH_TASK_KEY, remote_task_key};
 use super::ui::Browser;
@@ -972,6 +973,41 @@ impl Browser {
         })
     }
 
+    fn quick_access_add_entry(&self) -> MenuEntry {
+        let state = self.quick_access_add_state_untracked();
+        let label = match state {
+            QuickAccessAddState::CanAdd => i18n::text_untracked("quick-access-add-current"),
+            QuickAccessAddState::AlreadyAdded => i18n::text_untracked("quick-access-already-added"),
+            QuickAccessAddState::NotLocal => i18n::text_untracked("quick-access-local-only"),
+        };
+        let add_browser = self.clone();
+        MenuEntry::Item {
+            label,
+            icon: Some(IconName::Plus),
+            shortcut: None,
+            disabled: state != QuickAccessAddState::CanAdd,
+            destructive: false,
+            on_select: UnsyncCallback::new(move |()| {
+                add_browser
+                    .0
+                    .owner
+                    .with(|| add_browser.add_current_to_quick_access());
+            }),
+        }
+    }
+
+    pub(super) fn sidebar_quick_access_section_menu(&self, target_view: AnyView) -> AnyView {
+        let browser = self.clone();
+        let model = std::rc::Rc::new(move || {
+            let mut menu = gds::ui::menu::MenuModel::new();
+            menu.push(browser.quick_access_add_entry());
+            menu
+        });
+        AnyView::new(view! {
+            gds::ui::menu::ContextMenuHost(model = model) {{target_view}}
+        })
+    }
+
     pub(super) fn sidebar_quick_access_menu(&self, target_view: AnyView, path: PathBuf) -> AnyView {
         let browser = self.clone();
         let model = std::rc::Rc::new(move || {
@@ -991,22 +1027,8 @@ impl Browser {
                         .with(|| open_new.open_quick_access(&path_new, true));
                 }),
             });
-            let open_cur = browser.clone();
-            let path_cur = path.clone();
-            menu.push(MenuEntry::Item {
-                label: i18n::text_untracked("quick-access-open-current"),
-                icon: Some(IconName::FolderOpen),
-                shortcut: None,
-                disabled: false,
-                destructive: false,
-                on_select: UnsyncCallback::new(move |()| {
-                    open_cur
-                        .0
-                        .owner
-                        .with(|| open_cur.open_quick_access_in_current(&path_cur));
-                }),
-            });
             menu.push(MenuEntry::Separator);
+            menu.push(browser.quick_access_add_entry());
             let remove = browser.clone();
             let path_rm = path.clone();
             menu.push(MenuEntry::Item {
@@ -1022,7 +1044,22 @@ impl Browser {
             menu
         });
         AnyView::new(view! {
-            gds::ui::menu::ContextMenuHost(model = model) {{target_view}}
+            box(
+                style:display = "flex",
+                style:flex-direction = "column",
+                style:width = "100%",
+                style:min-width = "0px",
+                on:pointer_down = |ev: &mut EventCx<'_, events::PointerDown>| {
+                    if ev.button == Some(PointerButton::Secondary) {
+                        ev.stop_propagation();
+                    }
+                },
+                on:context_menu = |ev: &mut EventCx<'_, events::ContextMenu>| {
+                    ev.stop_propagation();
+                }
+            ) {
+                gds::ui::menu::ContextMenuHost(model = model) {{target_view}}
+            }
         })
     }
 

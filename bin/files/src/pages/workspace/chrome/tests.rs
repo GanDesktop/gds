@@ -226,7 +226,7 @@ fn transform_rect(m: [f64; 6], r: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) 
     (min_x, min_y, max_x, max_y)
 }
 
-fn collect_live_buttons(surface: &OffscreenSurface) -> Vec<LiveButton> {
+fn collect_live_role(surface: &OffscreenSurface, role: Role) -> Vec<(LiveButton, bool)> {
     let mut nodes = HashMap::new();
     let mut root = None;
     for update in surface.a11y_log() {
@@ -257,17 +257,20 @@ fn collect_live_buttons(surface: &OffscreenSurface) -> Vec<LiveButton> {
             Some(t) => compose_affine(world, t.as_coeffs()),
             None => world,
         };
-        if node.role() == Role::Button
+        if node.role() == role
             && let Some(rect) = node.bounds()
         {
             let (x0, y0, x1, y1) = transform_rect(next_world, (rect.x0, rect.y0, rect.x1, rect.y1));
-            out.push(LiveButton {
-                label: node.label().unwrap_or_default().to_owned(),
-                x0,
-                y0,
-                x1,
-                y1,
-            });
+            out.push((
+                LiveButton {
+                    label: node.label().unwrap_or_default().to_owned(),
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                },
+                node.is_disabled(),
+            ));
         }
         for &child in node.children().iter().rev() {
             stack.push((child, next_world));
@@ -276,34 +279,52 @@ fn collect_live_buttons(surface: &OffscreenSurface) -> Vec<LiveButton> {
     out
 }
 
+fn collect_live_buttons(surface: &OffscreenSurface) -> Vec<LiveButton> {
+    collect_live_role(surface, Role::Button)
+        .into_iter()
+        .map(|(btn, _)| btn)
+        .collect()
+}
+
 fn find_button_by_label<'a>(buttons: &'a [LiveButton], label: &str) -> Option<&'a LiveButton> {
     buttons.iter().find(|btn| btn.label == label)
 }
 
-fn click_at(harness: &mut Harness<Box<dyn AppHandler>>, x: f32, y: f32, ms: u64) {
+fn click_at_with_modifiers(
+    harness: &mut Harness<Box<dyn AppHandler>>,
+    x: f32,
+    y: f32,
+    button: PointerButton,
+    modifiers: Modifiers,
+    ms: u64,
+) {
     let mut ev = PointerEvent::mouse(Point::new(CssPx(x), CssPx(y)));
     harness.deliver_to_first(SurfaceEvent::Pointer {
         action: PointerAction::Moved,
         event: ev,
-        modifiers: Modifiers::NONE,
+        modifiers,
         timestamp: Timestamp::from_origin(Duration::from_millis(ms)),
     });
-    harness.settle(4);
-    ev.button = Some(PointerButton::Primary);
+    harness.pump();
+    ev.button = Some(button);
     harness.deliver_to_first(SurfaceEvent::Pointer {
         action: PointerAction::Pressed,
         event: ev,
-        modifiers: Modifiers::NONE,
+        modifiers,
         timestamp: Timestamp::from_origin(Duration::from_millis(ms)),
     });
-    harness.settle(4);
+    harness.pump();
     harness.deliver_to_first(SurfaceEvent::Pointer {
         action: PointerAction::Released,
         event: ev,
-        modifiers: Modifiers::NONE,
+        modifiers,
         timestamp: Timestamp::from_origin(Duration::from_millis(ms + 50)),
     });
-    harness.settle(8);
+    harness.settle(16);
+}
+
+fn click_at(harness: &mut Harness<Box<dyn AppHandler>>, x: f32, y: f32, ms: u64) {
+    click_at_with_modifiers(harness, x, y, PointerButton::Primary, Modifiers::NONE, ms);
 }
 
 pub(in crate::pages::workspace) fn click_button(
@@ -484,14 +505,55 @@ fn virtual_location_and_remote_breadcrumbs_render_localized_scheme_chips() {
         assert!(vol_crumbs[1].current);
         assert!(vol_crumbs[1].separated);
 
+        let zh_net = Breadcrumb::for_location(&Location::Network, None);
+        assert_eq!(zh_net.len(), 1);
+        assert_eq!(zh_net[0].label, "网络");
+        assert!(zh_net[0].scheme);
+        assert_eq!(zh_net[0].icon, Some(gds::ui::IconName::Network));
+        assert_eq!(zh_net[0].location, Some(Location::Network));
+        assert!(zh_net[0].current);
+        assert!(!zh_net[0].separated);
+
+        let zh_trash = Breadcrumb::for_location(&Location::Trash, None);
+        assert_eq!(zh_trash.len(), 1);
+        assert_eq!(zh_trash[0].label, "回收站");
+        assert!(zh_trash[0].scheme);
+        assert_eq!(zh_trash[0].icon, Some(gds::ui::IconName::Trash));
+        assert_eq!(zh_trash[0].location, Some(Location::Trash));
+        assert!(zh_trash[0].current);
+        assert!(!zh_trash[0].separated);
+
         app.i18n()
             .install_catalog(i18n::prepare(Language::English).expect("English catalog"));
+        let fav_crumbs = Breadcrumb::for_location(&Location::Favorites, None);
+        assert_eq!(fav_crumbs.len(), 2);
+        assert_eq!(fav_crumbs[0].label, "Location");
+        assert!(fav_crumbs[0].scheme);
+        assert_eq!(fav_crumbs[1].label, "Favorites");
+        assert!(fav_crumbs[1].current);
+
         let recent_crumbs = Breadcrumb::for_location(&Location::Recent, None);
-        assert_eq!(recent_crumbs.len(), 2);
-        assert_eq!(recent_crumbs[0].label, "Location");
+        assert_eq!(recent_crumbs.len(), 1);
+        assert_eq!(recent_crumbs[0].label, "Recent");
         assert!(recent_crumbs[0].scheme);
-        assert_eq!(recent_crumbs[1].label, "Recent");
-        assert!(recent_crumbs[1].current);
+        assert_eq!(recent_crumbs[0].icon, Some(gds::ui::IconName::Clock));
+        assert_eq!(recent_crumbs[0].location, Some(Location::Recent));
+        assert!(recent_crumbs[0].current);
+        assert!(!recent_crumbs[0].separated);
+
+        let net_crumbs = Breadcrumb::for_location(&Location::Network, None);
+        assert_eq!(net_crumbs.len(), 1);
+        assert_eq!(net_crumbs[0].label, "Network");
+        assert!(net_crumbs[0].scheme);
+        assert_eq!(net_crumbs[0].icon, Some(gds::ui::IconName::Network));
+        assert!(net_crumbs[0].current);
+
+        let trash_crumbs = Breadcrumb::for_location(&Location::Trash, None);
+        assert_eq!(trash_crumbs.len(), 1);
+        assert_eq!(trash_crumbs[0].label, "Trash");
+        assert!(trash_crumbs[0].scheme);
+        assert_eq!(trash_crumbs[0].icon, Some(gds::ui::IconName::Trash));
+        assert!(trash_crumbs[0].current);
 
         let remote = gds::service::remote::Address::parse("sftp://nas.local/home/atlas/docs")
             .expect("valid sftp address");
@@ -1667,7 +1729,7 @@ fn accordion_threshold_default_section_and_water_filling_allocator() {
 }
 
 #[test]
-fn quick_access_plus_button_tab_drag_new_tab_click_reorder_and_accordion_mode() {
+fn quick_access_current_tab_click_context_menu_tab_drag_reorder_and_accordion_mode() {
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path().join("home");
     let desktop = home.join("Desktop");
@@ -1713,8 +1775,8 @@ fn quick_access_plus_button_tab_drag_new_tab_click_reorder_and_accordion_mode() 
                 loc_bounds_tall
             );
 
-            // 2. Clicking a Quick Access item opens a NEW tab when different from active tab,
-            //    and keeps the current tab when already active at that directory.
+            // 2. Clicking a Quick Access item navigates in the CURRENT tab (matching Locations),
+            //    while Ctrl+click opens a new tab.
             assert_eq!(browser.read_untracked(|ws| ws.tabs.len()), 1);
             let buttons = collect_live_buttons(&surface);
             let dl_btn = find_button_by_label(&buttons, "Downloads")
@@ -1728,60 +1790,165 @@ fn quick_access_plus_button_tab_drag_new_tab_click_reorder_and_accordion_mode() 
             );
             assert_eq!(
                 browser.read_untracked(|ws| ws.tabs.len()),
-                2,
-                "clicking a different directory in Quick Access must open a new tab"
+                1,
+                "clicking a directory in Quick Access must navigate in the current tab"
             );
             assert_eq!(
                 browser.read_untracked(|ws| ws.tab().navigation.path().map(Path::to_path_buf)),
                 Some(downloads.clone())
             );
-            // Clicking Downloads again while active tab is already at Downloads must NOT spawn a 3rd tab.
+
+            let buttons = collect_live_buttons(&surface);
+            let desktop_btn = buttons
+                .iter()
+                .find(|b| b.label == "Desktop" && b.y0 >= qa_bounds_tall.origin.y.0 as f64 - 4.0)
+                .expect("Desktop quick access row")
+                .clone();
+            click_at_with_modifiers(
+                harness,
+                desktop_btn.center_x() as f32,
+                desktop_btn.center_y() as f32,
+                PointerButton::Primary,
+                Modifiers::CONTROL,
+                200,
+            );
+            assert_eq!(
+                browser.read_untracked(|ws| ws.tabs.len()),
+                2,
+                "Ctrl+clicking a Quick Access directory must open a new tab"
+            );
+            assert_eq!(
+                browser.read_untracked(|ws| ws.tab().navigation.path().map(Path::to_path_buf)),
+                Some(desktop.clone())
+            );
+
+            // 3. Heading has NO `+` button; adding the current folder lives in the Quick Access
+            //    context menu (disabled on AlreadyAdded / NotLocal, enabled on CanAdd).
+            let already_lbl = gds::i18n::text_untracked("quick-access-already-added");
+            let add_lbl = gds::i18n::text_untracked("quick-access-add-current");
+            let local_only_lbl = gds::i18n::text_untracked("quick-access-local-only");
+            let buttons = collect_live_buttons(&surface);
+            assert!(
+                find_button_by_label(&buttons, &add_lbl).is_none()
+                    && find_button_by_label(&buttons, &already_lbl).is_none()
+                    && find_button_by_label(&buttons, &local_only_lbl).is_none(),
+                "Quick Access heading must not render an inline `+` button"
+            );
+
+            let qa_heading = heading_node("quick-access").expect("quick-access heading node");
+            let scale = qa_heading.scale().max(1.0);
+            let h_bounds = qa_heading.window_bounds().expect("heading bounds");
+            let hx = (h_bounds.origin.x.0 + h_bounds.size.width.0 * 0.5) / scale;
+            let hy = (h_bounds.origin.y.0 + h_bounds.size.height.0 * 0.5) / scale;
+
+            let escape = KeyEvent::named(NamedKey::Escape, PhysicalKey::Code(KeyCode::Escape));
+
+            // AlreadyAdded on Desktop -> menu shows disabled already-added item.
+            click_at_with_modifiers(
+                harness,
+                hx,
+                hy,
+                PointerButton::Secondary,
+                Modifiers::NONE,
+                260,
+            );
+            let items = collect_live_role(&surface, Role::MenuItem);
+            assert!(
+                items
+                    .iter()
+                    .any(|(item, disabled)| item.label == already_lbl && *disabled),
+                "expected Quick Access context menu to show disabled already-added item on Desktop, got {items:?}"
+            );
+            send_key_chord(harness, escape.clone(), Modifiers::NONE);
+            harness.settle(8);
+
+            // NotLocal on location:/volumes -> menu shows disabled local-only item.
+            browser.open(Location::Volumes);
+            flush();
+            harness.settle(8);
+            click_at_with_modifiers(
+                harness,
+                hx,
+                hy,
+                PointerButton::Secondary,
+                Modifiers::NONE,
+                290,
+            );
+            let items = collect_live_role(&surface, Role::MenuItem);
+            assert!(
+                items
+                    .iter()
+                    .any(|(item, disabled)| item.label == local_only_lbl && *disabled),
+                "expected Quick Access context menu to show disabled local-only item on Volumes, got {items:?}"
+            );
+            send_key_chord(harness, escape.clone(), Modifiers::NONE);
+            harness.settle(8);
+
+            // CanAdd on Projects -> clicking the menu item adds Projects to Quick Access.
+            browser.open(Location::from(projects.as_path()));
+            flush();
+            harness.settle(8);
+            click_at_with_modifiers(
+                harness,
+                hx,
+                hy,
+                PointerButton::Secondary,
+                Modifiers::NONE,
+                320,
+            );
+            let items = collect_live_role(&surface, Role::MenuItem);
+            let (add_item, disabled) = items
+                .iter()
+                .find(|(item, _)| item.label == add_lbl)
+                .expect("add current folder menu item in Quick Access context menu")
+                .clone();
+            assert!(
+                !disabled,
+                "add current folder menu item must be enabled on Projects"
+            );
+            click_at(
+                harness,
+                add_item.center_x() as f32,
+                add_item.center_y() as f32,
+                340,
+            );
+            assert!(
+                browser.quick_access_paths_untracked().contains(&projects),
+                "selecting Quick Access context menu item must add current local directory"
+            );
+
+            // Right-clicking an item opens ONLY the item menu (no duplicate section menu)
+            // and includes Open in new tab, Add current folder (already added), and Remove.
             let buttons = collect_live_buttons(&surface);
             let dl_btn = buttons
                 .iter()
                 .find(|b| b.label == "Downloads" && b.y0 >= qa_bounds_tall.origin.y.0 as f64 - 4.0)
                 .expect("Downloads quick access row")
                 .clone();
-            click_at(
+            click_at_with_modifiers(
                 harness,
                 dl_btn.center_x() as f32,
                 dl_btn.center_y() as f32,
-                250,
+                PointerButton::Secondary,
+                Modifiers::NONE,
+                360,
             );
+            let open_menus = collect_live_role(&surface, Role::Menu);
             assert_eq!(
-                browser.read_untracked(|ws| ws.tabs.len()),
-                2,
-                "clicking already-active Quick Access directory must not open a duplicate tab"
+                open_menus.len(),
+                1,
+                "right-clicking a Quick Access row must open only the item context menu, got {open_menus:?}"
             );
-
-            // 3. Trailing `+` button reflects AlreadyAdded on Downloads, CanAdd on Projects, and
-            //    adds Projects cleanly when clicked; reflects NotLocal on location:/volumes.
-            let already_lbl = gds::i18n::text_untracked("quick-access-already-added");
-            let add_lbl = gds::i18n::text_untracked("quick-access-add-current");
-            let local_only_lbl = gds::i18n::text_untracked("quick-access-local-only");
-            let buttons = collect_live_buttons(&surface);
+            let item_entries = collect_live_role(&surface, Role::MenuItem);
+            let remove_lbl = gds::i18n::text_untracked("quick-access-remove");
             assert!(
-                find_button_by_label(&buttons, &already_lbl).is_some(),
-                "expected `+` button to show already-added state on Downloads"
+                item_entries.iter().any(|(i, _)| i.label == already_lbl)
+                    && item_entries.iter().any(|(i, _)| i.label == remove_lbl),
+                "Quick Access row menu must include add-current and remove entries, got {item_entries:?}"
             );
-
-            browser.open(Location::Volumes);
-            flush();
+            send_key_chord(harness, escape, Modifiers::NONE);
             harness.settle(8);
-            let buttons = collect_live_buttons(&surface);
-            assert!(
-                find_button_by_label(&buttons, &local_only_lbl).is_some(),
-                "expected `+` button to show local-only state on location:/volumes"
-            );
 
-            browser.open(Location::from(projects.as_path()));
-            flush();
-            harness.settle(8);
-            click_button(harness, &add_lbl);
-            assert!(
-                browser.quick_access_paths_untracked().contains(&projects),
-                "clicking `+` must add current local directory to Quick Access"
-            );
             // Remove Projects so we can also test dragging a tab onto collapsed Quick Access!
             browser.remove_quick_access(&projects);
             flush();
@@ -1789,21 +1956,7 @@ fn quick_access_plus_button_tab_drag_new_tab_click_reorder_and_accordion_mode() 
             assert!(!browser.quick_access_paths_untracked().contains(&projects));
 
             // 4. Dragging a tab onto collapsed Quick Access adds the directory AND expands Quick Access.
-            let qa_heading = heading_node("quick-access").expect("quick-access heading node");
-            let scale = qa_heading.scale().max(1.0);
-            let h_bounds = qa_heading.window_bounds().expect("heading bounds");
-            click_at(
-                harness,
-                (h_bounds.origin.x.0 + h_bounds.size.width.0 * 0.5) / scale,
-                (h_bounds.origin.y.0 + h_bounds.size.height.0 * 0.5) / scale,
-                400,
-            );
-            // Collapsed: `+` button must be hidden.
-            let buttons = collect_live_buttons(&surface);
-            assert!(
-                find_button_by_label(&buttons, &add_lbl).is_none(),
-                "trailing `+` button must hide when Quick Access is collapsed"
-            );
+            click_at(harness, hx, hy, 400);
 
             let active_tab_id = browser.read_untracked(|ws| ws.tab().id);
             let tab_node = recorded_tab_node(active_tab_id).expect("active tab node");

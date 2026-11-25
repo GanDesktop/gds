@@ -21,7 +21,7 @@ use gds::app::Gds;
 use gds::service::file_inspection::{FileFacts, Metadata, Request, Source as InspectionSource};
 use gds::service::file_tags;
 use gds::service::task_manager::Scope;
-use gds::ui::button::{ButtonProps, ButtonSize, ButtonVariant};
+use gds::ui::button::{ButtonProps, ButtonVariant};
 use gds::ui::capacity::CapacityBarProps;
 use gds::ui::feedback::dialog::{
     DialogActionsProps, DialogDecision, DialogDescriptionProps, DialogFooterProps,
@@ -166,20 +166,6 @@ pub(super) const INSPECTION_CSS: &str = css!(
         min-height: 0;
         overflow-y: auto;
         overflow-x: hidden;
-    }
-
-    .gds-files-details__footer {
-        display: flex;
-        flex-direction: row;
-        align-items: center;
-        flex-shrink: 0;
-        padding: 10px 14px;
-        border-top: 1px solid var(--gds-border);
-        box-sizing: border-box;
-    }
-
-    .gds-files-details__edit-btn {
-        width: 100%;
     }
 
     .gds-files-details__empty {
@@ -858,7 +844,7 @@ impl Properties {
                 }));
             }
 
-            let props_body = props.view(None, false);
+            let props_body = props.view(false);
             view! {
                 box(
                     node_ref = root_ref,
@@ -1211,7 +1197,7 @@ impl Properties {
         }))
     }
 
-    fn view(&self, browser: Option<Browser>, panel_chrome: bool) -> AnyView {
+    fn view(&self, panel_chrome: bool) -> AnyView {
         install_inspection_stylesheet();
         let entry_sig = self.0.entry;
         let desc_ver = self.0.description_version;
@@ -1228,7 +1214,6 @@ impl Properties {
             .map(|name| name.to_string_lossy().into_owned())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| self.0.path.display().to_string());
-        let edit_browser = browser.filter(|_| panel_chrome);
 
         AnyView::new(view! {
             column(class = class_name) {
@@ -1296,38 +1281,8 @@ impl Properties {
                             {comment_view}
                             {tags_view}
                         });
-                        let edit_footer = edit_browser
-                            .as_ref()
-                            .filter(|b| {
-                                entry.kind != EntryKind::SymbolicLink
-                                    && editor::has_editable_tabs(b)
-                            })
-                            .map(|b| {
-                                let click_browser = b.clone();
-                                let click_entry = entry.clone();
-                                view! {
-                                    box(class = "gds-files-details__footer") {
-                                        Button(
-                                            variant = ButtonVariant::Outline,
-                                            size = ButtonSize::Sm,
-                                            icon = IconName::Pencil,
-                                            class = "gds-files-details__edit-btn",
-                                            on:click = move |_| {
-                                                click_browser.edit_item_properties(
-                                                    click_entry.clone(),
-                                                    None,
-                                                );
-                                            },
-                                        ) {{i18n::text("details-edit-properties-action")}}
-                                    }
-                                }
-                                .into_view()
-                            });
 
-                        Either::Right(view! {
-                            {details_content_view(hero, body)}
-                            {edit_footer}
-                        })
+                        Either::Right(details_content_view(hero, body))
                     }
                 }}
             }
@@ -2517,7 +2472,7 @@ impl Browser {
                             created
                         }
                     };
-                    return props.view(Some(browser.clone()), true);
+                    return props.view(true);
                 }
                 _ => None,
             };
@@ -2553,7 +2508,7 @@ impl Browser {
                         created
                     }
                 };
-                return props.view(Some(browser.clone()), true);
+                return props.view(true);
             }
 
             static_row_details(&browser, row)

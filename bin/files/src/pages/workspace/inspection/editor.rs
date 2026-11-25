@@ -8,9 +8,11 @@ use std::{
 };
 
 use gds::i18n;
+use gds::ui::{IconName, IconProps};
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, RwSignal};
 use zgui::view::{current_host, install_stylesheet};
+use zgui::vocab::SharedString;
 use zgui::{css, view};
 use zgui_ui::{
     TabsActivation, TabsContentProps, TabsListProps, TabsListVariant, TabsProps, TabsTriggerProps,
@@ -31,7 +33,7 @@ const EDITOR_CSS: &str = css!(
     .gds-files-item-editor__tabs {
         display: flex;
         flex-direction: column;
-        gap: 14px;
+        gap: 12px;
         width: 100%;
         min-width: 0;
     }
@@ -39,39 +41,102 @@ const EDITOR_CSS: &str = css!(
     .gds-files-item-editor__tabs-header {
         display: flex;
         flex-direction: row;
-        align-items: flex-end;
+        align-items: center;
         width: 100%;
-        border-bottom: 1px solid var(--gds-border);
     }
 
-    .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"] {
-        height: 34px;
-        gap: 20px;
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"] {
+        display: inline-flex;
+        flex-direction: row;
+        align-items: center;
+        height: auto;
+        gap: 4px;
         padding: 0;
         border-radius: 0;
         background-color: transparent;
     }
 
-    .gds-files-item-editor__tabs-trigger.zui-tabs__trigger {
-        height: 34px;
-        padding: 0 2px;
-        font-size: var(--gds-text-sm, 14px);
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"]
+        .gds-files-item-editor__tabs-trigger.zui-tabs__trigger {
+        display: inline-flex;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 12px;
+        border: none;
+        border-radius: var(--gds-radius-control, 6px);
+        background-color: transparent;
         color: var(--gds-muted-foreground);
+        font-size: var(--gds-text-sm, 14px);
+        font-weight: 500;
+        box-shadow: none;
         cursor: pointer;
+        user-select: none;
+        transition:
+            background-color var(--gds-motion-fast, 100ms) var(--gds-motion-ease-out, cubic-bezier(0, 0, 0.2, 1)),
+            color var(--gds-motion-fast, 100ms) var(--gds-motion-ease-out, cubic-bezier(0, 0, 0.2, 1));
     }
 
-    .gds-files-item-editor__tabs-trigger.zui-tabs__trigger:hover {
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"]
+        .gds-files-item-editor__tabs-trigger.zui-tabs__trigger:hover {
+        background-color: var(--gds-hover);
         color: var(--gds-foreground);
     }
 
-    .gds-files-item-editor__tabs-trigger.zui-tabs__trigger[data-state="active"] {
-        color: var(--gds-foreground);
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"]
+        .gds-files-item-editor__tabs-trigger.zui-tabs__trigger:active {
+        background-color: var(--gds-pressed);
     }
 
-    .gds-files-item-editor__tabs-trigger.zui-tabs__trigger::after {
-        bottom: -1px;
-        height: 2px;
-        background-color: var(--gds-primary);
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"]
+        .gds-files-item-editor__tabs-trigger.zui-tabs__trigger[data-state="active"],
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"]
+        .gds-files-item-editor__tabs-trigger.zui-tabs__trigger[data-state="active"]:hover,
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"]
+        .gds-files-item-editor__tabs-trigger.zui-tabs__trigger[data-state="active"]:active {
+        background-color: var(--gds-selection);
+        color: var(--gds-selection-foreground);
+        border-color: transparent;
+        box-shadow: none;
+    }
+
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"]
+        .gds-files-item-editor__tabs-trigger.zui-tabs__trigger:focus:not(:focus-visible) {
+        outline: none;
+        box-shadow: none;
+    }
+
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"]
+        .gds-files-item-editor__tabs-trigger.zui-tabs__trigger:focus-visible {
+        outline: 1px solid var(--gds-primary);
+        outline-offset: -1px;
+        border-color: transparent;
+        box-shadow: none;
+    }
+
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"]
+        .gds-files-item-editor__tabs-trigger.zui-tabs__trigger::after,
+    .gds-files-item-editor__tabs
+        .gds-files-item-editor__tabs-list.zui-tabs__list[data-variant="line"]
+        .gds-files-item-editor__tabs-trigger.zui-tabs__trigger[data-state="active"]::after {
+        display: none;
+        opacity: 0;
+    }
+
+    .gds-files-item-editor__tab-icon {
+        flex: none;
     }
 
     .gds-files-item-editor__stage {
@@ -130,6 +195,16 @@ impl EditTab {
             Self::Permissions => "permissions",
             #[cfg(target_os = "linux")]
             Self::Comment => "details-comment",
+        }
+    }
+
+    const fn icon(self) -> IconName {
+        match self {
+            Self::Tags => IconName::Tag,
+            #[cfg(unix)]
+            Self::Permissions => IconName::Shield,
+            #[cfg(target_os = "linux")]
+            Self::Comment => IconName::MessageSquare,
         }
     }
 }
@@ -531,9 +606,20 @@ impl ItemEditor {
             .map(|tab| {
                 let id = tab.id();
                 let label_key = tab.label_key();
+                let icon = tab.icon();
                 AnyView::new(view! {
-                    TabsTrigger(value = id, class = "gds-files-item-editor__tabs-trigger") {
-                        {move || i18n::text(label_key)}
+                    TabsTrigger(
+                        value = id,
+                        class = "gds-files-item-editor__tabs-trigger",
+                        a11y:label = move || SharedString::from(i18n::text(label_key)),
+                    ) {
+                        Icon(
+                            name = icon,
+                            size = 14.0,
+                            class = "gds-files-item-editor__tab-icon",
+                            a11y:hidden = true,
+                        )
+                        text {{move || i18n::text(label_key)}}
                     }
                 })
             })

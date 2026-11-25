@@ -7,7 +7,6 @@ details-comment-placeholder = Add a comment…
 details-comment-hint = Leave empty to clear the comment.
 details-edit-properties-menu = Edit properties…
 details-edit-properties-title = Edit properties
-details-edit-properties-action = Edit properties
 details-properties-saved = Properties saved
 details-target = Target
 details-dimensions = Dimensions

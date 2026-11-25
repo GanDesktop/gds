@@ -7,7 +7,6 @@ details-comment-placeholder = 添加备注…
 details-comment-hint = 留空保存可清除备注。
 details-edit-properties-menu = 编辑属性…
 details-edit-properties-title = 编辑属性
-details-edit-properties-action = 编辑属性
 details-properties-saved = 属性已保存
 details-target = 目标
 details-dimensions = 尺寸

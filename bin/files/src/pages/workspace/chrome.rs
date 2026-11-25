@@ -108,7 +108,7 @@ pub(super) struct CollapsibleMeta {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum QuickAccessAddState {
+pub(super) enum QuickAccessAddState {
     CanAdd,
     AlreadyAdded,
     NotLocal,
@@ -564,21 +564,6 @@ pub(super) const CHROME_CSS: &str = css!(
         box-sizing: border-box;
     }
 
-    .gds-files-heading-action {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex: none;
-    }
-
-    .gds-files-heading-action .zui-tooltip__trigger {
-        flex-direction: row;
-        flex: none;
-        width: auto;
-        max-width: none;
-        overflow: visible;
-    }
-
     .gds-files-tabs-title.gds-files-tabs-title {
         padding: 0px var(--gds-files-tabs-title-pad-x, 6px);
     }
@@ -885,11 +870,15 @@ impl Breadcrumb {
         match location {
             Location::Tags(address) => Self::for_tags(address),
             Location::Remote(address) => Self::for_remote(address),
-            Location::Recent
-            | Location::Favorites
-            | Location::Volumes
-            | Location::Network
-            | Location::Trash => vec![
+            Location::Recent | Location::Network | Location::Trash => vec![Self {
+                label: location.label(),
+                location: Some(location.clone()),
+                icon: Some(location.icon()),
+                scheme: true,
+                current: true,
+                separated: false,
+            }],
+            Location::Favorites | Location::Volumes => vec![
                 Self::scheme_prefix(i18n::text_untracked("scheme-location"), IconName::Bookmark),
                 Self {
                     label: location.label(),
@@ -1982,26 +1971,20 @@ impl Browser {
         }
     }
 
-    pub(super) fn open_quick_access(&self, path: &Path, force_new_tab: bool) {
-        if !path.is_dir() {
-            self.report_notice(gds::t!(
-                "quick-access-missing",
-                path = path.display().to_string()
-            ));
-            return;
+    pub(super) fn quick_access_add_state_untracked(&self) -> QuickAccessAddState {
+        if self.pane_untracked() != Pane::Files {
+            return QuickAccessAddState::NotLocal;
         }
-        let already_active = !force_new_tab
-            && self.pane_untracked() == Pane::Files
-            && self.read_untracked(|state| state.tab().navigation.path() == Some(path));
-        if already_active {
-            self.focus_content_after_mount();
-            return;
-        }
-        self.new_tab(Some(Location::from(path)));
-        self.focus_content_after_mount();
+        self.read_untracked(|state| match state.tab().navigation.path() {
+            Some(path) if state.places.contains_quick_access(Location::from(path)) => {
+                QuickAccessAddState::AlreadyAdded
+            }
+            Some(_) => QuickAccessAddState::CanAdd,
+            None => QuickAccessAddState::NotLocal,
+        })
     }
 
-    pub(super) fn open_quick_access_in_current(&self, path: &Path) {
+    pub(super) fn open_quick_access(&self, path: &Path, in_new_tab: bool) {
         if !path.is_dir() {
             self.report_notice(gds::t!(
                 "quick-access-missing",
@@ -2009,7 +1992,11 @@ impl Browser {
             ));
             return;
         }
-        self.open(Location::from(path));
+        if in_new_tab {
+            self.new_tab(Some(Location::from(path)));
+        } else {
+            self.open(Location::from(path));
+        }
         self.focus_content_after_mount();
     }
 
@@ -2369,61 +2356,14 @@ impl Browser {
         let quick_access_section = {
             let qa_b = browser.clone();
             let quick_access_node = self.0.quick_access_node;
-            let add_state = local_memo({
-                let b = browser.clone();
-                move || {
-                    if b.pane() != Pane::Files {
-                        return QuickAccessAddState::NotLocal;
-                    }
-                    b.read(|state| match state.tab().navigation.path() {
-                        Some(path) if state.places.contains_quick_access(Location::from(path)) => {
-                            QuickAccessAddState::AlreadyAdded
-                        }
-                        Some(_) => QuickAccessAddState::CanAdd,
-                        None => QuickAccessAddState::NotLocal,
-                    })
-                }
-            });
             move || {
                 let toggle_b = qa_b.clone();
                 let focus_b = qa_b.clone();
                 let out_b = qa_b.clone();
                 let rows_b = qa_b.clone();
                 let head_b = qa_b.clone();
-                let add_b = qa_b.clone();
+                let menu_b = qa_b.clone();
                 let drop_b = qa_b.clone();
-
-                let add_action = AnyView::new(view! {
-                    box(
-                        class = "gds-files-heading-action",
-                        style:display = move || {
-                            (!(qa_expanded.get() && actions_visible.get()))
-                                .then(|| "none".to_owned())
-                        },
-                        on:click = |ev: &mut EventCx<'_, events::Click>| {
-                            ev.stop_propagation();
-                        }
-                    ) {
-                        IconButton(
-                            icon = IconName::Plus,
-                            size = ButtonSize::IconSm,
-                            disabled = Signal::derive_local(move || {
-                                add_state.get() != QuickAccessAddState::CanAdd
-                            }),
-                            label = Signal::derive_local(move || match add_state.get() {
-                                QuickAccessAddState::CanAdd => i18n::text("quick-access-add-current"),
-                                QuickAccessAddState::AlreadyAdded => {
-                                    i18n::text("quick-access-already-added")
-                                }
-                                QuickAccessAddState::NotLocal => i18n::text("quick-access-local-only"),
-                            }),
-                            on:click = move |ev: &mut EventCx<'_, events::Click>| {
-                                ev.stop_propagation();
-                                add_b.add_current_to_quick_access();
-                            }
-                        )
-                    }
-                });
 
                 let inner = AnyView::new(view! {
                     column(
@@ -2445,7 +2385,6 @@ impl Browser {
                                 COLLAPSIBLE_HEADER_HEIGHT,
                                 qa_expanded,
                                 is_collapsed_rail,
-                                Some(add_action),
                                 move || {
                                     let focused = toggle_b.0.sidebar_region.get_untracked()
                                         == Some(SidebarRegion::QuickAccess)
@@ -2531,7 +2470,7 @@ impl Browser {
                         }
                     }
                 });
-                drop_b.quick_access_drop_zone(inner)
+                drop_b.quick_access_drop_zone(menu_b.sidebar_quick_access_section_menu(inner))
             }
         };
 
@@ -2575,7 +2514,6 @@ impl Browser {
                             COLLAPSIBLE_HEADER_HEIGHT,
                             vol_expanded,
                             is_collapsed_rail,
-                            None,
                             move || {
                                 let focused = toggle_b.0.sidebar_region.get_untracked()
                                     == Some(SidebarRegion::Volumes)
@@ -2759,7 +2697,6 @@ impl Browser {
                                     COLLAPSIBLE_HEADER_HEIGHT,
                                     loc_expanded,
                                     is_collapsed_rail,
-                                    None,
                                     {
                                         let toggle_b = locs_browser.clone();
                                         move || {
@@ -2951,7 +2888,6 @@ impl Browser {
         header_height: f32,
         expanded: Signal<bool, LocalStorage>,
         is_collapsed_rail: Signal<bool, LocalStorage>,
-        trailing: Option<AnyView>,
         toggle: impl Fn() + 'static,
     ) -> AnyView {
         let toggle = Rc::new(toggle);
@@ -3010,7 +2946,6 @@ impl Browser {
                         TooltipText(text = Signal::derive_local(move || i18n::text(label)))
                     }
                 }
-                {trailing}
             }
         })
     }
