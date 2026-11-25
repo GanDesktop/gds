@@ -2456,15 +2456,34 @@ mod driven {
                     ctx.snap_surface("14-window-properties", &props_surface)?;
                     close_secondary(ctx.harness, &props_surface);
 
-                    // 15: Permissions dialog.
+                    // 15: Permissions dialog + 15b: Basic properties tab (default).
                     let readme_entry = Entry::inspect(&readme_path)
                         .map_err(|err| anyhow::anyhow!("inspect README.md: {err}"))?;
-                    browser.edit_permissions(readme_entry);
+                    browser.edit_permissions(readme_entry.clone());
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.has_role(Role::Dialog)
                     });
                     ctx.snap_primary("15-dialog-permissions")?;
+                    send_key(
+                        ctx.harness,
+                        KeyEvent::named(NamedKey::Escape, PhysicalKey::Code(KeyCode::Escape)),
+                        Modifiers::NONE,
+                        ctx.ts,
+                    );
+                    let _ = wait_until(ctx.harness, Duration::from_secs(1), |h| {
+                        ctx.semantic.ingest_from(h);
+                        !ctx.semantic.has_role(Role::Dialog)
+                    });
+
+                    browser.edit_item_properties(readme_entry, None);
+                    let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
+                        ctx.semantic.ingest_from(h);
+                        ctx.semantic.has_role(Role::Dialog)
+                    });
+                    std::thread::sleep(Duration::from_millis(80));
+                    pump_frames(ctx.harness);
+                    ctx.snap_primary("15b-dialog-properties-basic")?;
                     send_key(
                         ctx.harness,
                         KeyEvent::named(NamedKey::Escape, PhysicalKey::Code(KeyCode::Escape)),

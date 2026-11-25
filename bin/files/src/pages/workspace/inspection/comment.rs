@@ -54,7 +54,7 @@ fn install_comment_stylesheet() {
 
 struct CommentEditorInner {
     browser: WeakBrowser,
-    path: PathBuf,
+    path: RefCell<PathBuf>,
     input_ref: NodeRef,
     draft: RwSignal<String, LocalStorage>,
     original: RefCell<Option<String>>,
@@ -74,7 +74,7 @@ impl CommentEditor {
         let editor = browser.0.owner.with(|| {
             Self(Rc::new(CommentEditorInner {
                 browser: browser.downgrade(),
-                path,
+                path: RefCell::new(path),
                 input_ref: NodeRef::new(),
                 draft: RwSignal::new_local(String::new()),
                 original: RefCell::new(None),
@@ -90,11 +90,15 @@ impl CommentEditor {
         editor
     }
 
+    pub(super) fn set_path(&self, path: PathBuf) {
+        *self.0.path.borrow_mut() = path;
+    }
+
     fn load(&self, auto_focus: bool) {
         let Some(browser) = self.0.browser.upgrade() else {
             return;
         };
-        let path = self.0.path.clone();
+        let path = self.0.path.borrow().clone();
         let weak = Rc::downgrade(&self.0);
         browser.blocking(
             "Read file comment",
@@ -186,7 +190,7 @@ impl CommentEditor {
             on_done(Err(()));
             return;
         };
-        let save_path = self.0.path.clone();
+        let save_path = self.0.path.borrow().clone();
         let write_value = normalized.clone();
         let weak = Rc::downgrade(&self.0);
 

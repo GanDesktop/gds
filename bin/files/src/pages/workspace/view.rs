@@ -5182,6 +5182,7 @@ pub(super) mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let home = temp.path().join("home");
         let pictures = home.join("Pictures");
+        let photos = home.join("Photos");
         std::fs::create_dir_all(&pictures).expect("create Pictures");
 
         let supervisor = Supervisor::new(false).expect("tokio supervisor");
@@ -5189,6 +5190,8 @@ pub(super) mod tests {
         let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
         let slot_for_view = Rc::clone(&browser_slot);
         let start = home;
+        let photos_check = photos.clone();
+        let pictures_check = pictures.clone();
 
         let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
             let mut harness = Harness::new(handler);
@@ -5300,7 +5303,26 @@ pub(super) mod tests {
             };
 
             let (_, _, base_w, base_h) = find_bounds(&harness, Role::Dialog, None)
-                .expect("unified properties dialog bounds on Tags tab");
+                .expect("unified properties dialog bounds on General tab");
+
+            // Close button uses IconButton-sized hit box (32x32).
+            let (_, _, close_w, close_h) =
+                find_bounds(&harness, Role::Button, Some("Close")).expect("dialog close button");
+            assert!(
+                close_w >= 30.0 && close_h >= 30.0,
+                "dialog close button must have IconButton-sized hit box (~32x32), got {close_w:.1}x{close_h:.1}"
+            );
+
+            // Switch to Tags tab -> dialog geometry must remain identical.
+            let (tx, ty, tw, th) =
+                find_bounds(&harness, Role::Tab, Some("Tags")).expect("Tags tab trigger");
+            click_at(&mut harness, tx + tw / 2.0, ty + th / 2.0, 50);
+            let (_, _, tags_w, tags_h) =
+                find_bounds(&harness, Role::Dialog, None).expect("dialog bounds on Tags tab");
+            assert!(
+                (tags_w - base_w).abs() < 0.5 && (tags_h - base_h).abs() < 0.5,
+                "switching General -> Tags must not jump dialog size: base={base_w:.1}x{base_h:.1}, tags={tags_w:.1}x{tags_h:.1}"
+            );
 
             // Switch to Permissions tab -> dialog geometry must remain identical.
             let (px, py, pw, ph) = find_bounds(&harness, Role::Tab, Some("Permissions"))
@@ -5344,6 +5366,8 @@ pub(super) mod tests {
                 (rec_w - base_w).abs() < 0.5 && (rec_h - base_h).abs() < 0.5,
                 "toggling recursive permissions must not jump dialog size: base={base_w:.1}x{base_h:.1}, rec={rec_w:.1}x{rec_h:.1}"
             );
+            // Untoggle recursive so saving below only tests Basic rename + favorite cleanly.
+            click_at(&mut harness, rx + rw / 2.0, ry + rh / 2.0, 250);
 
             // Switch to Comment tab -> dialog height must stay identical.
             let (cx, cy, cw, ch) =
@@ -5354,6 +5378,51 @@ pub(super) mod tests {
             assert!(
                 (comment_w - base_w).abs() < 0.5 && (comment_h - base_h).abs() < 0.5,
                 "switching to Comment tab must not jump dialog size: base={base_w:.1}x{base_h:.1}, comment={comment_w:.1}x{comment_h:.1}"
+            );
+
+            // Switch back to General tab -> rename Pictures -> Photos + toggle Favorite -> Save.
+            let (gx, gy, gw, gh) =
+                find_bounds(&harness, Role::Tab, Some("General")).expect("General tab trigger");
+            click_at(&mut harness, gx + gw / 2.0, gy + gh / 2.0, 350);
+            let fav_label = gds::i18n::text_untracked("details-basic-favorite");
+            let (fx, fy, fw, fh) = find_bounds(&harness, Role::CheckBox, Some(fav_label.as_str()))
+                .expect("favorite checkbox in General tab");
+            click_at(&mut harness, fx + fw / 2.0, fy + fh / 2.0, 400);
+
+            let (nx, ny, nw, nh) =
+                find_bounds(&harness, Role::TextInput, Some("Name")).expect("Name input");
+            click_at(&mut harness, nx + nw / 2.0, ny + nh / 2.0, 450);
+            send_key_chord(&mut harness, KeyEvent::character("a"), Modifiers::CONTROL);
+            for ch in ["P", "h", "o", "t", "o", "s"] {
+                send_key_chord(&mut harness, KeyEvent::character(ch), Modifiers::NONE);
+            }
+            zgui::reactive::flush();
+            harness.settle(4);
+
+            let (sx, sy, sw, sh) =
+                find_bounds(&harness, Role::Button, Some("Save")).expect("Save button");
+            click_at(&mut harness, sx + sw / 2.0, sy + sh / 2.0, 500);
+            for _ in 0..12 {
+                harness.advance(Duration::from_millis(25));
+                harness.pump();
+                zgui::reactive::flush();
+                harness.settle(4);
+                if photos_check.is_dir() && find_bounds(&harness, Role::Dialog, None).is_none() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(
+                photos_check.is_dir() && !pictures_check.exists(),
+                "saving General tab rename must rename Pictures -> Photos on disk"
+            );
+            assert!(
+                browser.read_untracked(|state| {
+                    state
+                        .places
+                        .is_favorite(Location::from(photos_check.as_path()))
+                }),
+                "saving General tab favorite toggle must star the renamed path"
             );
 
             harness.shut_down();

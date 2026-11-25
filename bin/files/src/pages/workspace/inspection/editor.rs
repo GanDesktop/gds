@@ -22,6 +22,7 @@ use zgui_ui_primitives::Binding;
 use crate::entities::file::directory::Entry;
 
 use super::super::ui::{Browser, WeakBrowser};
+use super::basic::BasicEditor;
 #[cfg(target_os = "linux")]
 use super::comment::CommentEditor;
 use super::{PermissionEditor, tags::TagEditor};
@@ -170,6 +171,7 @@ fn install_editor_stylesheet() {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::pages::workspace) enum EditTab {
+    Basic,
     Tags,
     #[cfg(unix)]
     Permissions,
@@ -180,6 +182,7 @@ pub(in crate::pages::workspace) enum EditTab {
 impl EditTab {
     const fn id(self) -> &'static str {
         match self {
+            Self::Basic => "basic",
             Self::Tags => "tags",
             #[cfg(unix)]
             Self::Permissions => "permissions",
@@ -190,6 +193,7 @@ impl EditTab {
 
     const fn label_key(self) -> &'static str {
         match self {
+            Self::Basic => "details-basic",
             Self::Tags => "tags-title",
             #[cfg(unix)]
             Self::Permissions => "permissions",
@@ -200,6 +204,7 @@ impl EditTab {
 
     const fn icon(self) -> IconName {
         match self {
+            Self::Basic => IconName::Info,
             Self::Tags => IconName::Tag,
             #[cfg(unix)]
             Self::Permissions => IconName::Shield,
@@ -209,15 +214,17 @@ impl EditTab {
     }
 }
 
-pub(super) fn has_editable_tabs(browser: &Browser) -> bool {
-    browser.tags_enabled_untracked() || cfg!(unix) || cfg!(target_os = "linux")
+pub(super) fn has_editable_tabs(_browser: &Browser) -> bool {
+    true
 }
 
 struct ItemEditorInner {
     browser: WeakBrowser,
-    path: PathBuf,
+    original_path: PathBuf,
+    current_path: RefCell<PathBuf>,
     tabs: Vec<EditTab>,
     active_tab: RwSignal<String, LocalStorage>,
+    basic: BasicEditor,
     tags: Option<TagEditor>,
     #[cfg(unix)]
     permissions: Option<PermissionEditor>,
@@ -253,7 +260,7 @@ impl ItemEditor {
         entry: Option<Entry>,
         initial_tab: Option<EditTab>,
     ) -> Option<Self> {
-        let mut tabs = Vec::new();
+        let mut tabs = vec![EditTab::Basic];
         let include_tags = browser.tags_enabled_untracked();
         if include_tags {
             tabs.push(EditTab::Tags);
@@ -263,14 +270,16 @@ impl ItemEditor {
         #[cfg(target_os = "linux")]
         tabs.push(EditTab::Comment);
 
-        if tabs.is_empty() {
-            return None;
-        }
-
         let selected = initial_tab
             .filter(|tab| tabs.contains(tab))
             .unwrap_or(tabs[0]);
 
+        let basic = BasicEditor::new(
+            browser,
+            path.clone(),
+            entry.as_ref(),
+            selected == EditTab::Basic,
+        );
         let tags =
             include_tags.then(|| TagEditor::new(browser, path.clone(), selected == EditTab::Tags));
         #[cfg(unix)]
@@ -290,9 +299,11 @@ impl ItemEditor {
         let editor = browser.0.owner.with(|| {
             Self(Rc::new(ItemEditorInner {
                 browser: browser.downgrade(),
-                path,
+                original_path: path.clone(),
+                current_path: RefCell::new(path),
                 tabs,
                 active_tab: RwSignal::new_local(selected.id().to_owned()),
+                basic,
                 tags,
                 #[cfg(unix)]
                 permissions,
@@ -307,11 +318,26 @@ impl ItemEditor {
     }
 
     pub(super) fn path(&self) -> &Path {
-        &self.0.path
+        &self.0.original_path
+    }
+
+    fn propagate_renamed_path(&self, new_path: PathBuf) {
+        *self.0.current_path.borrow_mut() = new_path.clone();
+        if let Some(tags) = self.0.tags.as_ref() {
+            tags.set_path(new_path.clone());
+        }
+        #[cfg(unix)]
+        if let Some(perms) = self.0.permissions.as_ref() {
+            perms.set_path(new_path.clone());
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(comment) = self.0.comment.as_ref() {
+            comment.set_path(new_path);
+        }
     }
 
     pub(super) fn is_saving(&self) -> bool {
-        if self.0.saving.get() {
+        if self.0.saving.get() || self.0.basic.is_saving() {
             return true;
         }
         if self.0.tags.as_ref().is_some_and(TagEditor::is_saving) {
@@ -339,7 +365,7 @@ impl ItemEditor {
     }
 
     pub(super) fn is_saving_untracked(&self) -> bool {
-        if self.0.saving.get_untracked() {
+        if self.0.saving.get_untracked() || self.0.basic.is_saving_untracked() {
             return true;
         }
         if self
@@ -377,6 +403,7 @@ impl ItemEditor {
         }
         let active = self.0.active_tab.get();
         let active_loading = match active.as_str() {
+            "basic" => self.0.basic.is_loading(),
             "tags" => self.0.tags.as_ref().is_some_and(TagEditor::is_loading),
             #[cfg(unix)]
             "permissions" => self
@@ -396,7 +423,8 @@ impl ItemEditor {
             return false;
         }
 
-        self.0.tags.as_ref().is_some_and(TagEditor::available)
+        self.0.basic.available()
+            || self.0.tags.as_ref().is_some_and(TagEditor::available)
             || {
                 #[cfg(unix)]
                 {
@@ -427,6 +455,7 @@ impl ItemEditor {
 
     fn focus_tab(&self, id: &str) {
         match id {
+            "basic" => self.0.basic.focus(),
             "tags" => {
                 if let Some(tags) = self.0.tags.as_ref() {
                     tags.focus();
@@ -446,6 +475,11 @@ impl ItemEditor {
         if self.is_saving_untracked() {
             return;
         }
+        if self.0.basic.validate_draft().is_err() {
+            self.0.active_tab.set(EditTab::Basic.id().to_owned());
+            self.0.basic.focus();
+            return;
+        }
         if let Some(tags) = self.0.tags.as_ref()
             && tags.available_untracked()
             && tags.validate_and_commit_draft().is_err()
@@ -456,6 +490,9 @@ impl ItemEditor {
         }
 
         let mut pending = VecDeque::new();
+        if self.0.basic.has_changes_untracked() {
+            pending.push_back(EditTab::Basic);
+        }
         if self
             .0
             .tags
@@ -463,15 +500,6 @@ impl ItemEditor {
             .is_some_and(TagEditor::has_changes_untracked)
         {
             pending.push_back(EditTab::Tags);
-        }
-        #[cfg(unix)]
-        if self
-            .0
-            .permissions
-            .as_ref()
-            .is_some_and(PermissionEditor::has_changes_untracked)
-        {
-            pending.push_back(EditTab::Permissions);
         }
         #[cfg(target_os = "linux")]
         if self
@@ -481,6 +509,15 @@ impl ItemEditor {
             .is_some_and(CommentEditor::has_changes_untracked)
         {
             pending.push_back(EditTab::Comment);
+        }
+        #[cfg(unix)]
+        if self
+            .0
+            .permissions
+            .as_ref()
+            .is_some_and(PermissionEditor::has_changes_untracked)
+        {
+            pending.push_back(EditTab::Permissions);
         }
 
         if pending.is_empty() {
@@ -503,8 +540,17 @@ impl ItemEditor {
     ) {
         let Some(step) = pending.pop_front() else {
             self.0.saving.set(false);
-            if any_saved && let Some(browser) = self.0.browser.upgrade() {
-                browser.refresh_affected(std::slice::from_ref(&self.0.path));
+            let current_path = self.0.current_path.borrow().clone();
+            let renamed = current_path != self.0.original_path;
+            if (any_saved || renamed)
+                && let Some(browser) = self.0.browser.upgrade()
+            {
+                if renamed {
+                    browser.reveal_paths(vec![current_path.clone()]);
+                    browser.refresh_affected(&[self.0.original_path.clone(), current_path]);
+                } else {
+                    browser.refresh_affected(std::slice::from_ref(&self.0.original_path));
+                }
                 super::bump_details_revision(&browser);
                 if tags_saved {
                     browser.refresh_tag_tabs();
@@ -532,6 +578,17 @@ impl ItemEditor {
         };
 
         match step {
+            EditTab::Basic => {
+                let rename_editor = self.clone();
+                self.0.basic.save_result(move |result| match result {
+                    Ok(Some(new_path)) => {
+                        rename_editor.propagate_renamed_path(new_path);
+                        on_step_done(Ok(()));
+                    }
+                    Ok(None) => on_step_done(Ok(())),
+                    Err(()) => on_step_done(Err(())),
+                });
+            }
             EditTab::Tags => {
                 if let Some(tags) = self.0.tags.as_ref() {
                     tags.save_result(on_step_done);
@@ -564,6 +621,10 @@ impl ItemEditor {
 
         if self.0.tabs.len() == 1 {
             let single = match self.0.tabs[0] {
+                EditTab::Basic => {
+                    let s = Rc::clone(&submit);
+                    self.0.basic.fields(move || s())
+                }
                 EditTab::Tags => self
                     .0
                     .tags
@@ -624,6 +685,23 @@ impl ItemEditor {
                 })
             })
             .collect();
+
+        let basic_panel = {
+            let basic = self.0.basic.clone();
+            let s = Rc::clone(&submit);
+            AnyView::new(view! {
+                TabsContent(
+                    value = EditTab::Basic.id(),
+                    keep_mounted = true,
+                    class = "gds-files-item-editor__panel",
+                ) {
+                    {basic.fields({
+                        let s = Rc::clone(&s);
+                        move || s()
+                    })}
+                }
+            })
+        };
 
         let tags_panel = self.0.tags.as_ref().map(|tags| {
             let tags = tags.clone();
@@ -689,6 +767,7 @@ impl ItemEditor {
                     }
                 }
                 column(class = "gds-files-item-editor__stage") {
+                    {basic_panel}
                     {tags_panel}
                     {permissions_panel}
                     {comment_panel}

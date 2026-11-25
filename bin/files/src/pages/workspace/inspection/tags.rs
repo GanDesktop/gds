@@ -157,7 +157,7 @@ pub(super) fn parse_draft_tags(raw: &str) -> Result<Vec<String>, String> {
 
 struct TagEditorInner {
     browser: WeakBrowser,
-    path: PathBuf,
+    path: RefCell<PathBuf>,
     input_ref: NodeRef,
     draft: RwSignal<String, LocalStorage>,
     tags: RwSignal<Vec<String>, LocalStorage>,
@@ -179,7 +179,7 @@ impl TagEditor {
         let inner = browser.0.owner.with(|| {
             Rc::new(TagEditorInner {
                 browser: browser.downgrade(),
-                path: path.clone(),
+                path: RefCell::new(path.clone()),
                 input_ref: NodeRef::new(),
                 draft: RwSignal::new_local(String::new()),
                 tags: RwSignal::new_local(Vec::new()),
@@ -246,6 +246,10 @@ impl TagEditor {
         !self.0.loading.get_untracked()
             && !self.0.load_failed.get_untracked()
             && !self.0.saving.get_untracked()
+    }
+
+    pub(super) fn set_path(&self, path: PathBuf) {
+        *self.0.path.borrow_mut() = path;
     }
 
     pub(super) fn is_loading(&self) -> bool {
@@ -486,7 +490,7 @@ impl TagEditor {
             on_done(Ok(()));
             return;
         }
-        let save_path = self.0.path.clone();
+        let save_path = self.0.path.borrow().clone();
         let weak = Rc::downgrade(&self.0);
 
         self.0.saving.set(true);

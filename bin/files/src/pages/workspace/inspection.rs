@@ -1,5 +1,6 @@
 //! Properties, content inspection, and unified item editor dialog share existing services.
 
+mod basic;
 #[cfg(target_os = "linux")]
 mod comment;
 pub(super) mod editor;
@@ -1292,7 +1293,7 @@ impl Properties {
 
 struct PermissionEditorInner {
     browser: WeakBrowser,
-    path: PathBuf,
+    path: RefCell<PathBuf>,
     directory: RwSignal<bool, LocalStorage>,
     mode: RwSignal<u32, LocalStorage>,
     original_mode: RefCell<u32>,
@@ -1318,7 +1319,7 @@ impl PermissionEditor {
         let editor = browser.0.owner.with(|| {
             Self(Rc::new(PermissionEditorInner {
                 browser: browser.downgrade(),
-                path: entry.path.clone(),
+                path: RefCell::new(entry.path.clone()),
                 directory: RwSignal::new_local(directory),
                 mode: RwSignal::new_local(initial_mode),
                 original_mode: RefCell::new(initial_mode),
@@ -1348,7 +1349,7 @@ impl PermissionEditor {
         let editor = browser.0.owner.with(|| {
             Self(Rc::new(PermissionEditorInner {
                 browser: browser.downgrade(),
-                path,
+                path: RefCell::new(path),
                 directory: RwSignal::new_local(false),
                 mode: RwSignal::new_local(0o644),
                 original_mode: RefCell::new(0o644),
@@ -1363,9 +1364,13 @@ impl PermissionEditor {
         editor
     }
 
+    pub(super) fn set_path(&self, path: PathBuf) {
+        *self.0.path.borrow_mut() = path;
+    }
+
     fn load(&self, browser: &Browser) {
         let weak = Rc::downgrade(&self.0);
-        let read_path = self.0.path.clone();
+        let read_path = self.0.path.borrow().clone();
         let symlink_warning = i18n::text_untracked("permissions-symlink");
         browser.blocking(
             "Read file permissions",
@@ -1438,7 +1443,7 @@ impl PermissionEditor {
             on_done(Err(()));
             return;
         };
-        let path = self.0.path.clone();
+        let path = self.0.path.borrow().clone();
         // `permissions::save` and `permissions::apply_cancellable` read fstat and preserve
         // all high bits (`!0o777`, including `0o7000` setuid/setgid/sticky) while applying `access`.
         let access = self.0.mode.get_untracked() & 0o777;

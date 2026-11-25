@@ -180,7 +180,7 @@ fn next_free_remote_name(default_name: &str, reserved: &HashSet<String>) -> Stri
 }
 
 impl Browser {
-    fn record_history(&self, entry: history::Entry) {
+    pub(super) fn record_history(&self, entry: history::Entry) {
         let kind = entry.kind;
         let recorded = self.update(|state| {
             let non_empty = !entry.steps.is_empty();

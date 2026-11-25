@@ -90,6 +90,10 @@ const SHEET: &str = css!(
         width: 640px;
     }
 
+    .zui-dialog .zui-dialog__header {
+        padding-right: 32px;
+    }
+
     .zui-dialog .zui-dialog__title {
         font-size: var(--gds-text-md, 16px);
     }
@@ -99,8 +103,32 @@ const SHEET: &str = css!(
     }
 
     .zui-dialog .zui-dialog__dismiss {
+        top: 16px;
+        right: 16px;
+        width: var(--gds-icon-button-size, 32px);
+        height: var(--gds-icon-button-size, 32px);
+        padding: 0;
+        border-radius: var(--gds-radius-control, 6px);
+        background-color: transparent;
+        color: var(--gds-muted-foreground);
+        opacity: 1;
+        cursor: pointer;
         box-shadow: none;
         outline: none;
+        transition:
+            background-color var(--gds-motion-fast, 100ms) var(--gds-motion-ease-out, cubic-bezier(0, 0, 0.2, 1)),
+            color var(--gds-motion-fast, 100ms) var(--gds-motion-ease-out, cubic-bezier(0, 0, 0.2, 1));
+    }
+
+    .zui-dialog .zui-dialog__dismiss:hover {
+        background-color: var(--gds-hover);
+        color: var(--gds-foreground);
+        opacity: 1;
+    }
+
+    .zui-dialog .zui-dialog__dismiss:active {
+        background-color: var(--gds-pressed);
+        color: var(--gds-foreground);
     }
 
     .zui-dialog .zui-dialog__dismiss:focus-visible {
