@@ -1917,28 +1917,57 @@ fn quick_access_current_tab_click_context_menu_tab_drag_reorder_and_accordion_mo
                 "selecting Quick Access context menu item must add current local directory"
             );
 
-            // Right-clicking an item opens ONLY the item menu (no duplicate section menu)
-            // and includes Open in new tab, Add current folder (already added), and Remove.
+            // Right-clicking Desktop -> Downloads -> Pictures -> heading back-to-back without
+            // dismissing must ALWAYS keep exactly one context menu open (never stacked menus).
+            let qa_bounds_now = browser
+                .0
+                .quick_access_node
+                .window_bounds()
+                .expect("current quick access bounds");
             let buttons = collect_live_buttons(&surface);
+            let desktop_row = buttons
+                .iter()
+                .find(|b| b.label == "Desktop" && b.y0 >= qa_bounds_now.origin.y.0 as f64 - 4.0)
+                .expect("Desktop quick access row")
+                .clone();
             let dl_btn = buttons
                 .iter()
-                .find(|b| b.label == "Downloads" && b.y0 >= qa_bounds_tall.origin.y.0 as f64 - 4.0)
+                .find(|b| b.label == "Downloads" && b.y0 >= qa_bounds_now.origin.y.0 as f64 - 4.0)
                 .expect("Downloads quick access row")
                 .clone();
-            click_at_with_modifiers(
-                harness,
-                dl_btn.center_x() as f32,
-                dl_btn.center_y() as f32,
-                PointerButton::Secondary,
-                Modifiers::NONE,
-                360,
-            );
-            let open_menus = collect_live_role(&surface, Role::Menu);
-            assert_eq!(
-                open_menus.len(),
-                1,
-                "right-clicking a Quick Access row must open only the item context menu, got {open_menus:?}"
-            );
+            let pic_row = buttons
+                .iter()
+                .find(|b| b.label == "Pictures" && b.y0 >= qa_bounds_now.origin.y.0 as f64 - 4.0)
+                .expect("Pictures quick access row")
+                .clone();
+            for (step, (row_name, x, y, ts)) in [
+                (
+                    "Desktop",
+                    desktop_row.x0 + 24.0,
+                    desktop_row.center_y(),
+                    355,
+                ),
+                ("Downloads", dl_btn.x0 + 24.0, dl_btn.center_y(), 360),
+                ("Pictures", pic_row.x0 + 24.0, pic_row.center_y(), 365),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                click_at_with_modifiers(
+                    harness,
+                    x as f32,
+                    y as f32,
+                    PointerButton::Secondary,
+                    Modifiers::NONE,
+                    ts,
+                );
+                let open_menus = collect_live_role(&surface, Role::Menu);
+                assert_eq!(
+                    open_menus.len(),
+                    1,
+                    "step {step} right-clicking {row_name} must replace prior menu with exactly 1 open menu, got {open_menus:?}"
+                );
+            }
             let item_entries = collect_live_role(&surface, Role::MenuItem);
             let remove_lbl = gds::i18n::text_untracked("quick-access-remove");
             assert!(
@@ -1946,8 +1975,34 @@ fn quick_access_current_tab_click_context_menu_tab_drag_reorder_and_accordion_mo
                     && item_entries.iter().any(|(i, _)| i.label == remove_lbl),
                 "Quick Access row menu must include add-current and remove entries, got {item_entries:?}"
             );
+            // Switching directly from an open item menu to the section heading menu also replaces cleanly.
+            let h_now = qa_heading.window_bounds().expect("current heading bounds");
+            click_at_with_modifiers(
+                harness,
+                (h_now.origin.x.0 + h_now.size.width.0 * 0.5) / scale,
+                (h_now.origin.y.0 + h_now.size.height.0 * 0.5) / scale,
+                PointerButton::Secondary,
+                Modifiers::NONE,
+                368,
+            );
+            let open_menus = collect_live_role(&surface, Role::Menu);
+            assert_eq!(
+                open_menus.len(),
+                1,
+                "right-clicking section heading while item menu is open must leave exactly 1 menu, got {open_menus:?}"
+            );
+            let section_entries = collect_live_role(&surface, Role::MenuItem);
+            assert_eq!(
+                section_entries.len(),
+                1,
+                "section menu must replace item menu completely, got {section_entries:?}"
+            );
             send_key_chord(harness, escape, Modifiers::NONE);
             harness.settle(8);
+            assert!(
+                collect_live_role(&surface, Role::Menu).is_empty(),
+                "Escape must close the active context menu"
+            );
 
             // Remove Projects so we can also test dragging a tab onto collapsed Quick Access!
             browser.remove_quick_access(&projects);

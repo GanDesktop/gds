@@ -20,7 +20,6 @@ use gds::ui::interaction::{
     keytips::{self, HintPlacement},
     region,
 };
-use gds::ui::menu::{ContextMenuHostProps, MenuModel};
 use gds::ui::navigation::{
     CornerActionProps, CornerButtonProps, NavItemContentProps, NavItemDetailsProps,
     NavItemHeaderProps, NavItemLabelProps, NavItemProps,
@@ -1255,36 +1254,7 @@ impl Browser {
             return button;
         }
 
-        let menu_browser = self.clone();
-        let model = Rc::new(move || {
-            let mut menu = MenuModel::new();
-            for &(index, ref location) in &visits {
-                let target_location = location.clone();
-                let label = menu_browser.resolve_path_untracked(location).map_or_else(
-                    || menu_browser.location_title(location),
-                    |path| path.display().to_string(),
-                );
-                let weak = menu_browser.downgrade();
-                menu.item(
-                    label,
-                    Some(location.icon()),
-                    None,
-                    false,
-                    false,
-                    UnsyncCallback::new(move |()| {
-                        if let Some(browser) = weak.upgrade() {
-                            browser.visit_history(tab, index, &target_location);
-                            browser.focus_content_after_mount();
-                        }
-                    }),
-                );
-            }
-            menu
-        });
-
-        AnyView::new(view! {
-            ContextMenuHost(model = model) {{button}}
-        })
+        self.history_menu(button, tab, visits)
     }
 
     fn address_bar(&self) -> AnyView {

@@ -420,6 +420,26 @@ pub(super) enum Surface {
         x: f32,
         y: f32,
     },
+    Volume {
+        volume: volumes::Volume,
+        x: f32,
+        y: f32,
+    },
+    QuickAccessSection {
+        x: f32,
+        y: f32,
+    },
+    QuickAccessItem {
+        path: PathBuf,
+        x: f32,
+        y: f32,
+    },
+    History {
+        tab: u64,
+        visits: Vec<(usize, Location)>,
+        x: f32,
+        y: f32,
+    },
     Status(super::status::Kind),
     Columns {
         location: Location,
@@ -954,22 +974,81 @@ impl Browser {
         })
     }
 
+    fn context_menu_region(
+        &self,
+        full_width: bool,
+        target_view: AnyView,
+        build: impl Fn(f32, f32) -> Surface + 'static,
+    ) -> AnyView {
+        let host_ref = NodeRef::new();
+        let build = Rc::new(build);
+        let open_ptr = self.clone();
+        let build_ptr = Rc::clone(&build);
+        let open_ctx = self.clone();
+        let build_ctx = Rc::clone(&build);
+        let open_key = self.clone();
+        AnyView::new(view! {
+            box(
+                node_ref = host_ref,
+                class = "gds-files-menu-wrap",
+                style:flex-direction = full_width.then(|| "column".to_owned()),
+                style:width = full_width.then(|| "100%".to_owned()),
+                on:pointer_down = move |ev: &mut EventCx<'_, events::PointerDown>| {
+                    if ev.button == Some(PointerButton::Secondary) {
+                        ev.prevent_default();
+                        ev.stop_propagation();
+                        open_ptr
+                            .0
+                            .menus
+                            .surface
+                            .set(build_ptr(ev.position.x.0, ev.position.y.0));
+                    }
+                },
+                on:context_menu = move |ev: &mut EventCx<'_, events::ContextMenu>| {
+                    ev.prevent_default();
+                    ev.stop_propagation();
+                    open_ctx
+                        .0
+                        .menus
+                        .surface
+                        .set(build_ctx(ev.position.x.0, ev.position.y.0));
+                },
+                on:key_down = move |ev: &mut EventCx<'_, events::KeyDown>| {
+                    if ev.repeat {
+                        return;
+                    }
+                    let mods = ev.modifiers.held();
+                    let is_menu_key =
+                        ev.key == Key::Named(NamedKey::ContextMenu) && mods.is_empty();
+                    let is_shift_f10 =
+                        ev.key == Key::Named(NamedKey::F10) && mods == Modifiers::SHIFT;
+                    if (is_menu_key || is_shift_f10)
+                        && let Some(bounds) = host_ref.window_bounds()
+                    {
+                        let scale = host_ref.scale().max(0.01);
+                        let x = (bounds.origin.x.0 + bounds.size.width.0 * 0.5) / scale;
+                        let y = (bounds.origin.y.0 + bounds.size.height.0 * 0.5) / scale;
+                        ev.prevent_default();
+                        ev.stop_propagation();
+                        open_key.0.menus.surface.set(build(x, y));
+                    }
+                }
+            ) {
+                {target_view}
+            }
+        })
+    }
+
     pub(super) fn sidebar_volume_menu(
         &self,
         target_view: AnyView,
         volume: &volumes::Volume,
     ) -> AnyView {
-        let browser = self.clone();
         let volume = volume.clone();
-        let model = std::rc::Rc::new(move || {
-            let mut menu = gds::ui::menu::MenuModel::new();
-            for entry in browser.selection_entries(&Row::Volume(volume.clone())) {
-                menu.push(entry);
-            }
-            menu
-        });
-        AnyView::new(view! {
-            gds::ui::menu::ContextMenuHost(model = model) {{target_view}}
+        self.context_menu_region(true, target_view, move |x, y| Surface::Volume {
+            volume: volume.clone(),
+            x,
+            y,
         })
     }
 
@@ -996,25 +1075,12 @@ impl Browser {
         }
     }
 
-    pub(super) fn sidebar_quick_access_section_menu(&self, target_view: AnyView) -> AnyView {
-        let browser = self.clone();
-        let model = std::rc::Rc::new(move || {
-            let mut menu = gds::ui::menu::MenuModel::new();
-            menu.push(browser.quick_access_add_entry());
-            menu
-        });
-        AnyView::new(view! {
-            gds::ui::menu::ContextMenuHost(model = model) {{target_view}}
-        })
-    }
-
-    pub(super) fn sidebar_quick_access_menu(&self, target_view: AnyView, path: PathBuf) -> AnyView {
-        let browser = self.clone();
-        let model = std::rc::Rc::new(move || {
-            let mut menu = gds::ui::menu::MenuModel::new();
-            let open_new = browser.clone();
-            let path_new = path.clone();
-            menu.push(MenuEntry::Item {
+    fn quick_access_item_entries(&self, path: PathBuf) -> Vec<MenuEntry> {
+        let open_new = self.clone();
+        let path_new = path.clone();
+        let remove = self.clone();
+        vec![
+            MenuEntry::Item {
                 label: i18n::text_untracked(Command::OpenInNewTab.label_id()),
                 icon: Some(IconName::FolderPlus),
                 shortcut: None,
@@ -1026,41 +1092,76 @@ impl Browser {
                         .owner
                         .with(|| open_new.open_quick_access(&path_new, true));
                 }),
-            });
-            menu.push(MenuEntry::Separator);
-            menu.push(browser.quick_access_add_entry());
-            let remove = browser.clone();
-            let path_rm = path.clone();
-            menu.push(MenuEntry::Item {
+            },
+            MenuEntry::Separator,
+            self.quick_access_add_entry(),
+            MenuEntry::Item {
                 label: i18n::text_untracked("quick-access-remove"),
                 icon: Some(IconName::X),
                 shortcut: None,
                 disabled: false,
                 destructive: false,
                 on_select: UnsyncCallback::new(move |()| {
-                    remove.0.owner.with(|| remove.remove_quick_access(&path_rm));
+                    remove.0.owner.with(|| remove.remove_quick_access(&path));
                 }),
-            });
-            menu
-        });
-        AnyView::new(view! {
-            box(
-                style:display = "flex",
-                style:flex-direction = "column",
-                style:width = "100%",
-                style:min-width = "0px",
-                on:pointer_down = |ev: &mut EventCx<'_, events::PointerDown>| {
-                    if ev.button == Some(PointerButton::Secondary) {
-                        ev.stop_propagation();
-                    }
-                },
-                on:context_menu = |ev: &mut EventCx<'_, events::ContextMenu>| {
-                    ev.stop_propagation();
-                }
-            ) {
-                gds::ui::menu::ContextMenuHost(model = model) {{target_view}}
-            }
+            },
+        ]
+    }
+
+    pub(super) fn sidebar_quick_access_section_menu(&self, target_view: AnyView) -> AnyView {
+        self.context_menu_region(true, target_view, |x, y| Surface::QuickAccessSection {
+            x,
+            y,
         })
+    }
+
+    pub(super) fn sidebar_quick_access_menu(&self, target_view: AnyView, path: PathBuf) -> AnyView {
+        self.context_menu_region(true, target_view, move |x, y| Surface::QuickAccessItem {
+            path: path.clone(),
+            x,
+            y,
+        })
+    }
+
+    pub(super) fn history_menu(
+        &self,
+        target_view: AnyView,
+        tab: u64,
+        visits: Vec<(usize, Location)>,
+    ) -> AnyView {
+        self.context_menu_region(false, target_view, move |x, y| Surface::History {
+            tab,
+            visits: visits.clone(),
+            x,
+            y,
+        })
+    }
+
+    fn history_entries(&self, tab: u64, visits: Vec<(usize, Location)>) -> Vec<MenuEntry> {
+        visits
+            .into_iter()
+            .map(|(index, location)| {
+                let label = self.resolve_path_untracked(&location).map_or_else(
+                    || self.location_title(&location),
+                    |path| path.display().to_string(),
+                );
+                let icon = Some(location.icon());
+                let weak = self.downgrade();
+                MenuEntry::Item {
+                    label,
+                    icon,
+                    shortcut: None,
+                    disabled: false,
+                    destructive: false,
+                    on_select: UnsyncCallback::new(move |()| {
+                        if let Some(browser) = weak.upgrade() {
+                            browser.visit_history(tab, index, &location);
+                            browser.focus_content_after_mount();
+                        }
+                    }),
+                }
+            })
+            .collect()
     }
 
     pub(super) fn directory_menu(&self, target_view: AnyView) -> AnyView {
@@ -2388,6 +2489,18 @@ impl Browser {
                             .map(|tab| tab.pinned)
                     })
                     .map(|pinned| (x, y, self.tab_entries(id, pinned))),
+                Surface::Volume { volume, x, y } => {
+                    Some((x, y, self.selection_entries(&Row::Volume(volume))))
+                }
+                Surface::QuickAccessSection { x, y } => {
+                    Some((x, y, vec![self.quick_access_add_entry()]))
+                }
+                Surface::QuickAccessItem { path, x, y } => {
+                    Some((x, y, self.quick_access_item_entries(path)))
+                }
+                Surface::History { tab, visits, x, y } => {
+                    Some((x, y, self.history_entries(tab, visits)))
+                }
                 _ => None,
             }
         }) else {
