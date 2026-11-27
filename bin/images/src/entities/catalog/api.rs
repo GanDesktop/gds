@@ -54,6 +54,43 @@ pub fn scan_siblings(target: &Path, cancel: &CancellationToken) -> io::Result<Ca
     };
 
     let target_id = file_id(target);
+    let mut items = scan_directory(dir, cancel)?;
+
+    let current_index = find_target_index(&items, target, target_id).or_else(|| {
+        if target.is_file() {
+            let (id, meta, is_symlink) = inspect_target(target);
+            items.push(ScannedEntry {
+                id,
+                is_symlink,
+                entry: CatalogEntry::new(target.to_path_buf(), meta),
+            });
+            items.sort_by(|a, b| natural_sort::compare_paths(&a.entry.path, &b.entry.path));
+            find_target_index(&items, target, id)
+        } else {
+            None
+        }
+    });
+
+    let entries = items.into_iter().map(|item| item.entry).collect();
+
+    Ok(CatalogState {
+        directory: Some(dir.to_path_buf()),
+        entries,
+        current_index,
+    })
+}
+
+pub fn first_in_folder(
+    dir: &Path,
+    cancel: &CancellationToken,
+) -> io::Result<Option<std::path::PathBuf>> {
+    Ok(scan_directory(dir, cancel)?
+        .into_iter()
+        .next()
+        .map(|item| item.entry.path))
+}
+
+fn scan_directory(dir: &Path, cancel: &CancellationToken) -> io::Result<Vec<ScannedEntry>> {
     let mut items: Vec<ScannedEntry> = Vec::new();
     for item in fs::read_dir(dir)? {
         if cancel.is_cancelled() {
@@ -104,29 +141,7 @@ pub fn scan_siblings(target: &Path, cancel: &CancellationToken) -> io::Result<Ca
     }
 
     items.sort_by(|a, b| natural_sort::compare_paths(&a.entry.path, &b.entry.path));
-
-    let current_index = find_target_index(&items, target, target_id).or_else(|| {
-        if target.is_file() {
-            let (id, meta, is_symlink) = inspect_target(target);
-            items.push(ScannedEntry {
-                id,
-                is_symlink,
-                entry: CatalogEntry::new(target.to_path_buf(), meta),
-            });
-            items.sort_by(|a, b| natural_sort::compare_paths(&a.entry.path, &b.entry.path));
-            find_target_index(&items, target, id)
-        } else {
-            None
-        }
-    });
-
-    let entries = items.into_iter().map(|item| item.entry).collect();
-
-    Ok(CatalogState {
-        directory: Some(dir.to_path_buf()),
-        entries,
-        current_index,
-    })
+    Ok(items)
 }
 
 fn find_target_index(

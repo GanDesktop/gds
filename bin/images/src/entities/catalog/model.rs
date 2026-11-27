@@ -9,7 +9,7 @@ use std::{
 };
 
 use gds::service::image::source::Format;
-use gpui_kit::SharedString;
+use std::sync::Arc;
 
 use crate::shared::natural_sort;
 
@@ -30,19 +30,19 @@ pub fn format_byte_size(bytes: u64) -> String {
 pub struct CatalogEntryMeta {
     pub bytes: Option<u64>,
     pub modified: Option<SystemTime>,
-    pub display_name: SharedString,
-    pub subtitle: SharedString,
+    pub display_name: Arc<str>,
+    pub subtitle: Arc<str>,
 }
 
 impl CatalogEntryMeta {
     /// Builds entry metadata with pre-formatted filmstrip title and `"Format · Size"` subtitle.
     pub fn new(path: &Path, bytes: Option<u64>, modified: Option<SystemTime>) -> Self {
-        let display_name: SharedString = path
+        let display_name: Arc<str> = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string())
             .into();
-        let subtitle: SharedString = format_subtitle(path, bytes).into();
+        let subtitle: Arc<str> = format_subtitle(path, bytes).into();
         Self {
             bytes,
             modified,
@@ -90,10 +90,6 @@ pub struct CatalogState {
 }
 
 impl CatalogState {
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
     pub fn position_display(&self) -> Option<(usize, usize)> {
         let index = self.current_index?;
         (!self.entries.is_empty()).then_some((index + 1, self.entries.len()))
@@ -114,7 +110,7 @@ impl CatalogState {
 
     pub fn current_path(&self) -> Option<&PathBuf> {
         let idx = self.current_index?;
-        self.entries.get(idx).map(|entry| &entry.path)
+        self.entry_at(idx).map(|entry| &entry.path)
     }
 
     pub fn select_path(&mut self, target: &Path) -> bool {

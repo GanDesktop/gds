@@ -1,6 +1,6 @@
 # Maintainer: GDS contributors <https://github.com/GanDesktop/gds>
 pkgbase=gds-files
-pkgname=(gds-files xdg-desktop-portal-gds)
+pkgname=(gds-files gds-images xdg-desktop-portal-gds)
 pkgver=0.0.5
 pkgrel=1
 pkgdesc='Native file manager and optional FileChooser portal for Linux desktops'
@@ -25,7 +25,7 @@ build() {
     cd "$srcdir/gds-$pkgver"
     export GDS_BUILD_TAG="${GDS_BUILD_TAG:-unknown}"
     export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$srcdir/target}"
-    cargo build --locked --profile "${GDS_PROFILE:-release}" --bin gds-files --features files
+    cargo build --locked --profile "${GDS_PROFILE:-release}" --bin gds-files --bin gds-images --features files,images
     cargo build --locked --profile "${GDS_PROFILE:-release}" --bin xdg-desktop-portal-gds --features portal
 }
 
@@ -33,6 +33,7 @@ check() {
     local profile=${GDS_PROFILE:-release}
     [[ $profile == dev ]] && profile=debug
     "${CARGO_TARGET_DIR:-$srcdir/target}/$profile/gds-files" --help
+    "${CARGO_TARGET_DIR:-$srcdir/target}/$profile/gds-images" --help
     "${CARGO_TARGET_DIR:-$srcdir/target}/$profile/xdg-desktop-portal-gds" --help
 }
 
@@ -53,6 +54,17 @@ package_gds-files() {
     python "$srcdir/gds-$pkgver/packaging/linux/install.py" "$pkgdir" \
         "${CARGO_TARGET_DIR:-$srcdir/target}/$profile" --component files
     desktop-file-validate "$pkgdir/usr/share/applications/io.github.GanDesktop.GdsFiles.desktop"
+}
+
+package_gds-images() {
+    pkgdesc='Native image viewer and annotation editor'
+    depends=(libgcc glibc wayland libxkbcommon libxkbcommon-x11 fontconfig
+             freetype2 libxcb libglvnd vulkan-icd-loader xdg-desktop-portal hicolor-icon-theme)
+    local profile=${GDS_PROFILE:-release}
+    [[ $profile == dev ]] && profile=debug
+    python "$srcdir/gds-$pkgver/packaging/linux/install.py" "$pkgdir" \
+        "${CARGO_TARGET_DIR:-$srcdir/target}/$profile" --component images
+    desktop-file-validate "$pkgdir/usr/share/applications/io.github.GanDesktop.GdsImages.desktop"
 }
 
 package_xdg-desktop-portal-gds() {

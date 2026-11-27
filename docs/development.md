@@ -1,6 +1,6 @@
 # Development & Architecture Guide
 
-GDS currently builds native `gds-files` on [`zgui`](https://github.com/GanDesktop/zgui/tree/gds-0.1.0) (`view!`, Stylo `--gds-*`, Wayland + X11) and the UI-independent portal daemon (`xdg-desktop-portal-gds`) from a single Rust crate. Unmigrated companion apps (`bin/agents/`, `bin/nixes/`) retain their source on disk while excluded from active `[[bin]]` targets.
+GDS currently builds native `gds-files` and `gds-images` on [`zgui`](https://github.com/GanDesktop/zgui/tree/gds-0.1.0) (`view!`, Stylo `--gds-*`, Wayland + X11) and the UI-independent portal daemon (`xdg-desktop-portal-gds`) from a single Rust crate. Unmigrated companion apps (`bin/agents/`, `bin/nixes/`) retain their source on disk while excluded from active `[[bin]]` targets.
 
 ## Repository Layout
 
@@ -20,6 +20,7 @@ packaging/
 └── cloudflare/            # Installer worker (gds.gandesktop.dev) and R2 bucket routing
 bin/
 ├── files/                 # GDS Files (FSD application on zgui)
+├── images/                # Image viewer and annotation editor on zgui
 ├── portal/                # GDS Portal (headless FileChooser D-Bus service)
 ├── agents/                # Retained unmigrated source (excluded from active targets)
 └── nixes/                 # Retained unmigrated source (excluded from active targets)
@@ -35,14 +36,16 @@ Run inside a graphical Wayland or X11 terminal. The [justfile](../justfile) auto
 just dev files                    # Launch GDS Files in debug mode
 just dev files "/path/to/folder"  # Open a specific folder
 
-just build [files|portal|all]     # Incremental debug build
-just release [files|portal|all]   # Optimized release build
-just check                        # Typecheck Files, Portal, and test targets
+just dev images "/path/to/image"  # Open the viewer and sibling filmstrip
+just build [files|images|portal|all]     # Incremental debug build
+just release [files|images|portal|all]   # Optimized release build
+just check                        # Typecheck Files, Images, Portal, and test targets
 just lint                         # Check formatting and workspace Clippy lint gates
 just fmt-check                    # Check Rust formatting (just fmt to format)
 just test                         # Run workspace unit & integration tests
 just e2e-prepare all              # Prepare existing desktop test VMs
-just e2e-build                    # Bundle normal Files builds for VMs
+just e2e-build                    # Bundle normal Files and Images builds for VMs
+just test-images --vm ubuntu      # Check image editing and exported pixels
 just test-files --vm ubuntu       # Run Files VM workflows on one guest
 just test-files-native            # Run the private headless Weston E2E runner
 just shell                        # Open an interactive Nix development shell
@@ -73,6 +76,7 @@ When iterating on desktop integration or UI, `just install-dev files` builds `ta
 | `remote` | Native Rust SFTP (`russh-sftp`) and SMB (`smb`) services |
 | `appearance` / `i18n` / `ui` | Stylo `--gds-*` theme/font/token engine, Fluent translations, and reusable `zgui` components |
 | `files` | Full feature bundle for `gds-files` |
+| `images` | Native image viewer, editing workspace, and image engine for `gds-images` |
 | `portal` | Headless `xdg-desktop-portal-gds` bundle (never pulls in `zgui`, SQLite, terminal, or `remote`) |
 | `gui-tests` / `files-e2e` | `zgui-platform-headless` test helpers and isolated Weston E2E runner |
 
@@ -134,7 +138,7 @@ app → pages → widgets → features → entities → shared
 - **Local Container Packaging**: Build native distro packages from the working tree with `just rpm [43|44] [dev|release]`, `just deb [debian|ubuntu] [trixie|noble|resolute] [dev|release]`, and `just arch [dev|release]`.
 - **Automated Tag Releases ([release.yml](../.github/workflows/release.yml))**: Pushing a `v*` tag matching `Cargo.toml` runs a **Draft-First** pipeline:
   1. `prepare` validates version parity, runs installer tests (`python3 -m unittest discover -s scripts/tests -v`), and creates a GitHub Draft Release.
-  2. `build` compiles `gds-files` and `xdg-desktop-portal-gds` across Arch, Debian 13 (`trixie`), Ubuntu 24.04 (`noble`), Ubuntu 26.04 (`resolute`), and Fedora 43/44 containers alongside `nix` NUR evaluation.
+  2. `build` compiles `gds-files`, `gds-images`, and `xdg-desktop-portal-gds` across Arch, Debian 13 (`trixie`), Ubuntu 24.04 (`noble`), Ubuntu 26.04 (`resolute`), and Fedora 43/44 containers alongside `nix` NUR evaluation.
   3. `smoke-native` verifies `install.sh --yes --with-portal`, `--help`, `desktop-file-validate`, and `--uninstall` inside clean minimal runtime containers.
   4. `publish` generates `MANIFEST` and `SHA256SUMS`, uploads assets to GitHub Releases and Cloudflare R2 (`https://pkgs.gandesktop.dev`), updates `https://gds.gandesktop.dev/install.sh` (also tested and deployed on `main` via [installer.yml](../.github/workflows/installer.yml)), undrafts the release, and advances `nur` / `stable` for non-prerelease tags.
 

@@ -8,7 +8,7 @@ use crate::{
     entities::document::{
         AnnotationId, AnnotationItem, AnnotationKind, DocumentState, RgbaColor, SpatialTransformOp,
     },
-    shared::geometry::{Point2, Rect2, Size2, ViewportTransform, clip_segment_to_rect},
+    shared::geometry::{Point2, Size2, ViewportTransform},
 };
 
 use super::{
@@ -17,13 +17,14 @@ use super::{
     hit_test::{HandleKind, HitTarget, hit_test_canvas, hit_test_cycle_stack, marquee_hits},
     manipulate::{
         ReorderOp, ResizeModifiers, compute_duplicate_offset, reorder_annotations,
-        resize_item_with_handle, snap_angle_15, translate_group_clamped,
+        resize_item_with_handle, snap_angle_15, translate_group,
     },
     selection::SelectionSet,
 };
 
 const DRAG_THRESHOLD_SCREEN_PX: f32 = 3.0;
 const MIN_DRAW_DRAG_PX: f32 = 2.0;
+const MIN_BRUSH_STEP_SCREEN_PX: f32 = 1.5;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, strum::EnumIter)]
 pub enum ToolMode {
@@ -35,7 +36,9 @@ pub enum ToolMode {
     Ellipse,
     Arrow,
     Line,
+    Brush,
     Text,
+    Number,
     Mosaic,
     Blur,
 }
@@ -50,7 +53,9 @@ impl ToolMode {
             Self::Ellipse => "tool-ellipse",
             Self::Arrow => "tool-arrow",
             Self::Line => "tool-line",
+            Self::Brush => "tool-brush",
             Self::Text => "tool-text",
+            Self::Number => "tool-number",
             Self::Mosaic => "tool-mosaic",
             Self::Blur => "tool-blur",
         }
@@ -67,24 +72,21 @@ impl ToolMode {
                 | Self::Ellipse
                 | Self::Arrow
                 | Self::Line
+                | Self::Brush
                 | Self::Text
+                | Self::Number
                 | Self::Mosaic
                 | Self::Blur
         )
     }
-
-    pub const fn uses_color(self) -> bool {
-        matches!(
-            self,
-            Self::Rect | Self::Ellipse | Self::Arrow | Self::Line | Self::Text
-        )
-    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ToolSettings {
+    pub font_family: String,
     pub color: RgbaColor,
     pub stroke_width: f32,
+    pub marker_diameter: f32,
     pub font_size: f32,
     pub mosaic_block_size: u32,
     pub blur_radius: u32,
@@ -94,7 +96,9 @@ impl Default for ToolSettings {
     fn default() -> Self {
         Self {
             color: RgbaColor::RED,
+            font_family: "sans-serif".into(),
             stroke_width: 3.0,
+            marker_diameter: 32.0,
             font_size: 24.0,
             mosaic_block_size: 14,
             blur_radius: 8,
@@ -111,10 +115,12 @@ pub enum PropertyValue<T> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectionStyleSummary {
+    pub font_family: PropertyValue<String>,
     pub count: usize,
     pub color: PropertyValue<RgbaColor>,
     pub color_applicable: usize,
     pub stroke_width: PropertyValue<f32>,
+    pub marker_diameter: PropertyValue<f32>,
     pub stroke_applicable: usize,
     pub font_size: PropertyValue<f32>,
     pub font_applicable: usize,
@@ -137,6 +143,7 @@ pub enum TextEditTarget {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextDraft {
+    pub family: String,
     pub target: TextEditTarget,
     pub color: RgbaColor,
     pub font_size: f32,
@@ -208,6 +215,11 @@ pub enum ActiveInteraction {
         current_img: Point2,
         shift: bool,
     },
+    DrawingBrush {
+        points: Vec<[f32; 2]>,
+        last_vp: Point2,
+        current_img: Point2,
+    },
     EditingText(TextDraft),
 }
 
@@ -257,6 +269,13 @@ pub enum StyleApplyOutcome {
     Committed,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StyleTarget {
+    Tool,
+    Objects,
+    TextDraft,
+}
+
 #[derive(Default)]
 pub struct ToolFsm {
     pub tool: ToolMode,
@@ -276,6 +295,7 @@ impl ToolFsm {
                 | ActiveInteraction::Resizing { .. }
                 | ActiveInteraction::Marquee { .. }
                 | ActiveInteraction::Creating { .. }
+                | ActiveInteraction::DrawingBrush { .. }
         )
     }
 
@@ -283,9 +303,23 @@ impl ToolFsm {
         matches!(self.interaction, ActiveInteraction::EditingText(_))
     }
 
+    pub fn style_target(&self) -> Option<StyleTarget> {
+        if self.is_editing_text() {
+            Some(StyleTarget::TextDraft)
+        } else if self.tool.is_configurable() {
+            Some(StyleTarget::Tool)
+        } else if self.tool == ToolMode::Pointer && !self.selection.is_empty() {
+            Some(StyleTarget::Objects)
+        } else {
+            None
+        }
+    }
+
     pub fn set_tool(&mut self, tool: ToolMode, history: &mut EditHistory) -> CancelOutcome {
         let cancel_outcome = self.cancel_pointer_gesture(history);
-        if matches!(tool, ToolMode::Pan | ToolMode::Crop) {
+        if matches!(tool, ToolMode::Pan | ToolMode::Crop)
+            || (tool.is_configurable() && tool != self.tool)
+        {
             self.selection.clear();
         }
         if tool != ToolMode::Crop {
@@ -325,13 +359,15 @@ impl ToolFsm {
             self.selection.clone()
         };
 
-        if let Some(hit) = hit_test_canvas(
-            &doc.annotations,
-            &effective_selection,
-            input.img_pt,
-            self.tool,
-            input.scale,
-        ) {
+        if doc.canvas_bounds().contains(input.img_pt)
+            && let Some(hit) = hit_test_canvas(
+                &doc.annotations,
+                &effective_selection,
+                input.img_pt,
+                self.tool,
+                input.scale,
+            )
+        {
             match hit {
                 HitTarget::Handle { id, handle } => {
                     let Some(idx) = doc.annotations.iter().position(|item| item.id == id) else {
@@ -425,13 +461,10 @@ impl ToolFsm {
                 PointerDownOutcome::SelectionChanged
             }
             ToolMode::Text => {
-                let (out_w, out_h) = doc.output_dimensions();
-                let pos = Point2::new(
-                    input.img_pt.x.clamp(0.0, out_w as f32),
-                    input.img_pt.y.clamp(0.0, out_h as f32),
-                );
+                let pos = input.img_pt;
                 self.interaction = ActiveInteraction::EditingText(TextDraft {
                     target: TextEditTarget::New { position: pos },
+                    family: self.settings.font_family.clone(),
                     color: self.settings.color,
                     font_size: self.settings.font_size,
                     preview_content: String::new(),
@@ -439,6 +472,18 @@ impl ToolFsm {
                 PointerDownOutcome::OpenTextEditor {
                     initial_text: String::new(),
                 }
+            }
+            ToolMode::Brush => {
+                let mut points = Vec::with_capacity(32);
+                if input.img_pt.x.is_finite() && input.img_pt.y.is_finite() {
+                    points.push([input.img_pt.x, input.img_pt.y]);
+                }
+                self.interaction = ActiveInteraction::DrawingBrush {
+                    points,
+                    last_vp: input.vp_pt,
+                    current_img: input.img_pt,
+                };
+                PointerDownOutcome::NeedsTransientPreview
             }
             tool => {
                 self.interaction = ActiveInteraction::Creating {
@@ -558,6 +603,25 @@ impl ToolFsm {
                     }
                 }
             }
+            ActiveInteraction::DrawingBrush {
+                points,
+                last_vp,
+                current_img,
+            } => {
+                *current_img = img_pt;
+                if img_pt.x.is_finite()
+                    && img_pt.y.is_finite()
+                    && (points.is_empty()
+                        || (vp_pt.x - last_vp.x).hypot(vp_pt.y - last_vp.y)
+                            >= MIN_BRUSH_STEP_SCREEN_PX)
+                {
+                    points.push([img_pt.x, img_pt.y]);
+                    *last_vp = vp_pt;
+                }
+                PointerMoveOutcome::NeedsTransientPreview {
+                    first_changed_idx: doc.annotations.len(),
+                }
+            }
             ActiveInteraction::Idle | ActiveInteraction::EditingText(_) => PointerMoveOutcome::None,
         }
     }
@@ -583,13 +647,7 @@ impl ToolFsm {
             } => {
                 history.break_coalesce();
                 if modifiers.alt {
-                    let stack = hit_test_cycle_stack(
-                        &doc.annotations,
-                        &self.selection,
-                        start_img,
-                        self.tool,
-                        scale,
-                    );
+                    let stack = hit_test_cycle_stack(&doc.annotations, start_img, scale);
                     if !stack.is_empty() {
                         let next_id = self
                             .selection
@@ -612,11 +670,10 @@ impl ToolFsm {
                 originals,
                 ..
             } => {
-                let (moved, dx, dy) = translate_group_clamped(
+                let (moved, dx, dy) = translate_group(
                     &originals,
                     current_img.x - start_img.x,
                     current_img.y - start_img.y,
-                    doc.output_dimensions(),
                     shift,
                 );
                 if dx.abs() < 1.0 && dy.abs() < 1.0 {
@@ -638,11 +695,10 @@ impl ToolFsm {
                 originals,
                 ..
             } => {
-                let (moved, dx, dy) = translate_group_clamped(
+                let (moved, dx, dy) = translate_group(
                     &originals,
                     current_img.x - start_img.x,
                     current_img.y - start_img.y,
-                    doc.output_dimensions(),
                     shift,
                 );
                 if dx.abs() < 1.0 && dy.abs() < 1.0 {
@@ -650,7 +706,9 @@ impl ToolFsm {
                 }
                 let mut clones = Vec::with_capacity(moved.len());
                 let mut new_ids = Vec::with_capacity(moved.len());
+                let mut number = next_number(doc);
                 for mut item in moved {
+                    renumber_copy(&mut item, &mut number);
                     let id = doc.allocate_annotation_id();
                     item.id = id;
                     new_ids.push(id);
@@ -667,13 +725,8 @@ impl ToolFsm {
                 modifiers,
                 ..
             } => {
-                let updated = resize_item_with_handle(
-                    &original,
-                    handle,
-                    current_img,
-                    doc.output_dimensions(),
-                    modifiers.to_resize(),
-                );
+                let updated =
+                    resize_item_with_handle(&original, handle, current_img, modifiers.to_resize());
                 if updated == original {
                     return FinishOutcome::None;
                 }
@@ -694,7 +747,10 @@ impl ToolFsm {
             } => {
                 history.break_coalesce();
                 let rect = ViewportTransform::normalize_drag_rect(start_img, current_img);
-                let hits = marquee_hits(&doc.annotations, rect);
+                let hits = rect
+                    .intersect(doc.canvas_bounds())
+                    .map(|area| marquee_hits(&doc.annotations, area))
+                    .unwrap_or_default();
                 if shift {
                     self.selection = initial_selection;
                     for id in hits {
@@ -738,16 +794,46 @@ impl ToolFsm {
                     start_img,
                     current_img,
                     shift,
-                    (out_w, out_h),
                     &self.settings,
                     preview_id,
+                    doc,
                 ) else {
                     return FinishOutcome::None;
                 };
+                if item.dirty_bounds().intersect(doc.canvas_bounds()).is_none() {
+                    return FinishOutcome::None;
+                }
                 let id = doc.allocate_annotation_id();
                 item.id = id;
                 history.apply(EditCommand::AddAnnotations(Arc::from([item])), doc);
                 // Auto-select newly created item while preserving the active drawing tool.
+                self.selection.set_single(id);
+                FinishOutcome::Committed
+            }
+            ActiveInteraction::DrawingBrush {
+                points,
+                current_img,
+                ..
+            } => {
+                let finalized = finish_brush_points(&points, current_img);
+                if finalized.is_empty() {
+                    return FinishOutcome::None;
+                }
+                let preview_id = AnnotationId(doc.next_annotation_id);
+                let mut item = AnnotationItem {
+                    id: preview_id,
+                    kind: AnnotationKind::Brush {
+                        points: finalized,
+                        color: self.settings.color,
+                        stroke_width: self.settings.stroke_width,
+                    },
+                };
+                if item.dirty_bounds().intersect(doc.canvas_bounds()).is_none() {
+                    return FinishOutcome::None;
+                }
+                let id = doc.allocate_annotation_id();
+                item.id = id;
+                history.apply(EditCommand::AddAnnotations(Arc::from([item])), doc);
                 self.selection.set_single(id);
                 FinishOutcome::Committed
             }
@@ -765,6 +851,7 @@ impl ToolFsm {
             content,
             color,
             font_size,
+            family,
             ..
         } = &item.kind
         else {
@@ -779,6 +866,7 @@ impl ToolFsm {
                 original: item.clone(),
             },
             color: *color,
+            family: family.clone(),
             font_size: *font_size,
             preview_content: initial.clone(),
         });
@@ -812,20 +900,21 @@ impl ToolFsm {
                 if trimmed.is_empty() || !position.x.is_finite() || !position.y.is_finite() {
                     return FinishOutcome::None;
                 }
-                let (out_w, out_h) = doc.output_dimensions();
-                let id = doc.allocate_annotation_id();
+                let id = AnnotationId(doc.next_annotation_id);
                 let item = AnnotationItem {
                     id,
                     kind: AnnotationKind::Text {
-                        position: [
-                            position.x.clamp(0.0, out_w as f32),
-                            position.y.clamp(0.0, out_h as f32),
-                        ],
+                        position: [position.x, position.y],
                         content: trimmed.to_owned(),
                         color: draft.color,
+                        family: draft.family.clone(),
                         font_size: draft.font_size,
                     },
                 };
+                if item.dirty_bounds().intersect(doc.canvas_bounds()).is_none() {
+                    return FinishOutcome::None;
+                }
+                doc.allocate_annotation_id();
                 history.apply(EditCommand::AddAnnotations(Arc::from([item])), doc);
                 self.selection.set_single(id);
                 FinishOutcome::Committed
@@ -854,6 +943,7 @@ impl ToolFsm {
                         position,
                         content: trimmed.to_owned(),
                         color: draft.color,
+                        family: draft.family.clone(),
                         font_size: draft.font_size,
                     },
                 };
@@ -965,8 +1055,10 @@ impl ToolFsm {
         let (dx, dy) = compute_duplicate_offset(&originals, out_w, out_h);
         let mut clones = Vec::with_capacity(originals.len());
         let mut new_ids = Vec::with_capacity(originals.len());
+        let mut number = next_number(doc);
         for item in &originals {
             let mut moved = item.translated(dx, dy);
+            renumber_copy(&mut moved, &mut number);
             let id = doc.allocate_annotation_id();
             moved.id = id;
             new_ids.push(id);
@@ -981,11 +1073,9 @@ impl ToolFsm {
         if doc.annotations.is_empty() {
             return false;
         }
-        let changed = self.selection.select_all(&doc.annotations);
-        if changed {
-            history.break_coalesce();
-        }
-        changed
+        let changed_tool = self.tool != ToolMode::Pointer;
+        self.set_tool(ToolMode::Pointer, history);
+        self.selection.select_all(&doc.annotations) || changed_tool
     }
 
     pub fn nudge_selection(
@@ -1003,8 +1093,7 @@ impl ToolFsm {
         if originals.is_empty() {
             return false;
         }
-        let (moved, cdx, cdy) =
-            translate_group_clamped(&originals, dx, dy, doc.output_dimensions(), false);
+        let (moved, cdx, cdy) = translate_group(&originals, dx, dy, false);
         if cdx.abs() < 1e-4 && cdy.abs() < 1e-4 {
             return false;
         }
@@ -1095,6 +1184,10 @@ impl ToolFsm {
             summarize_property(&selected, AnnotationItem::stroke_width, |a, b| {
                 (a - b).abs() < 1e-3
             });
+        let (marker_diameter, _) =
+            summarize_property(&selected, AnnotationItem::marker_diameter, |a, b| {
+                (a - b).abs() < 1e-3
+            });
         let (font_size, font_applicable) =
             summarize_property(&selected, AnnotationItem::font_size, |a, b| {
                 (a - b).abs() < 1e-3
@@ -1104,7 +1197,11 @@ impl ToolFsm {
         let (blur_radius, blur_applicable) =
             summarize_property(&selected, AnnotationItem::blur_radius, |a, b| a == b);
 
+        let (font_family, _) =
+            summarize_property(&selected, AnnotationItem::font_family, |a, b| a == b);
         Some(SelectionStyleSummary {
+            marker_diameter,
+            font_family,
             count: selected.len(),
             color,
             color_applicable,
@@ -1125,14 +1222,17 @@ impl ToolFsm {
         doc: Option<&mut DocumentState>,
         history: &mut EditHistory,
     ) -> StyleApplyOutcome {
-        self.settings.color = color;
         if let ActiveInteraction::EditingText(draft) = &mut self.interaction {
             draft.color = color;
             return StyleApplyOutcome::UpdatedTextDraft;
         }
-        self.apply_style_change(StyleField::Color, doc, history, |item| {
-            item.with_color(color)
-        })
+        self.apply_style_change(
+            StyleField::Color,
+            doc,
+            history,
+            |settings| settings.color = color,
+            |item| item.with_color(color),
+        )
     }
 
     pub fn apply_stroke_width(
@@ -1141,10 +1241,47 @@ impl ToolFsm {
         doc: Option<&mut DocumentState>,
         history: &mut EditHistory,
     ) -> StyleApplyOutcome {
-        self.settings.stroke_width = width;
-        self.apply_style_change(StyleField::StrokeWidth, doc, history, |item| {
-            item.with_stroke_width(width)
-        })
+        self.apply_style_change(
+            StyleField::StrokeWidth,
+            doc,
+            history,
+            |settings| settings.stroke_width = width,
+            |item| item.with_stroke_width(width),
+        )
+    }
+
+    pub fn apply_marker_diameter(
+        &mut self,
+        diameter: f32,
+        doc: Option<&mut DocumentState>,
+        history: &mut EditHistory,
+    ) -> StyleApplyOutcome {
+        self.apply_style_change(
+            StyleField::MarkerDiameter,
+            doc,
+            history,
+            |settings| settings.marker_diameter = diameter,
+            |item| item.with_marker_diameter(diameter),
+        )
+    }
+
+    pub fn apply_font_family(
+        &mut self,
+        family: String,
+        doc: Option<&mut DocumentState>,
+        history: &mut EditHistory,
+    ) -> StyleApplyOutcome {
+        if let ActiveInteraction::EditingText(draft) = &mut self.interaction {
+            draft.family = family;
+            return StyleApplyOutcome::UpdatedTextDraft;
+        }
+        self.apply_style_change(
+            StyleField::FontFamily,
+            doc,
+            history,
+            |settings| settings.font_family.clone_from(&family),
+            |item| item.with_font_family(&family),
+        )
     }
 
     pub fn apply_font_size(
@@ -1153,14 +1290,17 @@ impl ToolFsm {
         doc: Option<&mut DocumentState>,
         history: &mut EditHistory,
     ) -> StyleApplyOutcome {
-        self.settings.font_size = size;
         if let ActiveInteraction::EditingText(draft) = &mut self.interaction {
             draft.font_size = size;
             return StyleApplyOutcome::UpdatedTextDraft;
         }
-        self.apply_style_change(StyleField::FontSize, doc, history, |item| {
-            item.with_font_size(size)
-        })
+        self.apply_style_change(
+            StyleField::FontSize,
+            doc,
+            history,
+            |settings| settings.font_size = size,
+            |item| item.with_font_size(size),
+        )
     }
 
     pub fn apply_mosaic_block_size(
@@ -1169,10 +1309,13 @@ impl ToolFsm {
         doc: Option<&mut DocumentState>,
         history: &mut EditHistory,
     ) -> StyleApplyOutcome {
-        self.settings.mosaic_block_size = block_size;
-        self.apply_style_change(StyleField::MosaicBlockSize, doc, history, |item| {
-            item.with_mosaic_block_size(block_size)
-        })
+        self.apply_style_change(
+            StyleField::MosaicBlockSize,
+            doc,
+            history,
+            |settings| settings.mosaic_block_size = block_size,
+            |item| item.with_mosaic_block_size(block_size),
+        )
     }
 
     pub fn apply_blur_radius(
@@ -1181,25 +1324,34 @@ impl ToolFsm {
         doc: Option<&mut DocumentState>,
         history: &mut EditHistory,
     ) -> StyleApplyOutcome {
-        self.settings.blur_radius = radius;
-        self.apply_style_change(StyleField::BlurRadius, doc, history, |item| {
-            item.with_blur_radius(radius)
-        })
+        self.apply_style_change(
+            StyleField::BlurRadius,
+            doc,
+            history,
+            |settings| settings.blur_radius = radius,
+            |item| item.with_blur_radius(radius),
+        )
     }
 
     fn apply_style_change(
-        &self,
+        &mut self,
         field: StyleField,
         doc: Option<&mut DocumentState>,
         history: &mut EditHistory,
+        update_tool: impl FnOnce(&mut ToolSettings),
         transform: impl Fn(&AnnotationItem) -> Option<AnnotationItem>,
     ) -> StyleApplyOutcome {
+        match self.style_target() {
+            Some(StyleTarget::Tool) => {
+                update_tool(&mut self.settings);
+                return StyleApplyOutcome::None;
+            }
+            Some(StyleTarget::Objects) => {}
+            _ => return StyleApplyOutcome::None,
+        }
         let Some(doc) = doc else {
             return StyleApplyOutcome::None;
         };
-        if self.selection.is_empty() {
-            return StyleApplyOutcome::None;
-        }
         let mut before = Vec::new();
         let mut after = Vec::new();
         for item in self.selection.selected_items_ordered(&doc.annotations) {
@@ -1233,7 +1385,6 @@ impl ToolFsm {
         &self,
         doc: &DocumentState,
     ) -> Option<(usize, Arc<[AnnotationItem]>)> {
-        let (out_w, out_h) = doc.output_dimensions();
         match &self.interaction {
             ActiveInteraction::Moving {
                 start_img,
@@ -1242,11 +1393,10 @@ impl ToolFsm {
                 originals,
                 first_changed_idx,
             } => {
-                let (moved, _, _) = translate_group_clamped(
+                let (moved, _, _) = translate_group(
                     originals,
                     current_img.x - start_img.x,
                     current_img.y - start_img.y,
-                    (out_w, out_h),
                     *shift,
                 );
                 let mut next = doc.annotations.clone();
@@ -1265,15 +1415,16 @@ impl ToolFsm {
                 clone_ids,
                 first_changed_idx,
             } => {
-                let (moved, _, _) = translate_group_clamped(
+                let (moved, _, _) = translate_group(
                     originals,
                     current_img.x - start_img.x,
                     current_img.y - start_img.y,
-                    (out_w, out_h),
                     *shift,
                 );
                 let mut next = doc.annotations.clone();
+                let mut number = next_number(doc);
                 for (mut item, &clone_id) in moved.into_iter().zip(clone_ids.iter()) {
+                    renumber_copy(&mut item, &mut number);
                     item.id = clone_id;
                     next.push(item);
                 }
@@ -1287,13 +1438,8 @@ impl ToolFsm {
                 modifiers,
                 first_changed_idx,
             } => {
-                let updated = resize_item_with_handle(
-                    original,
-                    *handle,
-                    *current_img,
-                    (out_w, out_h),
-                    modifiers.to_resize(),
-                );
+                let updated =
+                    resize_item_with_handle(original, *handle, *current_img, modifiers.to_resize());
                 let mut next = doc.annotations.clone();
                 if let Some(slot) = next.iter_mut().find(|item| item.id == *target_id) {
                     *slot = updated;
@@ -1317,11 +1463,31 @@ impl ToolFsm {
                     *start_img,
                     *current_img,
                     *shift,
-                    (out_w, out_h),
                     &self.settings,
                     preview_id,
+                    doc,
                 ) {
                     next.push(item);
+                }
+                Some((idx, Arc::from(next)))
+            }
+            ActiveInteraction::DrawingBrush {
+                points,
+                current_img,
+                ..
+            } => {
+                let idx = doc.annotations.len();
+                let mut next = doc.annotations.clone();
+                let finalized = finish_brush_points(points, *current_img);
+                if !finalized.is_empty() {
+                    next.push(AnnotationItem {
+                        id: AnnotationId(doc.next_annotation_id.saturating_add(1_000_000)),
+                        kind: AnnotationKind::Brush {
+                            points: finalized,
+                            color: self.settings.color,
+                            stroke_width: self.settings.stroke_width,
+                        },
+                    });
                 }
                 Some((idx, Arc::from(next)))
             }
@@ -1333,12 +1499,10 @@ impl ToolFsm {
                         next.push(AnnotationItem {
                             id: AnnotationId(doc.next_annotation_id.saturating_add(1_000_000)),
                             kind: AnnotationKind::Text {
-                                position: [
-                                    position.x.clamp(0.0, out_w as f32),
-                                    position.y.clamp(0.0, out_h as f32),
-                                ],
+                                position: [position.x, position.y],
                                 content: trimmed.to_owned(),
                                 color: draft.color,
+                                family: draft.family.clone(),
                                 font_size: draft.font_size,
                             },
                         });
@@ -1358,6 +1522,7 @@ impl ToolFsm {
                             position,
                             content: draft.preview_content.trim().to_owned(),
                             color: draft.color,
+                            family: draft.family.clone(),
                             font_size: draft.font_size,
                         },
                     };
@@ -1371,10 +1536,10 @@ impl ToolFsm {
     }
 }
 
-fn summarize_property<T: Copy>(
+fn summarize_property<T>(
     items: &[AnnotationItem],
     getter: impl Fn(&AnnotationItem) -> Option<T>,
-    eq: impl Fn(T, T) -> bool,
+    eq: impl Fn(&T, &T) -> bool,
 ) -> (PropertyValue<T>, usize) {
     let mut first: Option<T> = None;
     let mut mixed = false;
@@ -1384,10 +1549,10 @@ fn summarize_property<T: Copy>(
             continue;
         };
         applicable += 1;
-        match first {
+        match &first {
             None => first = Some(val),
             Some(prev) => {
-                if !eq(prev, val) {
+                if !eq(prev, &val) {
                     mixed = true;
                 }
             }
@@ -1406,19 +1571,23 @@ fn build_annotation_from_drag(
     start: Point2,
     current: Point2,
     shift: bool,
-    canvas_size: (u32, u32),
     settings: &ToolSettings,
     id: AnnotationId,
+    doc: &DocumentState,
 ) -> Option<AnnotationItem> {
-    let (cw, ch) = canvas_size;
-    let wf = cw as f32;
-    let hf = ch as f32;
-    if wf <= 0.0 || hf <= 0.0 {
-        return None;
+    if tool == ToolMode::Number {
+        return Some(AnnotationItem {
+            id,
+            kind: AnnotationKind::Number {
+                center: current,
+                number: next_number(doc),
+                radius: settings.marker_diameter * 0.5,
+                color: settings.color,
+            },
+        });
     }
-    let canvas_rect = Rect2::new(0.0, 0.0, wf, hf);
     let end = if shift && matches!(tool, ToolMode::Arrow | ToolMode::Line) {
-        snap_angle_15(start, current, wf, hf)
+        snap_angle_15(start, current)
     } else if shift && matches!(tool, ToolMode::Rect | ToolMode::Ellipse) {
         let dx = current.x - start.x;
         let dy = current.y - start.y;
@@ -1440,12 +1609,11 @@ fn build_annotation_from_drag(
     let kind = match tool {
         ToolMode::Rect => {
             let norm = ViewportTransform::normalize_drag_rect(start, end);
-            let clipped = norm.intersect(canvas_rect)?;
-            if clipped.width < 1.0 || clipped.height < 1.0 {
+            if norm.width < 1.0 || norm.height < 1.0 {
                 return None;
             }
             AnnotationKind::Rect {
-                rect: clipped,
+                rect: norm,
                 stroke: settings.color,
                 stroke_width: settings.stroke_width,
                 fill: None,
@@ -1453,61 +1621,88 @@ fn build_annotation_from_drag(
         }
         ToolMode::Ellipse => {
             let norm = ViewportTransform::normalize_drag_rect(start, end);
-            let clipped = norm.intersect(canvas_rect)?;
-            if clipped.width < 1.0 || clipped.height < 1.0 {
+            if norm.width < 1.0 || norm.height < 1.0 {
                 return None;
             }
             AnnotationKind::Ellipse {
-                rect: clipped,
+                rect: norm,
                 stroke: settings.color,
                 stroke_width: settings.stroke_width,
                 fill: None,
             }
         }
-        ToolMode::Arrow => {
-            let (p0, p1) = clip_segment_to_rect(start, end, canvas_rect)?;
-            if (p1.x - p0.x).hypot(p1.y - p0.y) < 1.0 {
-                return None;
-            }
-            AnnotationKind::Arrow {
-                start: [p0.x, p0.y],
-                end: [p1.x, p1.y],
-                color: settings.color,
-                stroke_width: settings.stroke_width,
-            }
-        }
-        ToolMode::Line => {
-            let (p0, p1) = clip_segment_to_rect(start, end, canvas_rect)?;
-            if (p1.x - p0.x).hypot(p1.y - p0.y) < 1.0 {
-                return None;
-            }
-            AnnotationKind::Line {
-                start: [p0.x, p0.y],
-                end: [p1.x, p1.y],
-                color: settings.color,
-                stroke_width: settings.stroke_width,
-            }
-        }
+        ToolMode::Arrow => AnnotationKind::Arrow {
+            start: [start.x, start.y],
+            end: [end.x, end.y],
+            color: settings.color,
+            stroke_width: settings.stroke_width,
+        },
+        ToolMode::Line => AnnotationKind::Line {
+            start: [start.x, start.y],
+            end: [end.x, end.y],
+            color: settings.color,
+            stroke_width: settings.stroke_width,
+        },
         ToolMode::Mosaic => {
             let norm = ViewportTransform::normalize_drag_rect(start, end);
-            let clipped = norm.intersect(canvas_rect)?;
-            clipped.to_clamped_pixel_rect(cw, ch)?;
+            if norm.width < 1. || norm.height < 1. {
+                return None;
+            }
             AnnotationKind::Mosaic {
-                region: clipped,
+                region: norm,
                 block_size: settings.mosaic_block_size,
             }
         }
         ToolMode::Blur => {
             let norm = ViewportTransform::normalize_drag_rect(start, end);
-            let clipped = norm.intersect(canvas_rect)?;
-            clipped.to_clamped_pixel_rect(cw, ch)?;
+            if norm.width < 1. || norm.height < 1. {
+                return None;
+            }
             AnnotationKind::GaussianBlur {
-                region: clipped,
+                region: norm,
                 radius: settings.blur_radius,
             }
         }
-        ToolMode::Pointer | ToolMode::Pan | ToolMode::Crop | ToolMode::Text => return None,
+        ToolMode::Pointer
+        | ToolMode::Pan
+        | ToolMode::Crop
+        | ToolMode::Brush
+        | ToolMode::Number
+        | ToolMode::Text => {
+            return None;
+        }
     };
 
     Some(AnnotationItem { id, kind })
+}
+
+fn finish_brush_points(points: &[[f32; 2]], current_img: Point2) -> Vec<[f32; 2]> {
+    let mut out = points.to_vec();
+    if current_img.x.is_finite() && current_img.y.is_finite() {
+        let should_push = out
+            .last()
+            .is_none_or(|last| (current_img.x - last[0]).hypot(current_img.y - last[1]) >= 0.25);
+        if should_push {
+            out.push([current_img.x, current_img.y]);
+        }
+    }
+    out
+}
+
+fn next_number(doc: &DocumentState) -> u32 {
+    doc.annotations
+        .iter()
+        .filter_map(|item| match item.kind {
+            AnnotationKind::Number { number, .. } => Some(number),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+fn renumber_copy(item: &mut AnnotationItem, next: &mut u32) {
+    if let AnnotationKind::Number { number, .. } = &mut item.kind {
+        *number = *next;
+        *next = next.saturating_add(1);
+    }
 }

@@ -4,4 +4,3 @@ pub mod clipboard;
 pub mod geometry;
 pub mod i18n;
 pub mod natural_sort;
-pub mod ui;

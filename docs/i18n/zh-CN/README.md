@@ -15,3 +15,7 @@ GDS 是一个旨在为一般人提供一个现代，简单，易用，且美观�
 GDS Files，一个原生文件管理器，提供熟悉的文件浏览体验、内置终端和全键盘操作，方便日常浏览与整理文件。
 
 [查看详细介绍与安装说明 →](../../../bin/files/docs/i18n/zh-CN/README.md)
+
+### 图像
+
+GDS Images 可以浏览同一目录的照片、SVG 与截图，支持裁剪、旋转、标注，以及将结果保存或复制到剪贴板。在源码目录运行 `just dev images /path/to/photo.png`，或用 `just install images` 安装 Nix 软件包。[开发指南](../../development.md) · [Nix 安装说明](../../nixos.md)

@@ -21,6 +21,7 @@ fn sample_text_item(id: u64, position: [f32; 2], content: &str, font_size: f32) 
     AnnotationItem {
         id: AnnotationId(id),
         kind: AnnotationKind::Text {
+            family: "sans-serif".into(),
             position,
             content: content.to_owned(),
             color: RgbaColor::BLUE,
@@ -157,7 +158,47 @@ fn apply_crop_keeps_signed_partial_geometry_and_rejects_missed_diagonal_lines() 
     );
 
     // Wide text is wider than narrow text.
-    let narrow = measure_text_rect([10.0, 10.0], "iiii", 24.0);
-    let wide = measure_text_rect([10.0, 10.0], "WWWW", 24.0);
+    let narrow = measure_text_rect([10.0, 10.0], "iiii", 24.0, "sans-serif");
+    let wide = measure_text_rect([10.0, 10.0], "WWWW", 24.0, "sans-serif");
     assert!(narrow.width < wide.width);
+}
+
+#[test]
+fn brush_annotation_supports_transforms_crop_and_style_updates() {
+    let stroke = AnnotationItem {
+        id: AnnotationId(7),
+        kind: AnnotationKind::Brush {
+            points: vec![[10.0, 10.0], [10.0, 140.0], [140.0, 140.0]],
+            color: RgbaColor::RED,
+            stroke_width: 4.0,
+        },
+    };
+    assert_eq!(stroke.visual_bounds(), Rect2::new(10.0, 10.0, 130.0, 130.0));
+    assert_eq!(stroke.color(), Some(RgbaColor::RED));
+    assert_eq!(stroke.stroke_width(), Some(4.0));
+
+    let recolored = stroke
+        .with_color(RgbaColor::BLUE)
+        .and_then(|item| item.with_stroke_width(8.0))
+        .expect("brush supports color and stroke width");
+    assert_eq!(recolored.color(), Some(RgbaColor::BLUE));
+    assert_eq!(recolored.stroke_width(), Some(8.0));
+
+    // Spatial transforms preserve involutions exactly.
+    let roundtrip = stroke
+        .apply_spatial_transform(SpatialTransformOp::RotateCw, 200, 150)
+        .apply_spatial_transform(SpatialTransformOp::RotateCcw, 150, 200);
+    assert_eq!(roundtrip, stroke);
+    let flipped = stroke
+        .apply_spatial_transform(SpatialTransformOp::FlipHorizontal, 200, 150)
+        .apply_spatial_transform(SpatialTransformOp::FlipHorizontal, 200, 150);
+    assert_eq!(flipped, stroke);
+
+    // Crop inside the hollow L-corner misses every segment even though the AABB overlaps it.
+    assert_eq!(stroke.apply_crop(PixelRect::new(50, 50, 60, 60)), None);
+    // Crop intersecting the vertical leg keeps the stroke with shifted signed coordinates.
+    let kept = stroke
+        .apply_crop(PixelRect::new(0, 50, 40, 40))
+        .expect("crossing brush stroke retained");
+    assert_eq!(kept.visual_bounds(), Rect2::new(10.0, -40.0, 130.0, 130.0));
 }

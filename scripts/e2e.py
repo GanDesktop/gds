@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare desktop guests or bundle the current Files build."""
+"""Prepare desktop guests or bundle the current normal Files/Images build."""
 
 import argparse
 import hashlib
@@ -28,25 +28,27 @@ def bundle():
     output.mkdir(parents=True, exist_ok=True)
     binaries = output / 'bin'
     binaries.mkdir(exist_ok=True)
-    executable = binaries / 'gds-files.elf'
-    wrapper = binaries / 'gds-files'
-    source = ROOT / 'target/debug/gds-files'
-    dependencies = subprocess.check_output(['ldd', str(source)], text=True)
-    if 'not found' in dependencies:
-        raise RuntimeError(dependencies)
-    roots = sorted(set(re.findall(r'/nix/store/[^/\s]+', dependencies)))
-    shutil.copy2(source, executable)
-    subprocess.run(['strip', '--strip-debug', str(executable)], check=True)
+    roots = set()
+    for app in ('files', 'images'):
+        source = ROOT / f'target/debug/gds-{app}'
+        dependencies = subprocess.check_output(['ldd', str(source)], text=True)
+        if 'not found' in dependencies:
+            raise RuntimeError(dependencies)
+        roots.update(re.findall(r'/nix/store/[^/\s]+', dependencies))
+        shutil.copy2(source, binaries / f'gds-{app}.elf')
+        subprocess.run(['strip', '--strip-debug', str(binaries / f'gds-{app}.elf')], check=True)
     closure = subprocess.check_output(
-        ['nix-store', '--query', '--requisites', *roots], text=True).splitlines() if roots else []
+        ['nix-store', '--query', '--requisites', *sorted(roots)], text=True).splitlines() if roots else []
     libraries = ':'.join(str(Path(path) / 'lib') for path in closure)
     libraries += ':/usr/lib/x86_64-linux-gnu:/usr/lib64:/usr/lib'
-    loader = subprocess.check_output(['patchelf', '--print-interpreter', str(executable)], text=True).strip()
-    wrapper.write_text(
-        '#!/bin/sh\n'
-        'export FONTCONFIG_FILE=/etc/fonts/fonts.conf\n'
-        f'exec {shlex.quote(loader)} --library-path {shlex.quote(libraries)} "${{0%/*}}/{executable.name}" "$@"\n')
-    wrapper.chmod(0o755)
+    for app in ('files', 'images'):
+        wrapper = binaries / f'gds-{app}'
+        loader = subprocess.check_output(['patchelf', '--print-interpreter', str(binaries / f'gds-{app}.elf')], text=True).strip()
+        wrapper.write_text(
+            '#!/bin/sh\n'
+            'export FONTCONFIG_FILE=/etc/fonts/fonts.conf\n'
+            f'exec {shlex.quote(loader)} --library-path {shlex.quote(libraries)} "${{0%/*}}/gds-{app}.elf" "$@"\n')
+        wrapper.chmod(0o755)
     source_paths = subprocess.check_output(
         ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], cwd=ROOT
     ).decode().split('\0')
@@ -58,17 +60,19 @@ def bundle():
     (output / 'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD'], cwd=ROOT))
     manifest = {
         'revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
-        'features': ['files'],
+        'features': ['files', 'images'],
         'profile': 'dev',
         'source_sha256': sha256(output / 'source.tar.gz'),
-        'binaries': {'files': sha256(executable)},
+        'binaries': {app: sha256(binaries / f'gds-{app}.elf') for app in ('files', 'images')},
         'nix_closure': closure,
     }
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     destination = OUTPUT / 'build.tar.gz'
     with tarfile.open(destination, 'w:gz') as archive:
-        for path in (wrapper, executable):
-            archive.add(path, arcname=f'bin/{path.name}')
+        for app in ('files', 'images'):
+            for suffix in ('', '.elf'):
+                name = f'bin/gds-{app}{suffix}'
+                archive.add(output / name, arcname=name)
         for name in ('manifest.json', 'source.tar.gz', 'source.diff'):
             archive.add(output / name, arcname=name)
         for path in closure:

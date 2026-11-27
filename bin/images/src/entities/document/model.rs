@@ -53,6 +53,11 @@ impl DocumentState {
         self.transform.output_dimensions(w, h)
     }
 
+    pub fn canvas_bounds(&self) -> crate::shared::geometry::Rect2 {
+        let (width, height) = self.output_dimensions();
+        crate::shared::geometry::Rect2::new(0., 0., width as f32, height as f32)
+    }
+
     /// Whether there are non-destructive spatial transforms or vector/redaction annotations
     /// that still need to be baked when exporting pixels.
     pub fn has_unbaked_ops(&self) -> bool {
@@ -88,7 +93,6 @@ impl DocumentState {
         self.transform = TransformState::default();
         self.annotations.clear();
         self.bump_revision();
-        self.cache.transformed_base = Some((self.transform, Arc::clone(&composited)));
         self.cache.complete = Some(CompleteComposite {
             revision: self.edit_revision,
             rgba: composited,

@@ -1,34 +1,27 @@
-//! Application entry point wiring CLI/stdin startup, supervisor lifecycle, and main window.
-
+//! Native viewer startup. Empty screenshot pipelines exit before creating a window.
 mod cli;
 mod config;
-mod ui;
-mod windows;
 
 use std::process::ExitCode;
 
-use anyhow::Context as _;
-use clap::Parser as _;
+use clap::Parser;
 use gds::{
-    app::AppExt as _,
-    service::{logs::Store, task_manager::Scope},
+    app::Gds,
+    appearance::{theme, typography},
+    i18n::{Catalog, Language},
+    service::{
+        logs,
+        task_manager::{Scope, Supervisor},
+    },
 };
-use gpui_kit::QuitMode;
-use tokio::sync::oneshot;
+#[cfg(unix)]
+use tokio::sync::mpsc;
+use zgui::prelude::*;
 
-use self::{
-    cli::Arguments,
-    config::{AppConfig, StartupOutcome, resolve_startup},
-    ui::Initializer,
-};
-use crate::{entities::preferences, shared::ui::assets::Assets};
+use crate::{entities::preferences, pages::workspace, shared::i18n};
 
-/// Runs `gds-images`, exiting silently with `0` if pre-GUI stdin receives 0 bytes.
 pub fn run() -> ExitCode {
-    match Bootstrap::load().and_then(|maybe| match maybe {
-        Some(bootstrap) => bootstrap.run(),
-        None => Ok(()),
-    }) {
+    match launch() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("gds-images: {error:#}");
@@ -37,125 +30,162 @@ pub fn run() -> ExitCode {
     }
 }
 
-struct Bootstrap {
-    config: AppConfig,
-    logs: Option<Store>,
-    supervisor: gds::service::task_manager::Supervisor,
-}
-
-impl Bootstrap {
-    fn load() -> anyhow::Result<Option<Self>> {
-        let args = Arguments::parse();
-        let StartupOutcome::Launch(config) = resolve_startup(&args)? else {
-            return Ok(None);
-        };
-        let logs = gds::service::logs::init_tracing(
-            "warn,gds=debug,gds_images=debug",
-            config.enable_logs,
-        )?;
-        let supervisor = gds::service::task_manager::Supervisor::new(config.enable_logs)
-            .context("cannot start the application task supervisor")?;
-        Ok(Some(Self {
-            config,
-            logs,
-            supervisor,
-        }))
-    }
-
-    fn bind_lifecycle(tasks: Scope, cx: &mut gpui_kit::App) {
-        cx.gds_mut().tasks().init(tasks);
-        #[cfg(unix)]
-        cx.gds_mut()
-            .tasks()
-            .signals(|cx| cx.gds_mut().tasks().request_quit());
-        cx.on_window_closed(|cx, _| cx.gds_mut().tasks().quit_when_idle())
-            .detach();
-    }
-
-    async fn prepare_io(tasks: Scope) -> anyhow::Result<PreparedIo> {
-        let startup_prefs = tasks
-            .spawn_blocking_named("Load images preferences", preferences::prepare_startup)
-            .await??;
-        startup_prefs.preferences().appearance.prime_session().await;
-        Ok(PreparedIo { startup_prefs })
-    }
-
-    fn run(self) -> anyhow::Result<()> {
-        let Self {
-            config,
-            logs,
-            supervisor,
-        } = self;
-        // `supervisor` owns the Tokio runtime and must stay alive until the GPUI event loop exits.
-        let tasks = supervisor.scope();
-        let (completed, mut startup) = oneshot::channel();
-
-        gpui_kit::application()
-            .with_quit_mode(QuitMode::Explicit)
-            .with_assets(Assets)
-            .run(move |cx| {
-                cx.spawn(async move |cx| {
-                    cx.update(|cx| Self::bind_lifecycle(tasks.clone(), cx));
-
-                    let io = tasks
-                        .spawn_cancellable_named(
-                            "Start Images services",
-                            Self::prepare_io(tasks.clone()),
-                        )
-                        .await;
-
-                    let result = cx.update(move |cx| {
-                        if cx.gds().tasks().is_shutting_down() {
-                            return Ok(());
-                        }
-                        let prepared = io??;
-                        prepared.mount(&tasks, config, logs, cx)
-                    });
-                    if let Err(error) = &result {
-                        tracing::error!(%error, "Cannot start Images");
-                        cx.update(|cx| cx.gds_mut().tasks().request_quit());
-                    }
-                    let _ = completed.send(result);
-                })
-                .detach();
-            });
-
-        match startup.try_recv() {
-            Ok(Ok(()))
-            | Err(oneshot::error::TryRecvError::Empty | oneshot::error::TryRecvError::Closed) => {
-                Ok(())
+fn launch() -> anyhow::Result<()> {
+    let config::StartupOutcome::Launch(config) = config::resolve_startup(&cli::Arguments::parse())?
+    else {
+        return Ok(());
+    };
+    let logs = logs::init_tracing("warn,gds=debug,gds_images=debug", config.enable_logs)?;
+    let supervisor = Supervisor::new(config.enable_logs)?;
+    let tasks = supervisor.scope();
+    let mut startup = preferences::read_startup()?;
+    preferences::normalize(&mut startup.preferences);
+    supervisor.block_on(startup.preferences.appearance.prime_session())?;
+    let language = Language::detect();
+    let catalog = Catalog::new(language, &[i18n::resource_for(language)])?;
+    let title = if config.is_capture {
+        "app-capture-title"
+    } else {
+        "app-title"
+    };
+    let app_id = config.app_id;
+    let outcome = zgui::app()
+        .without_primary_window()
+        .with_application_id(app_id)
+        .with_context(move || {
+            let gds = Gds::install_process_with_logs(tasks.clone(), logs);
+            bind_signals(&tasks);
+            gds.i18n().install_catalog(catalog);
+            if config.enable_logs {
+                let app_name = if config.is_capture {
+                    "GDS Images (Capture)"
+                } else {
+                    "GDS Images"
+                };
+                gds::ui::logs::init(gds::ui::logs::Options {
+                    app_id: Some(app_id.into()),
+                    app_name: app_name.into(),
+                    ignored_contexts: &["Input", "textarea", "input"],
+                });
             }
-            Ok(Err(error)) => Err(error),
-        }
+
+            let mut notices = Vec::new();
+            if let Some(error) = startup.notice.take() {
+                notices.push(gds::t_untracked!("settings-load-failed", error = error));
+            }
+            let prefs = &mut startup.preferences;
+            apply_theme(&gds, &mut prefs.appearance, &mut notices);
+            gds.appearance()
+                .theme()
+                .configure_hot_reload(prefs.appearance.clone());
+            apply_typography(&gds, &prefs.font, &mut notices);
+            gds.appearance()
+                .motion()
+                .set_enabled(prefs.animations_enabled.unwrap_or(true));
+            gds.appearance().motion().follow_system();
+
+            let preferences = preferences::Service::install(startup, &tasks);
+            let options =
+                gds::ui::window::workspace_options(gds::i18n::text_untracked(title), Some(app_id));
+            use_windows().open(options, move || {
+                workspace::mount(
+                    config.mode.clone(),
+                    config.workflow.clone(),
+                    config.is_capture,
+                    preferences.clone(),
+                    notices.clone(),
+                )
+            });
+        })
+        .run(|| ());
+    supervisor.shutdown();
+    outcome.map_err(|err| anyhow::anyhow!(err.to_string()))
+}
+
+fn bind_signals(tasks: &Scope) {
+    #[cfg(unix)]
+    {
+        let (tx, rx) = mpsc::channel(1);
+        zgui::tokio::spawn_receiver(rx, |()| {
+            if let Some(gds) = Gds::try_current() {
+                gds.tasks().request_quit();
+            } else if let Some(windows) = try_use_windows() {
+                windows.quit();
+            }
+        });
+        let cancel = tasks.token();
+        let watcher = tasks.spawn_named("Listen for termination signals", async move {
+            let mut terminate =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+            let mut interrupt =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+            enum Event {
+                Cancelled,
+                Terminate,
+            }
+            let event = tokio::select! {
+                _ = cancel.cancelled() => Event::Cancelled,
+                _ = terminate.recv() => Event::Terminate,
+                _ = interrupt.recv() => Event::Terminate,
+            };
+            if matches!(event, Event::Terminate) {
+                let _ = tx.send(()).await;
+            }
+            Ok::<_, std::io::Error>(())
+        });
+        zgui::task::spawn_local(async move {
+            if let Err(error) = watcher
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result.map_err(|error| error.to_string()))
+            {
+                tracing::error!(%error, "cannot listen for termination signals");
+            }
+        });
+    }
+    #[cfg(not(unix))]
+    let _ = tasks;
+}
+
+fn apply_theme(gds: &Gds, appearance: &mut theme::Appearance, notices: &mut Vec<String>) {
+    let theme = gds.appearance().theme();
+    let Err(error) = theme.apply(appearance) else {
+        return;
+    };
+    // Missing desktop theme integration degrades quietly and updates the active runtime source;
+    // an invalid user-selected theme surfaces a startup notice while keeping the stored preference
+    // intact so the user can inspect or repair it.
+    let unavailable_system = appearance.source == theme::Source::System;
+    if unavailable_system {
+        tracing::warn!(%error, "system theme unavailable; using built-in theme");
+    } else {
+        notices.push(error.to_string());
+    }
+    let fallback = appearance.builtin_fallback();
+    if let Err(fallback_error) = theme.apply(&fallback) {
+        tracing::error!(error = %fallback_error, "cannot initialize the built-in theme");
+    } else if unavailable_system {
+        *appearance = fallback;
     }
 }
 
-struct PreparedIo {
-    startup_prefs: preferences::StartupBundle,
-}
-
-impl PreparedIo {
-    fn mount(
-        self,
-        tasks: &Scope,
-        config: AppConfig,
-        logs: Option<Store>,
-        cx: &mut gpui_kit::App,
-    ) -> anyhow::Result<()> {
-        let mut notices = Vec::new();
-        Initializer::new(cx).run(tasks, &config, self.startup_prefs, logs, &mut notices)?;
-        windows::open_main_window(tasks.clone(), config, cx)?;
-        for notice in notices {
-            gds::ui::notifications::error(notice, cx);
+fn apply_typography(gds: &Gds, font: &typography::Preferences, notices: &mut Vec<String>) {
+    let typography = gds.appearance().typography();
+    match typography.apply(font) {
+        Ok(applied) => {
+            if let Some(unavailable) = applied.unavailable {
+                tracing::warn!(
+                    "Font family {unavailable:?} is not installed; using the system font."
+                );
+            }
         }
-        // Transition to ready only after the initial window exists so idle-quit checks never
-        // observe a 0-window window during startup.
-        cx.gds_mut().tasks().ready(false);
-        tracing::info!(
-            version = env!("CARGO_PKG_VERSION"),
-            build = env!("GDS_BUILD_TAG"),
-            "Images ready"
-        );
-        Ok(())
+        Err(error) => {
+            notices.push(error.to_string());
+            // An out-of-range stored font size must not block window creation; apply the default
+            // metrics for this session while leaving the stored preference untouched.
+            if let Err(fallback) = typography.apply(&typography::Preferences::default()) {
+                tracing::error!(error = %fallback, "cannot initialize the default font");
+            }
+        }
     }
 }

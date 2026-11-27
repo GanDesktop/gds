@@ -217,6 +217,7 @@ fn rich_torture_scene_ops() -> Vec<RasterOp> {
         },
         // Index 9: Mixed Latin/CJK multiline text placed clear of Ellipse [5] for isolated slicing checks.
         RasterOp::Text {
+            family: "sans-serif".into(),
             position: [260.0, 245.0],
             content: "iiii vs WWWW\n中文多行标注".to_owned(),
             font_size: 22.0,
@@ -270,6 +271,7 @@ fn r2_dragged_arrow_scene(arrow_start: [f32; 2], arrow_end: [f32; 2]) -> Vec<Ras
             fill: None,
         },
         RasterOp::Text {
+            family: "sans-serif".into(),
             position: [130.0, 160.0],
             content: "iiii vs WWWW\n中文多行标注".to_owned(),
             font_size: 20.0,
@@ -315,6 +317,7 @@ fn assert_text_alignment_with_rendered_pixels(content: &str, position: [f32; 2],
     composite_ops(
         &mut canvas,
         &[RasterOp::Text {
+            family: "sans-serif".into(),
             position,
             content: content.to_owned(),
             font_size,
@@ -411,6 +414,7 @@ fn section_8_5_benchmark_ops() -> Vec<RasterOp> {
             stroke_width: 3.0,
         },
         RasterOp::Text {
+            family: "sans-serif".into(),
             position: [110.0, 105.0],
             content: "Step 1: 登录校验 Auth".to_owned(),
             font_size: 24.0,
@@ -442,6 +446,7 @@ fn section_8_5_benchmark_ops() -> Vec<RasterOp> {
             fill: None,
         },
         RasterOp::Text {
+            family: "sans-serif".into(),
             position: [650.0, 150.0],
             content: "iiii vs WWWW\n中文多行标注".to_owned(),
             font_size: 22.0,
@@ -464,6 +469,7 @@ fn section_8_5_benchmark_ops() -> Vec<RasterOp> {
             stroke_width: 4.0,
         },
         RasterOp::Text {
+            family: "sans-serif".into(),
             position: [1580.0, 130.0],
             content: "Export 导出 2560×1440".to_owned(),
             font_size: 24.0,
@@ -497,6 +503,7 @@ fn section_8_5_benchmark_ops() -> Vec<RasterOp> {
         },
         // Index 19: Mixed CJK/Latin Text #4.
         RasterOp::Text {
+            family: "sans-serif".into(),
             position: [1480.0, 1140.0],
             content: "边界对齐 Boundary Check".to_owned(),
             font_size: 26.0,

@@ -1,9 +1,9 @@
-use super::{DEFAULT_INSPECTOR_WIDTH, DEFAULT_JPEG_QUALITY, Preferences};
+use super::{DEFAULT_JPEG_QUALITY, Preferences};
 use gds::appearance::{theme, typography};
 
 #[test]
 fn preferences_toml_roundtrip_preserves_fields_and_ignores_legacy_keys() {
-    let mut custom = Preferences {
+    let custom = Preferences {
         appearance: theme::Appearance {
             source: theme::Source::Builtin,
             builtin: theme::BuiltinTheme::Neon,
@@ -22,22 +22,17 @@ fn preferences_toml_roundtrip_preserves_fields_and_ignores_legacy_keys() {
         default_jpeg_quality: 85,
         inspector_open: false,
         filmstrip_open: false,
-        inspector_panel_width: Some(320),
     };
     let encoded = toml::to_string(&custom).expect("serialize preferences to TOML");
     let decoded: Preferences = toml::from_str(&encoded).expect("parse TOML back");
     assert_eq!(decoded, custom);
 
-    custom.inspector_panel_width = None;
-    assert_eq!(custom.effective_inspector_width(), DEFAULT_INSPECTOR_WIDTH);
-
     // Older configs containing removed `smooth_scaling` or renamed keys must still deserialize.
     let partial: Preferences =
-        toml::from_str("smooth_scaling = false\ninspector_width = 248\n").expect("partial TOML");
+        toml::from_str("smooth_scaling = false\ninspector_panel_width = 248\n")
+            .expect("partial TOML");
     assert!(partial.checkerboard_backdrop);
     assert!(partial.filmstrip_open);
-    assert_eq!(partial.inspector_panel_width, None);
-    assert_eq!(partial.effective_inspector_width(), DEFAULT_INSPECTOR_WIDTH);
     assert_eq!(partial.default_jpeg_quality, DEFAULT_JPEG_QUALITY);
     assert_eq!(partial.appearance, theme::Appearance::default());
     assert_eq!(partial.animations_enabled, None);

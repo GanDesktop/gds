@@ -20,6 +20,14 @@ Description: native zgui file manager for Linux desktops
  Browse local folders, mounted volumes and SFTP/SMB locations,
  with file operations, previews and embedded terminals.
 
+Package: gds-images
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libwayland-client0, libxkbcommon0,
+ libfontconfig1, libegl1, libvulkan1, xdg-desktop-portal
+Description: native image viewer and annotation editor
+ Browse, crop and annotate images, edit screenshot captures, and export them
+ to disk or the desktop clipboard.
+
 Package: xdg-desktop-portal-gds
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, xdg-desktop-portal

@@ -19,3 +19,7 @@ Early on, we're focusing on Niri + NixOS + DMS, filling in the desktop apps that
 GDS Files is a native file manager for everyday browsing and organizing, with a familiar interface, an integrated terminal, and full keyboard controls.
 
 [Details and installation →](bin/files/README.md)
+
+### Images
+
+GDS Images opens photos, SVGs, and screenshots. Browse sibling images, crop or rotate, add annotations, and copy or save the result. Run `just dev images /path/to/photo.png` from the checkout or install the Nix package with `just install images`. [Development guide](docs/development.md) · [Nix installation](docs/nixos.md)

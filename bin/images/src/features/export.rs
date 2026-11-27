@@ -20,7 +20,6 @@ use gds::service::{
         source::{FileStamp, Format, Origin},
     },
 };
-use gpui_kit::{App, Task};
 use image::RgbaImage;
 
 use crate::entities::{
@@ -187,7 +186,11 @@ pub fn build_save_plan(
             format: doc.format(),
             source_bytes: Arc::clone(&doc.decoded.source_bytes),
             edits,
-            policy: SanitizePolicy::PreserveWithEdits,
+            policy: if meta.strip_privacy_on_save {
+                SanitizePolicy::StripPrivacy
+            } else {
+                SanitizePolicy::PreserveWithEdits
+            },
             tags,
         };
     }
@@ -200,7 +203,11 @@ pub fn build_save_plan(
         existing_exif: doc.decoded.metadata.raw_exif.clone(),
         edits,
         jpeg_quality: prefs.default_jpeg_quality,
-        policy: SanitizePolicy::KeepSafeOnPixelExport,
+        policy: if meta.strip_privacy_on_save {
+            SanitizePolicy::StripPrivacy
+        } else {
+            SanitizePolicy::KeepSafeOnPixelExport
+        },
         tags,
     }
 }
@@ -215,7 +222,7 @@ pub fn build_clipboard_plan(
         pixels: PixelSource::from_document(doc),
         existing_exif: doc.decoded.metadata.raw_exif.clone(),
         edits: meta.map(|m| m.draft.normalized()),
-        strip_privacy: prefs.strip_privacy_on_copy,
+        strip_privacy: prefs.strip_privacy_on_copy || meta.is_some_and(|m| m.strip_privacy_on_save),
     }
 }
 
@@ -366,20 +373,6 @@ pub fn encode_clipboard_png_blocking(
         jpeg_matte: [255, 255, 255],
     };
     encode_rgba(rgba, &options)
-}
-
-/// Prompts the user to pick a Save As output file path.
-pub fn prompt_save_as_path(
-    suggested_name: &str,
-    directory: Option<&Path>,
-    cx: &mut App,
-) -> Task<Option<PathBuf>> {
-    let dir = directory
-        .map(Path::to_path_buf)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
-    let prompt = cx.prompt_for_new_path(&dir, Some(suggested_name));
-    cx.spawn(async move |_| prompt.await.ok().and_then(Result::ok).flatten())
 }
 
 pub fn suggested_save_filename(doc: &DocumentState) -> String {

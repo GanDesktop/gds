@@ -7,7 +7,7 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
-      applications = [ "files" ];
+      applications = [ "files" "images" ];
       applicationNames = map (name: "gds-${name}") applications;
       buildTag = builtins.substring 0 9 (self.rev or self.dirtyRev or "unknown");
     in {

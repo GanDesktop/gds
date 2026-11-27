@@ -68,7 +68,7 @@ fn visible_window_never_pads_empty_slots_and_clamps_bounds() {
     assert_eq!(items.len(), 3);
     assert_eq!(items[2].path, PathBuf::from("/tmp/d.png"));
 
-    assert_eq!(CatalogState::empty().visible_window(5), (0, &[][..]));
+    assert_eq!(CatalogState::default().visible_window(5), (0, &[][..]));
     assert_eq!(at_first.visible_window(0), (0, &[][..]));
 }
 

@@ -1,8 +1,6 @@
 //! Pure media decoding, processing, metadata inspection/rewriting, and atomic image I/O.
 //!
-//! This module contains zero GPUI or UI toolkit dependencies so codecs, color management,
-//! tile slicing, offline raster composition, and file safety guarantees remain independent of
-//! the presentation layer.
+//! Codecs, color management, tile slicing and raster composition run independently of the UI.
 
 pub mod color;
 pub mod decode;
@@ -126,6 +124,34 @@ pub(crate) fn system_fonts() -> Arc<resvg::usvg::fontdb::Database> {
         .get_or_init(|| {
             let mut db = resvg::usvg::fontdb::Database::new();
             db.load_system_fonts();
+            // Fontconfig aliases can designate a family that is absent on the desktop.
+            // usvg drops text runs when the generic sans-serif query has no match.
+            use resvg::usvg::fontdb::{Family, Query};
+            if db
+                .query(&Query {
+                    families: &[Family::SansSerif],
+                    ..Default::default()
+                })
+                .is_none()
+            {
+                let preferred = ["Noto Sans", "DejaVu Sans", "Liberation Sans"];
+                let fallback = preferred
+                    .iter()
+                    .find_map(|name| {
+                        db.query(&Query {
+                            families: &[Family::Name(name)],
+                            ..Default::default()
+                        })
+                        .map(|_| name.to_string())
+                    })
+                    .or_else(|| {
+                        db.faces()
+                            .find_map(|face| face.families.first().map(|(name, _)| name.clone()))
+                    });
+                if let Some(name) = fallback {
+                    db.set_sans_serif_family(name)
+                }
+            }
             Arc::new(db)
         })
         .clone()

@@ -1,4 +1,4 @@
-//! Document state, non-destructive spatial transforms, annotations, and GPUI texture cache.
+//! Document state, non-destructive spatial transforms, annotations, and zgui display cache.
 
 mod annotation;
 mod cache;
@@ -8,12 +8,9 @@ mod transform;
 pub use annotation::{
     AnnotationId, AnnotationItem, AnnotationKind, RgbaColor, SpatialTransformOp, measure_text_rect,
 };
-#[cfg(test)]
-pub use cache::CompleteComposite;
 pub use cache::{
-    GesturePrepareInput, GestureSession, PreparedPayload, PreparedTextures, RenderCache,
-    RenderOutput, SceneTag, TransientFrame, build_render_textures, build_svg_zoom_textures,
-    encode_display_payload,
+    CompleteComposite, GesturePrepareInput, GestureSession, PreparedPayload, PreparedTextures,
+    build_render_textures, display_tiles,
 };
 pub use model::DocumentState;
 pub use transform::TransformState;

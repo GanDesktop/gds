@@ -21,6 +21,10 @@ credits = [
 name = "GDS Files"
 icon = "assets/files/icon-solid.svg"
 
+[package.metadata.gds.about.applications.gds-images]
+name = "GDS Images"
+icon = "assets/images/icon-solid.svg"
+
 [workspace]
 members = ["macros/gds-settings-derive"]
 resolver = "3"
@@ -70,6 +74,11 @@ path = "src/lib.rs"
 name = "gds-files"
 path = "bin/files/src/main.rs"
 required-features = ["files"]
+
+[[bin]]
+name = "gds-images"
+path = "bin/images/src/main.rs"
+required-features = ["images"]
 
 [[bin]]
 name = "xdg-desktop-portal-gds"
@@ -135,6 +144,10 @@ files = [
     "ui", "desktop", "file-tags", "storage", "remote", "dep:clap", "dep:globset",
     "dep:memmap2", "dep:mime_guess", "dep:nix", "dep:roxmltree", "dep:xdg-mime", "dep:trash",
     "dep:tokio-util", "dep:walkdir", "dep:which",
+]
+images = [
+    "ui", "image-engine", "dep:clap", "dep:directories", "dep:serde",
+    "dep:strum", "dep:toml", "dep:trash", "dep:url", "ashpd/file_chooser",
 ]
 image-engine = [
     "file-tags",

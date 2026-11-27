@@ -46,9 +46,9 @@ pub(super) struct Store {
     expected: Option<Vec<u8>>,
 }
 
-pub(super) struct StartupRead {
+pub struct StartupRead {
     pub preferences: Preferences,
-    pub store: Store,
+    pub(super) store: Store,
     pub notice: Option<String>,
 }
 
@@ -57,7 +57,7 @@ pub(super) struct StartupRead {
 ///
 /// # Errors
 /// Returns configuration directory or I/O read failures.
-pub(super) fn read_startup() -> Result<StartupRead, Error> {
+pub fn read_startup() -> Result<StartupRead, Error> {
     read_startup_from(path()?)
 }
 
@@ -100,14 +100,6 @@ pub(super) fn read_startup_from(path: PathBuf) -> Result<StartupRead, Error> {
             },
             notice: Some(error.to_string()),
         }),
-    }
-}
-
-#[cfg(all(test, feature = "gui-tests"))]
-pub(super) fn test_store(path: PathBuf) -> Store {
-    Store {
-        file: File::new(path),
-        expected: None,
     }
 }
 

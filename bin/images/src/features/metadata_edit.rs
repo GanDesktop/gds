@@ -30,7 +30,7 @@ pub fn clear_privacy_in_draft(meta: &mut MetadataState) {
     meta.draft.artist = None;
     meta.draft.copyright = None;
     meta.draft.gps = None;
-    meta.metadata_dirty = true;
+    meta.strip_privacy_on_save = true;
 }
 
 /// Parameters for committing metadata and extended-attribute tag updates on a blocking worker.

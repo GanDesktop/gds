@@ -1,62 +1,185 @@
-//! Desktop shell integrations: Reveal in Files, Open With, and Move to Trash.
+//! Portal dialogs and file operations used by the workspace.
 
-use std::path::PathBuf;
-
-use gds::{
-    i18n,
-    service::{
-        desktop::{Desktop, OpenMode},
-        task_manager::Scope,
-    },
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
 };
-use gpui_kit::{App, Task};
 
-/// Reveals `path` inside the user's running desktop file manager (`org.freedesktop.FileManager1`).
-pub fn reveal_in_files(path: PathBuf, scope: &Scope, cx: &mut App) {
-    #[cfg(target_os = "linux")]
-    {
-        let task = scope.spawn_named("Reveal image in file manager", async move {
-            gds::service::desktop::file_manager::show_items(&[path], "").await
-        });
-        cx.spawn(async move |cx| {
-            if let Ok(Err(err)) = task.await {
-                tracing::warn!(error = %err, "cannot reveal image in file manager");
-                cx.update(|cx| {
-                    let msg = i18n::t!(@cx, "error-reveal-failed", error = err.to_string());
-                    gds::ui::notifications::error(msg, cx);
-                });
-            }
-        })
-        .detach();
-    }
-    #[cfg(not(target_os = "linux"))]
-    let _ = (path, scope, cx);
+use ashpd::desktop::file_chooser::{FileFilter, SelectedFiles};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PickMode {
+    OpenImage {
+        directory: Option<PathBuf>,
+    },
+    OpenFolder {
+        directory: Option<PathBuf>,
+    },
+    SaveImage {
+        suggested_name: String,
+        directory: Option<PathBuf>,
+    },
 }
 
-/// Opens the desktop application chooser dialog for `path`.
-pub fn open_with_chooser(path: PathBuf, scope: &Scope, cx: &mut App) {
-    let task = scope.spawn_named("Open image with chooser", async move {
-        Desktop::default()
-            .open_file(&path, OpenMode::ChooseApplication)
-            .await
-    });
-    cx.spawn(async move |cx| {
-        if let Ok(Err(err)) = task.await {
-            tracing::warn!(error = %err, "open-with dialog failed");
-            cx.update(|cx| {
-                let msg = i18n::t!(@cx, "error-open-with-failed", error = err.to_string());
-                gds::ui::notifications::error(msg, cx);
-            });
+/// Opens a desktop FileChooser portal dialog in the requested [`PickMode`].
+///
+/// # Errors
+/// Returns an error if the portal request fails or yields a non-local URI.
+pub async fn pick_path(title: String, mode: PickMode) -> anyhow::Result<Option<PathBuf>> {
+    let request = match mode {
+        PickMode::OpenImage { directory } => {
+            SelectedFiles::open_file()
+                .title(title.as_str())
+                .filter(FileFilter::new("Images").mimetype("image/*"))
+                .current_folder::<&Path>(directory.as_deref())?
+                .send()
+                .await?
         }
-    })
-    .detach();
+        PickMode::OpenFolder { directory } => {
+            SelectedFiles::open_file()
+                .title(title.as_str())
+                .directory(true)
+                .current_folder::<&Path>(directory.as_deref())?
+                .send()
+                .await?
+        }
+        PickMode::SaveImage {
+            suggested_name,
+            directory,
+        } => {
+            SelectedFiles::save_file()
+                .title(title.as_str())
+                .current_name(suggested_name.as_str())
+                .current_folder::<&Path>(directory.as_deref())?
+                .send()
+                .await?
+        }
+    };
+    match request.response() {
+        Ok(files) => files
+            .uris()
+            .first()
+            .map(|uri| {
+                url::Url::parse(uri.as_str())?
+                    .to_file_path()
+                    .map_err(|()| anyhow::anyhow!("Expected a local file"))
+            })
+            .transpose(),
+        Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
-/// Moves `path` cleanly to the freedesktop Trash using a supervised blocking task.
-pub fn move_to_trash(path: PathBuf, scope: &Scope, cx: &App) -> Task<anyhow::Result<()>> {
-    let task = scope.spawn_blocking_named("Trash image file", move || trash::delete(&path));
-    cx.spawn(async move |_| {
-        task.await?
-            .map_err(|err| anyhow::anyhow!("move to trash failed: {err}"))
-    })
+#[derive(Debug, thiserror::Error)]
+pub enum RenameError {
+    #[error("invalid file name")]
+    InvalidName,
+    #[error("a file named {0} already exists")]
+    AlreadyExists(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Atomically renames `path` within its parent directory without replacing an existing entry.
+///
+/// Returns `Ok(None)` if trimmed name is unchanged, `Ok(Some(new_path))` if renamed.
+///
+/// # Errors
+/// Returns [`RenameError::InvalidName`] for empty or path-separating names,
+/// [`RenameError::AlreadyExists`] if the destination already exists, or [`RenameError::Io`] on
+/// other filesystem failures.
+pub fn rename(path: &Path, name: &str) -> Result<Option<PathBuf>, RenameError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || matches!(trimmed, "." | "..")
+        || trimmed.contains(['/', '\\', '\0'])
+        || Path::new(trimmed).file_name() != Some(OsStr::new(trimmed))
+    {
+        return Err(RenameError::InvalidName);
+    }
+    let target = path.with_file_name(trimmed);
+    if target == path {
+        return Ok(None);
+    }
+    match rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::CWD,
+        &target,
+        rustix::fs::RenameFlags::NOREPLACE,
+    ) {
+        Ok(()) => Ok(Some(target)),
+        Err(error) if error == rustix::io::Errno::EXIST => {
+            Err(RenameError::AlreadyExists(trimmed.to_owned()))
+        }
+        Err(error) => {
+            let io_error = std::io::Error::from(error);
+            if io_error.kind() == std::io::ErrorKind::AlreadyExists {
+                Err(RenameError::AlreadyExists(trimmed.to_owned()))
+            } else {
+                Err(RenameError::Io(io_error))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RenameError, rename};
+
+    #[test]
+    fn rename_validates_names_detects_unchanged_and_prevents_overwrite() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let original = dir.path().join("photo.png");
+        let existing = dir.path().join("other.png");
+        std::fs::write(&original, b"one").expect("write original");
+        std::fs::write(&existing, b"two").expect("write existing");
+
+        assert!(matches!(
+            rename(&original, ""),
+            Err(RenameError::InvalidName)
+        ));
+        assert!(matches!(
+            rename(&original, "   "),
+            Err(RenameError::InvalidName)
+        ));
+        assert!(matches!(
+            rename(&original, "."),
+            Err(RenameError::InvalidName)
+        ));
+        assert!(matches!(
+            rename(&original, ".."),
+            Err(RenameError::InvalidName)
+        ));
+        assert!(matches!(
+            rename(&original, "sub/name.png"),
+            Err(RenameError::InvalidName)
+        ));
+        assert!(matches!(
+            rename(&original, "sub\\name.png"),
+            Err(RenameError::InvalidName)
+        ));
+        assert!(matches!(
+            rename(&original, "a\0b.png"),
+            Err(RenameError::InvalidName)
+        ));
+
+        assert_eq!(
+            rename(&original, "  photo.png  ").expect("unchanged rename"),
+            None
+        );
+
+        assert!(matches!(
+            rename(&original, "other.png"),
+            Err(RenameError::AlreadyExists(name)) if name == "other.png"
+        ));
+        assert_eq!(std::fs::read(&existing).expect("read existing"), b"two");
+
+        let renamed = rename(&original, "  renamed.png  ")
+            .expect("valid rename")
+            .expect("should return new path");
+        assert_eq!(renamed, dir.path().join("renamed.png"));
+        assert!(!original.exists());
+        assert_eq!(std::fs::read(&renamed).expect("read renamed"), b"one");
+    }
 }

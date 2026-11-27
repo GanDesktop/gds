@@ -16,7 +16,9 @@ pub const COALESCE_WINDOW: Duration = Duration::from_millis(600);
 pub enum StyleField {
     Color,
     StrokeWidth,
+    MarkerDiameter,
     FontSize,
+    FontFamily,
     MosaicBlockSize,
     BlurRadius,
 }

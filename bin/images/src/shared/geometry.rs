@@ -243,6 +243,11 @@ impl ViewportTransform {
         let scale = raw_scale.clamp(MIN_ZOOM, MAX_ZOOM);
         let pan_x = (vw - iw * scale) * 0.5;
         let pan_y = (vh - ih * scale) * 0.5;
+        let (pan_x, pan_y) = if mode == FitMode::ActualPixels {
+            (pan_x.round(), pan_y.round())
+        } else {
+            (pan_x, pan_y)
+        };
         Self {
             scale,
             pan_x,

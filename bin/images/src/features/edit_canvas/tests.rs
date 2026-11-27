@@ -17,7 +17,7 @@ use super::{
     HoverTarget, MAX_UNDO_DEPTH, PointerDownInput, PointerModifiers, PointerMoveOutcome,
     PropertyValue, ReorderOp, ResizeModifiers, SelectionSet, ToolFsm, ToolMode, handles_for_item,
     hit_test_canvas, hit_test_cycle_stack, hover_test_canvas, marquee_hits, reorder_annotations,
-    resize_item_with_handle, translate_group_clamped,
+    resize_item_with_handle, translate_group,
 };
 use crate::{
     entities::document::{
@@ -94,6 +94,7 @@ fn text_item(id: u64, pos: [f32; 2], content: &str, font_size: f32) -> Annotatio
     AnnotationItem {
         id: AnnotationId(id),
         kind: AnnotationKind::Text {
+            family: "sans-serif".into(),
             position: pos,
             content: content.to_owned(),
             color: RgbaColor::BLUE,
@@ -265,7 +266,7 @@ fn tool_fsm_drag_rejects_off_canvas_arrows_and_preserves_annotation_ids() {
     assert_eq!(
         doc.annotations[0].kind,
         AnnotationKind::Line {
-            start: [0.0, 45.0],
+            start: [-20.0, 45.0],
             end: [60.0, 45.0],
             color: RgbaColor::RED,
             stroke_width: 3.0,
@@ -306,7 +307,7 @@ fn hybrid_hit_testing_and_hover_obey_tool_and_screen_scale_rules() {
         ),
         None
     );
-    // Top stroke hits hollow rect even while Rect drawing tool is active.
+    // Drawing over an existing stroke starts a new shape.
     assert_eq!(
         hit_test_canvas(
             &annotations,
@@ -315,20 +316,24 @@ fn hybrid_hit_testing_and_hover_obey_tool_and_screen_scale_rules() {
             ToolMode::Rect,
             1.0
         ),
-        Some(HitTarget::Body {
-            id: AnnotationId(1)
-        })
+        None
     );
     // Nested text inside hollow rect is directly clickable.
     let text_center = annotations[1].visual_bounds().center();
     assert_eq!(
-        hit_test_canvas(&annotations, &empty_sel, text_center, ToolMode::Rect, 1.0),
+        hit_test_canvas(
+            &annotations,
+            &empty_sel,
+            text_center,
+            ToolMode::Pointer,
+            1.0
+        ),
         Some(HitTarget::Body {
             id: AnnotationId(2)
         })
     );
 
-    // Mosaic: full interior + discovery hover in Pointer; border-only in Mosaic; ignored when unselected in Arrow.
+    // The pointer discovers redactions. Drawing tools pass through their interior and border.
     assert_eq!(
         hover_test_canvas(
             &annotations,
@@ -360,9 +365,7 @@ fn hybrid_hit_testing_and_hover_obey_tool_and_screen_scale_rules() {
             ToolMode::Mosaic,
             1.0
         ),
-        Some(HitTarget::Body {
-            id: AnnotationId(3)
-        })
+        None
     );
     assert_eq!(
         hit_test_canvas(
@@ -382,7 +385,7 @@ fn hybrid_hit_testing_and_hover_obey_tool_and_screen_scale_rules() {
             &annotations,
             &sel_one,
             Point2::new(70.0, 20.0),
-            ToolMode::Rect,
+            ToolMode::Pointer,
             1.0
         ),
         Some(HitTarget::Handle {
@@ -408,13 +411,7 @@ fn hybrid_hit_testing_and_hover_obey_tool_and_screen_scale_rules() {
     let stack_rect = rect_item(4, Rect2::new(140.0, 20.0, 60.0, 60.0), RgbaColor::RED, None);
     let stacked = vec![annotations[2].clone(), stack_rect];
     assert_eq!(
-        hit_test_cycle_stack(
-            &stacked,
-            &empty_sel,
-            Point2::new(140.0, 50.0),
-            ToolMode::Pointer,
-            1.0
-        ),
+        hit_test_cycle_stack(&stacked, Point2::new(140.0, 50.0), 1.0),
         vec![AnnotationId(4), AnnotationId(3)]
     );
     // When lower overlapping Mosaic is already selected, hit_test_canvas keeps it draggable
@@ -445,13 +442,7 @@ fn hybrid_hit_testing_and_hover_obey_tool_and_screen_scale_rules() {
         })
     );
     assert_eq!(
-        hit_test_cycle_stack(
-            &stacked,
-            &sel_lower,
-            Point2::new(140.0, 35.0),
-            ToolMode::Pointer,
-            1.0
-        ),
+        hit_test_cycle_stack(&stacked, Point2::new(140.0, 35.0), 1.0),
         vec![AnnotationId(4), AnnotationId(3)]
     );
     assert_eq!(
@@ -461,14 +452,13 @@ fn hybrid_hit_testing_and_hover_obey_tool_and_screen_scale_rules() {
 }
 
 #[test]
-fn group_translation_clamps_rigidly_and_handles_resize_correctly() {
+fn group_translation_preserves_off_canvas_geometry_and_handles_resize_correctly() {
     let left_rect = rect_item(1, Rect2::new(10.0, 20.0, 20.0, 20.0), RgbaColor::RED, None);
     let right_rect = rect_item(2, Rect2::new(60.0, 20.0, 20.0, 20.0), RgbaColor::BLUE, None);
-    let (moved, dx, dy) =
-        translate_group_clamped(&[left_rect, right_rect], -50.0, 15.0, (200, 150), false);
-    assert_eq!((dx, dy), (-10.0, 15.0));
-    assert_eq!(moved[0].visual_bounds().x, 0.0);
-    assert_eq!(moved[1].visual_bounds().x, 50.0);
+    let (moved, dx, dy) = translate_group(&[left_rect, right_rect], -50.0, 15.0, false);
+    assert_eq!((dx, dy), (-50.0, 15.0));
+    assert_eq!(moved[0].visual_bounds().x, -40.0);
+    assert_eq!(moved[1].visual_bounds().x, 10.0);
     assert_eq!(
         moved[1].visual_bounds().x - moved[0].visual_bounds().right(),
         30.0
@@ -480,7 +470,6 @@ fn group_translation_clamps_rigidly_and_handles_resize_correctly() {
         &box_item,
         HandleKind::Se,
         Point2::new(10.0, 20.0),
-        (200, 200),
         ResizeModifiers {
             shift: true,
             ctrl: false,
@@ -503,7 +492,6 @@ fn group_translation_clamps_rigidly_and_handles_resize_correctly() {
         &line,
         HandleKind::LineEnd,
         Point2::new(90.0, 52.0),
-        (200, 200),
         ResizeModifiers {
             shift: true,
             ctrl: false,
@@ -528,7 +516,6 @@ fn group_translation_clamps_rigidly_and_handles_resize_correctly() {
         &mixed_text,
         HandleKind::Nw,
         Point2::new(20.0, 20.0),
-        (400, 300),
         ResizeModifiers::default(),
     );
     let next_bounds = resized_text.visual_bounds();
@@ -696,7 +683,7 @@ fn text_draft_and_mixed_property_summary_keep_transactions_and_defaults_clean() 
     doc.next_annotation_id = 5;
 
     // Selecting items reads Mixed / Uniform / Unsupported without overwriting fsm.settings.
-    let initial_settings = fsm.settings;
+    let initial_settings = fsm.settings.clone();
     fsm.selection = SelectionSet::from_ids([AnnotationId(1), AnnotationId(2), AnnotationId(3)]);
     let summary = fsm
         .selection_style_summary(&doc.annotations)
@@ -727,6 +714,8 @@ fn text_draft_and_mixed_property_summary_keep_transactions_and_defaults_clean() 
         text_item(4, [20.0, 80.0], "Original", 20.0)
     );
     assert!(!history.can_undo());
+
+    assert_eq!(fsm.settings, initial_settings);
 
     // Re-open, change both text and color, commit -> 1 single undo restores both together.
     fsm.begin_edit_existing_text(AnnotationId(4), &doc, &mut history);
@@ -839,5 +828,130 @@ fn pointer_threshold_alt_drag_duplicate_and_safe_delete_behave_per_spec() {
     assert_eq!(
         fsm.delete_selected_or_crop(&mut doc, &mut history),
         FinishOutcome::None
+    );
+}
+
+#[test]
+fn brush_tool_draws_freehand_strokes_dots_hit_tests_and_resizes() {
+    let mut doc = dummy_document(320, 200);
+    let mut history = EditHistory::default();
+    let mut fsm = ToolFsm::default();
+    let none = PointerModifiers::default();
+
+    fsm.set_tool(ToolMode::Brush, &mut history);
+    assert!(ToolMode::Brush.is_configurable());
+    fsm.apply_color(RgbaColor::GREEN, Some(&mut doc), &mut history);
+    fsm.apply_stroke_width(6.0, Some(&mut doc), &mut history);
+
+    // Freehand drag across 3 points with live transient preview.
+    fsm.on_pointer_down(
+        &doc,
+        &mut history,
+        PointerDownInput {
+            vp_pt: Point2::new(20.0, 20.0),
+            img_pt: Point2::new(20.0, 20.0),
+            scale: 1.0,
+            modifiers: none,
+            click_count: 1,
+        },
+    );
+    assert!(matches!(
+        fsm.on_pointer_move(
+            &doc,
+            Point2::new(20.0, 100.0),
+            Point2::new(20.0, 100.0),
+            none
+        ),
+        PointerMoveOutcome::NeedsTransientPreview {
+            first_changed_idx: 0
+        }
+    ));
+    fsm.on_pointer_move(
+        &doc,
+        Point2::new(100.0, 100.0),
+        Point2::new(100.0, 100.0),
+        none,
+    );
+    let (_, preview) = fsm
+        .transient_annotations(&doc)
+        .expect("active brush produces transient preview");
+    assert_eq!(preview.len(), 1);
+    assert_eq!(
+        fsm.on_pointer_up(&mut doc, &mut history, 1.0),
+        FinishOutcome::Committed
+    );
+    assert_eq!(doc.annotations.len(), 1);
+    let brush_id = doc.annotations[0].id;
+    assert_eq!(doc.annotations[0].color(), Some(RgbaColor::GREEN));
+    assert_eq!(doc.annotations[0].stroke_width(), Some(6.0));
+
+    // Single click without drag commits a dot.
+    fsm.on_pointer_down(
+        &doc,
+        &mut history,
+        PointerDownInput {
+            vp_pt: Point2::new(200.0, 50.0),
+            img_pt: Point2::new(200.0, 50.0),
+            scale: 1.0,
+            modifiers: none,
+            click_count: 1,
+        },
+    );
+    assert_eq!(
+        fsm.on_pointer_up(&mut doc, &mut history, 1.0),
+        FinishOutcome::Committed
+    );
+    assert_eq!(doc.annotations.len(), 2);
+    let dot_id = doc.annotations[1].id;
+
+    // Hit-test finds segments & dot accurately while ignoring hollow interior.
+    assert_eq!(
+        hit_test_canvas(
+            &doc.annotations,
+            &SelectionSet::empty(),
+            Point2::new(20.0, 60.0),
+            ToolMode::Pointer,
+            1.0,
+        ),
+        Some(HitTarget::Body { id: brush_id })
+    );
+    assert_eq!(
+        hit_test_canvas(
+            &doc.annotations,
+            &SelectionSet::empty(),
+            Point2::new(75.0, 45.0),
+            ToolMode::Pointer,
+            1.0,
+        ),
+        None
+    );
+    assert_eq!(
+        hit_test_canvas(
+            &doc.annotations,
+            &SelectionSet::empty(),
+            Point2::new(200.0, 50.0),
+            ToolMode::Pointer,
+            1.0,
+        ),
+        Some(HitTarget::Body { id: dot_id })
+    );
+
+    // Marquee inside the empty corner misses the L-shaped stroke; marquee touching a leg hits.
+    assert!(marquee_hits(&doc.annotations, Rect2::new(60.0, 30.0, 30.0, 30.0)).is_empty());
+    assert_eq!(
+        marquee_hits(&doc.annotations, Rect2::new(10.0, 50.0, 20.0, 20.0)),
+        vec![brush_id]
+    );
+
+    // Resizing via SE handle scales points proportionally into the new bounds.
+    let resized = resize_item_with_handle(
+        &doc.annotations[0],
+        HandleKind::Se,
+        Point2::new(180.0, 180.0),
+        ResizeModifiers::default(),
+    );
+    assert_eq!(
+        resized.visual_bounds(),
+        Rect2::new(20.0, 20.0, 160.0, 160.0)
     );
 }

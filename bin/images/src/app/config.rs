@@ -1,4 +1,4 @@
-//! Startup mode resolution, bounded pre-GPUI stdin ingestion, and dual Wayland App ID routing.
+//! Startup mode resolution, bounded pre-window stdin ingestion, and dual Wayland App ID routing.
 
 #[cfg(test)]
 mod tests;
@@ -15,20 +15,7 @@ pub const STANDARD_APP_ID: &str = "io.github.GanDesktop.GdsImages";
 pub const CAPTURE_APP_ID: &str = "io.github.GanDesktop.GdsImages.Capture";
 pub const MAX_STDIN_BYTES: usize = 256 * 1024 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LaunchMode {
-    EmptySmartState,
-    OpenFile(PathBuf),
-    Clipboard,
-    Stdin(Arc<[u8]>),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CaptureWorkflow {
-    pub output: Option<PathBuf>,
-    pub copy_on_save: bool,
-    pub early_exit: bool,
-}
+use crate::pages::workspace::{CaptureWorkflow, LaunchMode};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppConfig {

@@ -101,6 +101,7 @@ fn composite_ops_renders_dirty_bbox_strips_xml_control_chars_and_handles_edge_ge
         },
         // XML 1.0 control characters stripped from text cleanly.
         RasterOp::Text {
+            family: "sans-serif".into(),
             position: [20.0, 20.0],
             content: "OK\x00\x07\x1b!".to_owned(),
             font_size: 16.0,
@@ -297,6 +298,7 @@ fn stacked_clip_ops() -> Vec<RasterOp> {
             text_color: [255, 255, 255, 255],
         },
         RasterOp::Text {
+            family: "sans-serif".into(),
             position: [38.0, 28.0],
             content: "Hello\nClip".to_owned(),
             font_size: 14.0,
@@ -362,6 +364,7 @@ fn measure_text_bounds_distinguishes_widths_multiline_cjk_and_rejects_blank() {
 
     // Dirty bounds expand measure_text_bounds by 4.0 on all sides.
     let dirty = op_dirty_bounds(&RasterOp::Text {
+        family: "sans-serif".into(),
         position: [12.0, 24.0],
         content: "WWWW".to_owned(),
         font_size: 20.0,
@@ -432,6 +435,7 @@ fn composite_ops_clipped_matches_unclipped_on_sliced_curves_and_text() {
             stroke_width: 3.5,
         },
         RasterOp::Text {
+            family: "sans-serif".into(),
             position: [50.0, 50.0],
             content: "iiii vs WWWW\n中文多行标注".to_owned(),
             font_size: 20.0,
@@ -445,4 +449,43 @@ fn composite_ops_clipped_matches_unclipped_on_sliced_curves_and_text() {
     verify_slice_clip(&base, &full, &ops, PixelRect::new(63, 20, 1, 80));
     // Sub-region slicing across curved Ellipse edge, diagonal Line, and mid-glyph Text.
     verify_slice_clip(&base, &full, &ops, PixelRect::new(60, 45, 45, 35));
+}
+
+#[test]
+fn polyline_renders_single_dot_straight_segment_and_smooth_curve_with_exact_clip_parity() {
+    let base = solid_canvas(120, 100, [255, 255, 255, 255]);
+    let ops = vec![
+        // Single-point brush tap renders a filled circular dot.
+        RasterOp::Polyline {
+            points: vec![[20.0, 20.0]],
+            color: [239, 68, 68, 255],
+            stroke_width: 8.0,
+            opacity: 1.0,
+        },
+        // Two-point stroke renders a straight round-capped segment.
+        RasterOp::Polyline {
+            points: vec![[40.0, 20.0], [100.0, 20.0]],
+            color: [34, 197, 94, 255],
+            stroke_width: 4.0,
+            opacity: 1.0,
+        },
+        // Multi-point freehand curve stays smooth and matches clipped rendering bit-for-bit.
+        RasterOp::Polyline {
+            points: vec![[15.0, 60.0], [45.0, 40.0], [75.0, 80.0], [105.0, 55.0]],
+            color: [59, 130, 246, 255],
+            stroke_width: 5.0,
+            opacity: 1.0,
+        },
+    ];
+
+    let mut full = base.clone();
+    composite_ops(&mut full, &ops).expect("brush polylines composite");
+
+    assert_eq!(full.get_pixel(20, 20).0, [239, 68, 68, 255]);
+    assert_eq!(full.get_pixel(70, 20).0, [34, 197, 94, 255]);
+    assert_eq!(full.get_pixel(15, 60).0, [59, 130, 246, 255]);
+    assert_eq!(full.get_pixel(105, 55).0, [59, 130, 246, 255]);
+    assert_eq!(full.get_pixel(5, 5).0, [255, 255, 255, 255]);
+
+    verify_slice_clip(&base, &full, &ops, PixelRect::new(35, 35, 50, 45));
 }

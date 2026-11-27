@@ -30,6 +30,18 @@ Suggests:       xdg-desktop-portal-gds
 GDS Files browses local folders, mounted volumes and SFTP/SMB locations,
 with file operations, previews and embedded terminals.
 
+%package -n gds-images
+Summary:        Native image viewer and annotation editor
+Requires:       libwayland-client
+Requires:       libxkbcommon
+Requires:       fontconfig
+Requires:       mesa-libEGL
+Requires:       vulkan-loader
+Requires:       xdg-desktop-portal
+
+%description -n gds-images
+Browse, crop and annotate images and export screenshot captures to disk or clipboard.
+
 %package -n xdg-desktop-portal-gds
 Summary:        GDS desktop portal backend
 Requires:       xdg-desktop-portal
@@ -49,7 +61,7 @@ if [ "%{gds_profile}" = dev ]; then
     unset RUSTFLAGS
 fi
 cargo build --locked --profile %{gds_profile} \
-    --bin gds-files --features files
+    --bin gds-files --bin gds-images --features files,images
 cargo build --locked --profile %{gds_profile} \
     --bin xdg-desktop-portal-gds --features portal
 
@@ -59,6 +71,8 @@ python3 %{gds_source}/packaging/fedora/install.py \
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.GanDesktop.GdsFiles.desktop
+desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.GanDesktop.GdsImages.desktop
+%{buildroot}%{_bindir}/gds-images --help
 %{buildroot}%{_bindir}/gds-files --help
 %{buildroot}%{_libexecdir}/xdg-desktop-portal-gds --help
 
@@ -78,6 +92,13 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.GanDesktop.
 %{_datadir}/gds-files/noctalia/gds.json
 %{_datadir}/icons/hicolor/scalable/apps/io.github.GanDesktop.GdsFiles.svg
 %{_datadir}/metainfo/io.github.GanDesktop.GdsFiles.metainfo.xml
+
+%files -n gds-images
+%license %{_datadir}/licenses/gds-images/LICENSE
+%{_bindir}/gds-images
+%{_datadir}/applications/io.github.GanDesktop.GdsImages.desktop
+%{_datadir}/gds-images/noctalia/gds.json
+%{_datadir}/icons/hicolor/scalable/apps/io.github.GanDesktop.GdsImages.svg
 
 %files -n xdg-desktop-portal-gds
 %license %{_datadir}/licenses/xdg-desktop-portal-gds/LICENSE

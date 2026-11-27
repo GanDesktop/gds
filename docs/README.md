@@ -1,6 +1,6 @@
 # GDS Documentation
 
-GDS (Gan Desktop Suit) is a suite of native desktop applications built around a unified visual language. Currently, **GDS Files** runs on [`zgui`](https://github.com/GanDesktop/zgui/tree/gds-0.1.0) alongside the UI-independent **GDS Portal**; **Linux + Wayland** is the primary target, with **Linux + X11** as secondary support.
+GDS (Gan Desktop Suit) is a suite of native desktop applications built around a unified visual language. Currently, **GDS Files** and **GDS Images** run on [`zgui`](https://github.com/GanDesktop/zgui/tree/gds-0.1.0) alongside the UI-independent **GDS Portal**; **Linux + Wayland** is the primary target, with **Linux + X11** as secondary support.
 
 Documentation is organized into **Current State**, **Technical Decisions & Compromises**, and **Roadmap**:
 

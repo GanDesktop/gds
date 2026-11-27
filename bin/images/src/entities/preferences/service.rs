@@ -1,241 +1,148 @@
-//! Asynchronous ordered writer and application-wide preference snapshot.
+//! Reactive application preferences and an ordered writer drained at shutdown.
 
 use std::{
-    ops::Deref,
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 
-use gds::{
-    app::{AppExt as _, Context as GdsContext, Gds},
-    service::task_manager::Scope,
-};
-use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
+use gds::{app::Gds, service::task_manager::Scope};
 use tokio::sync::mpsc;
+use zgui::prelude::*;
 
 use super::{Preferences, api, presentation};
-
-pub struct SaveFailed(pub String);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Storage(#[from] api::Error),
+    Path(#[from] super::api::Error),
     #[error(transparent)]
     Presentation(#[from] presentation::Error),
-    #[error("GDS Images is shutting down; preferences can no longer be modified")]
+    #[error("application is shutting down")]
     Closed,
 }
 
 type Queue = Arc<Mutex<Option<mpsc::UnboundedSender<Preferences>>>>;
 
-struct Installed(Entity<Service>);
-impl Global for Installed {}
+#[derive(Clone)]
+pub struct Service(Rc<State>);
 
-/// Single-read startup snapshot carried from blocking Tokio preparation into GPUI bootstrap.
-pub struct StartupBundle {
-    preferences: Preferences,
-    store: api::Store,
-    notice: Option<String>,
-}
-
-impl StartupBundle {
-    pub fn preferences(&self) -> &Preferences {
-        &self.preferences
-    }
-
-    pub fn preferences_mut(&mut self) -> &mut Preferences {
-        &mut self.preferences
-    }
-
-    pub fn notice(&self) -> Option<&str> {
-        self.notice.as_deref()
-    }
-}
-
-/// Reads and normalizes startup preferences in memory without touching disk.
-///
-/// # Errors
-/// Returns configuration directory or I/O read failures.
-pub fn prepare_startup() -> Result<StartupBundle, Error> {
-    let mut loaded = api::read_startup()?;
-    presentation::normalize(&mut loaded.preferences);
-    Ok(StartupBundle {
-        preferences: loaded.preferences,
-        store: loaded.store,
-        notice: loaded.notice,
-    })
-}
-
-pub struct Service {
-    current: Preferences,
+struct State {
+    current: RwSignal<Preferences, LocalStorage>,
+    error: RwSignal<Option<String>, LocalStorage>,
     queue: Queue,
-    _updates: Task<()>,
+    tasks: Scope,
 }
-
-impl EventEmitter<SaveFailed> for Service {}
 
 impl Service {
-    pub fn current(&self) -> &Preferences {
-        &self.current
+    pub fn snapshot(&self) -> Preferences {
+        self.0.current.get_untracked()
     }
 
-    fn update(&mut self, mut next: Preferences, cx: &mut Context<Self>) -> Result<(), Error> {
-        presentation::normalize(&mut next);
-        let prepared = presentation::Prepared::new(&next, &self.current, cx)?;
-        let queue = self.queue.lock().expect("preferences queue lock");
-        let sender = queue.as_ref().ok_or(Error::Closed)?;
-        if cx.gds().tasks().is_shutting_down() || sender.is_closed() {
-            return Err(Error::Closed);
-        }
-        sender.send(next.clone()).map_err(|_| Error::Closed)?;
-        prepared.install(&next, cx);
-        if self.current != next {
-            self.current = next;
-            cx.notify();
-        }
-        Ok(())
+    pub fn state(&self) -> ReadSignal<Preferences, LocalStorage> {
+        self.0.current.read_only()
     }
 
-    fn new(
-        preferences: Preferences,
-        mut store: api::Store,
-        tasks: &Scope,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn error(&self) -> ReadSignal<Option<String>, LocalStorage> {
+        self.0.error.read_only()
+    }
+
+    pub fn install(startup: api::StartupRead, tasks: &Scope) -> Self {
         let (sender, mut receiver) = mpsc::unbounded_channel::<Preferences>();
         let queue = Arc::new(Mutex::new(Some(sender)));
         let closing = queue.clone();
         let cancel = tasks.token();
-        tasks.spawn_named("Close images preferences writer", async move {
+        // Closing the sender seals admission. The writer drains accepted changes
+        // before its blocking task completes, including during application exit.
+        tasks.spawn_named("Close preferences writer on exit", async move {
             cancel.cancelled().await;
             closing.lock().expect("preferences queue lock").take();
         });
-
-        let (results, mut saved) = mpsc::unbounded_channel();
-        let writer = tasks.spawn_blocking_named("Save images preferences", move || {
-            while let Some(mut next) = receiver.blocking_recv() {
+        let (results, mut saved) = mpsc::unbounded_channel::<Result<(), String>>();
+        let api::StartupRead {
+            preferences,
+            mut store,
+            ..
+        } = startup;
+        let writer = tasks.spawn_blocking_named("Save preferences", move || {
+            while let Some(mut preferences) = receiver.blocking_recv() {
                 while let Ok(newer) = receiver.try_recv() {
-                    next = newer;
+                    preferences = newer;
                 }
-                let result = store.save(&next);
+                let result = store.save(&preferences).map_err(|error| error.to_string());
                 if let Err(error) = &result {
-                    tracing::error!(%error, "cannot save GDS Images preferences");
+                    tracing::error!(%error, "Cannot save Images preferences");
                 }
                 let _ = results.send(result);
             }
         });
-
-        let updates = cx.spawn(async move |this, cx| {
-            while let Some(result) = saved.recv().await {
-                if let Err(error) = result {
-                    let _ = this.update(cx, |_, cx| cx.emit(SaveFailed(error.to_string())));
+        let error = RwSignal::new_local(None);
+        Gds::current().with(|| {
+            zgui::task::spawn_local(async move {
+                while let Some(result) = saved.recv().await {
+                    match result {
+                        Ok(()) => {
+                            error.try_set(None);
+                        }
+                        Err(message) => {
+                            error.try_set(Some(message));
+                        }
+                    }
                 }
-            }
-            if let Err(error) = writer.await {
-                tracing::error!(%error, "images preferences writer stopped");
-                let _ = this.update(cx, |_, cx| cx.emit(SaveFailed(error.to_string())));
-            }
+            });
+            Gds::current()
+                .tasks()
+                .spawn_ui("Observe preferences writer", writer, move |result| {
+                    if let Err(failure) = result.and_then(std::convert::identity) {
+                        error.try_set(Some(failure.to_string()));
+                    }
+                });
         });
-
-        Self {
-            current: preferences,
+        Self(Rc::new(State {
+            current: RwSignal::new_local(preferences),
+            error,
             queue,
-            _updates: updates,
-        }
-    }
-}
-
-/// Scoped accessor exposing preferences state and mutations on [`gds::app::Gds`].
-#[derive(Clone, Copy)]
-pub struct Accessor<C> {
-    cx: C,
-}
-
-pub trait PreferencesExt {
-    type Context<'a>: GdsContext
-    where
-        Self: 'a;
-
-    fn preferences(&mut self) -> Accessor<Self::Context<'_>>;
-}
-
-impl<C: GdsContext> PreferencesExt for Gds<C> {
-    type Context<'a>
-        = C::Reborrowed<'a>
-    where
-        C: 'a;
-
-    fn preferences(&mut self) -> Accessor<C::Reborrowed<'_>> {
-        Accessor {
-            cx: self.reborrow().into_inner(),
-        }
-    }
-}
-
-impl<C: Deref<Target = App>> Accessor<C> {
-    pub fn current(&self) -> Preferences {
-        self.service().read(&self.cx).current.clone()
+            tasks: tasks.clone(),
+        }))
     }
 
-    pub fn try_current(&self) -> Option<Preferences> {
-        self.cx
-            .try_global::<Installed>()
-            .map(|installed| installed.0.read(&self.cx).current.clone())
-    }
-
-    pub fn service(&self) -> Entity<Service> {
-        self.cx.global::<Installed>().0.clone()
-    }
-}
-
-impl Accessor<&mut App> {
-    /// Installs the preferences service from a pre-loaded [`StartupBundle`].
-    pub fn initialize(&mut self, startup: StartupBundle, tasks: &Scope) -> Entity<Service> {
-        assert!(
-            !self.cx.has_global::<Installed>(),
-            "preferences already initialized"
-        );
-        let service = self
-            .cx
-            .new(|cx| Service::new(startup.preferences, startup.store, tasks, cx));
-        self.cx.set_global(Installed(service.clone()));
-        service
-    }
-
-    /// Initializes test-isolated preferences backed by a temporary file path.
-    #[cfg(all(test, feature = "gui-tests"))]
-    pub fn init_test(
-        &mut self,
-        mut preferences: Preferences,
-        path: std::path::PathBuf,
-        tasks: &Scope,
-    ) -> Entity<Service> {
+    /// # Errors
+    /// Rejects invalid presentation values and edits after shutdown admission closes.
+    pub fn update(&self, mut preferences: Preferences) -> Result<(), Error> {
         presentation::normalize(&mut preferences);
-        self.initialize(
-            StartupBundle {
-                preferences,
-                store: api::test_store(path),
-                notice: None,
-            },
-            tasks,
-        )
+        let prepared = presentation::Prepared::new(&preferences, &self.0.current.get_untracked())?;
+        let queue = self.0.queue.lock().expect("preferences queue lock");
+        let sender = queue.as_ref().ok_or(Error::Closed)?;
+        if self.0.tasks.token().is_cancelled() || sender.is_closed() {
+            return Err(Error::Closed);
+        }
+        // Persist failures leave this accepted snapshot active in every window.
+        // The lock prevents shutdown from closing admission during the commit.
+        sender
+            .send(preferences.clone())
+            .map_err(|_| Error::Closed)?;
+        drop(queue);
+        let appearance_changed = prepared.appearance_changed();
+        prepared.install(&preferences);
+        if appearance_changed {
+            Gds::current()
+                .appearance()
+                .theme()
+                .configure_hot_reload(preferences.appearance.clone());
+        }
+        if self
+            .0
+            .current
+            .with_untracked(|current| *current != preferences)
+        {
+            self.0.current.set(preferences);
+        }
+        Ok(())
     }
 
-    /// Commits a modified preference snapshot and enqueues it for background disk persistence.
-    ///
     /// # Errors
-    /// Returns presentation errors or [`Error::Closed`] during application shutdown.
-    pub fn update(&mut self, preferences: Preferences) -> Result<(), Error> {
-        let service = self.service();
-        service.update(self.cx, |service, cx| service.update(preferences, cx))
-    }
-
-    /// Edits the current preferences snapshot atomically.
-    ///
-    /// # Errors
-    /// Returns presentation errors or [`Error::Closed`] during application shutdown.
-    pub fn edit(&mut self, edit: impl FnOnce(&mut Preferences)) -> Result<(), Error> {
-        let mut preferences = self.current();
+    /// Rejects invalid presentation values and edits after shutdown admission closes.
+    pub fn edit(&self, edit: impl FnOnce(&mut Preferences)) -> Result<(), Error> {
+        let mut preferences = self.0.current.get_untracked();
         edit(&mut preferences);
         self.update(preferences)
     }

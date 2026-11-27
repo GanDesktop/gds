@@ -10,7 +10,7 @@ use std::{
 
 use gds::service::image::{
     PixelRect,
-    ops::{RasterOp, measure_text_bounds},
+    ops::{RasterOp, measure_text_bounds_in_family},
 };
 
 use crate::shared::geometry::{Point2, Rect2, clip_segment_to_rect};
@@ -57,6 +57,10 @@ impl RgbaColor {
         Self { r, g, b, a: 255 }
     }
 
+    pub const fn is_light(self) -> bool {
+        299 * self.r as u32 + 587 * self.g as u32 + 114 * self.b as u32 > 145_000
+    }
+
     pub const fn to_array(self) -> [u8; 4] {
         [self.r, self.g, self.b, self.a]
     }
@@ -88,7 +92,19 @@ pub enum AnnotationKind {
         color: RgbaColor,
         stroke_width: f32,
     },
+    Brush {
+        points: Vec<[f32; 2]>,
+        color: RgbaColor,
+        stroke_width: f32,
+    },
+    Number {
+        center: Point2,
+        number: u32,
+        radius: f32,
+        color: RgbaColor,
+    },
     Text {
+        family: String,
         position: [f32; 2],
         content: String,
         color: RgbaColor,
@@ -112,7 +128,7 @@ pub struct AnnotationItem {
 
 /// Returns memoized SVG layout bounds for text at `position`, falling back to a minimum
 /// clickable placeholder box for whitespace-only content.
-pub fn measure_text_rect(position: [f32; 2], content: &str, font_size: f32) -> Rect2 {
+pub fn measure_text_rect(position: [f32; 2], content: &str, font_size: f32, family: &str) -> Rect2 {
     if !position[0].is_finite() || !position[1].is_finite() {
         return Rect2::new(0.0, 0.0, 0.0, 0.0);
     }
@@ -126,9 +142,9 @@ pub fn measure_text_rect(position: [f32; 2], content: &str, font_size: f32) -> R
         return Rect2::new(position[0], position[1], size, lines * size * 1.25);
     }
 
-    static CACHE: OnceLock<Mutex<HashMap<(String, u32), [f32; 4]>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<(String, String, u32), [f32; 4]>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = (content.to_owned(), size.to_bits());
+    let key = (content.to_owned(), family.to_owned(), size.to_bits());
 
     if let Some(&bounds) = cache
         .lock()
@@ -143,10 +159,11 @@ pub fn measure_text_rect(position: [f32; 2], content: &str, font_size: f32) -> R
         );
     }
 
-    let measured = measure_text_bounds([0.0, 0.0], content, size).unwrap_or_else(|| {
-        let lines = content.split('\n').count().max(1) as f32;
-        [0.0, 0.0, size, lines * size * 1.25]
-    });
+    let measured =
+        measure_text_bounds_in_family([0.0, 0.0], content, size, family).unwrap_or_else(|| {
+            let lines = content.split('\n').count().max(1) as f32;
+            [0.0, 0.0, size, lines * size * 1.25]
+        });
 
     {
         let mut guard = cache
@@ -225,13 +242,41 @@ impl AnnotationItem {
                 color: color.to_array(),
                 stroke_width: *stroke_width,
             }),
+            AnnotationKind::Brush {
+                points,
+                color,
+                stroke_width,
+            } => (!points.is_empty()).then(|| RasterOp::Polyline {
+                points: points.clone(),
+                color: color.to_array(),
+                stroke_width: *stroke_width,
+                opacity: 1.0,
+            }),
+            AnnotationKind::Number {
+                center,
+                number,
+                radius,
+                color,
+            } => Some(RasterOp::StepBadge {
+                center: [center.x, center.y],
+                number: *number,
+                radius: *radius,
+                fill: color.to_array(),
+                text_color: if color.is_light() {
+                    [18, 18, 18, 255]
+                } else {
+                    [255; 4]
+                },
+            }),
             AnnotationKind::Text {
+                family,
                 position,
                 content,
                 color,
                 font_size,
             } => Some(RasterOp::Text {
                 position: *position,
+                family: family.clone(),
                 content: content.clone(),
                 font_size: *font_size,
                 color: color.to_array(),
@@ -253,7 +298,7 @@ impl AnnotationItem {
         }
     }
 
-    /// Logical bounds used for selection outlines, handles, and rigid group clamping.
+    /// Logical bounds used for selection outlines and resize handles.
     pub fn visual_bounds(&self) -> Rect2 {
         match &self.kind {
             AnnotationKind::Rect { rect, .. }
@@ -267,12 +312,38 @@ impl AnnotationItem {
                 let y1 = start[1].max(end[1]);
                 Rect2::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
             }
+            AnnotationKind::Brush { points, .. } => {
+                let Some(&first) = points.first() else {
+                    return Rect2::new(0.0, 0.0, 0.0, 0.0);
+                };
+                let (mut min_x, mut min_y, mut max_x, mut max_y) =
+                    (first[0], first[1], first[0], first[1]);
+                for pt in &points[1..] {
+                    min_x = min_x.min(pt[0]);
+                    min_y = min_y.min(pt[1]);
+                    max_x = max_x.max(pt[0]);
+                    max_y = max_y.max(pt[1]);
+                }
+                Rect2::new(
+                    min_x,
+                    min_y,
+                    (max_x - min_x).max(0.0),
+                    (max_y - min_y).max(0.0),
+                )
+            }
+            AnnotationKind::Number { center, radius, .. } => Rect2::new(
+                center.x - radius,
+                center.y - radius,
+                2. * radius,
+                2. * radius,
+            ),
             AnnotationKind::Text {
+                family,
                 position,
                 content,
                 font_size,
                 ..
-            } => measure_text_rect(*position, content, *font_size),
+            } => measure_text_rect(*position, content, *font_size, family),
         }
     }
 
@@ -288,7 +359,8 @@ impl AnnotationItem {
                 let pad = stroke_width.max(1.0) * 0.5 + 3.0;
                 rect.normalized().expand(pad)
             }
-            AnnotationKind::Line { stroke_width, .. } => {
+            AnnotationKind::Line { stroke_width, .. }
+            | AnnotationKind::Brush { stroke_width, .. } => {
                 let pad = stroke_width.max(1.0) * 0.5 + 3.0;
                 self.visual_bounds().expand(pad)
             }
@@ -305,7 +377,9 @@ impl AnnotationItem {
                 let pad = wing.max(sw * 0.5) + 3.0;
                 self.visual_bounds().expand(pad)
             }
-            AnnotationKind::Text { .. } => self.visual_bounds().expand(5.0),
+            AnnotationKind::Text { .. } | AnnotationKind::Number { .. } => {
+                self.visual_bounds().expand(5.0)
+            }
             AnnotationKind::Mosaic { region, .. } | AnnotationKind::GaussianBlur { region, .. } => {
                 region.normalized().expand(1.0)
             }
@@ -358,13 +432,35 @@ impl AnnotationItem {
                 color: *color,
                 stroke_width: *stroke_width,
             },
+            AnnotationKind::Brush {
+                points,
+                color,
+                stroke_width,
+            } => AnnotationKind::Brush {
+                points: points.iter().map(|pt| [pt[0] + dx, pt[1] + dy]).collect(),
+                color: *color,
+                stroke_width: *stroke_width,
+            },
+            AnnotationKind::Number {
+                center,
+                number,
+                radius,
+                color,
+            } => AnnotationKind::Number {
+                center: Point2::new(center.x + dx, center.y + dy),
+                number: *number,
+                radius: *radius,
+                color: *color,
+            },
             AnnotationKind::Text {
+                family,
                 position,
                 content,
                 color,
                 font_size,
             } => AnnotationKind::Text {
                 position: [position[0] + dx, position[1] + dy],
+                family: family.clone(),
                 content: content.clone(),
                 color: *color,
                 font_size: *font_size,
@@ -434,14 +530,41 @@ impl AnnotationItem {
                 color: *color,
                 stroke_width: *stroke_width,
             },
+            AnnotationKind::Brush {
+                points,
+                color,
+                stroke_width,
+            } => AnnotationKind::Brush {
+                points: points
+                    .iter()
+                    .map(|&pt| transform_point(pt, op, wf, hf))
+                    .collect(),
+                color: *color,
+                stroke_width: *stroke_width,
+            },
+            AnnotationKind::Number {
+                center,
+                number,
+                radius,
+                color,
+            } => {
+                let [x, y] = transform_point([center.x, center.y], op, wf, hf);
+                AnnotationKind::Number {
+                    center: Point2::new(x, y),
+                    number: *number,
+                    radius: *radius,
+                    color: *color,
+                }
+            }
             AnnotationKind::Text {
+                family,
                 position,
                 content,
                 color,
                 font_size,
             } => {
                 // Keep text upright while preserving exact group involutions via visual-center bijection.
-                let bounds = measure_text_rect(*position, content, *font_size);
+                let bounds = measure_text_rect(*position, content, *font_size, family);
                 let center = bounds.center();
                 let next_center = transform_point([center.x, center.y], op, wf, hf);
                 let next_position = [
@@ -450,6 +573,7 @@ impl AnnotationItem {
                 ];
                 AnnotationKind::Text {
                     position: next_position,
+                    family: family.clone(),
                     content: content.clone(),
                     color: *color,
                     font_size: *font_size,
@@ -485,6 +609,26 @@ impl AnnotationItem {
                 )
                 .is_some()
             }
+            AnnotationKind::Brush {
+                points,
+                stroke_width,
+                ..
+            } => {
+                let pad = stroke_width.max(1.0) * 0.5 + 2.0;
+                let expanded = canvas_rect.expand(pad);
+                match points.as_slice() {
+                    [] => false,
+                    [only] => expanded.contains(Point2::new(only[0], only[1])),
+                    many => many.windows(2).any(|seg| {
+                        clip_segment_to_rect(
+                            Point2::new(seg[0][0], seg[0][1]),
+                            Point2::new(seg[1][0], seg[1][1]),
+                            expanded,
+                        )
+                        .is_some()
+                    }),
+                }
+            }
             AnnotationKind::Arrow {
                 start,
                 end,
@@ -508,7 +652,7 @@ impl AnnotationItem {
             AnnotationKind::Rect { .. } | AnnotationKind::Ellipse { .. } => {
                 translated.dirty_bounds().intersect(canvas_rect).is_some()
             }
-            AnnotationKind::Text { .. } => {
+            AnnotationKind::Number { .. } | AnnotationKind::Text { .. } => {
                 translated.visual_bounds().intersect(canvas_rect).is_some()
             }
         };
@@ -522,6 +666,8 @@ impl AnnotationItem {
             }
             AnnotationKind::Arrow { color, .. }
             | AnnotationKind::Line { color, .. }
+            | AnnotationKind::Brush { color, .. }
+            | AnnotationKind::Number { color, .. }
             | AnnotationKind::Text { color, .. } => Some(*color),
             AnnotationKind::Mosaic { .. } | AnnotationKind::GaussianBlur { .. } => None,
         }
@@ -535,6 +681,8 @@ impl AnnotationItem {
             }
             AnnotationKind::Arrow { color, .. }
             | AnnotationKind::Line { color, .. }
+            | AnnotationKind::Brush { color, .. }
+            | AnnotationKind::Number { color, .. }
             | AnnotationKind::Text { color, .. } => {
                 *color = next_color;
             }
@@ -548,8 +696,10 @@ impl AnnotationItem {
             AnnotationKind::Rect { stroke_width, .. }
             | AnnotationKind::Ellipse { stroke_width, .. }
             | AnnotationKind::Arrow { stroke_width, .. }
-            | AnnotationKind::Line { stroke_width, .. } => Some(*stroke_width),
-            AnnotationKind::Text { .. }
+            | AnnotationKind::Line { stroke_width, .. }
+            | AnnotationKind::Brush { stroke_width, .. } => Some(*stroke_width),
+            AnnotationKind::Number { .. }
+            | AnnotationKind::Text { .. }
             | AnnotationKind::Mosaic { .. }
             | AnnotationKind::GaussianBlur { .. } => None,
         }
@@ -561,16 +711,49 @@ impl AnnotationItem {
             AnnotationKind::Rect { stroke_width, .. }
             | AnnotationKind::Ellipse { stroke_width, .. }
             | AnnotationKind::Arrow { stroke_width, .. }
-            | AnnotationKind::Line { stroke_width, .. } => {
+            | AnnotationKind::Line { stroke_width, .. }
+            | AnnotationKind::Brush { stroke_width, .. } => {
                 *stroke_width = next_width;
             }
-            AnnotationKind::Text { .. }
+            AnnotationKind::Number { .. }
+            | AnnotationKind::Text { .. }
             | AnnotationKind::Mosaic { .. }
             | AnnotationKind::GaussianBlur { .. } => return None,
         }
         Some(updated)
     }
 
+    pub const fn marker_diameter(&self) -> Option<f32> {
+        match self.kind {
+            AnnotationKind::Number { radius, .. } => Some(radius * 2.),
+            _ => None,
+        }
+    }
+
+    pub fn with_marker_diameter(&self, diameter: f32) -> Option<Self> {
+        let mut item = self.clone();
+        let AnnotationKind::Number { radius, .. } = &mut item.kind else {
+            return None;
+        };
+        *radius = diameter * 0.5;
+        Some(item)
+    }
+
+    pub fn font_family(&self) -> Option<String> {
+        match &self.kind {
+            AnnotationKind::Text { family, .. } => Some(family.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn with_font_family(&self, next: &str) -> Option<Self> {
+        let mut item = self.clone();
+        let AnnotationKind::Text { family, .. } = &mut item.kind else {
+            return None;
+        };
+        *family = next.to_owned();
+        Some(item)
+    }
     pub const fn font_size(&self) -> Option<f32> {
         match &self.kind {
             AnnotationKind::Text { font_size, .. } => Some(*font_size),

@@ -8,7 +8,7 @@ pub struct MetadataState {
     pub draft: EditableFields,
     pub original_tags: Vec<String>,
     pub tags: Vec<String>,
-    pub metadata_dirty: bool,
+    pub strip_privacy_on_save: bool,
     pub tags_dirty: bool,
 }
 
@@ -20,12 +20,12 @@ impl MetadataState {
             draft,
             original_tags: tags.clone(),
             tags,
-            metadata_dirty: false,
+            strip_privacy_on_save: false,
             tags_dirty: false,
         }
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.metadata_dirty || self.tags_dirty
+        self.strip_privacy_on_save || self.tags_dirty
     }
 }

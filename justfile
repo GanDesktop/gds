@@ -19,7 +19,7 @@ dev app *args:
 shell:
     {{ develop }}
 
-# 构建 Files 与 Portal（可指定 files / portal / all）。
+# 构建 Files、Images 与 Portal（可指定 files / images / portal / all）。
 build app="all":
     @just _cargo build "$@"
 
@@ -27,11 +27,11 @@ build app="all":
 release app="all":
     @just _cargo build "$@" --release --locked
 
-# 在宿主机的 Fedora 容器中增量构建 Files 和可选 Portal 的原生 RPM。
+# 在宿主机的 Fedora 容器中增量构建 Files、Images 和 Portal 的原生 RPM。
 rpm fedora="43" profile="dev":
     @just _python scripts/build-rpm.py --fedora "$1" --profile "$2"
 
-# 在 Arch 容器中构建 Files 和独立 Portal 的 pacman 包。
+# 在 Arch 容器中构建 Files、Images 和独立 Portal 的 pacman 包。
 arch profile="dev":
     @just _python scripts/build-linux-package.py arch --profile "$1"
 
@@ -39,17 +39,17 @@ arch profile="dev":
 deb distro="debian" release="" profile="dev":
     @just _python scripts/build-linux-package.py "$1" --release "$2" --profile "$3"
 
-# 安装 Files（或指定 portal / all）到当前用户的 Nix profile。
+# 安装 Files（或指定 images / portal / all）到当前用户的 Nix profile。
 install app="files":
-    nix profile add {{ if app == "files" { ".#gds-files" } else if app == "portal" { ".#xdg-desktop-portal-gds" } else if app == "all" { ".#gds-files .#xdg-desktop-portal-gds" } else { error("未知组件：" + app + "；可选 files、portal、all") } }}
+    nix profile add {{ if app == "files" { ".#gds-files" } else if app == "images" { ".#gds-images" } else if app == "portal" { ".#xdg-desktop-portal-gds" } else if app == "all" { ".#gds-files .#gds-images .#xdg-desktop-portal-gds" } else { error("未知组件：" + app + "；可选 files、images、portal、all") } }}
 
-# 从当前用户的 Nix profile 移除已安装的 GDS 组件（files / portal / all）。
+# 从当前用户的 Nix profile 移除已安装的 GDS 组件（files / images / portal / all）。
 uninstall app="all":
     #!/usr/bin/env bash
     set -euo pipefail
     case "$1" in
-        files|portal|all) ;;
-        *) printf '未知组件：%s；可选 files、portal、all\n' "$1" >&2; exit 1 ;;
+        files|images|portal|all) ;;
+        *) printf '未知组件：%s；可选 files、images、portal、all\n' "$1" >&2; exit 1 ;;
     esac
     json=$(nix profile list --json 2>/dev/null || printf '')
     paths=()
@@ -62,6 +62,9 @@ uninstall app="all":
     }
     if [[ $1 == files || $1 == all ]]; then
         add_matches '/nix/store/[0-9a-z]+-gds-files(-[0-9][^"[:space:],}]*)?"'
+    fi
+    if [[ $1 == images || $1 == all ]]; then
+        add_matches '/nix/store/[0-9a-z]+-gds-images(-[0-9][^"]*)?"'
     fi
     if [[ $1 == portal || $1 == all ]]; then
         add_matches '/nix/store/[0-9a-z]+-xdg-desktop-portal-gds(-[0-9][^"[:space:],}]*)?"'
@@ -95,23 +98,23 @@ uninstall-dev app="all":
 
 # 检查全部 Rust 目标。
 check:
-    {{ develop }} --command cargo check --workspace --features files,portal --all-targets
+    {{ develop }} --command cargo check --workspace --features files,images,portal --all-targets
 
 # 检查代码格式与全部 Clippy 规范门禁。
 lint:
     #!/usr/bin/env bash
     set -euo pipefail
     {{ develop }} --command cargo fmt --all --check
-    {{ develop }} --command cargo clippy --workspace --features gui-tests,files-e2e,portal --lib --bins -- -D clippy::disallowed_methods -D warnings
-    {{ develop }} --command cargo clippy --workspace --features gui-tests,files-e2e,portal --all-targets -- -D warnings
+    {{ develop }} --command cargo clippy --workspace --features gui-tests,files-e2e,images,portal --lib --bins -- -D clippy::disallowed_methods -D warnings
+    {{ develop }} --command cargo clippy --workspace --features gui-tests,files-e2e,images,portal --all-targets -- -D warnings
 
 # 运行测试，可传测试名称等 Cargo 参数。
 test *args:
-    {{ develop }} --command cargo test --workspace --features files,portal "$@"
+    {{ develop }} --command cargo test --workspace --features files,images,portal "$@"
 
-# 为真实桌面 VM 构建 Files 普通版本，并打包精确源码和运行依赖。
+# 为真实桌面 VM 构建 Files 和 Images 普通版本，并打包精确源码和运行依赖。
 e2e-build:
-    {{ develop }} --command cargo build --locked --bin gds-files --features files
+    {{ develop }} --command cargo build --locked --bin gds-files --bin gds-images --features files,images
     {{ develop }} --command python3 scripts/e2e.py bundle
 
 # 安装客体的 AT-SPI/Python/剪贴板测试依赖，不重置磁盘快照。
@@ -155,15 +158,16 @@ _cargo command app *args:
     case "$app" in
         all)
             if [ "$command" = run ]; then
-                printf '%s\n' '启动时请指定目标：just dev files / just dev portal' >&2
+                printf '%s\n' '启动时请指定目标：just dev files / images / portal' >&2
                 exit 2
             fi
-            targets=(--bins --features files,portal)
+            targets=(--bins --features files,images,portal)
             ;;
         files) targets=(--bin gds-files --features files) ;;
+        images) targets=(--bin gds-images --features images) ;;
         portal) targets=(--bin xdg-desktop-portal-gds --features portal) ;;
         *)
-            printf '未知应用：%s；可选 files、portal\n' "$app" >&2
+            printf '未知应用：%s；可选 files、images、portal\n' "$app" >&2
             exit 2
             ;;
     esac

@@ -242,10 +242,10 @@ class Workflow:
     def image_dimensions(self):
         import re
         facts = self.expect(contains='×', role='label')
-        assert len(facts) == 1
-        match = re.search(r'(\d+) × (\d+)', facts[0]['name'])
-        assert match, facts
-        return int(match[1]), int(match[2])
+        sizes = {tuple(map(int, match.groups())) for node in facts
+                 if (match := re.search(r'(\d+) × (\d+)', node['name']))}
+        assert len(sizes) == 1, facts
+        return sizes.pop()
 
     def launch(self, app, *args, stdin=None):
         with self.step(f'Launch {app} {args}'):

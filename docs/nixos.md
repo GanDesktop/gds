@@ -1,10 +1,11 @@
 # Install GDS with Nix
 
-GDS exports `gds-files` and `xdg-desktop-portal-gds` for `x86_64-linux` and `aarch64-linux`.
+GDS exports `gds-files`, `gds-images`, and `xdg-desktop-portal-gds` for `x86_64-linux` and `aarch64-linux`.
 
 | Component | Package | NixOS module | Home Manager module | Enable option |
 | --- | --- | --- | --- | --- |
 | GDS Files | `gds-files` | `nixosModules.gds-files` | `homeManagerModules.gds-files` | `programs.gds-files.enable` |
+| GDS Images | `gds-images` | `nixosModules.gds-images` | `homeManagerModules.gds-images` | `programs.gds-images.enable` |
 | GDS Portal | `xdg-desktop-portal-gds` | `nixosModules.gds-portal` | `homeManagerModules.gds-portal` | `services.gds-portal.enable` |
 
 ## Build, install and run
@@ -13,13 +14,15 @@ From the repository:
 
 ```sh
 nix build .#gds-files
+nix build .#gds-images
 nix build .#xdg-desktop-portal-gds
 
 nix profile add .#gds-files
 nix run .#gds-files -- "$HOME"
+nix run .#gds-images -- /path/to/photo.png
 ```
 
-`nix build` and `nix run` default to `gds-files`. Install either individual package in a profile; `just install` installs `gds-files`, `just install portal` installs `xdg-desktop-portal-gds`, `just install all` installs both, and `just uninstall` removes all GDS profile entries (or `just uninstall files` / `just uninstall portal`). Packaged executables include their library wrappers; optional runtime helpers such as `xdg-terminal-exec`, `xdg-utils`, `bubblewrap`, and external `.thumbnailer` providers (e.g. `ffmpegthumbnailer`) are resolved from your environment `PATH` and XDG data directories when needed.
+`nix build` and `nix run` default to `gds-files`. Use `just install files`, `just install images`, or `just install portal` for one component. Use `just install all` for the suite and `just uninstall` to remove its profile entries. Packaged executables include their library wrappers; optional runtime helpers such as `xdg-terminal-exec`, `xdg-utils`, `bubblewrap`, and external `.thumbnailer` providers (e.g. `ffmpegthumbnailer`) are resolved from your environment `PATH` and XDG data directories when needed.
 
 ## Home Manager
 
@@ -36,7 +39,7 @@ services.gds-portal.enable = true;
 ```
 
 Enable only the components you need. The individual modules are listed above;
-`homeManagerModules.default` imports both without enabling them.
+`homeManagerModules.default` registers options for all three components.
 
 - Files becomes the default folder application. Set
   `programs.gds-files.defaultFileManager = false` to leave directory associations
@@ -46,7 +49,7 @@ Enable only the components you need. The individual modules are listed above;
   and interface routing belong in your desktop configuration. Files is installed
   separately. `services.gds-portal.desktops` defaults to `[ "niri" ]` alongside
   the common configuration; set it for your desktop when needed.
-- Override packages with `programs.gds-files.package`
+- Override packages with `programs.gds-files.package`, `programs.gds-images.package`,
   or `services.gds-portal.package`.
 - Removable-drive support requires UDisks2 and a polkit agent. The Home Manager
   module does not enable system services.
@@ -83,7 +86,7 @@ environment.pathsToLink = [ "/share/applications" "/share/xdg-desktop-portal" ];
 }
 ```
 
-The default module registers all options without enabling components. Import individual modules when only some components are needed. Packages use the project's locked nixpkgs; setting `gds.inputs.nixpkgs.follows` is unnecessary. Override a component with its `programs.gds-files.package` or `services.gds-portal.package` option.
+The default module registers all options without enabling components. Import individual modules when only some components are needed. Packages use the project's locked nixpkgs; setting `gds.inputs.nixpkgs.follows` is unnecessary. Override a component with its corresponding `package` option.
 
 Run in the system configuration repository, replacing `myhost`:
 
@@ -103,7 +106,7 @@ Application packages, NixOS modules (`module.nix`) and Home Manager modules (`ho
 
 ## NUR releases
 
-`packaging/nix/nur.nix` exports `gds-files` and `xdg-desktop-portal-gds`, using
+`packaging/nix/nur.nix` exports `gds-files`, `gds-images`, and `xdg-desktop-portal-gds`, using
 the caller's `pkgs`. The flake shares this package set, while retaining its
 pinned nixpkgs and module exports. NUR does not provide a binary cache; users
 may need to compile these packages.
@@ -122,8 +125,8 @@ package option) to the corresponding NUR package.
 
 ### Publication and first registration
 
-The release workflow checks NUR's restricted evaluation and builds `gds-files`
-plus Portal on `x86_64-linux` against `nixpkgs-unstable`. After those checks
+The release workflow checks NUR's restricted evaluation and builds Files, Images,
+and Portal on `x86_64-linux` against `nixpkgs-unstable`. After those checks
 and native release uploads succeed, it advances the `nur` branch to the release
 tag's commit. This push uses the workflow's built-in `GITHUB_TOKEN` with
 `contents: write`; repository rules must permit that branch update. It never

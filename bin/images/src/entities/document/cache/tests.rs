@@ -10,22 +10,20 @@ use crate::{
 };
 
 use super::{
-    GesturePrepareInput, GestureSession, PreparedPayload, RenderCache, SceneTag, TransformState,
-    TransientFrame, build_render_textures, build_svg_zoom_textures,
+    GesturePrepareInput, GestureSession, PreparedPayload, RenderCache, TransformState,
+    build_render_textures, display_tiles,
 };
 
 fn assert_payload_matches_image(payload: &PreparedPayload, expected_rgba: &RgbaImage) {
-    let PreparedPayload::Single(bgra) = payload else {
-        panic!("expected single payload for small test canvas");
-    };
-    let expected_bgra = gds::service::image::color::clone_as_bgra(expected_rgba);
-    assert_eq!(bgra.dimensions(), expected_bgra.dimensions());
-    let worst = bgra
+    assert_eq!(payload.tiles.len(), 1);
+    let rgba = &payload.tiles[0].1;
+    assert_eq!(rgba.dimensions(), expected_rgba.dimensions());
+    let worst = rgba
         .as_raw()
         .as_chunks::<4>()
         .0
         .iter()
-        .zip(expected_bgra.as_raw().as_chunks::<4>().0.iter())
+        .zip(expected_rgba.as_raw().as_chunks::<4>().0.iter())
         .enumerate()
         .filter_map(|(px_idx, (actual, expected))| {
             let diff = actual
@@ -38,7 +36,7 @@ fn assert_payload_matches_image(payload: &PreparedPayload, expected_rgba: &RgbaI
             // most +-1 LSB rounding difference between tiny_skia internal Porter-Duff and
             // f32 premultiplied blend_premultiplied_over on AA overlap pixels.
             (diff > 1).then(|| {
-                let w = bgra.width() as usize;
+                let w = rgba.width() as usize;
                 (px_idx % w, px_idx / w, diff, actual, expected)
             })
         })
@@ -108,10 +106,10 @@ fn complete_at_checks_revision_and_svg_helper_rejects_cancelled() {
     assert!(cache.complete_at(4).is_none());
 
     let cancel = CancellationToken::new();
-    assert!(build_svg_zoom_textures(Arc::clone(&base_arc), &cancel).is_ok());
+    assert!(display_tiles(&base_arc, &cancel).is_ok());
     cancel.cancel();
     assert!(matches!(
-        build_svg_zoom_textures(base_arc, &cancel),
+        display_tiles(&base_arc, &cancel),
         Err(Error::Cancelled)
     ));
 }
@@ -177,6 +175,7 @@ fn gesture_session_matches_full_composite_across_stacked_effects_and_preserves_c
             base_rgba: Arc::clone(&base_arc),
             transform: TransformState::default(),
             cached_base: Some((TransformState::default(), Arc::clone(&base_arc))),
+            display: None,
             complete_rgba: Some(Arc::clone(&complete_prepared.composited_rgba)),
             initial_annotations: &initial,
             first_changed_idx: 1,
@@ -233,23 +232,93 @@ fn gesture_session_matches_full_composite_across_stacked_effects_and_preserves_c
     )
     .expect("full build 2");
     assert_payload_matches_image(&payload_2, &full_2.composited_rgba);
+}
 
-    // `install_transient` must never overwrite `complete` or `complete_at`, and `SceneTag` stays isolated.
-    assert_eq!(
-        TransientFrame {
-            payload: payload_2,
-            gesture_id: 7,
-            seq: 2,
-            annotations: Arc::from(frame_2_items.as_slice()),
-        }
-        .gesture_id,
-        7
-    );
-    assert_ne!(
-        SceneTag::Transient {
-            gesture_id: 7,
-            seq: 2
+#[test]
+fn gesture_reuses_unaffected_display_tiles() {
+    let base = Arc::new(RgbaImage::new(super::DISPLAY_TILE_EDGE + 8, 32));
+    let cancel = CancellationToken::new();
+    let mut session = GestureSession::prepare(
+        GesturePrepareInput {
+            base_rgba: base,
+            transform: TransformState::default(),
+            cached_base: None,
+            display: None,
+            complete_rgba: None,
+            initial_annotations: &[],
+            first_changed_idx: 0,
         },
-        SceneTag::Complete { revision: 0 }
-    );
+        &cancel,
+    )
+    .unwrap();
+    let before = session.step(&[], &cancel).unwrap();
+    let annotation = AnnotationItem {
+        id: AnnotationId(1),
+        kind: AnnotationKind::Rect {
+            rect: Rect2::new(2., 2., 10., 12.),
+            stroke: RgbaColor::RED,
+            stroke_width: 2.,
+            fill: None,
+        },
+    };
+    let after = session
+        .step(std::slice::from_ref(&annotation), &cancel)
+        .unwrap();
+    assert_eq!(after.tiles.len(), 2);
+    assert!(!Arc::ptr_eq(&before.tiles[0].1, &after.tiles[0].1));
+    assert!(Arc::ptr_eq(&before.tiles[1].1, &after.tiles[1].1));
+    let committed = AnnotationItem {
+        id: AnnotationId(2),
+        ..annotation
+    };
+    let steady = session.step(&[committed], &cancel).unwrap();
+    assert!(Arc::ptr_eq(&steady.tiles[0].1, &after.tiles[0].1));
+}
+
+#[test]
+fn incremental_blur_matches_export_when_growing_moving_and_shrinking() {
+    let base = Arc::new(RgbaImage::from_fn(88, 64, |x, y| {
+        Rgba([
+            (13 * x + y) as u8,
+            (29 * y) as u8,
+            (x * y) as u8,
+            (x * 7 + y * 17) as u8,
+        ])
+    }));
+    let cancel = CancellationToken::new();
+    let mut session = GestureSession::prepare(
+        GesturePrepareInput {
+            base_rgba: base.clone(),
+            transform: TransformState::default(),
+            cached_base: None,
+            display: Some(display_tiles(&base, &cancel).expect("initial tiles")),
+            complete_rgba: Some(base.clone()),
+            initial_annotations: &[],
+            first_changed_idx: 0,
+        },
+        &cancel,
+    )
+    .expect("blur gesture");
+    let mut verify = |region, radius| {
+        let items = [AnnotationItem {
+            id: AnnotationId(1),
+            kind: AnnotationKind::GaussianBlur { region, radius },
+        }];
+        let frame = session.step(&items, &cancel).expect("blur preview");
+        let full = build_render_textures(
+            base.clone(),
+            None,
+            TransformState::default(),
+            &items,
+            &cancel,
+        )
+        .expect("full composite");
+        assert_eq!(frame.tiles[0].1.as_raw(), full.composited_rgba.as_raw());
+    };
+    verify(Rect2::new(9., 4., 13., 16.), 4);
+    verify(Rect2::new(9., 4., 48., 35.), 4);
+    verify(Rect2::new(-5., 0., 48., 35.), 4);
+    verify(Rect2::new(0., 0., 15., 24.), 4);
+    verify(Rect2::new(73., 48., 28., 40.), 4);
+    verify(Rect2::new(73., 48., 28., 40.), 8);
 }

@@ -7,9 +7,6 @@ use gds::appearance::{theme, typography};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_JPEG_QUALITY: u8 = 92;
-pub const DEFAULT_INSPECTOR_WIDTH: u16 = 202;
-pub const MIN_INSPECTOR_WIDTH: u16 = 200;
-pub const MAX_INSPECTOR_WIDTH: u16 = 520;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -24,16 +21,6 @@ pub struct Preferences {
     pub default_jpeg_quality: u8,
     pub inspector_open: bool,
     pub filmstrip_open: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub inspector_panel_width: Option<u16>,
-}
-
-impl Preferences {
-    pub fn effective_inspector_width(&self) -> u16 {
-        self.inspector_panel_width
-            .unwrap_or(DEFAULT_INSPECTOR_WIDTH)
-            .clamp(MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH)
-    }
 }
 
 impl Default for Preferences {
@@ -47,7 +34,6 @@ impl Default for Preferences {
             default_jpeg_quality: DEFAULT_JPEG_QUALITY,
             inspector_open: true,
             filmstrip_open: true,
-            inspector_panel_width: None,
         }
     }
 }

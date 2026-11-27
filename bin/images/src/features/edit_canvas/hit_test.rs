@@ -50,32 +50,34 @@ pub enum HoverTarget {
 }
 
 pub fn handles_for_item(item: &AnnotationItem) -> Vec<(HandleKind, Point2)> {
+    let box_handles = |rect: Rect2| {
+        let n = rect.normalized();
+        let cx = n.x + n.width * 0.5;
+        let cy = n.y + n.height * 0.5;
+        vec![
+            (HandleKind::Nw, Point2::new(n.x, n.y)),
+            (HandleKind::N, Point2::new(cx, n.y)),
+            (HandleKind::Ne, Point2::new(n.right(), n.y)),
+            (HandleKind::E, Point2::new(n.right(), cy)),
+            (HandleKind::Se, Point2::new(n.right(), n.bottom())),
+            (HandleKind::S, Point2::new(cx, n.bottom())),
+            (HandleKind::Sw, Point2::new(n.x, n.bottom())),
+            (HandleKind::W, Point2::new(n.x, cy)),
+        ]
+    };
     match &item.kind {
         AnnotationKind::Rect { rect, .. }
         | AnnotationKind::Ellipse { rect, .. }
         | AnnotationKind::Mosaic { region: rect, .. }
-        | AnnotationKind::GaussianBlur { region: rect, .. } => {
-            let n = rect.normalized();
-            let cx = n.x + n.width * 0.5;
-            let cy = n.y + n.height * 0.5;
-            vec![
-                (HandleKind::Nw, Point2::new(n.x, n.y)),
-                (HandleKind::N, Point2::new(cx, n.y)),
-                (HandleKind::Ne, Point2::new(n.right(), n.y)),
-                (HandleKind::E, Point2::new(n.right(), cy)),
-                (HandleKind::Se, Point2::new(n.right(), n.bottom())),
-                (HandleKind::S, Point2::new(cx, n.bottom())),
-                (HandleKind::Sw, Point2::new(n.x, n.bottom())),
-                (HandleKind::W, Point2::new(n.x, cy)),
-            ]
-        }
+        | AnnotationKind::GaussianBlur { region: rect, .. } => box_handles(*rect),
+        AnnotationKind::Brush { .. } => box_handles(item.visual_bounds()),
         AnnotationKind::Arrow { start, end, .. } | AnnotationKind::Line { start, end, .. } => {
             vec![
                 (HandleKind::LineStart, Point2::new(start[0], start[1])),
                 (HandleKind::LineEnd, Point2::new(end[0], end[1])),
             ]
         }
-        AnnotationKind::Text { .. } => {
+        AnnotationKind::Number { .. } | AnnotationKind::Text { .. } => {
             let b = item.visual_bounds();
             vec![
                 (HandleKind::Nw, Point2::new(b.x, b.y)),
@@ -94,7 +96,7 @@ pub fn hit_test_canvas(
     tool: ToolMode,
     scale: f32,
 ) -> Option<HitTarget> {
-    if matches!(tool, ToolMode::Pan | ToolMode::Crop) {
+    if tool != ToolMode::Pointer {
         return None;
     }
     let inv_scale = 1.0 / scale.max(MIN_ZOOM);
@@ -111,7 +113,7 @@ pub fn hit_test_canvas(
         });
     }
 
-    let stack = hit_test_cycle_stack(annotations, selection, img_pt, tool, scale);
+    let stack = hit_test_cycle_stack(annotations, img_pt, scale);
     // Keep an already-selected item draggable even when a higher unselected item overlaps it.
     stack
         .iter()
@@ -131,8 +133,7 @@ pub fn hover_test_canvas(
     match hit_test_canvas(annotations, selection, img_pt, tool, scale) {
         Some(HitTarget::Handle { id, handle }) => HoverTarget::Handle { id, handle },
         Some(HitTarget::Body { id }) => {
-            let discover_redaction = tool == ToolMode::Pointer
-                && !selection.contains(id)
+            let discover_redaction = !selection.contains(id)
                 && annotations.iter().any(|item| {
                     item.id == id
                         && matches!(
@@ -151,14 +152,9 @@ pub fn hover_test_canvas(
 
 pub fn hit_test_cycle_stack(
     annotations: &[AnnotationItem],
-    selection: &SelectionSet,
     img_pt: Point2,
-    tool: ToolMode,
     scale: f32,
 ) -> Vec<AnnotationId> {
-    if matches!(tool, ToolMode::Pan | ToolMode::Crop) {
-        return Vec::new();
-    }
     let inv_scale = 1.0 / scale.max(MIN_ZOOM);
     let stroke_pad = STROKE_PAD_PX * inv_scale;
     let text_pad = TEXT_PAD_PX * inv_scale;
@@ -166,16 +162,7 @@ pub fn hit_test_cycle_stack(
     annotations
         .iter()
         .rev()
-        .filter(|item| {
-            hit_test_body(
-                item,
-                img_pt,
-                tool,
-                selection.contains(item.id),
-                stroke_pad,
-                text_pad,
-            )
-        })
+        .filter(|item| hit_test_body(item, img_pt, stroke_pad, text_pad))
         .map(|item| item.id)
         .collect()
 }
@@ -205,6 +192,25 @@ pub fn marquee_hits(annotations: &[AnnotationItem], marquee: Rect2) -> Vec<Annot
                 )
                 .is_some()
             }
+            AnnotationKind::Brush {
+                points,
+                stroke_width,
+                ..
+            } => {
+                let expanded = norm.expand(stroke_width.max(1.0) * 0.5);
+                match points.as_slice() {
+                    [] => false,
+                    [only] => expanded.contains(Point2::new(only[0], only[1])),
+                    many => many.windows(2).any(|seg| {
+                        clip_segment_to_rect(
+                            Point2::new(seg[0][0], seg[0][1]),
+                            Point2::new(seg[1][0], seg[1][1]),
+                            expanded,
+                        )
+                        .is_some()
+                    }),
+                }
+            }
             _ => item.visual_bounds().intersects_inclusive(norm),
         })
         .map(|item| item.id)
@@ -225,14 +231,7 @@ fn hit_test_handles(item: &AnnotationItem, pt: Point2, radius: f32) -> Option<Ha
     best.map(|(kind, _)| kind)
 }
 
-fn hit_test_body(
-    item: &AnnotationItem,
-    pt: Point2,
-    tool: ToolMode,
-    is_selected: bool,
-    stroke_pad: f32,
-    text_pad: f32,
-) -> bool {
+fn hit_test_body(item: &AnnotationItem, pt: Point2, stroke_pad: f32, text_pad: f32) -> bool {
     match &item.kind {
         AnnotationKind::Rect {
             rect,
@@ -242,7 +241,7 @@ fn hit_test_body(
         } => {
             let n = rect.normalized();
             let pad = stroke_width.max(1.0) * 0.5 + stroke_pad;
-            let hit_interior = fill.is_some() && (tool == ToolMode::Pointer || is_selected);
+            let hit_interior = fill.is_some();
             if hit_interior {
                 n.expand(pad).contains(pt)
             } else {
@@ -257,7 +256,7 @@ fn hit_test_body(
         } => {
             let n = rect.normalized();
             let pad = stroke_width.max(1.0) * 0.5 + stroke_pad;
-            let hit_interior = fill.is_some() && (tool == ToolMode::Pointer || is_selected);
+            let hit_interior = fill.is_some();
             ellipse_hit(pt, n, pad, hit_interior)
         }
         AnnotationKind::Line {
@@ -279,16 +278,30 @@ fn hit_test_body(
             stroke_width,
             ..
         } => arrow_hit(pt, *start, *end, *stroke_width, stroke_pad),
+        AnnotationKind::Brush {
+            points,
+            stroke_width,
+            ..
+        } => {
+            let pad = stroke_width.max(1.0) * 0.5 + stroke_pad;
+            match points.as_slice() {
+                [] => false,
+                [only] => (pt.x - only[0]).hypot(pt.y - only[1]) <= pad,
+                many => many.windows(2).any(|seg| {
+                    point_to_segment_distance(
+                        pt,
+                        Point2::new(seg[0][0], seg[0][1]),
+                        Point2::new(seg[1][0], seg[1][1]),
+                    ) <= pad
+                }),
+            }
+        }
+        AnnotationKind::Number { center, radius, .. } => {
+            (pt.x - center.x).hypot(pt.y - center.y) <= radius + stroke_pad
+        }
         AnnotationKind::Text { .. } => item.visual_bounds().expand(text_pad).contains(pt),
         AnnotationKind::Mosaic { region, .. } | AnnotationKind::GaussianBlur { region, .. } => {
-            let n = region.normalized();
-            if tool == ToolMode::Pointer {
-                n.expand(stroke_pad).contains(pt)
-            } else if matches!(tool, ToolMode::Mosaic | ToolMode::Blur) || is_selected {
-                min_dist_to_rect_perimeter(pt, n) <= stroke_pad
-            } else {
-                false
-            }
+            region.normalized().expand(stroke_pad).contains(pt)
         }
     }
 }

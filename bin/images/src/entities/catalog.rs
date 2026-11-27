@@ -3,5 +3,5 @@
 mod api;
 mod model;
 
-pub use api::scan_siblings;
-pub use model::{CatalogEntry, CatalogEntryMeta, CatalogState, format_byte_size};
+pub use api::{first_in_folder, scan_siblings};
+pub use model::{CatalogEntryMeta, CatalogState, format_byte_size};

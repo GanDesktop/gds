@@ -12,20 +12,22 @@ TAG_RE = re.compile(r'^v?[0-9][a-zA-Z0-9._-]*$')
 SAFE_TOKEN_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._~+-]*$')
 DEFAULT_DISTRO_RE = re.compile(r'^([a-z0-9-]+):([0-9]+(?:\.[0-9]+)?)$')
 
-DEB_RE = re.compile(r'^(gds-files|xdg-desktop-portal-gds)_([^_]+)_([^_.]+)\.deb$')
+DEB_RE = re.compile(r'^(gds-files|gds-images|xdg-desktop-portal-gds)_([^_]+)_([^_.]+)\.deb$')
 DEB_SUFFIX_RE = re.compile(r'~([a-z]+)([0-9]+(?:\.[0-9]+)?)$')
 RPM_RE = re.compile(
-    r'^(gds-files|xdg-desktop-portal-gds)-(.+)-([^-]+\.fc([0-9]+))\.([^.]+)\.rpm$'
+    r'^(gds-files|gds-images|xdg-desktop-portal-gds)-(.+)-([^-]+\.fc([0-9]+))\.([^.]+)\.rpm$'
 )
 
 COMPONENT_MAP = {
     'gds-files': 'files',
     'gds-files-git': 'files',
+    'gds-images': 'images',
+    'gds-images-git': 'images',
     'xdg-desktop-portal-gds': 'portal',
     'xdg-desktop-portal-gds-git': 'portal',
 }
 BACKEND_ORDER = {'pacman': 0, 'deb': 1, 'rpm': 2}
-COMPONENT_ORDER = {'files': 0, 'portal': 1}
+COMPONENT_ORDER = {'files': 0, 'images': 1, 'portal': 2}
 IGNORED_FILES = {'MANIFEST', 'SHA256SUMS', 'install.sh'}
 
 

@@ -217,83 +217,120 @@ fn fill_mosaic_block(image: &mut RgbaImage, rect: PixelRect, color: Rgba<u8>) {
 /// Blurs `region` in `O(W * H)` using a 3-pass separable sliding-window Gaussian approximation
 /// on premultiplied RGBA8 pixels with halo padding to avoid dark border bleed.
 pub fn apply_gaussian_blur(image: &mut RgbaImage, region: PixelRect, radius: u32) {
-    let img_w = image.width();
-    let img_h = image.height();
-    let Some(rect) = region.clamp_to(img_w, img_h) else {
-        return;
-    };
-    let sigma = (radius.max(1) as f32).clamp(1.0, 64.0);
-    let widths = kovesi_box_widths(sigma);
-    let halo = (widths[0] / 2 + widths[1] / 2 + widths[2] / 2) as u32;
-    let Some(padded) = rect.expand_clamped(halo, img_w, img_h) else {
-        return;
-    };
-
-    let work_w = padded.width as usize;
-    let work_h = padded.height as usize;
-    let pixel_count = work_w.saturating_mul(work_h);
-    let mut buf_a = Vec::with_capacity(pixel_count);
-    let src_stride = (img_w as usize).saturating_mul(4);
-    let src_raw = image.as_raw();
-    let pad_x_byte = (padded.x as usize).saturating_mul(4);
-    let row_bytes = work_w.saturating_mul(4);
-
-    for row in 0..work_h {
-        let start = (padded.y as usize + row) * src_stride + pad_x_byte;
-        for px in src_raw[start..start + row_bytes].as_chunks::<4>().0 {
-            let a = u16::from(px[3]);
-            buf_a.push([
-                u16::from(px[0]) * a,
-                u16::from(px[1]) * a,
-                u16::from(px[2]) * a,
-                a * 255,
-            ]);
-        }
+    if let Some(blur) = BlurredRegion::compute(image, region, radius) {
+        blur.write(image);
     }
+}
 
-    let mut buf_b = vec![[0u16; 4]; pixel_count];
-    let mut col_sums = vec![[0u32; 4]; work_w];
-    for width in widths {
-        if width <= 1 {
-            continue;
-        }
-        let half = width / 2;
-        box_blur_horizontal(&buf_a, &mut buf_b, work_w, work_h, half, width as u32);
-        box_blur_vertical(
-            &buf_b,
-            &mut buf_a,
-            work_w,
-            work_h,
-            half,
-            width as u32,
-            &mut col_sums,
-        );
+/// Apply the same halo-padded kernel to a separate destination, sampling only the original layer.
+/// This lets interactive redactions extend across a previously blurred edge without blurring it twice.
+pub fn apply_gaussian_blur_from(
+    source: &RgbaImage,
+    destination: &mut RgbaImage,
+    region: PixelRect,
+    radius: u32,
+) {
+    if let Some(region) = region.clamp_to(destination.width(), destination.height())
+        && let Some(blur) = BlurredRegion::compute(source, region, radius)
+    {
+        blur.write(destination);
     }
+}
 
-    let offset_x = (rect.x - padded.x) as usize;
-    let offset_y = (rect.y - padded.y) as usize;
-    let dst_raw: &mut [u8] = image.as_mut();
-    let dst_x_byte = (rect.x as usize).saturating_mul(4);
-    let rect_bytes = (rect.width as usize).saturating_mul(4);
+struct BlurredRegion {
+    rect: PixelRect,
+    padded: PixelRect,
+    pixels: Vec<[u16; 4]>,
+}
+impl BlurredRegion {
+    fn compute(image: &RgbaImage, region: PixelRect, radius: u32) -> Option<Self> {
+        let img_w = image.width();
+        let img_h = image.height();
+        let rect = region.clamp_to(img_w, img_h)?;
+        let sigma = (radius.max(1) as f32).clamp(1.0, 64.0);
+        let widths = kovesi_box_widths(sigma);
+        let halo = (widths[0] / 2 + widths[1] / 2 + widths[2] / 2) as u32;
+        let padded = rect.expand_clamped(halo, img_w, img_h)?;
 
-    for row in 0..rect.height as usize {
-        let src_start = (offset_y + row) * work_w + offset_x;
-        let dst_start = (rect.y as usize + row) * src_stride + dst_x_byte;
-        for (dst_px, &[pm_r, pm_g, pm_b, pm_a]) in dst_raw[dst_start..dst_start + rect_bytes]
-            .as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .zip(&buf_a[src_start..src_start + rect.width as usize])
-        {
-            if pm_a == 0 {
-                dst_px.copy_from_slice(&[0, 0, 0, 0]);
-            } else {
-                let a_denom = u32::from(pm_a);
-                let half = a_denom / 2;
-                dst_px[0] = ((u32::from(pm_r) * 255 + half) / a_denom).min(255) as u8;
-                dst_px[1] = ((u32::from(pm_g) * 255 + half) / a_denom).min(255) as u8;
-                dst_px[2] = ((u32::from(pm_b) * 255 + half) / a_denom).min(255) as u8;
-                dst_px[3] = ((a_denom + 127) / 255).min(255) as u8;
+        let work_w = padded.width as usize;
+        let work_h = padded.height as usize;
+        let pixel_count = work_w.saturating_mul(work_h);
+        let mut buf_a = Vec::with_capacity(pixel_count);
+        let src_stride = (img_w as usize).saturating_mul(4);
+        let src_raw = image.as_raw();
+        let pad_x_byte = (padded.x as usize).saturating_mul(4);
+        let row_bytes = work_w.saturating_mul(4);
+
+        for row in 0..work_h {
+            let start = (padded.y as usize + row) * src_stride + pad_x_byte;
+            for px in src_raw[start..start + row_bytes].as_chunks::<4>().0 {
+                let a = u16::from(px[3]);
+                buf_a.push([
+                    u16::from(px[0]) * a,
+                    u16::from(px[1]) * a,
+                    u16::from(px[2]) * a,
+                    a * 255,
+                ]);
+            }
+        }
+
+        let mut buf_b = vec![[0u16; 4]; pixel_count];
+        let mut col_sums = vec![[0u32; 4]; work_w];
+        for width in widths {
+            if width <= 1 {
+                continue;
+            }
+            let half = width / 2;
+            box_blur_horizontal(&buf_a, &mut buf_b, work_w, work_h, half, width as u32);
+            box_blur_vertical(
+                &buf_b,
+                &mut buf_a,
+                work_w,
+                work_h,
+                half,
+                width as u32,
+                &mut col_sums,
+            );
+        }
+
+        Some(Self {
+            rect,
+            padded,
+            pixels: buf_a,
+        })
+    }
+    fn write(self, image: &mut RgbaImage) {
+        let Self {
+            rect,
+            padded,
+            pixels: buf_a,
+        } = self;
+        let offset_x = (rect.x - padded.x) as usize;
+        let offset_y = (rect.y - padded.y) as usize;
+        let stride = image.width() as usize * 4;
+        let dst_raw: &mut [u8] = image.as_mut();
+        let dst_x_byte = (rect.x as usize).saturating_mul(4);
+        let rect_bytes = (rect.width as usize).saturating_mul(4);
+
+        for row in 0..rect.height as usize {
+            let src_start = (offset_y + row) * padded.width as usize + offset_x;
+            let dst_start = (rect.y as usize + row) * stride + dst_x_byte;
+            for (dst_px, &[pm_r, pm_g, pm_b, pm_a]) in dst_raw[dst_start..dst_start + rect_bytes]
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(&buf_a[src_start..src_start + rect.width as usize])
+            {
+                if pm_a == 0 {
+                    dst_px.copy_from_slice(&[0, 0, 0, 0]);
+                } else {
+                    let a_denom = u32::from(pm_a);
+                    let half = a_denom / 2;
+                    dst_px[0] = ((u32::from(pm_r) * 255 + half) / a_denom).min(255) as u8;
+                    dst_px[1] = ((u32::from(pm_g) * 255 + half) / a_denom).min(255) as u8;
+                    dst_px[2] = ((u32::from(pm_b) * 255 + half) / a_denom).min(255) as u8;
+                    dst_px[3] = ((a_denom + 127) / 255).min(255) as u8;
+                }
             }
         }
     }
@@ -530,6 +567,7 @@ pub enum RasterOp {
         text_color: [u8; 4],
     },
     Text {
+        family: String,
         position: [f32; 2],
         content: String,
         font_size: f32,
@@ -805,12 +843,14 @@ fn op_dirty_bounds(op: &RasterOp) -> Option<(f32, f32, f32, f32)> {
             Some((center[0] - r, center[1] - r, center[0] + r, center[1] + r))
         }
         RasterOp::Text {
+            family,
             position,
             content,
             font_size,
             ..
         } => {
-            let [x, y, w, h] = measure_text_bounds(*position, content, *font_size)?;
+            let [x, y, w, h] =
+                measure_text_bounds_in_family(*position, content, *font_size, family)?;
             Some((x - 4.0, y - 4.0, x + w + 4.0, y + h + 4.0))
         }
         RasterOp::Mosaic { .. } | RasterOp::GaussianBlur { .. } | RasterOp::SolidFill { .. } => {
@@ -824,11 +864,27 @@ fn op_dirty_bounds(op: &RasterOp) -> Option<(f32, f32, f32, f32)> {
 /// Uses `usvg::Tree` font layout without allocating a pixel surface, falling back to
 /// deterministic proportional metrics when no system fonts are available.
 pub fn measure_text_bounds(position: [f32; 2], content: &str, font_size: f32) -> Option<[f32; 4]> {
+    measure_text_bounds_in_family(position, content, font_size, "sans-serif")
+}
+
+pub fn measure_text_bounds_in_family(
+    position: [f32; 2],
+    content: &str,
+    font_size: f32,
+    family: &str,
+) -> Option<[f32; 4]> {
     if content.trim().is_empty() || !finite_slice(&[position[0], position[1], font_size]) {
         return None;
     }
     let mut body = String::new();
-    write_text_svg_elements(&mut body, [0.0, 0.0], content, font_size, [0, 0, 0, 255]);
+    write_text_svg_elements(
+        &mut body,
+        [0.0, 0.0],
+        content,
+        font_size,
+        family,
+        [0, 0, 0, 255],
+    );
     let svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8192\" height=\"8192\">{body}</svg>"
     );
@@ -1065,19 +1121,50 @@ fn append_svg_op(out: &mut String, op: &RasterOp) {
             {
                 return;
             }
+            let sw = stroke_width.max(1.0);
+            let hex = svg_hex(*color);
             let alpha = (f32::from(color[3]) / 255.0) * opacity.clamp(0.0, 1.0);
-            let _ = write!(out, "<polyline points=\"");
-            for (idx, pt) in points.iter().enumerate() {
-                if idx > 0 {
-                    out.push(' ');
-                }
-                let _ = write!(out, "{},{}", pt[0], pt[1]);
+            let first = points[0];
+            if points
+                .iter()
+                .all(|pt| (pt[0] - first[0]).hypot(pt[1] - first[1]) < 1e-3)
+            {
+                let _ = write!(
+                    out,
+                    "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"{hex}\" fill-opacity=\"{alpha:.3}\"/>",
+                    first[0],
+                    first[1],
+                    sw * 0.5,
+                );
+                return;
             }
+            if points.len() == 2 {
+                let _ = write!(
+                    out,
+                    "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{hex}\" stroke-opacity=\"{alpha:.3}\" stroke-width=\"{sw}\" stroke-linecap=\"round\"/>",
+                    points[0][0], points[0][1], points[1][0], points[1][1],
+                );
+                return;
+            }
+            // Midpoint quadratic Bezier smoothing stays within the points' convex hull,
+            // preserving conservative dirty bounds while eliminating polygonal corners.
+            let _ = write!(out, "<path d=\"M {},{}", points[0][0], points[0][1]);
+            let first_mid = [
+                (points[0][0] + points[1][0]) * 0.5,
+                (points[0][1] + points[1][1]) * 0.5,
+            ];
+            let _ = write!(out, " L {},{}", first_mid[0], first_mid[1]);
+            for idx in 1..points.len() - 1 {
+                let ctrl = points[idx];
+                let next = points[idx + 1];
+                let mid = [(ctrl[0] + next[0]) * 0.5, (ctrl[1] + next[1]) * 0.5];
+                let _ = write!(out, " Q {},{} {},{}", ctrl[0], ctrl[1], mid[0], mid[1]);
+            }
+            let last = points[points.len() - 1];
             let _ = write!(
                 out,
-                "\" fill=\"none\" stroke=\"{}\" stroke-opacity=\"{alpha:.3}\" stroke-width=\"{}\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
-                svg_hex(*color),
-                stroke_width.max(1.0)
+                " L {},{}\" fill=\"none\" stroke=\"{hex}\" stroke-opacity=\"{alpha:.3}\" stroke-width=\"{sw}\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+                last[0], last[1],
             );
         }
         RasterOp::StepBadge {
@@ -1091,7 +1178,8 @@ fn append_svg_op(out: &mut String, op: &RasterOp) {
                 return;
             }
             let r = radius.max(8.0);
-            let font_size = r * 1.1;
+            let digits = (number.checked_ilog10().unwrap_or(0) + 1) as f32;
+            let font_size = (r * 1.1).min(r * 2.6 / digits);
             let _ = write!(
                 out,
                 "<circle cx=\"{}\" cy=\"{}\" r=\"{r}\" fill=\"{}\" fill-opacity=\"{:.3}\"/>\
@@ -1107,12 +1195,13 @@ fn append_svg_op(out: &mut String, op: &RasterOp) {
             );
         }
         RasterOp::Text {
+            family,
             position,
             content,
             font_size,
             color,
         } => {
-            write_text_svg_elements(out, *position, content, *font_size, *color);
+            write_text_svg_elements(out, *position, content, *font_size, family, *color);
         }
         RasterOp::Mosaic { .. } | RasterOp::GaussianBlur { .. } | RasterOp::SolidFill { .. } => {}
     }
@@ -1123,6 +1212,7 @@ fn write_text_svg_elements(
     position: [f32; 2],
     content: &str,
     font_size: f32,
+    family: &str,
     color: [u8; 4],
 ) {
     if content.trim().is_empty() || !finite_slice(&[position[0], position[1], font_size]) {
@@ -1131,14 +1221,50 @@ fn write_text_svg_elements(
     let size = font_size.max(8.0);
     let hex = svg_hex(color);
     let alpha = f32::from(color[3]) / 255.0;
+    let family = escape_xml(&format_svg_font_family(family));
     for (line_idx, line) in content.split('\n').enumerate() {
         let y = position[1] + size + (line_idx as f32) * size * 1.25;
         let escaped = escape_xml(line);
         let _ = write!(
             out,
-            "<text x=\"{}\" y=\"{y}\" font-size=\"{size}\" font-family=\"sans-serif\" fill=\"{hex}\" fill-opacity=\"{alpha:.3}\">{escaped}</text>",
+            "<text x=\"{}\" y=\"{y}\" font-size=\"{size}\" font-family=\"{family}\" fill=\"{hex}\" fill-opacity=\"{alpha:.3}\">{escaped}</text>",
             position[0]
         );
+    }
+}
+
+fn format_svg_font_family(family: &str) -> String {
+    let cleaned: String = family
+        .chars()
+        .filter(|&ch| !ch.is_control() && is_xml10_char(ch))
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("sans-serif") {
+        return "sans-serif".to_owned();
+    }
+    if let Some(generic) = ["serif", "monospace", "cursive", "fantasy"]
+        .into_iter()
+        .find(|keyword| trimmed.eq_ignore_ascii_case(keyword))
+    {
+        return format!("{generic}, sans-serif");
+    }
+    // Quote custom family names so spaces, leading digits, commas, and punctuation parse as one
+    // SVG/CSS family entry, and append `sans-serif` so missing glyphs (e.g. CJK in Latin-only
+    // fonts) or unavailable families still fall back to `system_fonts()`'s sans-serif face.
+    if !trimmed.contains('\'') && !trimmed.contains('\\') {
+        format!("'{trimmed}', sans-serif")
+    } else if !trimmed.contains('"') && !trimmed.contains('\\') {
+        format!("\"{trimmed}\", sans-serif")
+    } else {
+        let mut escaped = String::with_capacity(trimmed.len());
+        for ch in trimmed.chars() {
+            match ch {
+                '\\' => escaped.push_str("\\\\"),
+                '\'' => escaped.push_str("\\'"),
+                other => escaped.push(other),
+            }
+        }
+        format!("'{escaped}', sans-serif")
     }
 }
 

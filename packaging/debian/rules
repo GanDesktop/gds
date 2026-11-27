@@ -11,16 +11,18 @@ binary_profile = $(if $(filter dev,$(GDS_PROFILE)),debug,$(GDS_PROFILE))
 override_dh_auto_configure:
 
 override_dh_auto_build:
-	cd $(GDS_SOURCE) && cargo build --locked --profile $(GDS_PROFILE) --bin gds-files --features files
+	cd $(GDS_SOURCE) && cargo build --locked --profile $(GDS_PROFILE) --bin gds-files --bin gds-images --features files,images
 	cd $(GDS_SOURCE) && cargo build --locked --profile $(GDS_PROFILE) --bin xdg-desktop-portal-gds --features portal
 
 override_dh_auto_test:
+	$(CARGO_TARGET_DIR)/$(binary_profile)/gds-images --help
 	$(CARGO_TARGET_DIR)/$(binary_profile)/gds-files --help
 	$(CARGO_TARGET_DIR)/$(binary_profile)/xdg-desktop-portal-gds --help
 
 override_dh_auto_install:
 	python3 $(GDS_SOURCE)/packaging/linux/install.py debian/tmp $(CARGO_TARGET_DIR)/$(binary_profile)
 	desktop-file-validate debian/tmp/usr/share/applications/io.github.GanDesktop.GdsFiles.desktop
+	desktop-file-validate debian/tmp/usr/share/applications/io.github.GanDesktop.GdsImages.desktop
 	rm -r debian/tmp/usr/share/licenses
 
 override_dh_auto_clean:

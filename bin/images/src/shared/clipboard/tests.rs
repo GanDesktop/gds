@@ -1,11 +1,15 @@
 use std::path::PathBuf;
 
-use gds::service::image::source::Format;
-use gpui_kit::{ClipboardMime, ClipboardMimeOffer};
+use gds::service::{
+    image::source::{Format, MemoryOrigin, Origin},
+    task_manager::Supervisor,
+};
+use zgui::platform::{ClipboardMime, ClipboardMimeOffer};
 
 use super::{
-    GNOME_FILES, URI_LIST, extract_candidate_local_image_paths, first_raw_mime_format,
-    local_file_uri, parse_gnome_files_uris,
+    ClipboardOfferKind, GNOME_FILES, URI_LIST, extract_candidate_local_image_paths,
+    first_raw_mime_format, local_file_uri, offer_from_mime_offer, origin_from_mime_offer,
+    parse_gnome_files_uris,
 };
 
 #[test]
@@ -47,7 +51,7 @@ fn gnome_copied_files_requires_copy_or_cut_intent_header() {
 #[test]
 fn offer_extraction_filters_supported_formats_and_detects_actual_mime() {
     let offer = ClipboardMimeOffer {
-        id: 1,
+        revision: 1,
         entries: vec![
             ClipboardMime {
                 mime_type: GNOME_FILES.into(),
@@ -65,7 +69,7 @@ fn offer_extraction_filters_supported_formats_and_detects_actual_mime() {
     );
 
     let invalid_gnome = ClipboardMimeOffer {
-        id: 2,
+        revision: 2,
         entries: vec![
             ClipboardMime {
                 mime_type: GNOME_FILES.into(),
@@ -80,11 +84,129 @@ fn offer_extraction_filters_supported_formats_and_detects_actual_mime() {
     assert!(extract_candidate_local_image_paths(&invalid_gnome).is_empty());
 
     let raw_webp = ClipboardMimeOffer {
-        id: 3,
-        entries: vec![ClipboardMime {
-            mime_type: "image/webp".into(),
-            bytes: vec![1, 2, 3, 4],
-        }],
+        revision: 3,
+        entries: vec![
+            ClipboardMime {
+                mime_type: "image/png".into(),
+                bytes: Vec::new(),
+            },
+            ClipboardMime {
+                mime_type: "image/webp".into(),
+                bytes: vec![1, 2, 3, 4],
+            },
+        ],
     };
     assert_eq!(first_raw_mime_format(&raw_webp), Some(Format::WebP));
+
+    let prioritized = ClipboardMimeOffer {
+        revision: 4,
+        entries: vec![
+            ClipboardMime {
+                mime_type: "image/webp".into(),
+                bytes: vec![9, 8, 7],
+            },
+            ClipboardMime {
+                mime_type: "image/png".into(),
+                bytes: vec![1, 2, 3],
+            },
+        ],
+    };
+    assert_eq!(first_raw_mime_format(&prioritized), Some(Format::Png));
+}
+
+#[test]
+fn offer_and_origin_resolution_prefers_existing_local_file_and_falls_back_to_raw_mime() {
+    let supervisor = Supervisor::new(false).expect("start test supervisor");
+    let tasks = supervisor.scope();
+    let dir = tempfile::tempdir().expect("temp dir");
+    let image_path = dir.path().join("sample.png");
+    std::fs::write(&image_path, b"png-bytes").expect("write sample image");
+    let file_uri = url::Url::from_file_path(&image_path)
+        .expect("file uri")
+        .to_string();
+
+    let with_local = ClipboardMimeOffer {
+        revision: 10,
+        entries: vec![
+            ClipboardMime {
+                mime_type: URI_LIST.into(),
+                bytes: format!("{file_uri}\n").into_bytes(),
+            },
+            ClipboardMime {
+                mime_type: "image/webp".into(),
+                bytes: vec![4, 5, 6],
+            },
+        ],
+    };
+    let probed_local = supervisor
+        .block_on(offer_from_mime_offer(with_local.clone(), &tasks))
+        .expect("block on local probe");
+    assert_eq!(
+        probed_local,
+        Some(ClipboardOfferKind::LocalImageFile(image_path.clone()))
+    );
+    let resolved_local = supervisor
+        .block_on(origin_from_mime_offer(with_local, &tasks))
+        .expect("block on local origin");
+    assert!(matches!(
+        resolved_local,
+        Some(Origin::LocalFile { path, .. }) if path == image_path
+    ));
+
+    let missing_uri = url::Url::from_file_path(dir.path().join("missing.png"))
+        .expect("missing uri")
+        .to_string();
+    let fallback_raw = ClipboardMimeOffer {
+        revision: 11,
+        entries: vec![
+            ClipboardMime {
+                mime_type: URI_LIST.into(),
+                bytes: format!("{missing_uri}\n").into_bytes(),
+            },
+            ClipboardMime {
+                mime_type: "image/webp".into(),
+                bytes: vec![7, 8, 9],
+            },
+        ],
+    };
+    let probed_raw = supervisor
+        .block_on(offer_from_mime_offer(fallback_raw.clone(), &tasks))
+        .expect("block on raw probe");
+    assert_eq!(
+        probed_raw,
+        Some(ClipboardOfferKind::RawImageMime(Format::WebP))
+    );
+    let resolved_raw = supervisor
+        .block_on(origin_from_mime_offer(fallback_raw, &tasks))
+        .expect("block on raw origin");
+    assert!(matches!(
+        resolved_raw,
+        Some(Origin::Memory {
+            kind: MemoryOrigin::Clipboard,
+            bytes,
+            format_hint: Some(Format::WebP),
+        }) if bytes.as_ref() == [7, 8, 9]
+    ));
+
+    let empty_offer = ClipboardMimeOffer {
+        revision: 12,
+        entries: vec![ClipboardMime {
+            mime_type: "image/png".into(),
+            bytes: Vec::new(),
+        }],
+    };
+    assert_eq!(
+        supervisor
+            .block_on(offer_from_mime_offer(empty_offer.clone(), &tasks))
+            .expect("block on empty probe"),
+        None
+    );
+    assert_eq!(
+        supervisor
+            .block_on(origin_from_mime_offer(empty_offer, &tasks))
+            .expect("block on empty origin"),
+        None
+    );
+
+    supervisor.shutdown();
 }

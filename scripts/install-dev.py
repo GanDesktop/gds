@@ -88,7 +88,9 @@ def main():
     project = Path(__file__).resolve().parent.parent
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "gds/development"
     applications = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "applications"
-    selected = APPLICATIONS if args.application == "all" else [args.application]
+    selected = [args.application]
+    if args.application == "all":
+        selected = list(APPLICATIONS) if args.remove else ["files", "images"]
     for app in selected:
         app_id, categories = APPLICATIONS[app]
         binary = project / "target/debug" / f"gds-{app}"
@@ -131,7 +133,7 @@ Name[zh_CN]=新建窗口
 Exec={desktop_argument(launcher)} --new-window
 """
         elif app == "images":
-            extra_entries = "MimeType=image/png;image/jpeg;image/webp;image/gif;image/svg+xml;image/bmp;image/tiff;image/x-icon;image/x-tga;image/x-portable-anymap;image/qoi;\n"
+            extra_entries = "MimeType=image/png;image/jpeg;image/webp;image/gif;image/svg+xml;image/svg+xml-compressed;image/bmp;image/tiff;image/x-icon;image/x-tga;image/x-portable-anymap;image/qoi;\n"
             extra_sections = ""
         else:
             extra_entries = ""
