@@ -75,10 +75,15 @@ mod driven {
     use crate::entities::tags;
     use crate::features::pick_files;
     use crate::pages::workspace::{
-        inspection::Properties,
-        menus::Surface as MenuSurface,
-        status::Kind as StatusKind,
-        ui::{Browser, LaunchOptions},
+        Browser, LaunchOptions,
+        navigation::Navigator,
+        operations::{Dispatch, RemoteOps},
+        panes::{
+            Inspection, MenuHost, TerminalDock, inspection::Properties, status::Kind as StatusKind,
+        },
+        projection::{Rows, UiState},
+        shell::keyboard::Keyboard,
+        state::menus::Surface as MenuSurface,
     };
     use crate::shared::{i18n as files_i18n, lib::clipboard::Clipboard};
 
@@ -1458,7 +1463,7 @@ mod driven {
                         }),
                         "04: created-dir was not moved to Trash"
                     );
-                    browser.open(Location::Trash);
+                    Navigator(&browser).open(Location::Trash);
                     ensure!(
                         wait_until(&mut harness, Duration::from_secs(3), |h| {
                             semantic.ingest_from(h);
@@ -1491,7 +1496,7 @@ mod driven {
                     );
 
                     // 05: External filesystem change watch.
-                    browser.open(Location::from(&work));
+                    Navigator(&browser).open(Location::from(&work));
                     pump_frames(&mut harness);
                     fs::write(work.join("external-added.txt"), b"watched payload\n")?;
                     ensure!(
@@ -1518,7 +1523,7 @@ mod driven {
                     )?;
 
                     // 06: Grid view switch.
-                    browser.toggle_view();
+                    Navigator(&browser).toggle_view();
                     ensure!(
                         wait_until(&mut harness, Duration::from_secs(2), |_| {
                             browser.read_untracked(|state| state.tab().mode == ViewMode::Grid)
@@ -1540,7 +1545,7 @@ mod driven {
                         Modifiers::CONTROL,
                         &ts,
                     );
-                    browser.new_tab(Some(Location::from(work.join("folder_a"))));
+                    Navigator(&browser).new_tab(Some(Location::from(work.join("folder_a"))));
                     let tabs_label = browser.0.owner.with(|| files_i18n::text_untracked("tabs"));
                     ensure!(
                         wait_until(&mut harness, Duration::from_secs(2), |h| {
@@ -1702,8 +1707,8 @@ mod driven {
                     );
 
                     // 09: Details panel + embedded terminal dock.
-                    browser.toggle_details();
-                    browser.toggle_terminal();
+                    Inspection(&browser).toggle_details();
+                    TerminalDock(&browser).toggle_terminal();
                     ensure!(
                         wait_until(&mut harness, Duration::from_secs(2), |_| {
                             browser.0.details.get_untracked() && browser.0.terminal.get_untracked()
@@ -1721,11 +1726,11 @@ mod driven {
                     // 10: Hierarchical tag address + mouse Back/Forward navigation.
                     let tag_root = TagAddress::new("work")
                         .map_err(|err| anyhow::anyhow!("invalid work tag: {err:?}"))?;
-                    browser.open(Location::Tags(tag_root));
+                    Navigator(&browser).open(Location::Tags(tag_root));
                     let tag_child = TagAddress::new("work/urgent")
                         .map_err(|err| anyhow::anyhow!("invalid work/urgent tag: {err:?}"))?;
-                    browser.open(Location::Tags(tag_child));
-                    browser.open(Location::from(&work));
+                    Navigator(&browser).open(Location::Tags(tag_child));
+                    Navigator(&browser).open(Location::from(&work));
                     ensure!(
                         wait_until(&mut harness, Duration::from_secs(2), |_| {
                             browser.read_untracked(|state| {
@@ -2198,7 +2203,7 @@ mod driven {
                     );
 
                     // 04: Browser Grid view (Light + Dark).
-                    browser.open(Location::from(&docs));
+                    Navigator(&browser).open(Location::from(&docs));
                     ensure!(
                         wait_until(ctx.harness, Duration::from_secs(3), |h| {
                             ctx.semantic.ingest_from(h);
@@ -2206,7 +2211,7 @@ mod driven {
                         }),
                         "gallery 04: Documents entries did not render"
                     );
-                    browser.toggle_view();
+                    Navigator(&browser).toggle_view();
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |_| {
                         browser.read_untracked(|state| state.tab().mode == ViewMode::Grid)
                     });
@@ -2228,7 +2233,7 @@ mod driven {
                     apply_bamboo_mode(&browser, ModePreference::Dark);
                     ctx.snap_primary("04b-browser-grid-dark")?;
                     apply_bamboo_mode(&browser, ModePreference::Light);
-                    browser.toggle_view();
+                    Navigator(&browser).toggle_view();
                     pump_frames(ctx.harness);
 
                     // 05: Compact responsive mode (860x640) + collapsed icon-rail sidebar.
@@ -2259,7 +2264,7 @@ mod driven {
                         state.places.record(Location::from(home.join("Pictures")));
                         state.places.record(Location::from(home.join("Downloads")));
                     });
-                    browser.open(Location::Recent);
+                    Navigator(&browser).open(Location::Recent);
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.find_entry_center("Documents").is_some()
@@ -2282,7 +2287,7 @@ mod driven {
                             .places
                             .set_favorite(Location::from(home.join("Pictures")), true);
                     });
-                    browser.open(Location::Favorites);
+                    Navigator(&browser).open(Location::Favorites);
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.find_entry_center("Documents").is_some()
@@ -2294,7 +2299,7 @@ mod driven {
                     ctx.snap_primary("07-page-favorites")?;
 
                     // 08: Volumes page.
-                    browser.open(Location::Volumes);
+                    Navigator(&browser).open(Location::Volumes);
                     std::thread::sleep(Duration::from_millis(150));
                     ctx.snap_primary("08-page-volumes")?;
 
@@ -2313,17 +2318,17 @@ mod driven {
                             state.places.set_remote_favorite(smb_addr, true);
                         });
                     }
-                    browser.open(Location::Network);
+                    Navigator(&browser).open(Location::Network);
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |_| {
                         browser.read_untracked(|state| {
                             matches!(
                                 state.tab().contents,
-                                crate::pages::workspace::model::Contents::Network { .. }
+                                crate::pages::workspace::state::model::Contents::Network { .. }
                             )
                         })
                     });
                     ctx.snap_primary("09a-page-network")?;
-                    browser.connect_server();
+                    RemoteOps(&browser).connect_server();
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.has_role(Role::Dialog)
@@ -2343,7 +2348,7 @@ mod driven {
                     fs::write(&trashed_file, b"draft content\n")?;
                     fs::create_dir_all(&trashed_dir)?;
                     let _ = trash::delete_all([&trashed_file, &trashed_dir]);
-                    browser.open(Location::Trash);
+                    Navigator(&browser).open(Location::Trash);
                     let _ = wait_until(ctx.harness, Duration::from_secs(3), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic
@@ -2363,7 +2368,7 @@ mod driven {
                     pump_frames(ctx.harness);
                     let root_tags = TagAddress::new("")
                         .map_err(|err| anyhow::anyhow!("invalid root tag address: {err:?}"))?;
-                    browser.open(Location::Tags(root_tags));
+                    Navigator(&browser).open(Location::Tags(root_tags));
                     let _ = wait_until(ctx.harness, Duration::from_secs(3), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.find_entry_center("design").is_some()
@@ -2372,7 +2377,7 @@ mod driven {
 
                     let nested_tag = TagAddress::new("milestone/v1")
                         .map_err(|err| anyhow::anyhow!("invalid nested tag address: {err:?}"))?;
-                    browser.open(Location::Tags(nested_tag));
+                    Navigator(&browser).open(Location::Tags(nested_tag));
                     let _ = wait_until(ctx.harness, Duration::from_secs(3), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.find_entry_center("README.md").is_some()
@@ -2380,12 +2385,12 @@ mod driven {
                     ctx.snap_primary("11b-page-tags-items")?;
 
                     // 12: Tag Editor dialog + Destructive Confirm 5-item preview dialog.
-                    browser.open(Location::from(&docs));
+                    Navigator(&browser).open(Location::from(&docs));
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.find_entry_center("README.md").is_some()
                     });
-                    browser.edit_tags(readme_path.clone());
+                    Inspection(&browser).edit_tags(readme_path.clone());
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.has_role(Role::Dialog)
@@ -2399,9 +2404,9 @@ mod driven {
                         ctx.ts,
                     );
 
-                    browser.select_all();
+                    Keyboard(&browser).select_all();
                     pump_frames(ctx.harness);
-                    browser.delete(true);
+                    Dispatch(&browser).delete(true);
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.has_role(Role::Dialog)
@@ -2423,7 +2428,7 @@ mod driven {
                         park_pointer(ctx.harness, ctx.ts);
                     }
                     browser.0.details.set(true);
-                    browser.toggle_terminal();
+                    TerminalDock(&browser).toggle_terminal();
                     for _ in 0..8 {
                         std::thread::sleep(Duration::from_millis(40));
                         pump_frames(ctx.harness);
@@ -2440,7 +2445,7 @@ mod driven {
                     browser.0.details.set(true);
                     ctx.snap_primary("13b-details-and-terminal-dark")?;
                     browser.0.details.set(false);
-                    browser.toggle_terminal();
+                    TerminalDock(&browser).toggle_terminal();
                     apply_bamboo_mode(&browser, ModePreference::Light);
                     pump_frames(ctx.harness);
 
@@ -2459,7 +2464,7 @@ mod driven {
                     // 15: Permissions dialog + 15b: Basic properties tab (default).
                     let readme_entry = Entry::inspect(&readme_path)
                         .map_err(|err| anyhow::anyhow!("inspect README.md: {err}"))?;
-                    browser.edit_permissions(readme_entry.clone());
+                    Inspection(&browser).edit_permissions(readme_entry.clone());
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.has_role(Role::Dialog)
@@ -2476,7 +2481,7 @@ mod driven {
                         !ctx.semantic.has_role(Role::Dialog)
                     });
 
-                    browser.edit_item_properties(readme_entry, None);
+                    Inspection(&browser).edit_item_properties(readme_entry, None);
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.has_role(Role::Dialog)
@@ -2492,7 +2497,7 @@ mod driven {
                     );
 
                     // 16: Settings Center — render every available Settings category page.
-                    browser.show_settings();
+                    UiState(&browser).show_settings();
                     pump_frames(ctx.harness);
                     let settings_shots: [&str; 6] = [
                         "16a-settings-general",
@@ -2654,9 +2659,9 @@ mod driven {
                         picker_b.update(|state| {
                             state.places.set_remote_favorite(remote_addr.clone(), true);
                         });
-                        picker_b.open(Location::Network);
+                        Navigator(picker_b).open(Location::Network);
                         pump_frames(ctx.harness);
-                        picker_b.open(Location::Remote(remote_addr));
+                        Navigator(picker_b).open(Location::Remote(remote_addr));
                         pump_frames(ctx.harness);
                         ctx.snap_surface("18b-picker-remote-local-notice", &save_picker_surface)?;
                     }
@@ -2775,7 +2780,7 @@ mod driven {
                     close_secondary(ctx.harness, &remote_picker_surface);
 
                     // 19: Application menu, file context menu, column config dialog, status popover.
-                    browser.open(Location::from(&docs));
+                    Navigator(&browser).open(Location::from(&docs));
                     let _ = wait_until(ctx.harness, Duration::from_secs(2), |h| {
                         ctx.semantic.ingest_from(h);
                         ctx.semantic.find_entry_center("README.md").is_some()
@@ -2805,17 +2810,17 @@ mod driven {
                     );
                     park_pointer(ctx.harness, ctx.ts);
 
-                    browser.show_app_menu();
+                    MenuHost(&browser).show_app_menu();
                     ctx.snap_primary("19a-menu-application")?;
                     browser.0.menus.close();
                     pump_frames(ctx.harness);
 
-                    browser.show_context_menu();
+                    MenuHost(&browser).show_context_menu();
                     ctx.snap_primary("19-menus-and-status-popovers")?;
                     browser.0.menus.close();
                     pump_frames(ctx.harness);
 
-                    browser.configure_columns();
+                    Rows(&browser).configure_columns();
                     ctx.snap_primary("19c-dialog-column-config")?;
                     browser.0.menus.close();
                     pump_frames(ctx.harness);
@@ -2851,12 +2856,12 @@ mod driven {
                     pump_frames(ctx.harness);
 
                     // 20: Overlays — About dialog, Help page, Keytips + Toast notifications.
-                    browser.show_about();
+                    MenuHost(&browser).show_about();
                     ctx.snap_primary("20a-dialog-about")?;
                     browser.cancel_prompt();
                     pump_frames(ctx.harness);
 
-                    browser.show_help();
+                    MenuHost(&browser).show_help();
                     ctx.snap_primary("20b-page-help")?;
                     browser.show_files();
                     pump_frames(ctx.harness);

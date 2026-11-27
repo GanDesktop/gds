@@ -14,13 +14,8 @@ use gds::{app::Gds, service::task_manager::Scope};
 use tokio::sync::mpsc;
 use zgui::prelude::*;
 
-use super::Error;
 use super::*;
-
-pub(super) struct Observation {
-    pub started: Instant,
-    pub result: Result<Snapshot, Error>,
-}
+use super::{Error, Observation};
 
 struct BusyGuard {
     busy: Arc<Mutex<HashMap<VolumeId, Vec<PathBuf>>>>,

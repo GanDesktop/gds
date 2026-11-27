@@ -18,7 +18,7 @@ use zbus::{
     zvariant::{OwnedObjectPath, OwnedValue, Value},
 };
 
-use super::service::Observation;
+use super::Observation;
 use super::*;
 
 const DESTINATION: &str = "org.freedesktop.UDisks2";

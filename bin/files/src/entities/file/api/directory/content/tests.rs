@@ -65,23 +65,23 @@ fn unique_compound_and_alias_matches_resolve_without_opening_files() {
     let root = tempfile::tempdir().expect("create fixture directory");
     let missing = root.path().join("missing-unopened");
 
-    let rs = ContentType::detect_with_database(&db, OsStr::new("main.rs"), &missing)
+    let rs = detect_with_database(&db, OsStr::new("main.rs"), &missing)
         .expect("rust should detect from filename");
     assert_eq!(rs.category, ContentCategory::Code);
     assert_eq!(rs.mime.as_deref(), Some("text/rust"));
     assert!(rs.text_previewable);
 
-    let makefile = ContentType::detect_with_database(&db, OsStr::new("Makefile"), &missing)
+    let makefile = detect_with_database(&db, OsStr::new("Makefile"), &missing)
         .expect("Makefile should detect from literal name");
     assert_eq!(makefile.category, ContentCategory::Code);
     assert_eq!(makefile.mime.as_deref(), Some("text/x-makefile"));
 
-    let alias = ContentType::detect_with_database(&db, OsStr::new("picture.alias"), &missing)
+    let alias = detect_with_database(&db, OsStr::new("picture.alias"), &missing)
         .expect("alias should normalize to image/png");
     assert_eq!(alias.category, ContentCategory::Image);
     assert_eq!(alias.mime.as_deref(), Some("image/png"));
 
-    let ots = ContentType::detect_with_database(&db, OsStr::new("template.ots"), &missing)
+    let ots = detect_with_database(&db, OsStr::new("template.ots"), &missing)
         .expect("ots should detect via generic-icons");
     assert_eq!(ots.category, ContentCategory::Document);
     assert_eq!(
@@ -90,7 +90,7 @@ fn unique_compound_and_alias_matches_resolve_without_opening_files() {
     );
     assert!(!ots.text_previewable);
 
-    let tar_gz = ContentType::detect_with_database(&db, OsStr::new("bundle.tar.gz"), &missing)
+    let tar_gz = detect_with_database(&db, OsStr::new("bundle.tar.gz"), &missing)
         .expect("compound extension should win over .gz");
     assert_eq!(tar_gz.category, ContentCategory::Archive);
     assert_eq!(tar_gz.mime.as_deref(), Some("application/x-compressed-tar"));
@@ -102,7 +102,7 @@ fn parent_subclass_globs_and_linguist_extensions_stay_on_zero_io_fast_path() {
 
     // `.json` has `application/json` + subclass `application/schema+json`: collapses without enrich.
     let FilenameClassification::Resolved(json) =
-        ContentType::classify_filename_with_database(&db, OsStr::new("config.json"))
+        classify_filename_with_database(&db, OsStr::new("config.json"))
     else {
         panic!(".json must resolve on zero-I/O fast path");
     };
@@ -112,7 +112,7 @@ fn parent_subclass_globs_and_linguist_extensions_stay_on_zero_io_fast_path() {
 
     // `.zig` and `.nix` are absent from the MIME fixture; Linguist resolves them with zero I/O.
     let FilenameClassification::Resolved(zig) =
-        ContentType::classify_filename_with_database(&db, OsStr::new("main.zig"))
+        classify_filename_with_database(&db, OsStr::new("main.zig"))
     else {
         panic!(".zig must resolve via Linguist without enrich");
     };
@@ -122,7 +122,7 @@ fn parent_subclass_globs_and_linguist_extensions_stay_on_zero_io_fast_path() {
     assert_eq!(zig.source, DetectionSource::Linguist);
 
     let FilenameClassification::Resolved(nix) =
-        ContentType::classify_filename_with_database(&db, OsStr::new("flake.nix"))
+        classify_filename_with_database(&db, OsStr::new("flake.nix"))
     else {
         panic!(".nix must resolve via Linguist without enrich");
     };
@@ -137,7 +137,7 @@ fn ambiguous_ogg_and_dot_fixtures_disambiguate_when_probed() {
 
     // Filename-only marks `.ogg` as Ambiguous with deterministic shared-parent convergence.
     let FilenameClassification::Ambiguous(fallback) =
-        ContentType::classify_filename_with_database(&db, OsStr::new("clip.ogg"))
+        classify_filename_with_database(&db, OsStr::new("clip.ogg"))
     else {
         panic!(".ogg must be marked Ambiguous before probing");
     };
@@ -149,7 +149,7 @@ fn ambiguous_ogg_and_dot_fixtures_disambiguate_when_probed() {
     vorbis[28..35].copy_from_slice(b"\x01vorbis");
     let audio_path = root.path().join("track.ogg");
     fs::write(&audio_path, &vorbis).expect("write vorbis fixture");
-    let audio = ContentType::probe_content_with_database(&db, OsStr::new("track.ogg"), &audio_path)
+    let audio = probe_content_with_database(&db, OsStr::new("track.ogg"), &audio_path)
         .expect("probe vorbis ogg");
     assert_eq!(audio.category, ContentCategory::Audio);
     assert_eq!(audio.mime.as_deref(), Some("audio/x-vorbis+ogg"));
@@ -160,7 +160,7 @@ fn ambiguous_ogg_and_dot_fixtures_disambiguate_when_probed() {
     theora[28..35].copy_from_slice(b"\x80theora");
     let video_path = root.path().join("movie.ogg");
     fs::write(&video_path, &theora).expect("write theora fixture");
-    let video = ContentType::probe_content_with_database(&db, OsStr::new("movie.ogg"), &video_path)
+    let video = probe_content_with_database(&db, OsStr::new("movie.ogg"), &video_path)
         .expect("probe theora ogg");
     assert_eq!(video.category, ContentCategory::Video);
     assert_eq!(video.mime.as_deref(), Some("video/x-theora+ogg"));
@@ -168,7 +168,7 @@ fn ambiguous_ogg_and_dot_fixtures_disambiguate_when_probed() {
     // `.dot` with plain-text Graphviz content resolves via text/binary heuristic disambiguation.
     let dot_path = root.path().join("graph.dot");
     fs::write(&dot_path, b"digraph G { a -> b; }\n").expect("write graphviz fixture");
-    let dot = ContentType::probe_content_with_database(&db, OsStr::new("graph.dot"), &dot_path)
+    let dot = probe_content_with_database(&db, OsStr::new("graph.dot"), &dot_path)
         .expect("probe dot file");
     assert_eq!(dot.mime.as_deref(), Some("text/vnd.graphviz"));
 }
@@ -180,8 +180,7 @@ fn recognized_names_take_precedence_over_file_headers() {
     let path = root.path().join("sample");
     fs::write(&path, b"\x89PNG\r\n\x1a\nrest").expect("write sample header");
 
-    let jpg = ContentType::detect_with_database(&db, OsStr::new("picture.jpg"), &path)
-        .expect("detect jpg");
+    let jpg = detect_with_database(&db, OsStr::new("picture.jpg"), &path).expect("detect jpg");
     assert_eq!(jpg.category, ContentCategory::Image);
     assert_eq!(jpg.mime.as_deref(), Some("image/jpeg"));
 }
@@ -193,36 +192,32 @@ fn unknown_names_fall_back_to_magic_and_heuristics() {
     let path = root.path().join("sample");
 
     // Missing file returns None.
-    assert!(ContentType::detect_with_database(&db, OsStr::new("unknown"), &path).is_none());
+    assert!(detect_with_database(&db, OsStr::new("unknown"), &path).is_none());
 
     // Magic header match.
     fs::write(&path, b"\x89PNG\r\n\x1a\nrest").expect("write PNG header");
-    let png = ContentType::detect_with_database(&db, OsStr::new("no-extension"), &path)
-        .expect("sniff png");
+    let png = detect_with_database(&db, OsStr::new("no-extension"), &path).expect("sniff png");
     assert_eq!(png.category, ContentCategory::Image);
     assert_eq!(png.mime.as_deref(), Some("image/png"));
     assert_eq!(png.source, DetectionSource::Magic);
 
     // Empty file -> text/plain heuristic.
     fs::write(&path, b"").expect("write empty file");
-    let empty =
-        ContentType::detect_with_database(&db, OsStr::new("unknown"), &path).expect("detect empty");
+    let empty = detect_with_database(&db, OsStr::new("unknown"), &path).expect("detect empty");
     assert_eq!(empty.category, ContentCategory::Text);
     assert_eq!(empty.mime.as_deref(), Some("text/plain"));
     assert_eq!(empty.source, DetectionSource::Heuristic);
 
     // Plain text -> text/plain heuristic.
     fs::write(&path, b"plain text").expect("write text file");
-    let text = ContentType::detect_with_database(&db, OsStr::new("notes.foo"), &path)
-        .expect("detect text");
+    let text = detect_with_database(&db, OsStr::new("notes.foo"), &path).expect("detect text");
     assert_eq!(text.category, ContentCategory::Text);
     assert_eq!(text.mime.as_deref(), Some("text/plain"));
     assert_eq!(text.source, DetectionSource::Heuristic);
 
     // Binary bytes -> application/octet-stream heuristic.
     fs::write(&path, b"\0\xff\0\xff").expect("write binary file");
-    let bin = ContentType::detect_with_database(&db, OsStr::new("data.bar"), &path)
-        .expect("detect binary");
+    let bin = detect_with_database(&db, OsStr::new("data.bar"), &path).expect("detect binary");
     assert_eq!(bin.category, ContentCategory::Binary);
     assert_eq!(bin.mime.as_deref(), Some("application/octet-stream"));
     assert_eq!(bin.source, DetectionSource::Heuristic);
@@ -234,9 +229,7 @@ fn content_reads_remain_bounded() {
     let path = root.path().join("large-file");
     fs::write(&path, vec![b'a'; HEADER_LEN as usize + 1024]).expect("write large file");
     assert_eq!(
-        ContentType::read_header(&path)
-            .expect("read bounded header")
-            .len(),
+        read_header(&path).expect("read bounded header").len(),
         HEADER_LEN as usize
     );
 }
@@ -247,38 +240,33 @@ fn system_shared_mime_info_acceptance_checks_when_installed() {
         return;
     }
     // Verify `.ots`, `.tar.gz`, `.blend`, `.dmg`, `.rs`, `.py`, `.json` against the installed DB.
-    let FilenameClassification::Resolved(ots) =
-        ContentType::classify_filename(OsStr::new("template.ots"))
+    let FilenameClassification::Resolved(ots) = classify_filename(OsStr::new("template.ots"))
     else {
         panic!(".ots should resolve cleanly on installed shared-mime-info");
     };
     assert_eq!(ots.category, ContentCategory::Document);
     assert!(!ots.text_previewable);
 
-    let FilenameClassification::Resolved(tar_gz) =
-        ContentType::classify_filename(OsStr::new("archive.tar.gz"))
+    let FilenameClassification::Resolved(tar_gz) = classify_filename(OsStr::new("archive.tar.gz"))
     else {
         panic!(".tar.gz should resolve cleanly");
     };
     assert_eq!(tar_gz.category, ContentCategory::Archive);
     assert_eq!(tar_gz.mime.as_deref(), Some("application/x-compressed-tar"));
 
-    let FilenameClassification::Resolved(json) =
-        ContentType::classify_filename(OsStr::new("config.json"))
+    let FilenameClassification::Resolved(json) = classify_filename(OsStr::new("config.json"))
     else {
         panic!(".json should collapse to base MIME without enrich");
     };
     assert_eq!(json.category, ContentCategory::Text);
     assert_eq!(json.mime.as_deref(), Some("application/json"));
 
-    let FilenameClassification::Resolved(rs) = ContentType::classify_filename(OsStr::new("lib.rs"))
-    else {
+    let FilenameClassification::Resolved(rs) = classify_filename(OsStr::new("lib.rs")) else {
         panic!(".rs should resolve cleanly");
     };
     assert_eq!(rs.category, ContentCategory::Code);
 
-    let FilenameClassification::Resolved(py) = ContentType::classify_filename(OsStr::new("app.py"))
-    else {
+    let FilenameClassification::Resolved(py) = classify_filename(OsStr::new("app.py")) else {
         panic!(".py should resolve cleanly");
     };
     assert_eq!(py.category, ContentCategory::Code);
@@ -508,11 +496,11 @@ fn subclass_excludes_non_streamable_inodes_and_picker_shares_case_sensitive_rule
 
     // Both directory filename classification and picker MIME filtering enforce case-sensitive literal rules.
     assert!(matches!(
-        ContentType::classify_filename_with_database(&db, OsStr::new("ExactName")),
+        classify_filename_with_database(&db, OsStr::new("ExactName")),
         FilenameClassification::Resolved(content) if content.mime.as_deref() == Some("text/x-kind")
     ));
     assert!(matches!(
-        ContentType::classify_filename_with_database(&db, OsStr::new("exactname")),
+        classify_filename_with_database(&db, OsStr::new("exactname")),
         FilenameClassification::Unmatched
     ));
     assert!(matches_mime_filter_with_database(

@@ -1,7 +1,6 @@
 //! File operations on an immutable selection of original filesystem paths.
 
-pub mod names;
-pub mod transfer;
+pub(crate) use super::names;
 
 use std::{
     collections::HashSet,

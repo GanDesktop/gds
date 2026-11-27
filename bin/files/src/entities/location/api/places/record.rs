@@ -160,7 +160,7 @@ impl ViewKey {
     pub(super) fn into_scope(self) -> Result<crate::entities::location::ViewScope, super::Error> {
         use crate::entities::location::{Location, ViewScope, VolumeIdentity};
         let location = match self.kind {
-            ViewKind::Tags => Location::from_uri(&self.identity)
+            ViewKind::Tags => crate::entities::location::scheme::parse(&self.identity)
                 .map_err(|error| super::Error::Remote(error.to_string()))?,
             ViewKind::Defaults => return Ok(ViewScope::Defaults),
             ViewKind::Directory => Location::Directory(serde_json::from_slice(&self.path)?),

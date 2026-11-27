@@ -45,12 +45,6 @@ impl Location {
             .map(String::from)
             .map_err(|()| Error::Invalid(path.display().to_string()))
     }
-
-    /// # Errors
-    /// Rejects unsupported schemes, malformed addresses and invalid volume-relative paths.
-    pub(crate) fn from_uri(input: &str) -> Result<Self, Error> {
-        crate::entities::location::scheme::parse(input)
-    }
 }
 
 #[cfg(test)]

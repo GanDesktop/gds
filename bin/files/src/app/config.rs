@@ -98,7 +98,7 @@ impl Mode {
     fn parse_picker_path(raw: OsString) -> anyhow::Result<PathBuf> {
         if let Some(text) = raw.to_str()
             && scheme::recognizes(text)
-            && let Ok(location) = Location::from_uri(text)
+            && let Ok(location) = scheme::parse(text)
             && let Some(path) = location.local_path()
         {
             return Ok(path.to_path_buf());
@@ -112,7 +112,7 @@ impl Mode {
             let location = if let Some(text) = raw.to_str()
                 && scheme::recognizes(text)
             {
-                Location::from_uri(text).map_err(|error| anyhow::anyhow!(error.to_string()))?
+                scheme::parse(text).map_err(|error| anyhow::anyhow!(error.to_string()))?
             } else {
                 let path = PathBuf::from(raw);
                 let abs = if path.is_absolute() {

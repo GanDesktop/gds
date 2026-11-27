@@ -10,228 +10,143 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use super::snapshot::Snapshot;
 use super::{names::NamedTarget, recycle, transfer};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TargetKind {
-    File,
-    Directory,
-    Symlink,
-    Other,
-}
-
-impl TargetKind {
-    fn of(file_type: fs::FileType) -> Self {
-        if file_type.is_dir() {
-            Self::Directory
-        } else if file_type.is_symlink() {
-            Self::Symlink
-        } else if file_type.is_file() {
-            Self::File
+/// # Errors
+/// Maps missing entries to [`Error::TargetChanged`] and other failures to [`Error::TargetInspection`].
+fn inspect_snapshot(path: &Path) -> Result<Snapshot, Error> {
+    Snapshot::capture(path).map_err(|source| {
+        if source.kind() == io::ErrorKind::NotFound {
+            Error::TargetChanged {
+                path: path.to_owned(),
+            }
         } else {
-            Self::Other
-        }
-    }
-}
-
-/// Filesystem identity and content stamp captured when an operation commits its target.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Snapshot {
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
-    kind: TargetKind,
-    size: u64,
-    #[cfg(unix)]
-    modified: i64,
-    #[cfg(unix)]
-    modified_nanos: i64,
-    #[cfg(not(unix))]
-    modified: Option<std::time::SystemTime>,
-}
-
-impl Snapshot {
-    /// Capture the current `lstat` stamp of a committed path without following symlinks.
-    ///
-    /// # Errors
-    /// Propagates filesystem metadata lookup failures.
-    pub fn capture(path: &Path) -> io::Result<Self> {
-        let metadata = fs::symlink_metadata(path)?;
-        Ok(Self::from_metadata(&metadata))
-    }
-
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt as _;
-
-        Self {
-            #[cfg(unix)]
-            device: metadata.dev(),
-            #[cfg(unix)]
-            inode: metadata.ino(),
-            kind: TargetKind::of(metadata.file_type()),
-            size: metadata.len(),
-            #[cfg(unix)]
-            modified: metadata.mtime(),
-            #[cfg(unix)]
-            modified_nanos: metadata.mtime_nsec(),
-            #[cfg(not(unix))]
-            modified: metadata.modified().ok(),
-        }
-    }
-
-    /// # Errors
-    /// Maps missing entries to [`Error::TargetChanged`] and other failures to [`Error::TargetInspection`].
-    fn inspect(path: &Path) -> Result<Self, Error> {
-        Self::capture(path).map_err(|source| {
-            if source.kind() == io::ErrorKind::NotFound {
-                Error::TargetChanged {
-                    path: path.to_owned(),
-                }
-            } else {
-                Error::TargetInspection {
-                    path: path.to_owned(),
-                    source,
-                }
-            }
-        })
-    }
-
-    fn same_identity(&self, current: &Self) -> bool {
-        #[cfg(unix)]
-        {
-            self.device == current.device
-                && self.inode == current.inode
-                && self.kind == current.kind
-        }
-        #[cfg(not(unix))]
-        {
-            self.kind == current.kind
-        }
-    }
-
-    /// Verify that `path` still refers to the same filesystem object (allowing in-place edits).
-    ///
-    /// # Errors
-    /// Reports missing/replaced entries as [`Error::TargetChanged`] and I/O failures.
-    fn verify_identity(&self, path: &Path) -> Result<(), Error> {
-        let current = Self::inspect(path)?;
-        if self.same_identity(&current) {
-            Ok(())
-        } else {
-            Err(Error::TargetChanged {
-                path: path.to_owned(),
-            })
-        }
-    }
-
-    /// Verify that `path` still refers to the same unmodified entry.
-    ///
-    /// # Errors
-    /// Reports missing, replaced or modified entries as [`Error::TargetChanged`] and I/O failures.
-    fn verify_unmodified(&self, path: &Path) -> Result<(), Error> {
-        let current = Self::inspect(path)?;
-        if *self == current {
-            Ok(())
-        } else {
-            Err(Error::TargetChanged {
-                path: path.to_owned(),
-            })
-        }
-    }
-
-    /// Verify that `path` still refers to the exact created directory and contains no entries.
-    ///
-    /// # Errors
-    /// Reports replaced directories as [`Error::TargetChanged`], occupied directories as
-    /// [`Error::DirectoryNotEmpty`], and I/O failures.
-    fn verify_empty_directory(&self, path: &Path) -> Result<(), Error> {
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        {
-            use rustix::{
-                fs::{CWD, Dir, Mode, OFlags, fstat, openat},
-                io::Errno,
-            };
-            use std::os::unix::ffi::OsStrExt as _;
-
-            let descriptor = openat(
-                CWD,
-                path,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|error| match error {
-                Errno::NOENT | Errno::NOTDIR | Errno::LOOP => Error::TargetChanged {
-                    path: path.to_owned(),
-                },
-                #[cfg(target_os = "freebsd")]
-                Errno::MLINK => Error::TargetChanged {
-                    path: path.to_owned(),
-                },
-                other => Error::TargetInspection {
-                    path: path.to_owned(),
-                    source: other.into(),
-                },
-            })?;
-            let directory = fs::File::from(descriptor);
-            let stat = fstat(&directory).map_err(|error| Error::TargetInspection {
-                path: path.to_owned(),
-                source: error.into(),
-            })?;
-            if self.kind != TargetKind::Directory
-                || self.device != stat.st_dev
-                || self.inode != stat.st_ino
-            {
-                return Err(Error::TargetChanged {
-                    path: path.to_owned(),
-                });
-            }
-            let entries = Dir::read_from(&directory).map_err(|error| Error::TargetInspection {
-                path: path.to_owned(),
-                source: error.into(),
-            })?;
-            for entry in entries {
-                let entry = entry.map_err(|error| Error::TargetInspection {
-                    path: path.to_owned(),
-                    source: error.into(),
-                })?;
-                let name = std::ffi::OsStr::from_bytes(entry.file_name().to_bytes());
-                if name != "." && name != ".." {
-                    return Err(Error::DirectoryNotEmpty {
-                        path: path.to_owned(),
-                    });
-                }
-            }
-            Ok(())
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-        {
-            if self.kind != TargetKind::Directory {
-                return Err(Error::TargetChanged {
-                    path: path.to_owned(),
-                });
-            }
-            self.verify_identity(path)?;
-            let mut entries = fs::read_dir(path).map_err(|source| Error::TargetInspection {
+            Error::TargetInspection {
                 path: path.to_owned(),
                 source,
+            }
+        }
+    })
+}
+
+/// Verify that `path` still refers to the same filesystem object (allowing in-place edits).
+///
+/// # Errors
+/// Reports missing/replaced entries as [`Error::TargetChanged`] and I/O failures.
+fn verify_identity(expected: &Snapshot, path: &Path) -> Result<(), Error> {
+    let current = inspect_snapshot(path)?;
+    if expected.same_identity(&current) {
+        Ok(())
+    } else {
+        Err(Error::TargetChanged {
+            path: path.to_owned(),
+        })
+    }
+}
+
+/// Verify that `path` still refers to the same unmodified entry.
+///
+/// # Errors
+/// Reports missing, replaced or modified entries as [`Error::TargetChanged`] and I/O failures.
+fn verify_unmodified(expected: &Snapshot, path: &Path) -> Result<(), Error> {
+    let current = inspect_snapshot(path)?;
+    if *expected == current {
+        Ok(())
+    } else {
+        Err(Error::TargetChanged {
+            path: path.to_owned(),
+        })
+    }
+}
+
+/// Verify that `path` still refers to the exact created directory and contains no entries.
+///
+/// # Errors
+/// Reports replaced directories as [`Error::TargetChanged`], occupied directories as
+/// [`Error::DirectoryNotEmpty`], and I/O failures.
+fn verify_empty_directory(expected: &Snapshot, path: &Path) -> Result<(), Error> {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        use rustix::{
+            fs::{CWD, Dir, Mode, OFlags, fstat, openat},
+            io::Errno,
+        };
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let descriptor = openat(
+            CWD,
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| match error {
+            Errno::NOENT | Errno::NOTDIR | Errno::LOOP => Error::TargetChanged {
+                path: path.to_owned(),
+            },
+            #[cfg(target_os = "freebsd")]
+            Errno::MLINK => Error::TargetChanged {
+                path: path.to_owned(),
+            },
+            other => Error::TargetInspection {
+                path: path.to_owned(),
+                source: other.into(),
+            },
+        })?;
+        let directory = fs::File::from(descriptor);
+        let stat = fstat(&directory).map_err(|error| Error::TargetInspection {
+            path: path.to_owned(),
+            source: error.into(),
+        })?;
+        if !expected.matches_directory_dev_ino(stat.st_dev, stat.st_ino) {
+            return Err(Error::TargetChanged {
+                path: path.to_owned(),
+            });
+        }
+        let entries = Dir::read_from(&directory).map_err(|error| Error::TargetInspection {
+            path: path.to_owned(),
+            source: error.into(),
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| Error::TargetInspection {
+                path: path.to_owned(),
+                source: error.into(),
             })?;
-            if entries
-                .next()
-                .transpose()
-                .map_err(|source| Error::TargetInspection {
-                    path: path.to_owned(),
-                    source,
-                })?
-                .is_some()
-            {
+            let name = std::ffi::OsStr::from_bytes(entry.file_name().to_bytes());
+            if name != "." && name != ".." {
                 return Err(Error::DirectoryNotEmpty {
                     path: path.to_owned(),
                 });
             }
-            Ok(())
         }
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    {
+        if !expected.is_directory() {
+            return Err(Error::TargetChanged {
+                path: path.to_owned(),
+            });
+        }
+        verify_identity(expected, path)?;
+        let mut entries = fs::read_dir(path).map_err(|source| Error::TargetInspection {
+            path: path.to_owned(),
+            source,
+        })?;
+        if entries
+            .next()
+            .transpose()
+            .map_err(|source| Error::TargetInspection {
+                path: path.to_owned(),
+                source,
+            })?
+            .is_some()
+        {
+            return Err(Error::DirectoryNotEmpty {
+                path: path.to_owned(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -381,8 +296,8 @@ impl Step {
             return Ok(());
         };
         match policy {
-            TrashPolicy::Unmodified => expected.verify_unmodified(path),
-            TrashPolicy::EmptyDirectory => expected.verify_empty_directory(path),
+            TrashPolicy::Unmodified => verify_unmodified(expected, path),
+            TrashPolicy::EmptyDirectory => verify_empty_directory(expected, path),
         }
     }
 
@@ -402,7 +317,7 @@ impl Step {
                 destination,
                 expected,
             } => {
-                expected.verify_identity(source)?;
+                verify_identity(expected, source)?;
                 let parent = destination
                     .parent()
                     .ok_or_else(|| Error::InvalidPath(destination.clone()))?;
@@ -425,7 +340,7 @@ impl Step {
                 item.result?;
                 let next = match item.committed_snapshot {
                     Some(snapshot) => snapshot,
-                    None => Snapshot::inspect(destination)?,
+                    None => inspect_snapshot(destination)?,
                 };
                 Ok(Self::Move {
                     source: destination.clone(),
@@ -450,7 +365,7 @@ impl Step {
                 outcome.result?;
                 let expected = match outcome.restored {
                     Some(snapshot) => snapshot,
-                    None => Snapshot::inspect(&entry.original_path)?,
+                    None => inspect_snapshot(&entry.original_path)?,
                 };
                 let policy = if kind == Kind::NewFolder {
                     TrashPolicy::EmptyDirectory
@@ -470,7 +385,7 @@ impl Step {
                 target,
                 expected,
             } => {
-                expected.verify_unmodified(path)?;
+                verify_unmodified(expected, path)?;
                 fs::remove_file(path).map_err(|source| Error::TargetInspection {
                     path: path.clone(),
                     source,
@@ -493,7 +408,7 @@ impl Step {
                         }
                     }
                 })?;
-                let expected = Snapshot::inspect(path)?;
+                let expected = inspect_snapshot(path)?;
                 Ok(Self::RemoveSymlink {
                     path: path.clone(),
                     target: target.clone(),

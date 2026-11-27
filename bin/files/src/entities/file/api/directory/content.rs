@@ -64,260 +64,259 @@ impl FilenameClassification {
     }
 }
 
-impl ContentType {
-    /// Full content detection for a single regular file (used by `Entry::inspect`
-    /// and Properties). Preloads the localized XML description off the UI thread.
-    pub(super) fn detect(name: &OsStr, path: &Path) -> Option<Self> {
-        let detected = Self::detect_with_database(&MIME_DB, name, path);
-        if let Some(mime) = detected.as_ref().and_then(|c| c.mime.as_deref()) {
-            descriptions::preload_mime(mime);
-        }
-        detected
+/// Full content detection for a single regular file (used by `Entry::inspect`
+/// and Properties). Preloads the localized XML description off the UI thread.
+pub(super) fn detect(name: &OsStr, path: &Path) -> Option<ContentType> {
+    let detected = detect_with_database(&MIME_DB, name, path);
+    if let Some(mime) = detected.as_ref().and_then(|c| c.mime.as_deref()) {
+        descriptions::preload_mime(mime);
     }
+    detected
+}
 
-    /// Zero-I/O filename classification distinguishing resolved, ambiguous, and unmatched entries.
-    pub(super) fn classify_filename(name: &OsStr) -> FilenameClassification {
-        Self::classify_filename_with_database(&MIME_DB, name)
-    }
+/// Zero-I/O filename classification distinguishing resolved, ambiguous, and unmatched entries.
+pub(super) fn classify_filename(name: &OsStr) -> FilenameClassification {
+    classify_filename_with_database(&MIME_DB, name)
+}
 
-    /// Zero-I/O content classification for callers that never perform content probing
-    /// (e.g. remote directories or trash listings).
-    pub(super) fn detect_from_name(name: &OsStr) -> Option<Self> {
-        Self::classify_filename_with_database(&MIME_DB, name).into_content()
-    }
+/// Zero-I/O content classification for callers that never perform content probing
+/// (e.g. remote directories or trash listings).
+pub(crate) fn detect_from_name(name: &OsStr) -> Option<ContentType> {
+    classify_filename_with_database(&MIME_DB, name).into_content()
+}
 
-    /// Breadth-first MIME superclasses from `shared-mime-info` for external thumbnailer matching.
-    pub(super) fn mime_ancestors(mime: &str) -> Vec<Arc<str>> {
-        let mut visited = std::collections::HashSet::new();
-        let mut queue = std::collections::VecDeque::new();
-        let mut ancestors = Vec::new();
-        let canonical = MIME_DB.unalias(mime).into_owned();
-        visited.insert(canonical.clone());
-        queue.push_back(canonical);
-        while let Some(current) = queue.pop_front() {
-            for parent in MIME_DB.direct_parents(&current) {
-                if visited.insert(parent.clone()) {
-                    ancestors.push(Arc::from(parent.as_str()));
-                    if ancestors.len() >= 8 {
-                        return ancestors;
-                    }
-                    queue.push_back(parent);
+/// Breadth-first MIME superclasses from `shared-mime-info` for external thumbnailer matching.
+pub(super) fn mime_ancestors(mime: &str) -> Vec<Arc<str>> {
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut ancestors = Vec::new();
+    let canonical = MIME_DB.unalias(mime).into_owned();
+    visited.insert(canonical.clone());
+    queue.push_back(canonical);
+    while let Some(current) = queue.pop_front() {
+        for parent in MIME_DB.direct_parents(&current) {
+            if visited.insert(parent.clone()) {
+                ancestors.push(Arc::from(parent.as_str()));
+                if ancestors.len() >= 8 {
+                    return ancestors;
                 }
-            }
-        }
-        ancestors
-    }
-
-    /// Bounded 8 KiB content probe for ambiguous or unmatched regular files during
-    /// background enrichment. Also preloads the resolved MIME's XML description.
-    pub(super) fn probe_content(name: &OsStr, path: &Path) -> Option<Self> {
-        let detected = Self::probe_content_with_database(&MIME_DB, name, path);
-        if let Some(mime) = detected.as_ref().and_then(|c| c.mime.as_deref()) {
-            descriptions::preload_mime(mime);
-        }
-        detected
-    }
-
-    fn detect_with_database(db: &MimeDatabase, name: &OsStr, path: &Path) -> Option<Self> {
-        if let Some(xattr_mime) = gds::service::file_tags::read_mime_type(path) {
-            let canonical = db.unalias(&xattr_mime);
-            return Some(Self::build_from_mime(
-                db,
-                &canonical,
-                Some(name),
-                DetectionSource::Xattr,
-            ));
-        }
-        match Self::classify_filename_with_database(db, name) {
-            FilenameClassification::Resolved(content) => Some(content),
-            FilenameClassification::Ambiguous(fallback) => {
-                Self::probe_content_with_database(db, name, path).or(Some(fallback))
-            }
-            FilenameClassification::Unmatched => Self::probe_content_with_database(db, name, path),
-        }
-    }
-
-    fn classify_filename_with_database(db: &MimeDatabase, name: &OsStr) -> FilenameClassification {
-        let candidates = db.filename_candidates(&name.to_string_lossy());
-        if candidates.is_empty() {
-            // Branch C0: zero-I/O Linguist code language fallback (e.g. `.zig`, `.nix`, `Dockerfile`).
-            return if let Some(language) = linguist::code_language_for_filename(name) {
-                FilenameClassification::Resolved(Self::from_linguist(language))
-            } else {
-                FilenameClassification::Unmatched
-            };
-        }
-
-        match disambiguation::detect_conflict(db, name, &candidates) {
-            ConflictKind::None => {
-                // Branch A (unique non-shadowed MIME) or B0 (parent + subclasses collapsed to base).
-                let resolved = disambiguation::converge_candidates(db, &candidates);
-                FilenameClassification::Resolved(Self::build_from_mime(
-                    db,
-                    &resolved,
-                    Some(name),
-                    DetectionSource::Filename,
-                ))
-            }
-            ConflictKind::MultiMime | ConflictKind::LinguistShadow => {
-                // Branch B1: multi-MIME or binary/XML shadow conflict pending 8 KiB disambiguation.
-                let fallback = disambiguation::converge_candidates(db, &candidates);
-                FilenameClassification::Ambiguous(Self::build_from_mime(
-                    db,
-                    &fallback,
-                    Some(name),
-                    DetectionSource::Filename,
-                ))
+                queue.push_back(parent);
             }
         }
     }
+    ancestors
+}
 
-    fn probe_content_with_database(db: &MimeDatabase, name: &OsStr, path: &Path) -> Option<Self> {
-        if let Some(xattr_mime) = gds::service::file_tags::read_mime_type(path) {
-            let canonical = db.unalias(&xattr_mime);
-            return Some(Self::build_from_mime(
-                db,
-                &canonical,
-                Some(name),
-                DetectionSource::Xattr,
-            ));
-        }
-        let candidates = db.filename_candidates(&name.to_string_lossy());
-        if !candidates.is_empty()
-            && disambiguation::detect_conflict(db, name, &candidates) != ConflictKind::None
-        {
-            let header = Self::read_header(path);
-            let outcome =
-                disambiguation::resolve_with_header(db, name, &candidates, header.as_deref());
-            return Some(match outcome {
-                Outcome::Mime { mime, source } => {
-                    Self::build_from_mime(db, &mime, Some(name), source)
-                }
-                Outcome::Linguist(LinguistFallback::Code(language)) => {
-                    Self::from_linguist(language)
-                }
-                Outcome::Linguist(LinguistFallback::Data(language)) => {
-                    Self::from_linguist_data(language)
-                }
-            });
-        }
-
-        // Branch C: unmatched filename — read up to 8 KiB.
-        let header = Self::read_header(path)?;
-        if header.is_empty() {
-            return Some(Self::from_mime(
-                ContentCategory::Text,
-                TEXT_PLAIN_MIME.clone(),
-                DetectionSource::Heuristic,
-                true,
-            ));
-        }
-        if let Some((raw_mime, _)) = db.sniff_data(&header) {
-            let mime = disambiguation::sanitize_disguised_desktop(name, raw_mime);
-            return Some(Self::build_from_mime(
-                db,
-                &mime,
-                Some(name),
-                DetectionSource::Magic,
-            ));
-        }
-        Some(Self::text_or_binary(&header))
+/// Bounded 8 KiB content probe for ambiguous or unmatched regular files during
+/// background enrichment. Also preloads the resolved MIME's XML description.
+pub(super) fn probe_content(name: &OsStr, path: &Path) -> Option<ContentType> {
+    let detected = probe_content_with_database(&MIME_DB, name, path);
+    if let Some(mime) = detected.as_ref().and_then(|c| c.mime.as_deref()) {
+        descriptions::preload_mime(mime);
     }
+    detected
+}
 
-    fn build_from_mime(
-        db: &MimeDatabase,
-        mime: &str,
-        name: Option<&OsStr>,
-        source: DetectionSource,
-    ) -> Self {
-        let category = Self::category_for_mime(db, mime, name);
-        let text_previewable = matches!(category, ContentCategory::Text | ContentCategory::Code)
-            || (category == ContentCategory::Document && db.is_subclass(mime, "text/plain"));
-        let interned = match mime {
-            "text/plain" => TEXT_PLAIN_MIME.clone(),
-            "application/octet-stream" => OCTET_STREAM_MIME.clone(),
-            other => Arc::from(other),
-        };
-        Self::from_mime(category, interned, source, text_previewable)
+fn detect_with_database(db: &MimeDatabase, name: &OsStr, path: &Path) -> Option<ContentType> {
+    if let Some(xattr_mime) = gds::service::file_tags::read_mime_type(path) {
+        let canonical = db.unalias(&xattr_mime);
+        return Some(build_from_mime(
+            db,
+            &canonical,
+            Some(name),
+            DetectionSource::Xattr,
+        ));
     }
-
-    /// Stage 2 decision tree: derive `ContentCategory` from `shared-mime-info`
-    /// (`generic-icons`, MIME prefix, `subclasses`), Linguist `Code` refinement,
-    /// and the minimal last-resort patch table.
-    fn category_for_mime(db: &MimeDatabase, mime: &str, name: Option<&OsStr>) -> ContentCategory {
-        // 1. Own explicit generic-icon hint in `shared-mime-info`.
-        if let Some(icon) = db.explicit_generic_icon(mime)
-            && let Some(category) = map_generic_icon(&icon, mime, name)
-        {
-            return category;
+    match classify_filename_with_database(db, name) {
+        FilenameClassification::Resolved(content) => Some(content),
+        FilenameClassification::Ambiguous(fallback) => {
+            probe_content_with_database(db, name, path).or(Some(fallback))
         }
-
-        // 2. Top-level MIME prefix (evaluated before `subclasses` so e.g. `text/x-python`
-        // does not inherit `application-x-executable` from its parent list).
-        if let Some((top, _)) = mime.split_once('/') {
-            match top {
-                "image" => return ContentCategory::Image,
-                "audio" => return ContentCategory::Audio,
-                "video" => return ContentCategory::Video,
-                "font" => return ContentCategory::Font,
-                "text" => {
-                    return if linguist::is_code_text(mime, name) {
-                        ContentCategory::Code
-                    } else {
-                        ContentCategory::Text
-                    };
-                }
-                _ => {}
-            }
-        }
-
-        // 3. `subclasses` inheritance (parent generic-icon, then `text/plain` subclass).
-        if let Some(parent_icon) = db.inherited_generic_icon(mime)
-            && let Some(category) = map_generic_icon(&parent_icon, mime, name)
-        {
-            return category;
-        }
-        if db.is_subclass(mime, "text/plain") {
-            return if linguist::is_code_text(mime, name) {
-                ContentCategory::Code
-            } else {
-                ContentCategory::Text
-            };
-        }
-
-        // 4. Minimal last-resort patch table.
-        if let Some(patched) = formats::patch_category(mime) {
-            return patched;
-        }
-
-        // 5. Fallback.
-        ContentCategory::Binary
+        FilenameClassification::Unmatched => probe_content_with_database(db, name, path),
     }
+}
 
-    fn read_header(path: &Path) -> Option<Vec<u8>> {
-        let file = File::open(path).ok()?;
-        let mut header = Vec::new();
-        let mut reader = file.take(HEADER_LEN);
-        reader.read_to_end(&mut header).ok()?;
-        Some(header)
-    }
-
-    fn text_or_binary(header: &[u8]) -> Self {
-        if header.is_empty() || disambiguation::looks_like_text(header) {
-            Self::from_mime(
-                ContentCategory::Text,
-                TEXT_PLAIN_MIME.clone(),
-                DetectionSource::Heuristic,
-                true,
-            )
+fn classify_filename_with_database(db: &MimeDatabase, name: &OsStr) -> FilenameClassification {
+    let candidates = db.filename_candidates(&name.to_string_lossy());
+    if candidates.is_empty() {
+        // Branch C0: zero-I/O Linguist code language fallback (e.g. `.zig`, `.nix`, `Dockerfile`).
+        return if let Some(language) = linguist::code_language_for_filename(name) {
+            FilenameClassification::Resolved(ContentType::from_linguist(language))
         } else {
-            Self::from_mime(
-                ContentCategory::Binary,
-                OCTET_STREAM_MIME.clone(),
-                DetectionSource::Heuristic,
-                false,
-            )
+            FilenameClassification::Unmatched
+        };
+    }
+
+    match disambiguation::detect_conflict(db, name, &candidates) {
+        ConflictKind::None => {
+            // Branch A (unique non-shadowed MIME) or B0 (parent + subclasses collapsed to base).
+            let resolved = disambiguation::converge_candidates(db, &candidates);
+            FilenameClassification::Resolved(build_from_mime(
+                db,
+                &resolved,
+                Some(name),
+                DetectionSource::Filename,
+            ))
         }
+        ConflictKind::MultiMime | ConflictKind::LinguistShadow => {
+            // Branch B1: multi-MIME or binary/XML shadow conflict pending 8 KiB disambiguation.
+            let fallback = disambiguation::converge_candidates(db, &candidates);
+            FilenameClassification::Ambiguous(build_from_mime(
+                db,
+                &fallback,
+                Some(name),
+                DetectionSource::Filename,
+            ))
+        }
+    }
+}
+
+fn probe_content_with_database(
+    db: &MimeDatabase,
+    name: &OsStr,
+    path: &Path,
+) -> Option<ContentType> {
+    if let Some(xattr_mime) = gds::service::file_tags::read_mime_type(path) {
+        let canonical = db.unalias(&xattr_mime);
+        return Some(build_from_mime(
+            db,
+            &canonical,
+            Some(name),
+            DetectionSource::Xattr,
+        ));
+    }
+    let candidates = db.filename_candidates(&name.to_string_lossy());
+    if !candidates.is_empty()
+        && disambiguation::detect_conflict(db, name, &candidates) != ConflictKind::None
+    {
+        let header = read_header(path);
+        let outcome = disambiguation::resolve_with_header(db, name, &candidates, header.as_deref());
+        return Some(match outcome {
+            Outcome::Mime { mime, source } => build_from_mime(db, &mime, Some(name), source),
+            Outcome::Linguist(LinguistFallback::Code(language)) => {
+                ContentType::from_linguist(language)
+            }
+            Outcome::Linguist(LinguistFallback::Data(language)) => {
+                ContentType::from_linguist_data(language)
+            }
+        });
+    }
+
+    // Branch C: unmatched filename — read up to 8 KiB.
+    let header = read_header(path)?;
+    if header.is_empty() {
+        return Some(ContentType::from_mime(
+            ContentCategory::Text,
+            TEXT_PLAIN_MIME.clone(),
+            DetectionSource::Heuristic,
+            true,
+        ));
+    }
+    if let Some((raw_mime, _)) = db.sniff_data(&header) {
+        let mime = disambiguation::sanitize_disguised_desktop(name, raw_mime);
+        return Some(build_from_mime(
+            db,
+            &mime,
+            Some(name),
+            DetectionSource::Magic,
+        ));
+    }
+    Some(text_or_binary(&header))
+}
+
+fn build_from_mime(
+    db: &MimeDatabase,
+    mime: &str,
+    name: Option<&OsStr>,
+    source: DetectionSource,
+) -> ContentType {
+    let category = category_for_mime(db, mime, name);
+    let text_previewable = matches!(category, ContentCategory::Text | ContentCategory::Code)
+        || (category == ContentCategory::Document && db.is_subclass(mime, "text/plain"));
+    let interned = match mime {
+        "text/plain" => TEXT_PLAIN_MIME.clone(),
+        "application/octet-stream" => OCTET_STREAM_MIME.clone(),
+        other => Arc::from(other),
+    };
+    ContentType::from_mime(category, interned, source, text_previewable)
+}
+
+/// Stage 2 decision tree: derive `ContentCategory` from `shared-mime-info`
+/// (`generic-icons`, MIME prefix, `subclasses`), Linguist `Code` refinement,
+/// and the minimal last-resort patch table.
+fn category_for_mime(db: &MimeDatabase, mime: &str, name: Option<&OsStr>) -> ContentCategory {
+    // 1. Own explicit generic-icon hint in `shared-mime-info`.
+    if let Some(icon) = db.explicit_generic_icon(mime)
+        && let Some(category) = map_generic_icon(&icon, mime, name)
+    {
+        return category;
+    }
+
+    // 2. Top-level MIME prefix (evaluated before `subclasses` so e.g. `text/x-python`
+    // does not inherit `application-x-executable` from its parent list).
+    if let Some((top, _)) = mime.split_once('/') {
+        match top {
+            "image" => return ContentCategory::Image,
+            "audio" => return ContentCategory::Audio,
+            "video" => return ContentCategory::Video,
+            "font" => return ContentCategory::Font,
+            "text" => {
+                return if linguist::is_code_text(mime, name) {
+                    ContentCategory::Code
+                } else {
+                    ContentCategory::Text
+                };
+            }
+            _ => {}
+        }
+    }
+
+    // 3. `subclasses` inheritance (parent generic-icon, then `text/plain` subclass).
+    if let Some(parent_icon) = db.inherited_generic_icon(mime)
+        && let Some(category) = map_generic_icon(&parent_icon, mime, name)
+    {
+        return category;
+    }
+    if db.is_subclass(mime, "text/plain") {
+        return if linguist::is_code_text(mime, name) {
+            ContentCategory::Code
+        } else {
+            ContentCategory::Text
+        };
+    }
+
+    // 4. Minimal last-resort patch table.
+    if let Some(patched) = formats::patch_category(mime) {
+        return patched;
+    }
+
+    // 5. Fallback.
+    ContentCategory::Binary
+}
+
+fn read_header(path: &Path) -> Option<Vec<u8>> {
+    let file = File::open(path).ok()?;
+    let mut header = Vec::new();
+    let mut reader = file.take(HEADER_LEN);
+    reader.read_to_end(&mut header).ok()?;
+    Some(header)
+}
+
+fn text_or_binary(header: &[u8]) -> ContentType {
+    if header.is_empty() || disambiguation::looks_like_text(header) {
+        ContentType::from_mime(
+            ContentCategory::Text,
+            TEXT_PLAIN_MIME.clone(),
+            DetectionSource::Heuristic,
+            true,
+        )
+    } else {
+        ContentType::from_mime(
+            ContentCategory::Binary,
+            OCTET_STREAM_MIME.clone(),
+            DetectionSource::Heuristic,
+            false,
+        )
     }
 }
 

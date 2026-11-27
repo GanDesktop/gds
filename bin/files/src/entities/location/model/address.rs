@@ -1,4 +1,7 @@
+mod tag;
 pub(crate) mod uri;
+
+pub(crate) use tag::{TagAddress, TagAddressError};
 
 use std::{
     ffi::OsString,
@@ -8,7 +11,7 @@ use std::{
 /// A content location, independent of the tab or sidebar entry presenting it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Location {
-    Tags(crate::entities::location::scheme::TagAddress),
+    Tags(TagAddress),
     Directory(OsString),
     Remote(gds::service::remote::Address),
     Recent,

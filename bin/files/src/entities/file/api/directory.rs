@@ -6,12 +6,15 @@ mod details;
 mod enrich;
 mod identity;
 mod inspection;
+mod permissions;
 
 pub use self::children::{ChildCount, DEFAULT_CHILD_COUNT_LIMIT};
 pub(crate) use self::content::descriptions as mime_descriptions;
+pub(crate) use self::content::detect_from_name as content_type_from_filename;
 pub(crate) use self::content::matches_mime_filter;
 pub use self::details::*;
 pub use self::enrich::*;
+pub use self::permissions::Permissions;
 pub use self::watching::{DEFAULT_WATCH_DEBOUNCE_MS, DEFAULT_WATCH_INCREMENTAL_LIMIT};
 
 use std::{
@@ -645,7 +648,7 @@ impl Entry {
         let mut details = EntryDetails::from_metadata(metadata, identities);
         match kind {
             EntryKind::Directory => details.children = ChildCount::from_path(path),
-            EntryKind::File => details.content = ContentType::detect(&name, path),
+            EntryKind::File => details.content = content::detect(&name, path),
             EntryKind::SymbolicLink => details.target = Some(LinkTarget::from_path(path)),
             _ => (),
         }
@@ -672,7 +675,7 @@ impl Entry {
         let kind = EntryKind::from(metadata.file_type());
         let mut details = EntryDetails::from_metadata(metadata, identities);
         let (content, content_probed) = if kind == EntryKind::File {
-            ContentType::classify_filename(&name).into_parts()
+            content::classify_filename(&name).into_parts()
         } else {
             (None, false)
         };
@@ -688,13 +691,6 @@ impl Entry {
             content_probed,
             false,
         )
-    }
-}
-
-impl ContentType {
-    /// Detect the content type strictly from filename patterns in memory without disk I/O.
-    pub(crate) fn from_filename(name: &OsStr) -> Option<Self> {
-        Self::detect_from_name(name)
     }
 }
 
@@ -721,9 +717,9 @@ impl LinkTarget {
                     EntryKind::File => {
                         let name = target_name.as_deref().unwrap_or(path.as_os_str());
                         if sniff_header {
-                            (ContentType::detect(name, path), true)
+                            (content::detect(name, path), true)
                         } else {
-                            ContentType::classify_filename(name).into_parts()
+                            content::classify_filename(name).into_parts()
                         }
                     }
                     _ => (None, true),

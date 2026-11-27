@@ -166,14 +166,14 @@ pub(crate) struct PasteJob {
     file_all: Option<FileAllPolicy>,
     dir_all: Option<DirAllPolicy>,
     mismatch_all: Option<MismatchAllPolicy>,
-    pub succeeded: Vec<PathBuf>,
-    pub cut_completed: Vec<PathBuf>,
-    pub undo: Vec<history::Step>,
-    pub committed: Vec<PathBuf>,
-    pub failures: Vec<String>,
-    pub skipped: usize,
-    pub merged_dirs: usize,
-    pub non_undoable: bool,
+    succeeded: Vec<PathBuf>,
+    cut_completed: Vec<PathBuf>,
+    undo: Vec<history::Step>,
+    committed: Vec<PathBuf>,
+    failures: Vec<String>,
+    skipped: usize,
+    merged_dirs: usize,
+    non_undoable: bool,
 }
 
 /// Background pre-flight result: execute ready transfers, complete with no remaining disk transfers
@@ -276,6 +276,16 @@ impl PasteJob {
     /// alone does not count as partial disk progress).
     pub(crate) fn has_disk_progress(&self) -> bool {
         !self.succeeded.is_empty() || !self.committed.is_empty() || !self.failures.is_empty()
+    }
+
+    /// True if any item has already completed or failed during earlier passes.
+    pub(crate) fn has_recorded_outcomes(&self) -> bool {
+        !self.succeeded.is_empty() || !self.failures.is_empty()
+    }
+
+    /// Root source paths whose move completed cleanly and can be cleared from a cut clipboard.
+    pub(crate) fn completed_cut_paths(&self) -> Option<Vec<PathBuf>> {
+        (!self.cut_completed.is_empty()).then(|| self.cut_completed.clone())
     }
 
     /// Discard all remaining unexecuted tasks (used when the user aborts a conflict dialog).

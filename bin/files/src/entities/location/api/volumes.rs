@@ -14,3 +14,8 @@ pub use model::*;
 pub use network::read_network_mounts;
 pub(crate) use service::*;
 pub use usage::CapacityState;
+
+pub(super) struct Observation {
+    pub started: std::time::Instant,
+    pub result: Result<Snapshot, Error>,
+}

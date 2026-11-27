@@ -289,7 +289,7 @@ impl Host {
         let start = match &command.request {
             Request::NewWindow { directory } => Some(directory.clone()),
             Request::OpenLocations { uris, .. } => uris.iter().find_map(|uri| {
-                crate::entities::location::Location::from_uri(uri)
+                crate::entities::location::scheme::parse(uri)
                     .ok()
                     .and_then(|loc| loc.local_path().map(std::path::Path::to_path_buf))
             }),

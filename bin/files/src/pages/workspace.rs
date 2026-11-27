@@ -1,28 +1,14 @@
 //! Native Files workspace and its window-owned application state.
 
-mod advanced;
-mod chrome;
-mod conflict_dialog;
-mod drag;
-mod enrichment;
-mod geometry;
-pub(crate) mod inspection;
-mod keyboard;
-mod marquee;
-mod menus;
-mod model;
-mod name_form;
 mod navigation;
 mod operations;
-mod picker;
-mod status;
-mod surfaces;
-mod terminals;
-mod typeahead;
-mod ui;
-mod view;
+mod panes;
+mod projection;
+mod shell;
+mod state;
 
 #[cfg(feature = "files-e2e")]
 pub(crate) mod e2e;
 
-pub(crate) use ui::{Browser, LaunchOptions, WeakBrowser};
+pub(crate) use shell::{Browser, WeakBrowser};
+pub(crate) use state::LaunchOptions;

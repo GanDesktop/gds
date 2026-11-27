@@ -1,5 +1,5 @@
 //! Project filesystem entries onto the shared content inspection service.
-use super::{ContentCategory, ContentType, Entry, EntryKind};
+use super::{ContentCategory, Entry, EntryKind, content};
 use gds::service::file_inspection::{Kind, Source};
 
 impl Entry {
@@ -22,7 +22,7 @@ impl Entry {
             .and_then(|content| content.mime.clone());
         let mime_ancestors = mime
             .as_deref()
-            .map(ContentType::mime_ancestors)
+            .map(content::mime_ancestors)
             .unwrap_or_default();
         Source {
             path: self.path.clone(),

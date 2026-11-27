@@ -8,9 +8,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use super::{
-    ChildCount, ContentType, DirectorySnapshot, Entry, EntryData, EntryKind, Error, LinkTarget,
-};
+use super::{ChildCount, DirectorySnapshot, Entry, EntryData, EntryKind, Error, LinkTarget};
 
 /// Off-screen entries probed per enrichment pass when unbounded probing is not required.
 pub const DEFAULT_PROBE_BUDGET: usize = 256;
@@ -170,8 +168,8 @@ pub fn probe_batch_with_limit(
             }
             EntryKind::File => {
                 if need.content && !data.content_probed {
-                    data.details.content =
-                        ContentType::probe_content(&data.name, &data.path).or(data.details.content);
+                    data.details.content = super::content::probe_content(&data.name, &data.path)
+                        .or(data.details.content);
                     data.content_probed = true;
                 }
             }
@@ -197,8 +195,8 @@ pub fn probe_batch_with_limit(
                             target.file_name().map(std::ffi::OsStr::to_os_string)
                         });
                         let name = target_name.as_deref().unwrap_or(data.name.as_os_str());
-                        *content =
-                            ContentType::probe_content(name, &data.path).or_else(|| content.take());
+                        *content = super::content::probe_content(name, &data.path)
+                            .or_else(|| content.take());
                     }
                     data.content_probed = true;
                 }

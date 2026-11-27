@@ -67,7 +67,7 @@ pub enum Action {
 #[derive(Debug)]
 pub struct Outcome {
     pub entry: Entry,
-    pub restored: Option<super::history::Snapshot>,
+    pub restored: Option<super::snapshot::Snapshot>,
     pub result: Result<(), Error>,
 }
 
@@ -327,7 +327,7 @@ pub fn perform_cancellable(
 }
 
 struct Applied {
-    restored: Option<super::history::Snapshot>,
+    restored: Option<super::snapshot::Snapshot>,
     result: Result<(), Error>,
 }
 
@@ -386,7 +386,7 @@ impl Entry {
     /// Restore the payload to its original location without replacing existing targets.
     ///
     /// When the payload commits on disk before `.trashinfo` cleanup fails, `restored`
-    /// still carries its committed [`super::history::Snapshot`] alongside `RestoreIncomplete`.
+    /// still carries its committed [`super::snapshot::Snapshot`] alongside `RestoreIncomplete`.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn restore(&self, cancel: &tokio_util::sync::CancellationToken) -> Applied {
         if let Err(error) = self.verify() {

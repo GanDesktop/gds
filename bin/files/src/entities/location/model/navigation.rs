@@ -13,9 +13,9 @@ use tokio_util::sync::CancellationToken;
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
-pub struct Visit<V> {
-    pub location: Location,
-    pub view: V,
+struct Visit<V> {
+    location: Location,
+    view: V,
 }
 
 #[derive(Debug)]
@@ -268,11 +268,29 @@ impl<V: Default> Navigation<V> {
         Some(f(snapshot))
     }
 
-    pub fn directory(&self) -> Option<&DirectorySnapshot> {
-        self.directory.as_deref()
+    pub fn has_directory(&self) -> bool {
+        self.directory.is_some()
     }
-    pub fn directory_arc(&self) -> Option<Arc<DirectorySnapshot>> {
-        self.directory.clone()
+    pub fn directory_entry_count(&self) -> Option<usize> {
+        self.directory.as_ref().map(|dir| dir.entries.len())
+    }
+    pub fn directory_entries(&self) -> Option<&[directory::Entry]> {
+        self.directory.as_deref().map(|dir| dir.entries.as_ref())
+    }
+    pub fn directory_warnings(&self) -> &[directory::EntryWarning] {
+        self.directory
+            .as_deref()
+            .map_or(&[], |dir| dir.warnings.as_slice())
+    }
+    pub fn directory_hidden_mismatch(&self, show_hidden: bool) -> bool {
+        self.directory
+            .as_ref()
+            .is_some_and(|dir| dir.options.show_hidden != show_hidden)
+    }
+    pub fn directory_revision_snapshot(&self) -> Option<(u64, Arc<DirectorySnapshot>)> {
+        self.directory
+            .as_ref()
+            .map(|dir| (self.revision, Arc::clone(dir)))
     }
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
@@ -286,11 +304,28 @@ impl<V: Default> Navigation<V> {
     pub fn view_mut(&mut self) -> &mut V {
         &mut self.history[self.history_index].view
     }
-    pub fn history(&self) -> &[Visit<V>] {
-        &self.history
+    pub fn back_entries(&self) -> Vec<(usize, Location)> {
+        (0..self.history_index)
+            .rev()
+            .map(|index| (index, self.history[index].location.clone()))
+            .collect()
     }
-    pub fn history_index(&self) -> usize {
-        self.history_index
+    pub fn forward_entries(&self) -> Vec<(usize, Location)> {
+        ((self.history_index + 1)..self.history.len())
+            .map(|index| (index, self.history[index].location.clone()))
+            .collect()
+    }
+    pub fn back_target(&self) -> Option<(usize, &Location)> {
+        let index = self.history_index.checked_sub(1)?;
+        Some((index, &self.history.get(index)?.location))
+    }
+    pub fn forward_target(&self) -> Option<(usize, &Location)> {
+        let index = self.history_index.checked_add(1)?;
+        Some((index, &self.history.get(index)?.location))
+    }
+    #[cfg(test)]
+    pub fn history_len(&self) -> usize {
+        self.history.len()
     }
     pub fn is_loading(&self) -> bool {
         self.pending.is_some()

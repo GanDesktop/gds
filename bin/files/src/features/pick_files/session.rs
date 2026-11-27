@@ -3,6 +3,7 @@ use super::{Filter, Options, Outcome};
 use crate::entities::file::directory::{Entry, EntryKind, LinkTarget};
 use gds::service::desktop::protocol::chooser;
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -207,16 +208,44 @@ impl Projection {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ChoiceControl {
+    pub id: String,
+    pub label: String,
+    pub options: Vec<(String, String)>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ActivatedFile {
+    PopulateSaveName(Option<String>),
+    Confirm,
+}
+
+#[derive(Debug)]
+pub(crate) enum AcceptPlan {
+    Save {
+        mode: chooser::Mode,
+        target: PathBuf,
+    },
+    SaveFiles {
+        mode: chooser::Mode,
+        folder: PathBuf,
+    },
+    Open {
+        paths: Vec<PathBuf>,
+    },
+}
+
 pub(crate) struct Session {
-    pub options: Arc<Options>,
-    pub active_filter: usize,
-    pub read_only: bool,
-    pub choices: Vec<chooser::Choice>,
+    options: Arc<Options>,
+    active_filter: usize,
+    read_only: bool,
+    choices: Vec<chooser::Choice>,
     /// Lossless spelling retained while the filename input still displays this name.
-    pub save_name: Option<std::ffi::OsString>,
-    pub(crate) submitting: bool,
+    save_name: Option<OsString>,
+    submitting: bool,
     /// A confirmed selection must only be reported once.
-    pub completing: bool,
+    completing: bool,
     outcome: Option<Outcome>,
 }
 
@@ -257,6 +286,95 @@ impl Session {
         self.options.multiple
     }
 
+    pub(crate) fn is_save(&self) -> bool {
+        self.options.is_save()
+    }
+
+    pub(crate) fn is_busy(&self) -> bool {
+        self.submitting || self.completing
+    }
+
+    pub(crate) fn supports_read_only(&self) -> bool {
+        !self.options.directory && !self.options.is_save()
+    }
+
+    pub(crate) fn accept_label_parts(&self) -> (Option<&str>, &'static str) {
+        let custom = self
+            .options
+            .portal
+            .as_ref()
+            .and_then(|portal| portal.accept_label.as_deref());
+        let fallback_id = if self.options.is_save() {
+            "picker-save"
+        } else if self.options.directory {
+            "picker-confirm-directory"
+        } else {
+            "picker-confirm"
+        };
+        (custom, fallback_id)
+    }
+
+    pub(crate) fn initial_save_name(&self) -> Option<String> {
+        self.save_name
+            .as_ref()
+            .map(|name| name.to_string_lossy().into_owned())
+    }
+
+    /// Resolve double-clicking a regular file in the picker list.
+    ///
+    /// Save mode populates the filename input and never submits; open mode confirms selection.
+    pub(crate) fn handle_activated_file(&mut self, path: &Path) -> ActivatedFile {
+        if !self.options.is_save() {
+            return ActivatedFile::Confirm;
+        }
+        let display = path.file_name().map(|name| {
+            self.save_name = Some(name.to_os_string());
+            name.to_string_lossy().into_owned()
+        });
+        ActivatedFile::PopulateSaveName(display)
+    }
+
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub(crate) fn set_read_only(&mut self, read_only: bool) -> bool {
+        if !self.supports_read_only() || self.read_only == read_only {
+            return false;
+        }
+        self.read_only = read_only;
+        true
+    }
+
+    pub(crate) fn choice_controls(&self) -> Vec<ChoiceControl> {
+        self.choices
+            .iter()
+            .map(|choice| ChoiceControl {
+                id: choice.id.clone(),
+                label: choice.label.clone(),
+                options: choice.options.clone(),
+            })
+            .collect()
+    }
+
+    pub(crate) fn choice_selected(&self, id: &str) -> Option<&str> {
+        self.choices
+            .iter()
+            .find(|choice| choice.id == id)
+            .map(|choice| choice.selected.as_str())
+    }
+
+    pub(crate) fn set_choice(&mut self, id: &str, value: &str) -> bool {
+        let Some(choice) = self.choices.iter_mut().find(|choice| choice.id == id) else {
+            return false;
+        };
+        if choice.selected == value {
+            return false;
+        }
+        choice.selected = value.to_owned();
+        true
+    }
+
     pub(crate) fn accepts_entry(&self, entry: &Entry) -> bool {
         if Projection::is_directory(entry) {
             self.options.directory || self.options.allow_mixed
@@ -273,6 +391,128 @@ impl Session {
         }
     }
 
+    pub(crate) fn resolve_candidates(
+        &self,
+        typed_save: &str,
+        current_dir: Option<&Path>,
+        selected: &[Option<&Entry>],
+    ) -> Option<Vec<PathBuf>> {
+        if self.is_busy() {
+            return None;
+        }
+
+        if self.options.is_save() {
+            let dir = current_dir?;
+            let file_name = if let Some(original) = self.save_name.as_ref()
+                && original.to_string_lossy() == typed_save
+            {
+                original.clone()
+            } else {
+                OsString::from(typed_save)
+            };
+            if !Options::valid_name(&file_name) {
+                return None;
+            }
+            return Some(vec![dir.join(file_name)]);
+        }
+
+        if matches!(
+            self.options.portal.as_ref().map(|portal| &portal.mode),
+            Some(chooser::Mode::SaveFiles { .. })
+        ) {
+            let folder = selected
+                .iter()
+                .find_map(|entry| {
+                    entry
+                        .filter(|entry| Projection::is_directory(entry))
+                        .map(|entry| entry.path.clone())
+                })
+                .or_else(|| current_dir.map(Path::to_path_buf))?;
+            return Some(vec![folder]);
+        }
+
+        if self.options.directory {
+            if selected.is_empty() {
+                return current_dir.map(|dir| vec![dir.to_path_buf()]);
+            }
+            if !self.allows_multiple() && selected.len() > 1 {
+                return None;
+            }
+            let mut dirs = Vec::with_capacity(selected.len());
+            for entry in selected {
+                match entry {
+                    Some(entry) if Projection::is_directory(entry) => {
+                        dirs.push(entry.path.clone());
+                    }
+                    _ => return None,
+                }
+            }
+            return (!dirs.is_empty()).then_some(dirs);
+        }
+
+        if selected.is_empty() || (!self.allows_multiple() && selected.len() > 1) {
+            return None;
+        }
+        let mut files = Vec::with_capacity(selected.len());
+        for entry in selected {
+            match entry {
+                Some(entry) if self.accepts_entry(entry) => {
+                    files.push(entry.path.clone());
+                }
+                _ => return None,
+            }
+        }
+        (!files.is_empty()).then_some(files)
+    }
+
+    pub(crate) fn begin_accept(&mut self, candidates: Vec<PathBuf>) -> Option<AcceptPlan> {
+        if self.is_busy() {
+            return None;
+        }
+        if self.options.is_save() {
+            let target = candidates.into_iter().next()?;
+            let mode = self
+                .options
+                .portal
+                .as_ref()
+                .map(|portal| portal.mode.clone())
+                .unwrap_or(chooser::Mode::Save {
+                    name: OsString::new(),
+                });
+            self.submitting = true;
+            Some(AcceptPlan::Save { mode, target })
+        } else if let Some(chooser::Mode::SaveFiles { names }) = self
+            .options
+            .portal
+            .as_ref()
+            .map(|portal| &portal.mode)
+            .cloned()
+        {
+            let folder = candidates.into_iter().next()?;
+            self.submitting = true;
+            Some(AcceptPlan::SaveFiles {
+                mode: chooser::Mode::SaveFiles { names },
+                folder,
+            })
+        } else {
+            self.submitting = true;
+            Some(AcceptPlan::Open { paths: candidates })
+        }
+    }
+
+    pub(crate) fn begin_validation(&mut self, accepted_in_table: Vec<PathBuf>) -> SelectionCheck {
+        self.submitting = true;
+        self.selection_check(accepted_in_table)
+    }
+
+    pub(crate) fn finish_submit(&mut self) {
+        self.submitting = false;
+    }
+
+    pub(crate) fn mark_completing(&mut self) {
+        self.completing = true;
+    }
+
     pub(crate) fn projection(&self) -> Projection {
         Projection {
             options: Arc::clone(&self.options),
@@ -280,7 +520,7 @@ impl Session {
         }
     }
 
-    pub(crate) fn selection_check(&self, accepted_in_table: Vec<PathBuf>) -> SelectionCheck {
+    pub(super) fn selection_check(&self, accepted_in_table: Vec<PathBuf>) -> SelectionCheck {
         SelectionCheck {
             options: Arc::clone(&self.options),
             active_filter: self.active_filter,
@@ -288,7 +528,7 @@ impl Session {
         }
     }
 
-    pub(crate) fn portal_result(&self, paths: &[PathBuf]) -> chooser::Result {
+    pub(super) fn portal_result(&self, paths: &[PathBuf]) -> chooser::Result {
         chooser::Result {
             paths: paths
                 .iter()
@@ -321,13 +561,18 @@ impl Session {
         self.outcome.unwrap_or_default()
     }
 
-    /// Emit the confirmed picker result to stdout and record the session outcome.
+    /// Emit the confirmed picker result to stdout and record the session outcome once.
     ///
-    /// # Errors
-    /// Propagates serialization or stdout write failures from the underlying emitter.
-    pub(crate) fn complete(&mut self, paths: &[PathBuf]) -> Result<(), super::model::Error> {
+    /// Returns `None` if completion has already started.
+    pub(crate) fn complete(
+        &mut self,
+        paths: &[PathBuf],
+    ) -> Option<Result<(), super::model::Error>> {
+        if self.completing {
+            return None;
+        }
         let stdout = std::io::stdout().lock();
-        self.complete_to(stdout, paths)
+        Some(self.complete_to(stdout, paths))
     }
 
     pub(super) fn complete_to(
@@ -358,7 +603,20 @@ impl Session {
     }
 
     pub(crate) fn filters(&self) -> &[Filter] {
-        &self.options.filters
+        if self.options.directory {
+            &[]
+        } else {
+            &self.options.filters
+        }
+    }
+
+    pub(crate) fn active_filter(&self) -> usize {
+        self.active_filter
+    }
+
+    pub(crate) fn next_filter_index(&self) -> Option<usize> {
+        let count = self.filters().len();
+        (count > 1).then_some((self.active_filter + 1) % count)
     }
 
     pub(crate) fn select_filter(&mut self, index: usize) -> bool {

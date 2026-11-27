@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use nix::unistd::{Gid, Group, Uid, User, getegid, geteuid};
 
-use super::super::details::Permissions;
+use super::super::permissions::Permissions;
 
 /// Per-read cache of owner and group lookups.
 #[derive(Debug)]

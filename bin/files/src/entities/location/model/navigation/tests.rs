@@ -2,7 +2,8 @@ use super::*;
 
 #[test]
 fn tag_history_preserves_uri_and_rejects_stale_results() {
-    let tag = Location::from_uri("tags:/工作/设计").expect("parse tag location");
+    let tag =
+        crate::entities::location::scheme::parse("tags:/工作/设计").expect("parse tag location");
     let mut navigation = Navigation::<()>::new(Location::Recent, None);
     let old = navigation.prepare_open(tag.clone(), None, ReadOptions::default());
     let current = navigation.prepare_open(tag.clone(), None, ReadOptions::default());
@@ -20,7 +21,11 @@ fn tag_history_preserves_uri_and_rejects_stale_results() {
     );
     assert_eq!(navigation.location(), &tag);
     assert!(navigation.path().is_none());
-    assert!(navigation.directory().is_none());
+    assert!(!navigation.has_directory());
+    assert_eq!(navigation.back_target(), Some((0, &Location::Recent)));
+    assert_eq!(navigation.forward_target(), None);
+    assert_eq!(navigation.back_entries(), vec![(0, Location::Recent)]);
+    assert!(navigation.forward_entries().is_empty());
     let back = navigation
         .prepare_history(0, None, ReadOptions::default())
         .expect("prepare back navigation");
@@ -28,6 +33,10 @@ fn tag_history_preserves_uri_and_rejects_stale_results() {
         .finish_load(&back, Ok(None))
         .expect("finish back navigation");
     assert_eq!(navigation.location(), &Location::Recent);
+    assert_eq!(navigation.back_target(), None);
+    assert_eq!(navigation.forward_target(), Some((1, &tag)));
+    assert!(navigation.back_entries().is_empty());
+    assert_eq!(navigation.forward_entries(), vec![(1, tag.clone())]);
     let forward = navigation
         .prepare_history(1, None, ReadOptions::default())
         .expect("prepare forward navigation");
@@ -60,7 +69,10 @@ fn base_directory_loads_share_arc_snapshots_and_accept_in_place_updates() {
         LoadOutcome::Applied
     );
 
-    let arc_snapshot = navigation.directory_arc().expect("shared snapshot arc");
+    let (rev, arc_snapshot) = navigation
+        .directory_revision_snapshot()
+        .expect("shared snapshot arc");
+    assert_eq!(rev, navigation.revision());
     assert_eq!(
         arc_snapshot
             .entry_for_path(&folder)
@@ -75,8 +87,8 @@ fn base_directory_loads_share_arc_snapshots_and_accept_in_place_updates() {
     assert!(navigation.update_directory(navigation.revision(), full_snapshot));
     assert_eq!(
         navigation
-            .directory()
-            .and_then(|snapshot| snapshot.entry_for_path(&folder))
+            .directory_entries()
+            .and_then(|entries| entries.iter().find(|entry| entry.path == folder))
             .and_then(|entry| entry.details.children),
         Some(directory::ChildCount {
             count: 1,
@@ -164,7 +176,7 @@ fn progressive_partial_loads_commit_route_once_and_keep_loading_until_finish() {
     navigation
         .finish_load(&initial, Ok(initial_snap))
         .expect("commit start");
-    assert_eq!(navigation.history().len(), 1);
+    assert_eq!(navigation.history_len(), 1);
 
     let stale = navigation.prepare_open(
         slow_loc.clone(),
@@ -208,14 +220,10 @@ fn progressive_partial_loads_commit_route_once_and_keep_loading_until_finish() {
     assert!(navigation.is_loading());
     assert!(navigation.had_partial_commit(&request));
     assert_eq!(navigation.location(), &slow_loc);
-    assert_eq!(navigation.history().len(), 2);
+    assert_eq!(navigation.history_len(), 2);
     assert_eq!(
-        navigation
-            .directory()
-            .expect("partial snapshot")
-            .entries
-            .len(),
-        partials[0].entries.len()
+        navigation.directory_entry_count(),
+        Some(partials[0].entries.len())
     );
 
     // Subsequent partials update the snapshot in place without pushing duplicate history visits.
@@ -224,14 +232,10 @@ fn progressive_partial_loads_commit_route_once_and_keep_loading_until_finish() {
         PartialLoadOutcome::Updated
     );
     assert!(navigation.is_loading());
-    assert_eq!(navigation.history().len(), 2);
+    assert_eq!(navigation.history_len(), 2);
     assert_eq!(
-        navigation
-            .directory()
-            .expect("second partial")
-            .entries
-            .len(),
-        partials[1].entries.len()
+        navigation.directory_entry_count(),
+        Some(partials[1].entries.len())
     );
 
     // Final completion clears `is_loading()` and keeps history length at 2.
@@ -243,13 +247,6 @@ fn progressive_partial_loads_commit_route_once_and_keep_loading_until_finish() {
     );
     assert!(!navigation.is_loading());
     assert!(!navigation.had_partial_commit(&request));
-    assert_eq!(navigation.history().len(), 2);
-    assert_eq!(
-        navigation
-            .directory()
-            .expect("final snapshot")
-            .entries
-            .len(),
-        6
-    );
+    assert_eq!(navigation.history_len(), 2);
+    assert_eq!(navigation.directory_entry_count(), Some(6));
 }

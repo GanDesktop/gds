@@ -1,7 +1,7 @@
 //! Discovery and instantiation of FreeDesktop `XDG_TEMPLATES_DIR` document templates.
 
+use super::super::snapshot::Snapshot;
 use super::names;
-use crate::features::file_operations::history;
 use std::{
     ffi::OsString,
     fs::{self, OpenOptions},
@@ -43,7 +43,7 @@ pub(crate) enum Error {
 #[derive(Debug, Clone)]
 pub(crate) struct Created {
     pub path: PathBuf,
-    pub snapshot: Option<history::Snapshot>,
+    pub snapshot: Option<Snapshot>,
 }
 
 pub(crate) struct Request {
@@ -161,7 +161,7 @@ impl Request {
         drop(target);
 
         let _ = gds::service::file_tags::copy(&self.template, &destination);
-        let snapshot = history::Snapshot::capture(&destination).ok();
+        let snapshot = Snapshot::capture(&destination).ok();
         Ok(Created {
             path: destination,
             snapshot,

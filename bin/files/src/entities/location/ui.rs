@@ -18,18 +18,6 @@ pub(crate) enum Collection {
 }
 
 impl Collection {
-    pub fn from_location(location: &Location) -> Option<Self> {
-        match location {
-            Location::Tags(_) => Some(Self::Tags),
-            Location::Recent => Some(Self::Recent),
-            Location::Favorites => Some(Self::Favorites),
-            Location::Network => Some(Self::Network),
-            Location::Trash => Some(Self::Trash),
-            Location::Volumes => Some(Self::Volumes),
-            _ => None,
-        }
-    }
-
     pub fn location(self) -> Location {
         match self {
             Self::Tags => Location::Tags(TagAddress::new("").expect("root tag address")),
@@ -104,25 +92,22 @@ impl LocationTarget {
 }
 
 impl Location {
-    pub(crate) fn collection(&self) -> Option<Collection> {
-        Collection::from_location(self)
-    }
-
     pub(crate) fn icon(&self) -> IconName {
         match self {
             Self::Directory(_) => IconName::Folder,
-            Self::Remote(_) => IconName::Network,
-            Self::Volume { .. } => IconName::HardDrive,
-            _ => self
-                .collection()
-                .expect("non-path location belongs to a collection")
-                .icon(),
+            Self::Remote(_) | Self::Network => IconName::Network,
+            Self::Volume { .. } | Self::Volumes => IconName::HardDrive,
+            Self::Tags(_) => IconName::Tag,
+            Self::Recent => IconName::Clock,
+            Self::Favorites => IconName::Star,
+            Self::Trash => IconName::Trash,
         }
     }
 
     pub(crate) fn label(&self) -> String {
         match self {
             Self::Tags(address) if !address.tag().is_empty() => address.label().to_owned(),
+            Self::Tags(_) => i18n::text("tags-title"),
             Self::Remote(address) => address.name(),
             Self::Directory(path) => Path::new(path)
                 .file_name()
@@ -134,13 +119,11 @@ impl Location {
                 .unwrap_or(relative)
                 .to_string_lossy()
                 .into_owned(),
-            Self::Volume { .. } => i18n::text(Collection::Volumes.label_id()),
-            _ => {
-                let collection = self
-                    .collection()
-                    .expect("non-path location belongs to a collection");
-                i18n::text(collection.label_id())
-            }
+            Self::Volume { .. } | Self::Volumes => i18n::text("volumes"),
+            Self::Recent => i18n::text("recent"),
+            Self::Favorites => i18n::text("favorites"),
+            Self::Network => i18n::text("network"),
+            Self::Trash => i18n::text("trash"),
         }
     }
 }

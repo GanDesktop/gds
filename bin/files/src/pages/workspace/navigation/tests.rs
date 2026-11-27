@@ -3,11 +3,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use gds::service::remote::{Address, Entry as RemoteEntry, EntryKind as RemoteKind};
 
-use super::{
-    apply_reorder_tab, apply_toggle_pin, filter_remote_entries, location_supports_grid,
-    pinned_tab_locations, sort_remote_entries, sortable_columns_for, sync_pinned_navigation,
-    toggle_tab_or_selected_favorite,
-};
+use super::tabs::{apply_reorder_tab, apply_toggle_pin, toggle_tab_or_selected_favorite};
 use crate::entities::{
     file::{
         columns::Column,
@@ -16,7 +12,13 @@ use crate::entities::{
     location::{Location, places::Places, scheme::TagAddress},
 };
 use crate::features::file_operations::history::History;
-use crate::pages::workspace::model::{Contents, Operation, Row, State, Tab};
+use crate::pages::workspace::{
+    projection::rows::{
+        filter_remote_entries, location_supports_grid, pinned_tab_locations, sort_remote_entries,
+        sortable_columns_for, sync_pinned_navigation,
+    },
+    state::model::{Contents, Operation, Row, State, Tab},
+};
 
 fn remote_item(name: &str, kind: RemoteKind, size: Option<u64>, secs: u64) -> RemoteEntry {
     let base = Address::parse("sftp://user@example.com/root").expect("valid remote test address");

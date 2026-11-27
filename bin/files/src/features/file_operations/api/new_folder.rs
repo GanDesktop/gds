@@ -24,7 +24,7 @@ pub(crate) enum Error {
 #[derive(Debug, Clone)]
 pub(crate) struct Created {
     pub path: PathBuf,
-    pub snapshot: Option<crate::features::file_operations::history::Snapshot>,
+    pub snapshot: Option<super::super::snapshot::Snapshot>,
 }
 
 pub(crate) struct Request {
@@ -45,8 +45,7 @@ impl Request {
         let destination = self.directory.join(&self.name);
         match fs::create_dir(&destination) {
             Ok(()) => {
-                let snapshot =
-                    crate::features::file_operations::history::Snapshot::capture(&destination).ok();
+                let snapshot = super::super::snapshot::Snapshot::capture(&destination).ok();
                 Ok(Created {
                     path: destination,
                     snapshot,

@@ -7,9 +7,10 @@ async fn persist_ordered_abstract_locations() {
     let root = tempfile::tempdir().expect("create fixture directory");
     let path = root.path().join("state.sqlite");
     let local = Address::from(Path::new("/existing-pin"));
-    let tags = Address::from_uri("tags:/工作/设计").expect("parse tag address");
-    let remote =
-        Address::from_uri("sftp://user@example.com/home/user").expect("parse remote address");
+    let tags =
+        crate::entities::location::scheme::parse("tags:/工作/设计").expect("parse tag address");
+    let remote = crate::entities::location::scheme::parse("sftp://user@example.com/home/user")
+        .expect("parse remote address");
     let scope =
         gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false);
 

@@ -88,7 +88,7 @@ pub(crate) enum Error {
 #[derive(Debug, Clone)]
 pub(crate) struct Renamed {
     pub destination: PathBuf,
-    pub snapshot: Option<crate::features::file_operations::history::Snapshot>,
+    pub snapshot: Option<super::super::snapshot::Snapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,8 +121,7 @@ impl Request {
         Self::ensure_absent(&destination)?;
         Self::rename_no_replace(&self.source, &destination)?;
         gds::service::file_inspection::invalidate_thumbnail_cache(&self.source);
-        let snapshot =
-            crate::features::file_operations::history::Snapshot::capture(&destination).ok();
+        let snapshot = super::super::snapshot::Snapshot::capture(&destination).ok();
         Ok(Renamed {
             destination,
             snapshot,

@@ -36,7 +36,7 @@ fn portal_result_assembles_paths_filter_read_only_and_choices() {
     };
     let options = Options::from_request(request).expect("build portal options");
     let mut session = Session::new(options);
-    session.read_only = true;
+    session.set_read_only(true);
 
     let path = PathBuf::from("/tmp/example.txt");
     let result = session.portal_result(std::slice::from_ref(&path));

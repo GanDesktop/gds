@@ -4,7 +4,8 @@ pub(crate) use model::{Filter, Options, Outcome};
 
 mod session;
 pub(crate) use session::{
-    ActivatedPath, Projection, SaveDecision, Session, inspect_activated_path, prepare_save_targets,
+    AcceptPlan, ActivatedFile, ActivatedPath, Projection, SaveDecision, Session,
+    inspect_activated_path, prepare_save_targets,
 };
 pub(crate) mod targets;
 

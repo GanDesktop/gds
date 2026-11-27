@@ -1,7 +1,7 @@
 //! Atomic symbolic-link creation with conflict-safe naming.
 
+use super::super::snapshot::Snapshot;
 use super::names;
-use crate::features::file_operations::history;
 use std::{
     ffi::{OsStr, OsString},
     io,
@@ -35,7 +35,7 @@ pub(crate) enum Error {
 pub(crate) struct Created {
     pub path: PathBuf,
     pub target: PathBuf,
-    pub snapshot: Option<history::Snapshot>,
+    pub snapshot: Option<Snapshot>,
 }
 
 pub(crate) struct Request {
@@ -100,7 +100,7 @@ impl Request {
             let destination = self.directory.join(&name);
             match symlink(&self.target, &destination) {
                 Ok(()) => {
-                    let snapshot = history::Snapshot::capture(&destination).ok();
+                    let snapshot = Snapshot::capture(&destination).ok();
                     return Ok(Created {
                         path: destination,
                         target: self.target,
