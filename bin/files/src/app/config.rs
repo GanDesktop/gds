@@ -161,7 +161,7 @@ impl Mode {
 pub(super) struct Config {
     pub home: PathBuf,
     pub state_path: PathBuf,
-    pub preferences: configuration::Preferences,
+    pub startup: configuration::StartupRead,
     pub notices: Vec<String>,
     pub enable_logs: bool,
     pub mode: Mode,
@@ -184,18 +184,15 @@ impl Config {
         let mode = Mode::resolve(arguments, &home)?;
 
         let mut notices = Vec::new();
-        let preferences = match configuration::load() {
-            Ok(preferences) => preferences,
-            Err(error) => {
-                notices.push(error.to_string());
-                configuration::Preferences::default()
-            }
-        };
+        let mut startup = configuration::read_startup()?;
+        if let Some(notice) = startup.notice.take() {
+            notices.push(notice);
+        }
 
         Ok(Self {
             home,
             state_path,
-            preferences,
+            startup,
             notices,
             enable_logs,
             mode,

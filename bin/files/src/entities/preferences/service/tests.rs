@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use gds::{appearance::theme, service::task_manager::Supervisor};
 use zgui::reactive::{Mounted, RenderEffect, flush, install, on_cleanup_local};
@@ -139,4 +142,103 @@ fn invalid_font_rejects_the_entire_update_before_changing_the_theme() {
     });
     harness.shutdown();
     assert!(!path.exists());
+}
+
+#[test]
+fn external_config_edit_does_not_block_persisting_sidebar_show_volumes() {
+    let directory = tempfile::tempdir().expect("configuration directory");
+    let path = directory.path().join("settings.toml");
+
+    let mut initial = Preferences::default();
+    initial.appearance.source = theme::Source::Builtin;
+    std::fs::write(
+        &path,
+        toml::to_string_pretty(&initial).expect("serialize initial preferences"),
+    )
+    .expect("seed settings.toml");
+
+    let harness = Harness::new(path.clone());
+
+    // Another process (for example a portal file picker) writes settings.toml externally.
+    let mut external = initial;
+    external.files.show_hidden = true;
+    std::fs::write(
+        &path,
+        toml::to_string_pretty(&external).expect("serialize external preferences"),
+    )
+    .expect("simulate external writer");
+
+    harness.with(|service| {
+        service
+            .edit(|preferences| preferences.files.sidebar.show_volumes = true)
+            .expect("toggle show_volumes");
+        service
+            .edit(|preferences| preferences.files.auto_focus_search = true)
+            .expect("follow-up edit");
+    });
+    harness.shutdown();
+
+    assert_eq!(
+        harness.with(|service| service.error().get_untracked()),
+        None
+    );
+    let saved: Preferences =
+        toml::from_str(&std::fs::read_to_string(&path).expect("read saved settings"))
+            .expect("valid saved settings");
+    assert!(saved.files.sidebar.show_volumes);
+    assert!(saved.files.auto_focus_search);
+    assert!(saved.files.show_hidden);
+}
+
+#[test]
+fn corrupt_startup_config_reports_save_error_without_overwriting_disk() {
+    let directory = tempfile::tempdir().expect("configuration directory");
+    let path = directory.path().join("settings.toml");
+    let corrupt = "[files.sidebar]\nshow_volumes = [broken\n";
+    std::fs::write(&path, corrupt).expect("seed corrupt config");
+
+    let mut startup = api::read_startup_from(path.clone());
+    assert!(startup.notice.is_some());
+    startup.preferences.appearance.source = theme::Source::Builtin;
+    let _ = install();
+    let supervisor = Supervisor::new(false).expect("preference test runtime");
+    let scope = supervisor.scope();
+    let root = Mounted::new();
+    let service = root.with(|| {
+        let app = Gds::install(scope.clone());
+        app.appearance()
+            .theme()
+            .apply(&startup.preferences.appearance)
+            .expect("initial theme");
+        app.appearance()
+            .theme()
+            .configure_hot_reload(startup.preferences.appearance.clone());
+        Service::install_loaded(startup, &scope)
+    });
+
+    root.with(|| {
+        Gds::current().with(|| {
+            service
+                .edit(|preferences| preferences.files.sidebar.show_volumes = true)
+                .expect("accept edit while disk is corrupt");
+        });
+    });
+
+    supervisor.shutdown();
+    for _ in 0..4 {
+        flush();
+    }
+
+    let error = root.with(|| Gds::current().with(|| service.error().get_untracked()));
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|message| message.contains("invalid configuration")),
+        "expected parse error on corrupt startup config, got {error:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("corrupt config remains intact"),
+        corrupt
+    );
+    root.unmount();
 }

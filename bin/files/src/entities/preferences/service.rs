@@ -2,7 +2,6 @@
 
 use std::{
     cell::RefCell,
-    path::PathBuf,
     rc::Rc,
     sync::{Arc, Mutex},
 };
@@ -15,6 +14,7 @@ use super::{Preferences, api, presentation};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[cfg(any(test, feature = "files-e2e"))]
     #[error(transparent)]
     Path(#[from] super::api::Error),
     #[error(transparent)]
@@ -40,19 +40,67 @@ struct State {
 }
 
 impl Service {
+    pub fn install_loaded(mut startup: api::StartupRead, tasks: &Scope) -> Self {
+        startup
+            .store
+            .set_local_baseline(startup.preferences.clone());
+        Self::install_store(
+            startup.preferences,
+            startup.store,
+            #[cfg(test)]
+            None,
+            tasks,
+        )
+    }
+
     /// # Errors
     /// Reports an unavailable configuration directory.
+    #[cfg(any(test, feature = "files-e2e"))]
     pub fn install(preferences: Preferences, tasks: &Scope) -> Result<Self, Error> {
+        #[cfg(test)]
+        let (path, temp_dir) = {
+            let dir = tempfile::tempdir().map_err(|source| {
+                api::Error::Persistence(gds::persistence::Error::Io {
+                    path: std::env::temp_dir(),
+                    source,
+                })
+            })?;
+            let path = dir.path().join("settings.toml");
+            (path, Some(dir))
+        };
+        #[cfg(not(test))]
         let path = api::path()?;
-        let service = Gds::current().with(|| {
-            let service = Self::new(preferences, path, tasks);
+
+        let store = api::Store::for_path(path, preferences.clone());
+        Ok(Self::install_store(
+            preferences,
+            store,
+            #[cfg(test)]
+            temp_dir,
+            tasks,
+        ))
+    }
+
+    fn install_store(
+        preferences: Preferences,
+        store: api::Store,
+        #[cfg(test)] temp_dir: Option<tempfile::TempDir>,
+        tasks: &Scope,
+    ) -> Self {
+        Gds::current().with(|| {
+            let service = Self::with_store(
+                preferences,
+                store,
+                #[cfg(test)]
+                temp_dir,
+                tasks,
+            );
             INSTALLED.with(|installed| *installed.borrow_mut() = Some(service.clone()));
             on_cleanup_local(|| {
                 INSTALLED.with(|installed| installed.borrow_mut().take());
             });
             service
-        });
-        Ok(service)
+        })
     }
 
     pub fn current() -> Self {
@@ -75,7 +123,18 @@ impl Service {
         self.0.error.read_only()
     }
 
-    fn new(preferences: Preferences, path: PathBuf, tasks: &Scope) -> Self {
+    #[cfg(test)]
+    fn new(preferences: Preferences, path: std::path::PathBuf, tasks: &Scope) -> Self {
+        let store = api::Store::for_path(path, preferences.clone());
+        Self::with_store(preferences, store, None, tasks)
+    }
+
+    fn with_store(
+        preferences: Preferences,
+        mut store: api::Store,
+        #[cfg(test)] temp_dir: Option<tempfile::TempDir>,
+        tasks: &Scope,
+    ) -> Self {
         let (sender, mut receiver) = mpsc::unbounded_channel::<Preferences>();
         let queue = Arc::new(Mutex::new(Some(sender)));
         let closing = queue.clone();
@@ -87,8 +146,9 @@ impl Service {
             closing.lock().expect("preferences queue lock").take();
         });
         let (results, mut saved) = mpsc::unbounded_channel::<Result<(), String>>();
-        let mut store = api::Store::new(path);
         let writer = tasks.spawn_blocking_named("Save preferences", move || {
+            #[cfg(test)]
+            let _temp_dir = temp_dir;
             while let Some(mut preferences) = receiver.blocking_recv() {
                 while let Ok(newer) = receiver.try_recv() {
                     preferences = newer;
@@ -104,18 +164,23 @@ impl Service {
         Gds::current().with(|| {
             zgui::task::spawn_local(async move {
                 while let Some(result) = saved.recv().await {
-                    if let Err(message) = result {
-                        error.try_set(Some(message));
+                    match result {
+                        Ok(()) => {
+                            error.try_set(None);
+                        }
+                        Err(message) => {
+                            error.try_set(Some(message));
+                        }
                     }
                 }
             });
-            Gds::current()
-                .tasks()
-                .spawn_ui("Observe preferences writer", writer, move |result| {
-                    if let Err(failure) = result.and_then(std::convert::identity) {
-                        error.try_set(Some(failure.to_string()));
-                    }
-                });
+            zgui::task::spawn_local(async move {
+                if let Err(failure) = writer.await
+                    && !matches!(failure, gds::service::task_manager::Error::Closed(_))
+                {
+                    error.try_set(Some(failure.to_string()));
+                }
+            });
         });
         Self(Rc::new(State {
             current: RwSignal::new_local(preferences),

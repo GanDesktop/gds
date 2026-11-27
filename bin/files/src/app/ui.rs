@@ -25,18 +25,18 @@ impl Initializer {
     /// opening windows.
     ///
     /// # Errors
-    /// Returns an error if base translations cannot be loaded, the built-in fallback theme fails
-    /// to initialize, or the preferences service cannot be installed.
+    /// Returns an error if base translations cannot be loaded or the built-in fallback theme fails
+    /// to initialize.
     pub fn run(
         &mut self,
         tasks: &Scope,
-        mut preferences: preferences::Preferences,
+        mut startup: preferences::StartupRead,
         notices: &mut Vec<String>,
     ) -> anyhow::Result<()> {
         self.app
             .appearance()
             .motion()
-            .set_enabled(preferences.animations_enabled.unwrap_or(true));
+            .set_enabled(startup.preferences.animations_enabled.unwrap_or(true));
         self.app.appearance().motion().follow_system();
         gds::ui::logs::init(gds::ui::logs::Options {
             app_id: Some(APP_ID.into()),
@@ -44,15 +44,15 @@ impl Initializer {
             ignored_contexts: &["GdsTerminal", "Input", "textarea", "input"],
         });
 
-        self.install_i18n(preferences.language)?;
-        gds::ui::time::apply(preferences.time_format);
-        self.apply_theme(&mut preferences.appearance, notices)?;
-        self.apply_typography(&preferences.font, notices);
+        self.install_i18n(startup.preferences.language)?;
+        gds::ui::time::apply(startup.preferences.time_format);
+        self.apply_theme(&mut startup.preferences.appearance, notices)?;
+        self.apply_typography(&startup.preferences.font, notices);
         self.app
             .appearance()
             .theme()
-            .configure_hot_reload(preferences.appearance.clone());
-        self.install_preferences(preferences, tasks)?;
+            .configure_hot_reload(startup.preferences.appearance.clone());
+        self.install_preferences(startup, tasks);
         Ok(())
     }
 
@@ -120,14 +120,8 @@ impl Initializer {
         }
     }
 
-    /// # Errors
-    /// Returns an error if the preferences configuration path cannot be resolved.
-    fn install_preferences(
-        &mut self,
-        preferences: preferences::Preferences,
-        tasks: &Scope,
-    ) -> anyhow::Result<()> {
-        let service = preferences::Service::install(preferences, tasks)?;
+    fn install_preferences(&mut self, startup: preferences::StartupRead, tasks: &Scope) {
+        let service = preferences::Service::install_loaded(startup, tasks);
         let error_sig = service.error();
         let app = self.app.clone();
         self.app.with(|| {
@@ -145,6 +139,5 @@ impl Initializer {
             });
             on_cleanup_local(move || drop(fx));
         });
-        Ok(())
     }
 }

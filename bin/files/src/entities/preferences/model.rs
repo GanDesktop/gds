@@ -1,5 +1,7 @@
 //! Persisted Files preferences and their editor schema.
 
+mod merge;
+
 use gds::{
     appearance::{theme, typography},
     i18n::Language,

@@ -86,11 +86,11 @@ impl Bootstrap {
         let places = if config.mode.needs_initial_window() {
             let (places, ()) = tokio::join!(
                 storage.load(&tasks),
-                config.preferences.appearance.prime_session()
+                config.startup.preferences.appearance.prime_session()
             );
             Some(places)
         } else {
-            config.preferences.appearance.prime_session().await;
+            config.startup.preferences.appearance.prime_session().await;
             None
         };
         Ok(Some(PreparedIo {
@@ -224,7 +224,7 @@ impl PreparedIo {
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             desktop,
         } = self;
-        ui::Initializer::new(Gds::current()).run(tasks, config.preferences, &mut config.notices)?;
+        ui::Initializer::new(Gds::current()).run(tasks, config.startup, &mut config.notices)?;
         let windows = windows::Host::new(
             tasks.clone(),
             config.home,
