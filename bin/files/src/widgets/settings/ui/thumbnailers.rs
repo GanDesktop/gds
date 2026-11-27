@@ -6,6 +6,7 @@ use gds::service::file_inspection::{
     ExternalProbeReport, ExternalThumbnailers, SandboxError, ThumbnailerInfo,
 };
 use gds::ui::button::{ButtonProps, ButtonSize, ButtonVariant};
+use gds::ui::disclosure::DisclosureProps;
 use gds::ui::feedback::tooltip::HintTooltipProps;
 use gds::ui::field::FieldLabelProps;
 use gds::ui::settings::{
@@ -85,39 +86,116 @@ const THUMBNAILERS_CSS: &str = css!(
         color: var(--gds-muted-foreground);
     }
 
-    .gds-settings-thumbnailers__list {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        padding-top: 8px;
+    .gds-settings-thumbnailers__disclosure {
+        margin-top: 8px;
         width: 100%;
+        min-width: 0;
+        border-radius: 8px;
+        border: 1px solid var(--gds-border);
+        background-color: var(--gds-control);
+        color: var(--gds-control-foreground);
+        overflow: hidden;
+        box-sizing: border-box;
+    }
+
+    .gds-settings-thumbnailers__disclosure > .gds-disclosure__trigger {
+        width: 100%;
+        min-height: 40px;
+        padding: 8px 14px;
+        gap: 8px;
+        border-radius: 0;
+        box-sizing: border-box;
+    }
+
+    .gds-settings-thumbnailers__disclosure-header {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        flex: 1 1 0%;
         min-width: 0;
     }
 
-    .gds-settings-thumbnailers__list-heading {
-        font-size: var(--gds-text-xs, 12px);
+    .gds-settings-thumbnailers__disclosure-title {
+        font-size: var(--gds-text-sm, 14px);
         font-weight: 500;
+        color: var(--gds-foreground);
+        flex: none;
+    }
+
+    .gds-settings-thumbnailers__count {
+        font-size: var(--gds-text-xs, 12px);
+        font-variant-numeric: tabular-nums;
+        padding: 1px 7px;
+        border-radius: 999px;
+        background-color: color-mix(in srgb, var(--gds-foreground) 10%, transparent);
         color: var(--gds-muted-foreground);
+        flex: none;
+    }
+
+    .gds-settings-thumbnailers__categories {
+        flex: 1 1 0%;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: right;
+        font-size: var(--gds-text-xs, 12px);
+        color: var(--gds-muted-foreground);
+    }
+
+    .gds-settings-thumbnailers__rows {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0;
+        border-top: 1px solid var(--gds-border);
+    }
+
+    .gds-settings-thumbnailers__rows > *:not(:first-child) {
+        border-top: 1px solid color-mix(in srgb, var(--gds-border) 65%, transparent);
+    }
+
+    .gds-settings-thumbnailers__rows > .zui-tooltip__trigger {
+        display: flex;
+        width: 100%;
+        min-width: 0;
     }
 
     .gds-settings-thumbnailers__entry {
         display: flex;
         flex-direction: row;
         align-items: center;
-        gap: 8px;
-        padding: 6px 10px;
-        border-radius: var(--gds-radius-control, 6px);
-        background-color: var(--gds-surface);
-        border: 1px solid var(--gds-border);
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        min-height: 36px;
+        padding: 7px 14px;
         min-width: 0;
         box-sizing: border-box;
+    }
+
+    .gds-settings-thumbnailers__entry:hover {
+        background-color: var(--gds-hover);
+    }
+
+    .gds-settings-thumbnailers__entry-identity {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        flex: 0 1 auto;
     }
 
     .gds-settings-thumbnailers__entry-name {
         font-size: var(--gds-text-sm, 14px);
         font-weight: 500;
         color: var(--gds-foreground);
-        flex: none;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
     }
 
     .gds-settings-thumbnailers__entry-badge {
@@ -129,7 +207,7 @@ const THUMBNAILERS_CSS: &str = css!(
         flex: none;
     }
 
-    .gds-settings-thumbnailers__entry-mimes {
+    .gds-settings-thumbnailers__entry-summary {
         flex: 1 1 0%;
         min-width: 0;
         overflow: hidden;
@@ -157,6 +235,7 @@ pub(super) enum State {
 pub(super) struct Probe {
     state: RwSignal<State, LocalStorage>,
     refresh: RwSignal<u64, LocalStorage>,
+    discovered_open: RwSignal<bool, LocalStorage>,
 }
 
 impl Probe {
@@ -177,6 +256,7 @@ impl Probe {
         let initial_commands = preferences.with_untracked(|p| p.thumbnailers.commands.clone());
         let state = RwSignal::new_local(State::Checking(initial_commands));
         let refresh = RwSignal::new_local(0_u64);
+        let discovered_open = RwSignal::new_local(false);
 
         let parent_scope = Gds::current()
             .tasks()
@@ -264,7 +344,11 @@ impl Probe {
         });
         on_cleanup_local(move || drop(fx));
 
-        Self { state, refresh }
+        Self {
+            state,
+            refresh,
+            discovered_open,
+        }
     }
 
     fn bwrap_ready(&self, preferences: ReadSignal<Preferences, LocalStorage>) -> bool {
@@ -328,7 +412,7 @@ impl Probe {
                 commands,
                 sandbox,
                 discovered,
-                mime_count,
+                ..
             } if *commands == current => {
                 if !use_bwrap {
                     if discovered.is_empty() {
@@ -336,18 +420,13 @@ impl Probe {
                     } else {
                         gds::t!(
                             "thumbnailers-unsandboxed-ready",
-                            count = discovered.len() as i64,
-                            mimes = *mime_count as i64
+                            count = discovered.len() as i64
                         )
                     }
                 } else {
                     match sandbox {
                         Ok(_) if discovered.is_empty() => i18n::text("thumbnailers-ready-empty"),
-                        Ok(_) => gds::t!(
-                            "thumbnailers-ready",
-                            count = discovered.len() as i64,
-                            mimes = *mime_count as i64
-                        ),
+                        Ok(_) => gds::t!("thumbnailers-ready", count = discovered.len() as i64),
                         Err(error) => format_sandbox_error(error),
                     }
                 }
@@ -370,6 +449,231 @@ impl Probe {
             _ => Vec::new(),
         })
     }
+}
+
+const MAX_ENTRY_CATEGORIES: usize = 3;
+const MAX_TOOLTIP_MIMES: usize = 5;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum MediaCategory {
+    Video,
+    Audio,
+    Pdf,
+    Office,
+    Ebook,
+    Comics,
+    Document,
+    Font,
+    Image,
+    Model3d,
+    Other,
+}
+
+impl MediaCategory {
+    fn i18n_key(self) -> &'static str {
+        match self {
+            Self::Video => "thumbnailers-cat-video",
+            Self::Audio => "thumbnailers-cat-audio",
+            Self::Pdf => "thumbnailers-cat-pdf",
+            Self::Office => "thumbnailers-cat-office",
+            Self::Ebook => "thumbnailers-cat-ebook",
+            Self::Comics => "thumbnailers-cat-comics",
+            Self::Document => "thumbnailers-cat-document",
+            Self::Font => "thumbnailers-cat-font",
+            Self::Image => "thumbnailers-cat-image",
+            Self::Model3d => "thumbnailers-cat-3d",
+            Self::Other => "thumbnailers-cat-other",
+        }
+    }
+
+    fn label(self) -> String {
+        i18n::text(self.i18n_key())
+    }
+}
+
+fn classify_mime(mime: &str) -> MediaCategory {
+    let mime = mime.trim().to_ascii_lowercase();
+    if mime.starts_with("video/")
+        || matches!(
+            mime.as_str(),
+            "application/mxf"
+                | "application/vnd.ms-asf"
+                | "application/vnd.rn-realmedia"
+                | "application/x-matroska"
+        )
+    {
+        return MediaCategory::Video;
+    }
+    if mime.starts_with("audio/") || mime == "application/x-flac" {
+        return MediaCategory::Audio;
+    }
+    if matches!(
+        mime.as_str(),
+        "application/pdf"
+            | "application/x-ext-pdf"
+            | "application/x-bzpdf"
+            | "application/x-gzpdf"
+            | "application/x-xzpdf"
+    ) {
+        return MediaCategory::Pdf;
+    }
+    if mime.starts_with("application/vnd.oasis.opendocument.")
+        || mime.starts_with("application/vnd.openxmlformats-officedocument.")
+        || mime.starts_with("application/vnd.sun.xml.")
+        || matches!(
+            mime.as_str(),
+            "application/msword"
+                | "application/vnd.ms-excel"
+                | "application/vnd.ms-powerpoint"
+                | "application/rtf"
+                | "text/rtf"
+        )
+    {
+        return MediaCategory::Office;
+    }
+    if matches!(
+        mime.as_str(),
+        "application/epub+zip"
+            | "application/x-mobipocket-ebook"
+            | "application/vnd.amazon.mobi8-ebook"
+            | "application/x-fictionbook+xml"
+    ) {
+        return MediaCategory::Ebook;
+    }
+    if mime.starts_with("application/vnd.comicbook")
+        || matches!(
+            mime.as_str(),
+            "application/x-cb7"
+                | "application/x-cbr"
+                | "application/x-cbt"
+                | "application/x-cbz"
+                | "application/x-ext-cb7"
+                | "application/x-ext-cbr"
+                | "application/x-ext-cbt"
+                | "application/x-ext-cbz"
+        )
+    {
+        return MediaCategory::Comics;
+    }
+    if mime.starts_with("image/vnd.djvu")
+        || matches!(
+            mime.as_str(),
+            "application/x-ext-djv"
+                | "application/x-ext-djvu"
+                | "application/illustrator"
+                | "application/postscript"
+                | "application/oxps"
+                | "application/vnd.ms-xpsdocument"
+        )
+    {
+        return MediaCategory::Document;
+    }
+    if mime.starts_with("font/")
+        || mime.starts_with("application/x-font-")
+        || mime == "application/vnd.ms-opentype"
+    {
+        return MediaCategory::Font;
+    }
+    if mime.starts_with("image/") || matches!(mime.as_str(), "application/ico" | "text/ico") {
+        return MediaCategory::Image;
+    }
+    if mime.starts_with("model/") || mime == "application/x-blender" {
+        return MediaCategory::Model3d;
+    }
+    MediaCategory::Other
+}
+
+fn exact_format_label(mime: &str) -> Option<&'static str> {
+    match mime.trim().to_ascii_lowercase().as_str() {
+        "image/avif" => Some("AVIF"),
+        "image/jxl" => Some("JPEG XL"),
+        "image/heif" | "image/heic" => Some("HEIF"),
+        "image/webp" => Some("WebP"),
+        "image/svg+xml" | "image/svg+xml-compressed" => Some("SVG"),
+        "application/epub+zip" => Some("EPUB"),
+        "application/x-mobipocket-ebook" => Some("MOBI"),
+        "application/vnd.amazon.mobi8-ebook" => Some("AZW3"),
+        "application/pdf" => Some("PDF"),
+        "application/x-blender" => Some("Blender"),
+        _ => None,
+    }
+}
+
+fn collect_categories<'a>(mimes: impl IntoIterator<Item = &'a str>) -> Vec<MediaCategory> {
+    let mut categories: Vec<MediaCategory> = mimes.into_iter().map(classify_mime).collect();
+    categories.sort();
+    categories.dedup();
+    if categories.len() > 1 {
+        categories.retain(|category| *category != MediaCategory::Other);
+    }
+    categories
+}
+
+fn summarize_entry_formats(mime_types: &[String]) -> String {
+    let sep = i18n::text("thumbnailers-list-sep");
+    if !mime_types.is_empty() && mime_types.len() <= 3 {
+        let mut exact = Vec::with_capacity(mime_types.len());
+        let mut all_exact = true;
+        for mime in mime_types {
+            if let Some(label) = exact_format_label(mime) {
+                if !exact.contains(&label) {
+                    exact.push(label);
+                }
+            } else {
+                all_exact = false;
+                break;
+            }
+        }
+        if all_exact && !exact.is_empty() {
+            return exact.join(&sep);
+        }
+    }
+
+    let categories = collect_categories(mime_types.iter().map(String::as_str));
+    let summary = categories
+        .into_iter()
+        .take(MAX_ENTRY_CATEGORIES)
+        .map(MediaCategory::label)
+        .collect::<Vec<_>>()
+        .join(&sep);
+    if mime_types.len() > 1 {
+        gds::t!(
+            "thumbnailers-formats-count",
+            summary = summary,
+            count = mime_types.len() as i64
+        )
+    } else {
+        summary
+    }
+}
+
+fn summarize_all_categories(entries: &[ThumbnailerInfo]) -> String {
+    let categories = collect_categories(
+        entries
+            .iter()
+            .flat_map(|entry| entry.mime_types.iter().map(String::as_str)),
+    );
+    categories
+        .into_iter()
+        .map(MediaCategory::label)
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn format_entry_tooltip(entry: &ThumbnailerInfo) -> String {
+    let mimes = if entry.mime_types.len() <= MAX_TOOLTIP_MIMES {
+        entry.mime_types.join(", ")
+    } else {
+        let shown = entry.mime_types[..MAX_TOOLTIP_MIMES].join(", ");
+        let rest = entry.mime_types.len() - MAX_TOOLTIP_MIMES;
+        gds::t!(
+            "thumbnailers-tooltip-more",
+            shown = shown,
+            rest = rest as i64,
+            total = entry.mime_types.len() as i64
+        )
+    };
+    format!("{}\n{mimes}", entry.path.display())
 }
 
 fn format_sandbox_error(error: &SandboxError) -> String {
@@ -404,6 +708,7 @@ impl View {
         let view_sandbox = self.clone();
         let enabled_ref = NodeRef::new();
         let sandbox_ref = NodeRef::new();
+        let list_open = self.thumbnailers.discovered_open;
 
         let enabled = Binding::controlled(
             Signal::derive_local(move || preferences.with(|p| p.thumbnailers.enabled)),
@@ -523,39 +828,64 @@ impl View {
                 {move || {
                     let entries = probe_list.discovered(preferences);
                     (!entries.is_empty()).then(|| {
-                        let rows = entries
-                            .into_iter()
-                            .map(|entry| {
-                                let name = entry.id.clone();
-                                let mimes_summary = entry.mime_types.join(", ");
-                                let tooltip = format!(
-                                    "{}\n{}",
-                                    entry.path.display(),
-                                    entry.mime_types.join("\n")
-                                );
-                                let user_override = entry.user_override;
-                                AnyView::new(view! {
-                                    HintTooltip(text = tooltip) {
-                                        row(class = "gds-settings-thumbnailers__entry") {
-                                            text(class = "gds-settings-thumbnailers__entry-name") {{name}}
-                                            {user_override.then(|| AnyView::new(view! {
-                                                text(class = "gds-settings-thumbnailers__entry-badge") {
-                                                    {move || i18n::text("thumbnailers-user-badge")}
-                                                }
-                                            }))}
-                                            text(class = "gds-settings-thumbnailers__entry-mimes") {{mimes_summary}}
+                        let count = entries.len().to_string();
+                        let header_entries = entries.clone();
+                        let open_binding = Binding::controlled(
+                            Signal::derive_local(move || list_open.get()),
+                            move |next: bool| list_open.set(next),
+                        );
+                        AnyView::new(view! {
+                            Disclosure(
+                                open = open_binding,
+                                show_icon = true,
+                                class = "gds-settings-thumbnailers__disclosure",
+                                header = move || AnyView::new(view! {
+                                    row(class = "gds-settings-thumbnailers__disclosure-header") {
+                                        text(class = "gds-settings-thumbnailers__disclosure-title") {
+                                            {move || i18n::text("thumbnailers-discovered")}
+                                        }
+                                        text(class = "gds-settings-thumbnailers__count") {{count}}
+                                        text(class = "gds-settings-thumbnailers__categories") {
+                                            {move || summarize_all_categories(&header_entries)}
                                         }
                                     }
-                                })
-                            })
-                            .collect::<Vec<_>>();
-                        AnyView::new(view! {
-                            column(class = "gds-settings-thumbnailers__list") {
-                                text(class = "gds-settings-thumbnailers__list-heading") {
-                                    {move || i18n::text("thumbnailers-discovered")}
-                                }
-                                {rows}
-                            }
+                                }),
+                                content = move || {
+                                    let rows = entries
+                                        .into_iter()
+                                        .map(|entry| {
+                                            let name = entry.id.clone();
+                                            let user_override = entry.user_override;
+                                            let summary_mimes = entry.mime_types.clone();
+                                            let tooltip = Signal::derive_local(move || {
+                                                format_entry_tooltip(&entry)
+                                            });
+                                            AnyView::new(view! {
+                                                HintTooltip(text = tooltip) {
+                                                    row(class = "gds-settings-thumbnailers__entry") {
+                                                        row(class = "gds-settings-thumbnailers__entry-identity") {
+                                                            text(class = "gds-settings-thumbnailers__entry-name") {{name}}
+                                                            {user_override.then(|| AnyView::new(view! {
+                                                                text(class = "gds-settings-thumbnailers__entry-badge") {
+                                                                    {move || i18n::text("thumbnailers-user-badge")}
+                                                                }
+                                                            }))}
+                                                        }
+                                                        text(class = "gds-settings-thumbnailers__entry-summary") {
+                                                            {move || summarize_entry_formats(&summary_mimes)}
+                                                        }
+                                                    }
+                                                }
+                                            })
+                                        })
+                                        .collect::<Vec<_>>();
+                                    AnyView::new(view! {
+                                        column(class = "gds-settings-thumbnailers__rows") {
+                                            {rows}
+                                        }
+                                    })
+                                },
+                            )
                         })
                     })
                 }}
@@ -715,6 +1045,76 @@ mod tests {
             flush();
             assert!(probe.can_enable_untracked(prefs.read_only()));
             assert_eq!(started.load(Ordering::SeqCst), 2);
+        });
+        root.unmount();
+    }
+
+    #[test]
+    fn format_summaries_hide_raw_mime_soup_and_bound_tooltips() {
+        let _ = install();
+        set_frame_waker(Arc::new(TestWaker::default()));
+        let supervisor = Supervisor::new(false).expect("start test supervisor");
+
+        let root = Mounted::new();
+        root.with(|| {
+            let app = Gds::install(supervisor.scope());
+            app.i18n().install_catalog(
+                crate::shared::i18n::prepare(gds::i18n::Language::Chinese)
+                    .expect("Chinese catalog"),
+            );
+
+            Signal::derive_local(move || {
+                assert_eq!(
+                    super::summarize_entry_formats(&["image/avif".into()]),
+                    "AVIF"
+                );
+                assert_eq!(
+                    super::summarize_entry_formats(&["image/heif".into(), "image/avif".into()]),
+                    "HEIF、AVIF"
+                );
+                assert_eq!(
+                    super::summarize_entry_formats(&["application/epub+zip".into()]),
+                    "EPUB"
+                );
+
+                let video_mimes: Vec<String> = vec![
+                    "video/mp4".into(),
+                    "video/webm".into(),
+                    "video/x-matroska".into(),
+                    "application/ogg".into(),
+                ];
+                let video_summary = super::summarize_entry_formats(&video_mimes);
+                assert_eq!(video_summary, "视频 · 4 种格式");
+                assert!(!video_summary.contains("video/"));
+
+                let papers_mimes: Vec<String> = vec![
+                    "application/pdf".into(),
+                    "application/x-cbz".into(),
+                    "image/vnd.djvu".into(),
+                    "image/tiff".into(),
+                ];
+                let papers_summary = super::summarize_entry_formats(&papers_mimes);
+                assert_eq!(papers_summary, "PDF、漫画、文档 · 4 种格式");
+                assert!(!papers_summary.contains("application/"));
+
+                let many_mimes: Vec<String> = (0..12).map(|i| format!("audio/fmt-{i}")).collect();
+                let entry = gds::service::file_inspection::ThumbnailerInfo {
+                    id: "ffmpegthumbnailer-audio".into(),
+                    path: PathBuf::from(
+                        "/usr/share/thumbnailers/ffmpegthumbnailer-audio.thumbnailer",
+                    ),
+                    executable: PathBuf::from("/usr/bin/ffmpegthumbnailer"),
+                    mime_types: many_mimes,
+                    user_override: false,
+                };
+                let tooltip = super::format_entry_tooltip(&entry);
+                assert_eq!(tooltip.lines().count(), 2);
+                assert!(tooltip.contains("audio/fmt-0"));
+                assert!(tooltip.contains("audio/fmt-4"));
+                assert!(!tooltip.contains("audio/fmt-5"));
+                assert!(tooltip.contains("12"));
+            })
+            .get_untracked();
         });
         root.unmount();
     }

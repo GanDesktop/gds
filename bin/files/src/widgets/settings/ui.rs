@@ -1,101 +1,40 @@
 //! Reactive settings pages editing the persisted application schema.
 
-mod appearance;
+use gds::ui::settings::appearance::{self, AppearanceEditor};
 mod pages;
 mod tags;
 mod thumbnailers;
 
 use std::rc::Rc;
 
-use gds::appearance::tokens::{
-    COLLAPSED_SIDEBAR_WIDTH, SIDEBAR_ICON_SIZE, SIDEBAR_WIDTH, TOOLTIP_DELAY,
-};
+use gds::appearance::tokens::{COLLAPSED_SIDEBAR_WIDTH, SIDEBAR_WIDTH};
 use gds::i18n;
-use gds::ui::field::FieldLabelProps;
-use gds::ui::keytips::{self, HintPlacement};
-use gds::ui::navigation::NavItemProps;
+use gds::ui::keytips;
+use gds::ui::settings::SettingsCategoryProps;
 use gds::ui::settings::form::{Changed, Editor, Model};
 use gds::ui::settings::{
-    NumberControlProps, PERCENTAGE_RANGE, SettingActionsProps, SettingControlProps,
-    SettingDescriptionProps, SettingLabelProps, SettingResetProps, SettingRowProps,
+    SettingsColumnProps, SettingsFooterProps, SettingsNavigationProps, SettingsPageProps,
 };
-use gds::ui::sidebar::{SideBarContentProps, SideBarProps, SidebarPresentation};
-use gds::ui::tooltip::{HintTooltipProps, TooltipTextProps};
-use gds::ui::{
-    FrameContext, IconButtonProps, IconName, IconProps, Shortcut, ShortcutBadgeProps,
-    ToggleSwitchProps, window::WidthTier,
-};
+use gds::ui::sidebar::SidebarPresentation;
+
+use gds::ui::{FrameContext, window::WidthTier};
 use serde::{Serialize, de::DeserializeOwned};
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, ReadSignal, RwSignal, UnsyncCallback};
 use zgui::view::{ShowProps, install_stylesheet};
-use zgui::vocab::{Key, NamedKey};
+
 use zgui::{component, css, view};
-use zgui_ui::{TooltipContentProps, TooltipProps, TooltipTriggerProps};
+
 use zgui_ui_primitives::Binding;
 
 use crate::entities::preferences::Preferences;
-use crate::shared::ui::actions::Command;
+
 pub use pages::Page;
 
 const SETTINGS_SHEET: &str = "gds-files-settings";
 const SETTINGS_CSS: &str = css!(
     r#"
-    .gds-settings-sidebar {
-        display: flex;
-        flex-direction: column;
-        width: 100%;
-        min-width: 0;
-        gap: 4px;
-        padding: var(--gds-sidebar-padding, 10px);
-        box-sizing: border-box;
-    }
 
-    .gds-settings-sidebar > .zui-tooltip__trigger {
-        display: flex;
-        width: 100%;
-        min-width: 0;
-    }
-
-    .gds-settings-nav-corner-anchor {
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-    }
-
-    .gds-settings-content {
-        display: flex;
-        flex-direction: column;
-        flex: 1 1 0%;
-        width: 100%;
-        height: 100%;
-        min-width: 0;
-        min-height: 0;
-        padding: 24px;
-        box-sizing: border-box;
-        outline: none;
-        box-shadow: none;
-    }
-
-    .gds-settings-content:focus,
-    .gds-settings-content:focus-visible {
-        outline: none;
-        box-shadow: none;
-    }
-
-    .gds-settings-heading {
-        font-size: var(--gds-text-lg, 20px);
-        font-weight: 600;
-        margin-bottom: 20px;
-    }
-
-    .gds-settings-col {
-        display: flex;
-        flex-direction: column;
-        width: 100%;
-        max-width: 880px;
-        min-width: 0;
-    }
 
     .gds-settings-extensions__divider {
         width: 100%;
@@ -105,16 +44,9 @@ const SETTINGS_CSS: &str = css!(
         flex-shrink: 0;
     }
 
-    .gds-settings-label-trigger {
-        display: inline-flex;
-        align-self: flex-start;
-        max-width: 100%;
-    }
 
-    .gds-settings-footer {
-        font-size: var(--gds-text-xs, 12px);
-        color: var(--gds-muted-foreground);
-    }
+
+
     "#
 );
 
@@ -140,7 +72,7 @@ impl View {
             preferences,
             on_apply: Rc::new(on_apply),
             page: RwSignal::new_local(Page::General),
-            themes: appearance::Themes::new(&preferences.get_untracked()),
+            themes: appearance::Themes::new(&preferences.get_untracked().appearance.source),
             tags: tags::Probe::new(preferences),
             thumbnailers: thumbnailers::Probe::new(preferences),
             nav_refs: std::array::from_fn(|_| NodeRef::new()),
@@ -193,32 +125,7 @@ impl View {
         testid: Option<&'static str>,
         on_reset: impl Fn() + Clone + 'static,
     ) -> AnyView {
-        let focus = self.page_focus;
-        AnyView::new(view! {
-            SettingReset {
-                {move || {
-                    let on_reset = on_reset.clone();
-                    modified.get().then(|| {
-                        let attrs = match testid {
-                            Some(id) => Attrs::new().attribute(zgui::view::AttrName::new("data-testid"), id),
-                            None => Attrs::new(),
-                        };
-                        view! {
-                            IconButton(
-                                icon = IconName::RotateCcw,
-                                label = Signal::derive_local(|| i18n::text("settings-reset-default")),
-                                on:click = move |_| {
-                                    on_reset();
-                                    focus.focus();
-                                },
-                                {..attrs}
-                            )
-                        }
-                        .into_view()
-                    })
-                }}
-            }
-        })
+        gds::ui::settings::reset_button(modified, self.page_focus, testid, on_reset)
     }
 
     pub(super) fn reset<T: PartialEq + 'static>(
@@ -244,51 +151,15 @@ impl View {
         set: fn(&mut Preferences, bool),
         reset_fn: fn(&mut Preferences),
     ) -> AnyView {
-        let preferences = self.preferences;
         let view = self.clone();
-        let reset_view = self.clone();
-        let title_ref = NodeRef::new();
-        let value = Binding::controlled(
-            Signal::derive_local(move || preferences.with(get)),
-            move |checked| view.apply(|preferences| set(preferences, checked)),
-        );
-        let modified =
-            Signal::derive_local(move || preferences.with(get) != get(&Preferences::default()));
-        let reset = self.reset_button(modified, None, move || {
-            reset_view.apply(reset_fn);
-        });
-        let title = if help.is_empty() {
-            AnyView::new(view! {
-                FieldLabel(node_ref = title_ref) {{move || i18n::text(label)}}
-            })
-        } else {
-            AnyView::new(view! {
-                box(class = "gds-settings-label-trigger") {
-                    HintTooltip(text = Signal::derive_local(move || i18n::text(help))) {
-                        FieldLabel(node_ref = title_ref) {{move || i18n::text(label)}}
-                    }
-                }
-            })
-        };
-        AnyView::new(view! {
-            SettingRow {
-                SettingLabel {
-                    {title}
-                    {(!help.is_empty()).then(|| view! {
-                        SettingDescription {{move || i18n::text(help)}}
-                    }.into_view())}
-                }
-                SettingActions {
-                    {reset}
-                    SettingControl {
-                        ToggleSwitch(
-                            checked = value,
-                            labelled_by = Some(title_ref),
-                        )
-                    }
-                }
-            }
-        })
+        gds::ui::settings::toggle_with_reset(
+            label,
+            (!help.is_empty()).then_some(help),
+            self.binding(get, set),
+            get(&Preferences::default()),
+            self.page_focus,
+            move || view.apply(reset_fn),
+        )
     }
 
     pub(super) fn toggle(
@@ -298,105 +169,43 @@ impl View {
         get: fn(&Preferences) -> bool,
         set: fn(&mut Preferences, bool),
     ) -> AnyView {
-        let preferences = self.preferences;
-        let view = self.clone();
-        let reset_view = self.clone();
-        let title_ref = NodeRef::new();
-        let value = Binding::controlled(
-            Signal::derive_local(move || preferences.with(get)),
-            move |checked| view.apply(|preferences| set(preferences, checked)),
-        );
-        let modified =
-            Signal::derive_local(move || preferences.with(get) != get(&Preferences::default()));
-        let reset = self.reset_button(modified, None, move || {
-            reset_view.apply(|preferences| set(preferences, get(&Preferences::default())));
-        });
-        let title = if help.is_empty() {
-            AnyView::new(view! {
-                FieldLabel(node_ref = title_ref) {{move || i18n::text(label)}}
-            })
-        } else {
-            AnyView::new(view! {
-                box(class = "gds-settings-label-trigger") {
-                    HintTooltip(text = Signal::derive_local(move || i18n::text(help))) {
-                        FieldLabel(node_ref = title_ref) {{move || i18n::text(label)}}
-                    }
-                }
-            })
-        };
-        AnyView::new(view! {
-            SettingRow {
-                SettingLabel {
-                    {title}
-                    {(!help.is_empty()).then(|| view! {
-                        SettingDescription {{move || i18n::text(help)}}
-                    }.into_view())}
-                }
-                SettingActions {
-                    {reset}
-                    SettingControl {
-                        ToggleSwitch(
-                            checked = value,
-                            labelled_by = Some(title_ref),
-                        )
-                    }
-                }
-            }
-        })
+        gds::ui::settings::toggle_setting(
+            label,
+            (!help.is_empty()).then_some(help),
+            self.binding(get, set),
+            get(&Preferences::default()),
+            self.page_focus,
+        )
     }
 
-    pub(super) fn opacity(
+    fn binding<T: Clone + PartialEq + 'static>(
         &self,
-        label: &'static str,
-        get: fn(&Preferences) -> f32,
-        set: fn(&mut Preferences, f32),
-    ) -> AnyView {
+        get: fn(&Preferences) -> T,
+        set: fn(&mut Preferences, T),
+    ) -> Binding<T> {
         let preferences = self.preferences;
         let view = self.clone();
-        let reset_view = self.clone();
-        let title_ref = NodeRef::new();
-        let pct = Signal::derive_local(move || {
-            f64::from(PERCENTAGE_RANGE.quantize(preferences.with(get) * 100.0))
-        });
-        let binding = Binding::controlled(pct, move |next| {
-            let quantized = PERCENTAGE_RANGE.quantize(next as f32);
-            let current = preferences.with_untracked(get) * 100.0;
-            if !PERCENTAGE_RANGE.equivalent(current, quantized) {
-                view.apply(|p| set(p, quantized / 100.0));
-            }
-        });
-        let modified = Signal::derive_local(move || {
-            !opacity_matches_default(preferences.with(get), get(&Preferences::default()))
-        });
-        let reset = self.reset_button(modified, None, move || {
-            reset_view.apply(|p| set(p, get(&Preferences::default())));
-        });
-        AnyView::new(view! {
-            SettingRow {
-                SettingLabel {
-                    FieldLabel(node_ref = title_ref) {{move || i18n::text(label)}}
-                }
-                SettingActions {
-                    {reset}
-                    SettingControl {
-                        row(class = "gds-setting-number-row") {
-                            NumberControl(
-                                value = binding,
-                                range = PERCENTAGE_RANGE,
-                                label = i18n::text_untracked(label),
-                                labelled_by = Some(title_ref),
-                            )
-                            text(class = "gds-setting-number-value") {
-                                {move || format!("{:.0}%", pct.get())}
-                            }
-                        }
-                    }
-                }
-            }
-        })
+        Binding::controlled(
+            Signal::derive_local(move || preferences.with(get)),
+            move |value| {
+                view.apply(|p| set(p, value));
+            },
+        )
+    }
+
+    fn appearance(&self) -> AnyView {
+        AppearanceEditor::new(
+            self.binding(|p| p.appearance.clone(), |p, v| p.appearance = v),
+            self.binding(|p| p.font.clone(), |p, v| p.font = v),
+            self.binding(|p| p.animations_enabled, |p, v| p.animations_enabled = v),
+            self.themes.clone(),
+            self.page_focus,
+        )
+        .view()
     }
 
     fn contents(&self) -> AnyView {
+        let fields = self.clone();
         match self.page.get() {
             Page::General => {
                 let view = self.clone();
@@ -408,25 +217,25 @@ impl View {
                 .reset_focus(self.page_focus)
                 .view();
                 AnyView::new(view! {
-                    column(class = "gds-settings-col") { {editor} }
+                    SettingsColumn { {editor} }
                 })
             }
             Page::Appearance => self.appearance(),
             Page::Files => AnyView::new(view! {
-                column(class = "gds-settings-col") {
-                    {self.toggle(
+                SettingsColumn {
+                    {fields.toggle(
                         "sidebar-show-quick-access",
                         "",
                         |p| p.files.sidebar.show_quick_access,
                         |p, v| p.files.sidebar.show_quick_access = v,
                     )}
-                    {self.toggle(
+                    {fields.toggle(
                         "sidebar-show-volumes",
                         "",
                         |p| p.files.sidebar.show_volumes,
                         |p, v| p.files.sidebar.show_volumes = v,
                     )}
-                    {self.toggle(
+                    {fields.toggle(
                         "auto-focus-search",
                         "auto-focus-search-help",
                         |p| p.files.auto_focus_search,
@@ -438,8 +247,8 @@ impl View {
                 let preferences = self.preferences;
                 let view = self.clone();
                 AnyView::new(view! {
-                    column(class = "gds-settings-col") {
-                        {self.toggle_with_reset(
+                    SettingsColumn {
+                        {fields.toggle_with_reset(
                             "files-terminal-enabled",
                             "",
                             Preferences::terminal_enabled,
@@ -460,10 +269,10 @@ impl View {
                 })
             }
             Page::Extensions => AnyView::new(view! {
-                column(class = "gds-settings-col") {
-                    {self.tags_section()}
+                SettingsColumn {
+                    {fields.tags_section()}
                     box(class = "gds-settings-extensions__divider") {}
-                    {self.thumbnailers_section()}
+                    {fields.thumbnailers_section()}
                 }
             }),
             Page::Performance => self.performance(),
@@ -471,18 +280,7 @@ impl View {
     }
 
     pub(super) fn adjacent(page: Page, backwards: bool) -> Page {
-        let offset = if backwards { Page::ALL.len() - 1 } else { 1 };
-        Page::ALL[(page.index() + offset) % Page::ALL.len()]
-    }
-
-    pub(super) fn navigation_shortcut(current: Page, destination: Page) -> Option<Shortcut> {
-        if destination == Self::adjacent(current, false) {
-            Some(Command::NextTab.shortcut())
-        } else if destination == Self::adjacent(current, true) {
-            Some(Command::PreviousTab.shortcut())
-        } else {
-            None
-        }
+        Page::ALL[gds::ui::settings::adjacent_page(page.index(), Page::ALL.len(), backwards)]
     }
 
     pub fn cycle_page(&self, backwards: bool) {
@@ -498,118 +296,21 @@ impl View {
         &self,
         event: &mut zgui::view::EventCx<'_, zgui::view::events::KeyDown>,
     ) {
-        if event.repeat || keytips::has_active_modal_scope() {
-            return;
-        }
-        let held = event.modifiers.held();
-        if held.control() && !held.alt() && !held.meta() && event.key == Key::Named(NamedKey::Tab) {
-            self.cycle_page(held.shift());
-            event.prevent_default();
-            event.stop_propagation();
-        }
+        gds::ui::settings::handle_page_cycle(event, |previous| self.cycle_page(previous));
     }
 
-    fn navigation_item(
-        &self,
-        destination: Page,
-        pres_sig: Signal<SidebarPresentation, LocalStorage>,
-    ) -> AnyView {
+    fn navigation_item(&self, destination: Page) -> AnyView {
         let page = self.page;
-        let selected = Signal::derive_local(move || page.get() == destination);
-        let item_ref = self.nav_refs[destination.index()];
-        let corner_ref = NodeRef::new();
-
-        let next_expanded = Signal::derive_local(move || {
-            !pres_sig.get().collapsed() && destination == Self::adjacent(page.get(), false)
-        });
-        let prev_expanded = Signal::derive_local(move || {
-            !pres_sig.get().collapsed() && destination == Self::adjacent(page.get(), true)
-        });
-        let next_collapsed = Signal::derive_local(move || {
-            pres_sig.get().collapsed() && destination == Self::adjacent(page.get(), false)
-        });
-        let prev_collapsed = Signal::derive_local(move || {
-            pres_sig.get().collapsed() && destination == Self::adjacent(page.get(), true)
-        });
-
-        keytips::stage_shortcut(
-            item_ref,
-            Command::NextTab.shortcut(),
-            HintPlacement::Trailing,
-            next_expanded,
-        );
-        keytips::stage_shortcut(
-            item_ref,
-            Command::PreviousTab.shortcut(),
-            HintPlacement::Trailing,
-            prev_expanded,
-        );
-        keytips::stage_shortcut(
-            corner_ref,
-            Command::NextTab.shortcut(),
-            HintPlacement::Corner,
-            next_collapsed,
-        );
-        keytips::stage_shortcut(
-            corner_ref,
-            Command::PreviousTab.shortcut(),
-            HintPlacement::Corner,
-            prev_collapsed,
-        );
-
-        let icon_view = AnyView::new(view! {
-            Icon(name = destination.icon(), size = SIDEBAR_ICON_SIZE)
-        });
-        let label_view = AnyView::new(view! {
-            {move || i18n::text(destination.label_id())}
-        });
-        let tooltip_label = Signal::derive_local(move || i18n::text(destination.label_id()));
-
-        let nav_row = view! {
-            NavItem(
-                node_ref = item_ref,
-                selected = selected,
-                presentation = pres_sig,
-                icon = icon_view,
-                label = label_view,
-                tooltip_enabled = false,
-                attr:data-testid = format!("settings-page-{}", destination.index()),
-                a11y:label = move || i18n::text(destination.label_id()),
-                on_click = UnsyncCallback::new(move |()| {
-                    if page.get_untracked() != destination {
-                        page.set(destination);
-                    }
-                }),
-            ) {
-                box(
-                    node_ref = corner_ref,
-                    class = "gds-settings-nav-corner-anchor",
-                    a11y:hidden = true,
-                ) {}
-            }
-        };
-
         AnyView::new(view! {
-            Tooltip(delay = TOOLTIP_DELAY) {
-                TooltipTrigger {{nav_row}}
-                TooltipContent(class = "gds-tooltip-content", arrow = false) {
-                    row(class = "gds-shortcut-hint") {
-                        box(class = "gds-shortcut-hint__label") {
-                            TooltipText(text = tooltip_label)
-                        }
-                        {move || {
-                            Self::navigation_shortcut(page.get(), destination).map(|shortcut| {
-                                view! {
-                                    box(class = "gds-shortcut-hint__keys") {
-                                        ShortcutBadge(shortcut = shortcut)
-                                    }
-                                }
-                                .into_view()
-                            })
-                        }}
-                    }
-                }
-            }
+            SettingsCategory(
+                label=Signal::derive_local(move||i18n::text(destination.label_id())),
+                icon=destination.icon(),
+                selected=Signal::derive_local(move||page.get()==destination),
+                shortcut=Signal::derive_local(move||gds::ui::settings::category_shortcut(page.get().index(), destination.index(), Page::ALL.len())),
+                node_ref=self.nav_refs[destination.index()],
+                attr:data-testid=format!("settings-page-{}",destination.index()),
+                on_click=UnsyncCallback::new(move|()| {if page.get_untracked()!=destination {page.set(destination)}}),
+            )
         })
     }
 
@@ -628,23 +329,12 @@ impl View {
         let focus = self.page_focus;
         let contents = self.clone();
         let navigation = self.clone();
-        let focus_on_mount = zgui::reactive::RenderEffect::new(move |prev: Option<bool>| {
-            let mounted = focus.get().is_some();
-            if mounted && prev != Some(true) {
-                focus.focus();
-            }
-            mounted
-        });
-        zgui::reactive::on_cleanup_local(move || drop(focus_on_mount));
-
         AnyView::new(view! {
-            scroll(
-                class = "gds-settings-content",
+            SettingsPage(
+                heading = Signal::derive_local(move || i18n::text(page.get().label_id())),
                 node_ref = focus,
-                tabindex = {Focus::Sequential},
                 on:key_down = move |event| navigation.handle_cycle_shortcut(event),
             ) {
-                text(class = "gds-settings-heading") {{move || i18n::text(page.get().label_id())}}
                 {move || contents.contents()}
             }
         })
@@ -653,7 +343,7 @@ impl View {
     pub fn footer_text(&self) -> AnyView {
         install_stylesheet(SETTINGS_SHEET, SETTINGS_CSS);
         AnyView::new(view! {
-            text(class = "gds-settings-footer") {{move || i18n::text("settings-auto-apply")}}
+            SettingsFooter(label = Signal::derive_local(|| i18n::text("settings-auto-apply")))
         })
     }
 }
@@ -691,28 +381,21 @@ fn SettingsSidebar(view: View, presentation: SidebarPresentation) -> impl IntoVi
     let navigation = view.clone();
     let items = Page::ALL
         .into_iter()
-        .map(|destination| view.navigation_item(destination, pres_sig))
+        .map(|destination| view.navigation_item(destination))
         .collect::<Vec<_>>();
 
     view! {
-        SideBar(
+        SettingsNavigation(
             presentation = pres_sig,
             label = i18n::text_untracked("settings"),
-        ) {
-            SideBarContent {
-                column(
-                    class = "gds-settings-sidebar",
-                    on:key_down = move |event| navigation.handle_cycle_shortcut(event),
-                ) {
-                    {items}
-                }
-            }
-        }
+            on:key_down = move |event| navigation.handle_cycle_shortcut(event),
+        ) { {items} }
     }
 }
 
-pub(super) fn opacity_matches_default(current: f32, default: f32) -> bool {
-    PERCENTAGE_RANGE.equivalent(current * 100.0, default * 100.0)
+#[cfg(test)]
+fn opacity_matches_default(current: f32, default: f32) -> bool {
+    gds::ui::settings::PERCENTAGE_RANGE.equivalent(current * 100.0, default * 100.0)
 }
 
 impl IntoView for View {
@@ -745,9 +428,7 @@ mod tests {
     };
     use zgui::runtime::AppError;
     use zgui::view;
-    use zgui::vocab::{
-        Key, Modifiers, NamedKey, PointerAction, PointerButton, PointerEvent, Role, Timestamp,
-    };
+    use zgui::vocab::{Modifiers, PointerAction, PointerButton, PointerEvent, Role, Timestamp};
     use zgui_platform_headless::Harness;
 
     use super::{Page, Preferences, View, opacity_matches_default};
@@ -834,22 +515,13 @@ mod tests {
         assert_eq!(View::adjacent(Page::General, false), Page::Appearance);
         assert_eq!(View::adjacent(Page::General, true), Page::Performance);
         assert_eq!(View::adjacent(Page::Performance, false), Page::General);
-
+        use gds::ui::{Shortcut, settings::category_shortcut};
+        assert_eq!(category_shortcut(0, 1, 6), Shortcut::parse("Ctrl+Tab"));
         assert_eq!(
-            View::navigation_shortcut(Page::General, Page::Appearance),
-            Some(gds::ui::Shortcut::new(
-                Key::Named(NamedKey::Tab),
-                Modifiers::CONTROL
-            ))
+            category_shortcut(0, 5, 6),
+            Shortcut::parse("Ctrl+Shift+Tab")
         );
-        assert_eq!(
-            View::navigation_shortcut(Page::General, Page::Performance),
-            Some(gds::ui::Shortcut::new(
-                Key::Named(NamedKey::Tab),
-                Modifiers::CONTROL | Modifiers::SHIFT
-            ))
-        );
-        assert_eq!(View::navigation_shortcut(Page::General, Page::Files), None);
+        assert_eq!(category_shortcut(0, 2, 6), None);
     }
 
     #[test]
