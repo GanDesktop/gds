@@ -12,7 +12,7 @@ use directories::BaseDirs;
 use image::RgbaImage;
 use md5::{Digest, Md5};
 
-use super::{EDGE, Error, Generated, Source, Thumbnail};
+use super::{EDGE, Error, Generated, Target, Thumbnail};
 
 const FLAVORS: [(&str, u32); 4] = [
     ("normal", 128),
@@ -73,34 +73,26 @@ struct ExtraMeta<'a> {
 }
 
 /// # Errors
-/// Reports unreadable sources and thumbnail generation failures. Cache failures
-/// are diagnosed separately and never prevent displaying a generated thumbnail.
-#[cfg(test)]
-pub(super) fn load(source: &Source, cache: Option<&Cache>) -> Result<Thumbnail, Error> {
-    load_with(source, cache, || source.generate())
-}
-
-/// # Errors
 /// Reports source access and generation failures; cache I/O is diagnosed separately.
 pub(super) fn load_with(
-    source: &Source,
+    target: Target<'_>,
     cache: Option<&Cache>,
     generate: impl FnOnce() -> Result<Generated, Error>,
 ) -> Result<Thumbnail, Error> {
     // A cached preview must not bypass the original file's read permissions.
-    let file = File::open(&source.path)?;
+    let file = File::open(target.path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(Error::NotFile);
     }
-    let identity = match Identity::new(&source.path, &metadata) {
+    let identity = match Identity::new(target.path, &metadata) {
         Ok(identity) => Some(identity),
         Err(error) => {
             tracing::debug!(%error, "thumbnail identity unavailable; generating without disk cache");
             None
         }
     };
-    let cache = cache.filter(|cache| !cache.contains(&source.path));
+    let cache = cache.filter(|cache| !cache.contains(target.path));
     if let (Some(cache), Some(identity)) = (cache, identity.as_ref()) {
         match cache.lookup(identity) {
             Lookup::Ready(thumbnail) => return Ok(thumbnail),
@@ -111,10 +103,10 @@ pub(super) fn load_with(
     match generate() {
         Ok(generated) => {
             if let (Some(cache), Some(identity)) = (cache, identity.as_ref())
-                && identity.unchanged(&source.path)
+                && identity.unchanged(target.path)
             {
                 let extra = ExtraMeta {
-                    mime: source.mime.as_deref(),
+                    mime: target.mime,
                     dimensions: generated.source_dimensions,
                 };
                 match encode(&generated.image, Some(identity), extra, None) {
@@ -136,7 +128,7 @@ pub(super) fn load_with(
                 error,
                 Error::Image(_) | Error::Svg(_) | Error::ExternalFailed(_) | Error::NoCover
             ) && let (Some(cache), Some(identity)) = (cache, identity.as_ref())
-                && identity.unchanged(&source.path)
+                && identity.unchanged(target.path)
                 && let Err(cache_error) = cache.store_failure_kind(
                     identity,
                     if matches!(error, Error::NoCover) {

@@ -4,7 +4,7 @@ use zgui::canvas::zgui_color::Color;
 
 use super::{
     Mode,
-    provider::color::{color_css, rgb},
+    color::{color_css, rgb},
 };
 
 /// Opaque terminal colors; the content material supplies background opacity.

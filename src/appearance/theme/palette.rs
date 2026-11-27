@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use zgui::canvas::zgui_color::{Color, ColorSpace};
 use zgui_ui_tokens::Theme;
 
-use super::provider::color::{
+use super::color::{
     ColorExt as _, color_css, contrast_ratio, ensure_contrast, relative_luminance, rgb,
 };
 use crate::appearance::{motion, typography};

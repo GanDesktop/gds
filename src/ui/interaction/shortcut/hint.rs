@@ -5,8 +5,7 @@ use zgui_ui::{TooltipContentProps, TooltipProps, TooltipTriggerProps};
 
 use super::{Shortcut, ShortcutBadgeProps};
 use crate::appearance::tokens::TOOLTIP_DELAY;
-use crate::ui::actions::Command;
-use crate::ui::feedback::tooltip::{TooltipTextProps, install_tooltip_stylesheet};
+use crate::ui::tooltip::{TooltipTextProps, install_tooltip_stylesheet};
 
 pub(crate) const SHEET: &str = css!(
     r#"
@@ -82,12 +81,6 @@ pub fn ShortcutHint(
             }
         }
     }
-}
-
-/// Format a localized label with a command's default shortcut.
-#[must_use]
-pub fn command_tooltip(label: &str, command: Command) -> String {
-    command.default_stroke().hint(label)
 }
 
 /// Format a localized label with an explicit shortcut.

@@ -134,6 +134,20 @@ impl Environment {
         }
         dirs
     }
+
+    fn user_mimeapps_path(&self) -> PathBuf {
+        self.config_home.join("mimeapps.list")
+    }
+
+    fn user_desktop_mimeapps_paths(&self) -> Vec<PathBuf> {
+        self.desktops
+            .iter()
+            .map(|desktop| {
+                self.config_home
+                    .join(format!("{}-mimeapps.list", desktop.to_ascii_lowercase()))
+            })
+            .collect()
+    }
 }
 
 fn push_mimeapps_dir(out: &mut Vec<PathBuf>, dir: &Path, lower_desktops: &[String]) {
@@ -483,18 +497,11 @@ pub fn set_default_in(env: &Environment, mime_type: &str, desktop_id: &str) -> i
     let canonical_mime = hierarchy.canonical(&mime_trimmed);
 
     // Update the canonical user `~/.config/mimeapps.list`.
-    update_mimeapps_file(
-        &env.config_home.join("mimeapps.list"),
-        &canonical_mime,
-        id_trimmed,
-    )?;
+    update_mimeapps_file(&env.user_mimeapps_path(), &canonical_mime, id_trimmed)?;
 
     // If a higher-precedence desktop-specific user override file already exists and mentions this
     // MIME type, keep it synchronized so the newly chosen default takes effect immediately.
-    for desktop in &env.desktops {
-        let override_path = env
-            .config_home
-            .join(format!("{}-mimeapps.list", desktop.to_ascii_lowercase()));
+    for override_path in env.user_desktop_mimeapps_paths() {
         if let Ok(existing) = fs::read_to_string(&override_path) {
             let parsed = parse_mimeapps_list(&existing);
             if parsed.defaults.contains_key(&canonical_mime)

@@ -1,8 +1,9 @@
 //! Palette providers grouped by system state, configured files and built-in data.
 pub mod builtin;
-pub(crate) mod color;
 pub mod custom;
+mod schema;
 pub(crate) mod system;
+pub(crate) use super::color;
 
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};

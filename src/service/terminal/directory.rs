@@ -1,7 +1,7 @@
 //! Explicit shell-directory commands. Navigation must never call this implicitly.
 use std::path::Path;
 
-use super::session::Error;
+use super::state::Error;
 
 pub(super) fn command(path: &Path) -> Result<Vec<u8>, Error> {
     let Some(path_text) = path.to_str() else {

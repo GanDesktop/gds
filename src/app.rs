@@ -108,11 +108,14 @@ impl Gds {
             zgui::tokio::enter_here(handle.clone());
         }
         let tasks_scope = scope.clone();
+        let tasks = Tasks::new(scope, owner.clone());
+        #[cfg(feature = "appearance")]
+        let appearance = Appearance::new(owner.clone(), tasks.clone());
         let services = Self(Rc::new(Services {
-            owner: owner.clone(),
-            tasks: Tasks::new(scope, owner),
+            owner,
+            tasks,
             #[cfg(feature = "appearance")]
-            appearance: Appearance::new(),
+            appearance,
             #[cfg(feature = "i18n")]
             i18n: I18n::new(),
             #[cfg(feature = "ui")]

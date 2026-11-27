@@ -1,7 +1,7 @@
 //! Session startup and shutdown ownership, independent of a UI executor or window.
 use super::{
     ProcessStatus, Session, SpawnOptions,
-    session::{QueryPalette, lock},
+    state::{QueryPalette, lock},
 };
 use std::{
     future::Future,

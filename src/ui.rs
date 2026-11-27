@@ -1,41 +1,28 @@
 //! Reusable `zgui` components and their reactive state, events, and rendering helpers.
+//!
+//! Organized in acyclic dependency layers:
+//! `primitives` <- `interaction` <- `controls` <- (`layout`, `forms`) <- `feedback` <- `views`.
 
+pub mod controls;
 pub mod feedback;
 pub mod forms;
 pub mod interaction;
-pub mod time;
-pub use feedback::{dialog, notifications, tooltip};
+pub mod layout;
+pub mod primitives;
+pub mod views;
+
+pub use controls::{button, disclosure, list, menu, time};
+pub use feedback::{dialog, notifications};
 pub use forms::{ToggleSwitch, ToggleSwitchProps, ToggleSwitchSize, field, settings, switch};
 pub(crate) use interaction::shortcut;
-pub use interaction::{actions, keytips, region};
+pub use interaction::{actions, drag, keytips, region};
+pub use layout::{frame, navigation, page, sidebar, split, window};
+pub(crate) use primitives::metadata;
+pub use primitives::{capacity, icon, styles, surface, tooltip};
+pub use views::{about, file_inspection, help, logs, picker, task_manager, terminal, thumbnail};
 
-pub mod about;
-pub mod button;
-pub mod capacity;
-mod container;
-pub mod disclosure;
-pub mod drag;
-pub mod file_inspection;
-pub mod frame;
-pub mod help;
-pub mod icon;
-pub mod list;
-pub mod logs;
-pub mod menu;
-pub mod navigation;
-pub mod page;
-pub mod picker;
-pub mod sidebar;
-pub mod split;
-pub mod styles;
-pub mod surface;
-pub mod task_manager;
-pub mod terminal;
-pub mod thumbnail;
-pub mod window;
-
+pub use actions::command_tooltip;
 pub use button::{IconButton, IconButtonProps};
-pub use container::{ContentContainer, ContentContainerProps};
 pub use dialog::DialogActions;
 pub use drag::DragCard;
 pub use frame::{
@@ -50,9 +37,10 @@ pub use navigation::{
     corner_action, corner_button, hover_action, pinned_icon, with_pin,
 };
 pub use page::ContentPage;
+pub use primitives::container::{ContentContainer, ContentContainerProps};
 pub use shortcut::{
     HeldModifier, Shortcut, ShortcutBadge, ShortcutBadgeProps, ShortcutHint, ShortcutHintProps,
-    command_tooltip, shortcut_tooltip,
+    shortcut_tooltip,
 };
 pub use sidebar::{
     SidebarPresentation, SidebarState, use_sidebar_presentation, use_sidebar_presentation_widths,

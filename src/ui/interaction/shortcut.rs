@@ -6,11 +6,9 @@ mod keycap;
 
 pub use badge::{ShortcutBadge, ShortcutBadgeProps};
 pub(crate) use hint::install_shortcut_hint_stylesheet;
-pub use hint::{ShortcutHint, ShortcutHintProps, command_tooltip, shortcut_tooltip};
+pub use hint::{ShortcutHint, ShortcutHintProps, shortcut_tooltip};
 
 use zgui::vocab::{Key, KeyEvent, Modifiers};
-
-use crate::ui::actions::Command;
 
 /// The modifier group a press reveals keytip labels for (`shortcuts.md` §3).
 ///
@@ -83,12 +81,6 @@ impl Shortcut {
     #[must_use]
     pub fn new(key: Key, modifiers: Modifiers) -> Self {
         Self { key, modifiers }
-    }
-
-    /// Returns the default shortcut bound to `command`.
-    #[must_use]
-    pub fn command(command: Command) -> Self {
-        command.default_stroke()
     }
 
     /// Parses a human-readable shortcut specification such as `"Ctrl+Shift+C"` or `"Alt+N"`.
@@ -189,12 +181,6 @@ impl Shortcut {
     }
 }
 
-impl From<Command> for Shortcut {
-    fn from(command: Command) -> Self {
-        Self::command(command)
-    }
-}
-
 /// Ordered sequence of one or more [`Shortcut`] strokes representing a key chord.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -253,13 +239,6 @@ impl KeyChord {
 impl From<Shortcut> for KeyChord {
     fn from(stroke: Shortcut) -> Self {
         Self::single(stroke)
-    }
-}
-
-#[cfg(test)]
-impl From<Command> for KeyChord {
-    fn from(command: Command) -> Self {
-        Self::single(Shortcut::command(command))
     }
 }
 

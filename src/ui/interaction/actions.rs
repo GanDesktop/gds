@@ -72,6 +72,26 @@ impl Command {
     }
 }
 
+impl Shortcut {
+    /// Returns the default shortcut bound to `command`.
+    #[must_use]
+    pub fn command(command: Command) -> Self {
+        command.default_stroke()
+    }
+}
+
+impl From<Command> for Shortcut {
+    fn from(command: Command) -> Self {
+        command.default_stroke()
+    }
+}
+
+/// Format a localized label with a command's default shortcut.
+#[must_use]
+pub fn command_tooltip(label: &str, command: Command) -> String {
+    command.default_stroke().hint(label)
+}
+
 /// Ordered keyboard command matcher that honors `!focus_is_text_entry()` for unmodified and
 /// `Shift`-only shortcuts.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,5 +1,6 @@
 //! Appearance preferences, palette installation, materials, and live updates.
 
+pub(crate) mod color;
 mod hot_reload;
 mod material;
 mod palette;
@@ -9,6 +10,7 @@ pub mod provider;
 #[cfg(test)]
 mod tests;
 
+pub use super::mode::{Contrast, Mode};
 pub use hot_reload::HotReload;
 pub use material::Material;
 pub use palette::Palette as Colors;
@@ -22,7 +24,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zgui_ui_tokens::{ColorScheme, Theme as TokensTheme, theme_sheet};
+use zgui_ui_tokens::{Theme as TokensTheme, theme_sheet};
 
 use super::{motion, tokens, typography};
 use provider::Loaded;
@@ -42,51 +44,6 @@ impl From<&Source> for SourceKind {
             Source::System => Self::System,
             Source::Builtin => Self::Builtin,
             Source::Custom(_) => Self::Custom,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    Light,
-    #[default]
-    Dark,
-}
-
-impl Mode {
-    pub const fn color_scheme(self) -> ColorScheme {
-        match self {
-            Self::Light => ColorScheme::Light,
-            Self::Dark => ColorScheme::Dark,
-        }
-    }
-
-    const fn css_keyword(self) -> &'static str {
-        match self {
-            Self::Light => "light",
-            Self::Dark => "dark",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Contrast {
-    #[default]
-    Normal,
-    More,
-}
-
-impl Contrast {
-    pub const fn is_more(self) -> bool {
-        matches!(self, Self::More)
-    }
-
-    const fn css_keyword(self) -> &'static str {
-        match self {
-            Self::Normal => "normal",
-            Self::More => "more",
         }
     }
 }
@@ -191,12 +148,23 @@ impl Error {
 /// Applications can compare snapshots before installing external changes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Prepared {
-    pub(crate) appearance: Appearance,
+    appearance: Appearance,
     loaded: Loaded,
     contrast: Contrast,
 }
 
 impl Prepared {
+    pub(crate) fn set_opacity(&mut self, content: f32, sidebar: f32) -> Result<(), Error> {
+        validate_opacity("content_opacity", content)?;
+        validate_opacity("sidebar_opacity", sidebar)?;
+        self.appearance.content_opacity = content;
+        self.appearance.sidebar_opacity = sidebar;
+        Ok(())
+    }
+
+    pub(crate) fn set_rounded_corners(&mut self, rounded: bool) {
+        self.appearance.rounded_corners = rounded;
+    }
     /// Files affecting this palette, including the active source file resolved during loading.
     pub fn source_paths(&self) -> Vec<PathBuf> {
         let mut paths = self.appearance.source_paths();
@@ -328,6 +296,14 @@ impl Appearance {
     /// Provider inputs; a prepared palette adds its resolved palette file.
     pub fn source_paths(&self) -> Vec<PathBuf> {
         self.source.source_paths()
+    }
+
+    pub(crate) fn platform_mode() -> Mode {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if let Some(mode) = super::portal::snapshot().color_scheme {
+            return mode;
+        }
+        Mode::Dark
     }
 
     pub(crate) fn platform_contrast() -> Contrast {

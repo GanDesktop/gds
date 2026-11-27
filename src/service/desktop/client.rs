@@ -1,8 +1,8 @@
 //! Native desktop document and terminal operations.
 
-use super::Error;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use super::portal;
+use super::{Error, OpenMode, OpenOutcome};
 
 use std::{
     env,
@@ -97,18 +97,6 @@ impl Drop for TempOutput {
 pub struct Desktop {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     portal: std::sync::Arc<tokio::sync::OnceCell<portal::Portal>>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OpenMode {
-    DefaultApplication,
-    ChooseApplication,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OpenOutcome {
-    Opened,
-    Cancelled,
 }
 
 impl Desktop {

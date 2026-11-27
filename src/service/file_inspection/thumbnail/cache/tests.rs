@@ -1,5 +1,5 @@
 use super::*;
-use crate::service::file_inspection::Kind;
+use crate::service::file_inspection::{Kind, Source};
 use image::{Rgb, RgbImage, Rgba};
 use std::time::Duration;
 
@@ -51,7 +51,10 @@ impl Fixture {
     }
 
     fn load(&self) -> Result<Thumbnail, Error> {
-        load(&self.source(), Some(&self.cache))
+        let source = self.source();
+        load_with(source.thumbnail_target(), Some(&self.cache), || {
+            source.generate()
+        })
     }
 
     fn cached(&self) -> PathBuf {
@@ -352,7 +355,10 @@ fn cache_writes_optional_mimetype_and_dimensions_and_invalidates_stale_entries()
     fixture.image([120, 40, 200], UNIX_EPOCH + Duration::from_secs(10));
     let mut source = fixture.source();
     source.mime = Some(std::sync::Arc::from("image/bmp"));
-    let thumb = load(&source, Some(&fixture.cache)).expect("generated thumbnail");
+    let thumb = load_with(source.thumbnail_target(), Some(&fixture.cache), || {
+        source.generate()
+    })
+    .expect("generated thumbnail");
     assert_eq!((thumb.width(), thumb.height()), (512, 256));
 
     let cached = read_png(&fixture.cached(), EDGE)

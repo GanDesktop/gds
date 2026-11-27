@@ -109,6 +109,10 @@ impl Scope {
         self.node().inspection.is_some()
     }
 
+    pub fn has_runtime(&self) -> bool {
+        self.runtime.is_some()
+    }
+
     pub fn runtime_handle(&self) -> Option<&tokio::runtime::Handle> {
         self.runtime.as_ref()
     }

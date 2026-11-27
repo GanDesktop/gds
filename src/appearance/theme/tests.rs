@@ -194,7 +194,7 @@ fn reactive_appearance_emits_gds_and_zui_css_tokens() {
 
 #[test]
 fn contrast_more_lifts_all_builtin_themes_to_wcag_floors_and_forces_opaque_surfaces() {
-    use super::provider::color::{color_css, contrast_ratio};
+    use super::color::{color_css, contrast_ratio};
     use super::{BuiltinTheme, Contrast};
 
     let typo = crate::appearance::typography::Preferences::default()

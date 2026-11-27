@@ -10,7 +10,7 @@ use std::{
     process::{Child, Command as ProcessCommand},
 };
 
-use super::super::session::{Error, SpawnOptions};
+use super::super::state::{Error, SpawnOptions};
 use nix::{
     fcntl::{OFlag, open},
     sys::stat::Mode,

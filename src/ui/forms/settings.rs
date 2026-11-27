@@ -1,6 +1,11 @@
 //! Suite settings presentation: flat hairline rows, numeric ranges, and keyboard-accessible sliders.
 
+pub mod appearance;
+mod controls;
+pub use controls::{number_setting, reset_button, toggle_setting, toggle_with_reset};
 pub mod form;
+mod layout;
+pub use layout::*;
 mod row;
 
 pub use row::*;
@@ -68,6 +73,7 @@ const SETTINGS_CSS: &str = css!(
         min-width: 0px;
         font-size: var(--gds-text-sm, 14px);
     }
+    .gds-settings-label-trigger { display:inline-flex; align-self:flex-start; max-width:100%; }
     .gds-setting-title.gds-setting-title {
         font-size: var(--gds-text-sm, 14px);
         font-weight: 400;

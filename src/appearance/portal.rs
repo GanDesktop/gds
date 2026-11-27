@@ -1,5 +1,5 @@
 //! Shared XDG Settings Portal snapshot and change stream.
-use super::theme::{Contrast, Mode};
+use super::mode::{Contrast, Mode};
 use futures_lite::StreamExt as _;
 use std::{
     cell::Cell,
@@ -38,10 +38,10 @@ struct State {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Update {
-    reduced_motion: bool,
-    appearance_changed: bool,
-    contrast_changed: bool,
+pub(crate) struct Update {
+    pub(crate) reduced_motion: bool,
+    pub(crate) appearance_changed: bool,
+    pub(crate) contrast_changed: bool,
 }
 
 static APPEARANCE: OnceLock<RwLock<Snapshot>> = OnceLock::new();
@@ -103,15 +103,15 @@ thread_local! {
     static FOLLOWING: Cell<bool> = const { Cell::new(false) };
 }
 
-pub(crate) fn follow() {
+pub(crate) fn follow(
+    scope: crate::service::task_manager::Scope,
+    on_update: impl Fn(Update) + 'static,
+) {
     if FOLLOWING.with(|following| following.replace(true)) {
         return;
     }
     zgui::reactive::on_cleanup_local(|| FOLLOWING.with(|following| following.set(false)));
     let (sender, receiver) = watch::channel(None);
-    let scope = crate::app::Gds::current()
-        .tasks()
-        .owner_scope("Desktop appearance portal");
     let cancel = scope.token();
     drop(scope.spawn_named("Watch appearance portal", async move {
         let result = tokio::select! {
@@ -123,17 +123,8 @@ pub(crate) fn follow() {
         }
     }));
     drop(zgui::tokio::spawn_watch(receiver, move |update| {
-        let Some(update) = update else {
-            return;
-        };
-        let app = crate::app::Gds::current();
-        app.appearance()
-            .motion()
-            .system_changed(update.reduced_motion);
-        if update.appearance_changed || update.contrast_changed {
-            app.appearance()
-                .theme()
-                .refresh_for_portal(update.contrast_changed);
+        if let Some(update) = update {
+            on_update(update);
         }
     }));
 }

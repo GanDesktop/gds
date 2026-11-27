@@ -1,11 +1,8 @@
 //! Source-driven palette refresh owned by the application root.
 use super::{Appearance, Error, Prepared};
-use crate::{
-    app::Gds,
-    service::{
-        desktop::watch::Sources,
-        task_manager::{self, Owner},
-    },
+use crate::service::{
+    desktop::watch::Sources,
+    task_manager::{self, Owner},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -34,13 +31,17 @@ struct State {
 }
 
 impl HotReload {
-    pub(crate) fn new(appearance: Appearance) -> Self {
+    pub(crate) fn new(
+        appearance: Appearance,
+        scope: Owner,
+        install: impl Fn(Prepared) -> Result<(), Error> + 'static,
+    ) -> Self {
         let (notify, mut changes) = mpsc::channel(1);
         let (events_tx, events_rx) = mpsc::channel(16);
         let state = Rc::new(State {
             appearance: RefCell::new(appearance),
             sources: RefCell::new(Sources::new(notify)),
-            scope: Gds::current().tasks().scope().named_child("Appearance"),
+            scope,
             generation: Cell::new(0),
             error: RefCell::new(None),
             events: events_tx.clone(),
@@ -67,8 +68,8 @@ impl HotReload {
                     match result {
                         Ok(prepared) => {
                             state_ui.watch(prepared.source_paths());
-                            match Gds::current().appearance().theme().install(prepared) {
-                                Ok(_) => *state_ui.error.borrow_mut() = None,
+                            match install(prepared) {
+                                Ok(()) => *state_ui.error.borrow_mut() = None,
                                 Err(error) => state_ui.report(error.to_string()),
                             }
                         }
@@ -138,7 +139,7 @@ impl State {
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
         let appearance = self.appearance.borrow().clone();
-        let mode = crate::app::appearance::Theme::platform_mode();
+        let mode = Appearance::platform_mode();
         let task = self
             .scope
             .spawn_blocking_named("Read appearance palette", move || appearance.prepare(mode));

@@ -109,9 +109,76 @@ impl DialogScopeId {
     }
 }
 
+#[derive(Clone, Copy)]
+struct OcclusionEntry {
+    id: u64,
+    owner_node: NodeRef,
+    surface_node: NodeRef,
+    visible: Signal<bool, LocalStorage>,
+}
+
 thread_local! {
     static NEXT_SCOPE_ID: Cell<u64> = const { Cell::new(1) };
     static FALLBACK_MODAL_SCOPES: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    static NEXT_OCCLUSION_ID: Cell<u64> = const { Cell::new(1) };
+    static OCCLUSION_SURFACES: RefCell<Vec<OcclusionEntry>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Registers a floating overlay surface (such as the notification toast stack) whose bounds
+/// occlude underlying keytips while `visible` is `true`. Cleaned up automatically on unmount.
+pub(crate) fn register_occlusion_surface(
+    owner_node: NodeRef,
+    surface_node: NodeRef,
+    visible: Signal<bool, LocalStorage>,
+) {
+    let id = NEXT_OCCLUSION_ID.with(|cell| {
+        let id = cell.get();
+        cell.set(id.saturating_add(1));
+        id
+    });
+    OCCLUSION_SURFACES.with(|list| {
+        list.borrow_mut().push(OcclusionEntry {
+            id,
+            owner_node,
+            surface_node,
+            visible,
+        });
+    });
+    on_cleanup_local(move || {
+        OCCLUSION_SURFACES.with(|list| {
+            list.borrow_mut().retain(|entry| entry.id != id);
+        });
+    });
+}
+
+fn active_occlusion_surface(window_root_id: Option<NodeId>) -> Option<(NodeRef, Rect<CssPx, Css>)> {
+    if !zgui::reactive::is_ui_thread() {
+        return None;
+    }
+    let root_id = window_root_id?;
+    let entry = OCCLUSION_SURFACES.with(|list| {
+        list.borrow().iter().rev().copied().find(|entry| {
+            let entry_root = entry
+                .surface_node
+                .window_root()
+                .or_else(|| entry.owner_node.window_root())
+                .and_then(|r| r.get_untracked());
+            entry_root == Some(root_id)
+        })
+    })?;
+    if entry.visible.try_get() != Some(true) {
+        return None;
+    }
+    let dev = entry.surface_node.window_bounds()?;
+    let scale = entry.surface_node.scale().max(0.01);
+    let rect = Rect::new(
+        Point::new(CssPx(dev.origin.x.0 / scale), CssPx(dev.origin.y.0 / scale)),
+        Size::new(
+            CssPx(dev.size.width.0 / scale),
+            CssPx(dev.size.height.0 / scale),
+        ),
+    );
+    (rect.size.width.0 > 0.0 && rect.size.height.0 > 0.0).then_some((entry.surface_node, rect))
 }
 
 pub(crate) fn allocate_dialog_scope_id() -> u64 {
@@ -906,9 +973,7 @@ fn sample_keytips(
         let _ = host_ref.get();
     }
     let window_root = host_ref.window_root();
-    let toast_occlusion = crate::ui::feedback::notifications::active_stack_occlusion(
-        window_root.and_then(|r| r.get_untracked()),
-    );
+    let toast_occlusion = active_occlusion_surface(window_root.and_then(|r| r.get_untracked()));
     let content = window_root
         .and_then(|root| {
             let bounds = root.window_bounds()?;

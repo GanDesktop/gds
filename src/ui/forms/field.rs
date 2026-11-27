@@ -219,6 +219,15 @@ const FIELD_CSS: &str = css!(
         padding-right: 10px;
         pointer-events: none;
     }
+    .gds-search-choice-button {
+        display:flex; align-items:center; gap:4px; min-width:0px; padding:0px 4px; border-radius:4px;
+        color:var(--gds-foreground); cursor:pointer; font-size:var(--gds-text-xs);
+    }
+    .gds-search-choice-button:hover, .gds-search-choice-button:focus-visible { background-color:var(--gds-hover); }
+    .gds-search-choice-button__value { min-width:0px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .gds-search-choice-button .gds-icon { flex:none; color:var(--gds-muted-foreground); }
+    .gds-search-choice-button__options { min-height:0px; flex:1 1 auto; }
+    .gds-search-choice-popup__search { padding:2px 6px 6px; flex:none; }
     .zui-combobox__list.gds-search-choice-popup {
         padding: 4px 0px;
         min-width: max(220px, var(--zui-popper-anchor-width, 220px));
@@ -1077,6 +1086,66 @@ pub fn SearchChoiceField(
     };
 
     (input_group.into_view(), popup.into_view())
+}
+
+/// Compact choice trigger with search and keyboard navigation inside the popup.
+#[component]
+pub fn SearchChoiceButton(
+    #[prop(into)] value: Binding<String>,
+    #[prop(into)] options: Signal<Vec<SearchOption>, LocalStorage>,
+    #[prop(into)] label: String,
+    #[prop(into)] search_label: String,
+    #[prop(into)] empty_text: String,
+    #[prop(into)] placeholder: String,
+) -> impl IntoView {
+    install_field_stylesheets();
+    let state = SearchChoiceState::new(value, options, None, Signal::stored_local(false));
+    let surface = state.surface.provide();
+    let trigger = surface.trigger();
+    let search = NodeRef::new();
+    let focus = RenderEffect::new(move |previous: Option<bool>| {
+        let ready = surface.is_open() && search.get().is_some();
+        if ready && previous != Some(true) {
+            search.focus();
+        }
+        ready
+    });
+    on_cleanup_local(move || drop(focus));
+    let chosen = Memo::new(move |_| {
+        let name = state.chosen_label();
+        if name.is_empty() {
+            placeholder.clone()
+        } else {
+            name
+        }
+    });
+    let query = Binding::controlled(
+        Signal::derive_local(move || state.filter.get()),
+        move |text| state.set_typed_query(text),
+    );
+    view! {
+        control(node_ref=trigger,class="gds-search-choice-button",tabindex=Focus::Sequential,
+            a11y:role=Role::Button,a11y:label=label,a11y:description=move||chosen.get(),
+            a11y:expanded=move||surface.is_open(),a11y:has_popup=HasPopup::Dialog,
+            on:click=move |_|{
+                if surface.is_open_untracked() { surface.close(); } else { trigger.focus(); state.open_on_chosen(); }
+            }) {
+            text(class="gds-search-choice-button__value"){{move||chosen.get()}}
+            Icon(name=IconName::ChevronDown,size=10.)
+        }
+        AnchoredSurface(state=surface,placement=Placement::new(Side::Left, Align::Start),
+            offset=4.,role=Role::Dialog,trap=zgui::view::FocusTrapOptions::MODAL,
+            dismiss_on_outside_press=true,class="zui-combobox__list gds-search-choice-popup") {
+            box(class="gds-search-choice-popup__search"){
+                InputField(node_ref=search,value=query,compact=true,leading_icon=IconName::Search,
+                    label=search_label.clone(),placeholder=search_label.clone(),
+                    on:key_down=move|ev|state.handle_key_down(ev))
+            }
+            column(a11y:role=Role::ListBox,class="gds-search-choice-button__options"){
+                SearchChoicePopup(state=state,empty_text=Signal::stored_local(empty_text.clone()))
+            }
+        }
+    }
 }
 
 /// Unified `6px`-radius GDS single-line input pill with optional leading icon/view,

@@ -11,10 +11,7 @@ fn user_theme_catalog_and_palette_validation() {
         catalog_at(root.path()).expect("catalog"),
         vec![Entry {
             path: PathBuf::from("personal/bamboo.toml"),
-            metadata: definition(text, &path)
-                .expect("definition")
-                .metadata
-                .expect("metadata"),
+            metadata: Definition::parse_custom(text, &path).expect("definition").0,
         }]
     );
     let catalog = catalog_at(root.path()).expect("catalog");

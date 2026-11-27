@@ -20,7 +20,7 @@ use tokio::{
 };
 
 use super::{
-    super::session::{Completion, Error, Shared, Size, SpawnOptions, Status, lock},
+    super::state::{Completion, Error, Shared, Size, SpawnOptions, Status, lock},
     shell::Command,
 };
 

@@ -1,9 +1,12 @@
 //! Reactive theme, typography, motion, and Stylo CSS custom property generation.
+use super::task_manager::Tasks;
 use crate::appearance::{motion, theme, typography};
+use crate::service::task_manager::Scope;
 use std::{cell::RefCell, rc::Rc};
 use zgui::canvas::zgui_color::Color;
 use zgui::reactive::{
-    LocalStorage, Mounted, Owner, ReadSignal, RenderEffect, RwSignal, on_cleanup_local, prelude::*,
+    LocalStorage, Mounted, Owner, ReadSignal, RenderEffect, RwSignal, StoredValue,
+    on_cleanup_local, prelude::*,
 };
 use zgui::view::{HostHandle, Stylesheet, current_host};
 use zgui_ui_tokens::{ColorScheme, Theme as TokensTheme};
@@ -25,14 +28,15 @@ pub struct Appearance {
 }
 
 impl Appearance {
-    pub(super) fn new() -> Self {
-        let owner = Owner::current().unwrap_or_default();
+    pub(super) fn new(owner: Owner, tasks: Tasks) -> Self {
+        let theme = Theme::new(owner.clone(), tasks.scope());
+        let motion = Motion::new(owner.clone(), tasks, theme.clone());
         Self {
             owner,
             sheets: Rc::new(RefCell::new(Vec::new())),
-            theme: Theme::new(),
+            theme,
             typography: Typography::new(),
-            motion: Motion::new(),
+            motion,
         }
     }
 
@@ -167,12 +171,14 @@ impl Appearance {
 
 #[derive(Clone)]
 pub struct Theme {
+    owner: Owner,
+    scope: Scope,
     prepared: RwSignal<theme::Prepared, LocalStorage>,
     reload: Rc<RefCell<Option<theme::HotReload>>>,
 }
 
 impl Theme {
-    fn new() -> Self {
+    fn new(owner: Owner, scope: Scope) -> Self {
         let initial = theme::Appearance {
             source: theme::Source::Builtin,
             ..Default::default()
@@ -180,17 +186,15 @@ impl Theme {
         .prepare(Self::platform_mode())
         .expect("embedded theme is valid");
         Self {
+            owner,
+            scope,
             prepared: RwSignal::new_local(initial),
             reload: Rc::new(RefCell::new(None)),
         }
     }
 
     pub fn platform_mode() -> theme::Mode {
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        if let Some(mode) = crate::appearance::portal::snapshot().color_scheme {
-            return mode;
-        }
-        theme::Mode::Dark
+        theme::Appearance::platform_mode()
     }
 
     pub fn platform_contrast() -> theme::Contrast {
@@ -242,13 +246,7 @@ impl Theme {
     /// # Errors
     /// Reports invalid surface opacity, retaining the current appearance.
     pub fn install(&self, prepared: theme::Prepared) -> Result<theme::Applied, theme::Error> {
-        theme::validate_opacity("content_opacity", prepared.appearance().content_opacity)?;
-        theme::validate_opacity("sidebar_opacity", prepared.appearance().sidebar_opacity)?;
-        let applied = prepared.applied();
-        if self.prepared.with_untracked(|current| *current != prepared) {
-            self.prepared.set(prepared);
-        }
-        Ok(applied)
+        install_prepared(self.prepared, prepared)
     }
 
     /// # Errors
@@ -257,15 +255,13 @@ impl Theme {
         theme::validate_opacity("content_opacity", content)?;
         theme::validate_opacity("sidebar_opacity", sidebar)?;
         self.prepared.update(|p| {
-            p.appearance.content_opacity = content;
-            p.appearance.sidebar_opacity = sidebar;
+            let _ = p.set_opacity(content, sidebar);
         });
         Ok(())
     }
 
     pub fn update_window_corners(&self, rounded: bool) {
-        self.prepared
-            .update(|p| p.appearance.rounded_corners = rounded);
+        self.prepared.update(|p| p.set_rounded_corners(rounded));
     }
 
     pub fn configure_hot_reload(&self, appearance: theme::Appearance) {
@@ -273,7 +269,13 @@ impl Theme {
         match reload.as_ref() {
             Some(reload) => reload.configure(appearance),
             None => {
-                *reload = Some(super::Gds::current().with(|| theme::HotReload::new(appearance)));
+                let scope = self.scope.named_child("Appearance");
+                let prepared_signal = self.prepared;
+                *reload = Some(self.owner.with(|| {
+                    theme::HotReload::new(appearance, scope, move |prepared| {
+                        install_prepared(prepared_signal, prepared).map(|_| ())
+                    })
+                }));
             }
         }
     }
@@ -295,6 +297,19 @@ impl Theme {
             }
         }
     }
+}
+
+fn install_prepared(
+    signal: RwSignal<theme::Prepared, LocalStorage>,
+    prepared: theme::Prepared,
+) -> Result<theme::Applied, theme::Error> {
+    theme::validate_opacity("content_opacity", prepared.appearance().content_opacity)?;
+    theme::validate_opacity("sidebar_opacity", prepared.appearance().sidebar_opacity)?;
+    let applied = prepared.applied();
+    if signal.with_untracked(|current| *current != prepared) {
+        signal.set(prepared);
+    }
+    Ok(applied)
 }
 
 #[derive(Clone, Copy)]
@@ -363,17 +378,34 @@ impl Typography {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+struct PortalContext {
+    owner: Owner,
+    tasks: Tasks,
+    theme: Theme,
+}
+
 #[derive(Clone, Copy)]
 pub struct Motion {
     policy: RwSignal<motion::Policy, LocalStorage>,
     following: RwSignal<bool, LocalStorage>,
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    portal: StoredValue<PortalContext, LocalStorage>,
 }
 
 impl Motion {
-    fn new() -> Self {
+    fn new(owner: Owner, tasks: Tasks, theme: Theme) -> Self {
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        let _ = (owner, tasks, theme);
         Self {
             policy: RwSignal::new_local(motion::Policy::default()),
             following: RwSignal::new_local(false),
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            portal: StoredValue::new_local(PortalContext {
+                owner,
+                tasks,
+                theme,
+            }),
         }
     }
 
@@ -399,11 +431,23 @@ impl Motion {
         }
         self.following.set(true);
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        super::Gds::current().with(crate::appearance::portal::follow);
+        self.portal.with_value(|ctx| {
+            let motion = *self;
+            let theme = ctx.theme.clone();
+            ctx.owner.with(|| {
+                let scope = ctx.tasks.owner_scope("Desktop appearance portal");
+                crate::appearance::portal::follow(scope, move |update| {
+                    motion.system_changed(update.reduced_motion);
+                    if update.appearance_changed || update.contrast_changed {
+                        theme.refresh_for_portal(update.contrast_changed);
+                    }
+                });
+            });
+        });
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    pub(crate) fn system_changed(&self, reduced: bool) {
+    fn system_changed(&self, reduced: bool) {
         self.policy.update(|policy| policy.system_reduced = reduced);
     }
 }

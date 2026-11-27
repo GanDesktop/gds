@@ -2,7 +2,7 @@
 use std::fmt::Write as _;
 use zgui::canvas::zgui_color::Color;
 
-use super::provider::color::color_css;
+use super::color::color_css;
 
 /// Resolved surface materials separating window translucency from opaque control backgrounds.
 #[derive(Clone, Copy, Debug, PartialEq)]

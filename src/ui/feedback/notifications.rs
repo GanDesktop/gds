@@ -28,7 +28,9 @@ use zgui::{component, css, view};
 use crate::app::Gds;
 use crate::appearance::tokens::{NOTIFICATION_TOP_GAP, TOOLBAR_HEIGHT};
 use crate::ui::actions::{ActionDispatcher, Command};
-use crate::ui::keytips::{HintPlacement, has_active_modal_scope, stage_shortcut};
+use crate::ui::keytips::{
+    HintPlacement, has_active_modal_scope, register_occlusion_surface, stage_shortcut,
+};
 
 pub const TOP_OFFSET: f32 = TOOLBAR_HEIGHT + NOTIFICATION_TOP_GAP;
 pub const MAX_CONTENT_HEIGHT: f32 = 240.0;
@@ -810,6 +812,7 @@ pub fn NotificationHost(children: Children) -> impl IntoView {
     queue.register_host_ref(column_ref);
 
     let has_items = Signal::derive_local(move || !items.get().is_empty());
+    register_occlusion_surface(host_ref, column_ref, has_items);
     stage_shortcut(
         column_ref,
         Command::FocusNotifications,
@@ -918,44 +921,4 @@ pub fn warning(message: impl Into<String>) {
 /// Pushes an error notification.
 pub fn error(message: impl Into<String>) {
     report(Report::new(Level::Error, message));
-}
-
-/// Returns the mounted notification stack `NodeRef` and CSS-pixel window bounds for `window_root_id`
-/// while at least one toast is visible, subscribing to queue item changes reactively.
-pub(crate) fn active_stack_occlusion(
-    window_root_id: Option<NodeId>,
-) -> Option<(
-    NodeRef,
-    zgui::geom::Rect<zgui::geom::CssPx, zgui::geom::Css>,
-)> {
-    use zgui::geom::{CssPx, Point, Rect, Size};
-    if !zgui::reactive::is_ui_thread() {
-        return None;
-    }
-    let root_id = window_root_id?;
-    let queue = MOUNTED_HOSTS.with(|hosts| {
-        let list = hosts.borrow();
-        list.iter().rev().find_map(|&(_, q)| {
-            if !q.is_alive() {
-                return None;
-            }
-            let col_ref = q.runtime_rc()?.borrow().host_ref?;
-            let host_root_id = col_ref.window_root().and_then(|r| r.get_untracked());
-            (host_root_id == Some(root_id)).then_some(q)
-        })
-    })?;
-    if queue.items.get().is_empty() {
-        return None;
-    }
-    let col_ref = queue.runtime_rc()?.borrow().host_ref?;
-    let dev = col_ref.window_bounds()?;
-    let scale = col_ref.scale().max(0.01);
-    let rect = Rect::new(
-        Point::new(CssPx(dev.origin.x.0 / scale), CssPx(dev.origin.y.0 / scale)),
-        Size::new(
-            CssPx(dev.size.width.0 / scale),
-            CssPx(dev.size.height.0 / scale),
-        ),
-    );
-    (rect.size.width.0 > 0.0 && rect.size.height.0 > 0.0).then_some((col_ref, rect))
 }

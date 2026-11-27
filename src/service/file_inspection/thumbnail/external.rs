@@ -21,7 +21,7 @@ use directories::BaseDirs;
 use image::RgbaImage;
 use tokio_util::sync::CancellationToken;
 
-use super::{EDGE, Error, Source, cache, image as thumb_image};
+use super::{EDGE, Error, Target, cache, image as thumb_image};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 const ERROR_BYTES: u64 = 4 * 1024;
@@ -271,7 +271,7 @@ impl ExternalThumbnailers {
     /// Reports sandbox unavailability, timeout, cancellation, or thumbnailer decoding failures.
     pub(super) fn generate(
         &self,
-        source: &Source,
+        target: Target<'_>,
         timeout: Duration,
         cancel: &CancellationToken,
         user_only: bool,
@@ -279,8 +279,7 @@ impl ExternalThumbnailers {
         if cancel.is_cancelled() {
             return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
         }
-        let candidates =
-            self.matching_indices(source.mime.as_deref(), &source.mime_ancestors, user_only);
+        let candidates = self.matching_indices(target.mime, target.mime_ancestors, user_only);
         if candidates.is_empty() {
             return Err(Error::NoCover);
         }
@@ -294,18 +293,29 @@ impl ExternalThumbnailers {
                 return Err(Error::Io(std::io::ErrorKind::Interrupted.into()));
             }
             let spec = &self.entries[idx];
-            match run_thumbnailer(&self.sandbox, spec, &source.path, timeout, cancel) {
+            match run_thumbnailer(&self.sandbox, spec, target.path, timeout, cancel) {
                 Ok(image) => return Ok(image),
                 Err(
                     err @ (Error::SandboxUnavailable
                     | Error::ExternalTimeout
                     | Error::TooLarge
                     | Error::Io(_)),
-                ) => return Err(err),
+                ) => {
+                    if !cancel.is_cancelled() {
+                        tracing::warn!(
+                            thumbnailer = %spec.info.id,
+                            path = %target.path.display(),
+                            timeout_secs = timeout.as_secs(),
+                            %err,
+                            "external thumbnailer aborted"
+                        );
+                    }
+                    return Err(err);
+                }
                 Err(err) => {
                     tracing::debug!(
                         thumbnailer = %spec.info.id,
-                        path = %source.path.display(),
+                        path = %target.path.display(),
                         %err,
                         "external thumbnailer candidate failed"
                     );
@@ -394,6 +404,7 @@ async fn probe_bwrap(
 ) -> Result<PathBuf, SandboxError> {
     let bwrap = resolve_bwrap(bwrap_override)?;
     let mut cmd = tokio::process::Command::new(&bwrap);
+    cmd.env_remove("LD_LIBRARY_PATH");
     for arg in build_bwrap_probe_args(&bwrap) {
         cmd.arg(arg);
     }
@@ -961,7 +972,7 @@ fn run_thumbnailer(
         SandboxMode::Bwrap(bwrap) => {
             let bwrap_args = build_bwrap_thumbnailer_args(spec, host_input, &out_dir, EDGE)?;
             let mut cmd = Command::new(bwrap);
-            cmd.args(&bwrap_args);
+            cmd.env_remove("LD_LIBRARY_PATH").args(&bwrap_args);
             cmd
         }
         SandboxMode::Unsandboxed => {
@@ -982,7 +993,8 @@ fn run_thumbnailer(
                 )));
             };
             let mut cmd = Command::new(program);
-            cmd.args(rest)
+            cmd.env_remove("LD_LIBRARY_PATH")
+                .args(rest)
                 .current_dir(temp.path())
                 .env("TMPDIR", temp.path());
             cmd
@@ -1046,7 +1058,6 @@ fn run_thumbnailer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::file_inspection::Kind;
 
     #[cfg(unix)]
     fn write_executable(dir: &Path, name: &str, body: &str) -> PathBuf {
@@ -1284,17 +1295,14 @@ exec "$PROG" "$OUT"
             ],
         };
         let runner = ExternalThumbnailers::from_parts(SandboxMode::Bwrap(mock_bwrap), vec![spec]);
-        let src = Source {
-            path: input,
-            kind: Kind::Other,
-            mime: Some(Arc::from("application/pdf")),
-            mime_ancestors: Vec::new(),
-            size: Some(9),
-            modified: None,
+        let target = Target {
+            path: &input,
+            mime: Some("application/pdf"),
+            mime_ancestors: &[],
         };
         let cancel = CancellationToken::new();
         let img = runner
-            .generate(&src, Duration::from_secs(5), &cancel, false)
+            .generate(target, Duration::from_secs(5), &cancel, false)
             .expect("generate thumbnail via mock bwrap");
         assert_eq!(img.width(), 512);
         assert_eq!(img.height(), 256);
@@ -1342,17 +1350,14 @@ exec "$PROG" "$OUT"
         assert!(!runner.is_sandboxed());
         assert!(runner.bwrap_path().is_none());
 
-        let src = Source {
-            path: input,
-            kind: Kind::Video,
-            mime: Some(Arc::from("video/mp4")),
-            mime_ancestors: Vec::new(),
-            size: Some(16),
-            modified: None,
+        let target = Target {
+            path: &input,
+            mime: Some("video/mp4"),
+            mime_ancestors: &[],
         };
         let cancel = CancellationToken::new();
         let img = runner
-            .generate(&src, Duration::from_secs(5), &cancel, false)
+            .generate(target, Duration::from_secs(5), &cancel, false)
             .expect("generate video thumbnail directly without shell");
         assert_eq!((img.width(), img.height()), (512, 256));
         assert!(!root.path().join("pwned").exists());

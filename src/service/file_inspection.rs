@@ -154,7 +154,7 @@ impl Source {
                     }) {
                     // The generator runs only on a disk-cache miss. Reuse its parse for
                     // metadata; on a cache hit the later metadata read skips artwork.
-                    thumbnail::load_with(self, || {
+                    thumbnail::load_with(self.thumbnail_target(), || {
                         let file = audio::read(&self.path, lofty::config::ParseOptions::new())?;
                         result.metadata = Field::Available(Metadata::File(FileFacts::Audio(
                             audio::Metadata::from_file(&file).into(),
@@ -165,7 +165,7 @@ impl Source {
                         thumbnail::cover(&file, options.max_thumbnail_source_bytes)
                     })
                 } else {
-                    thumbnail::load_with(self, || {
+                    thumbnail::load_with(self.thumbnail_target(), || {
                         self.generate_cancellable_with_options(&options, cancel)
                     })
                 };
