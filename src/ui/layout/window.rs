@@ -1,12 +1,17 @@
 //! Suite window defaults, titlebars, and platform-aware window controls.
 
+mod drag;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use drag::{DragAction, record_drag_actions};
+pub(crate) use drag::{attach_window_drag, inside_window_drag_scope, provide_window_drag_scope};
 
 use zgui::geom::{Css, CssPx, Point, Size};
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, UnsyncCallback};
-use zgui::vocab::PointerButton;
+use zgui::view::Scoped;
 use zgui::{component, css, view};
 use zgui_ui::{TooltipContentProps, TooltipProps, TooltipTriggerProps};
 
@@ -233,45 +238,6 @@ fn hidden_in_current_session() -> bool {
     session_hides_controls(desktop.as_deref(), has_niri_socket)
 }
 
-/// Returns `true` when `target` is inside a focusable interactive control beneath `current`.
-pub(crate) fn is_interactive_descendant(
-    current: zgui::view::NodeId,
-    target: zgui::view::NodeId,
-) -> bool {
-    if current == target {
-        return false;
-    }
-    zgui::view::current_host().is_some_and(|host| {
-        host.focusables(current).into_iter().any(|focusable| {
-            focusable != current && (focusable == target || host.contains(focusable, target))
-        })
-    })
-}
-
-/// Shared pointer-down handler for client-side titlebars, toolbars, and drag strips.
-pub(crate) fn drag_pointer_down_handler(
-    window: Option<WindowHandle>,
-) -> impl Fn(&mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>) {
-    let move_handler = window.as_ref().map(WindowHandle::move_drag_handler);
-    let menu_win = window;
-    move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
-        if is_interactive_descendant(ev.current, ev.target) {
-            return;
-        }
-        if ev.button == Some(PointerButton::Secondary) {
-            if let Some(ref w) = menu_win
-                && !w.server_decorated().get_untracked()
-            {
-                show_window_menu(w, ev.position);
-            }
-            ev.stop_propagation();
-        } else if let Some(ref handler) = move_handler {
-            handler(ev);
-            ev.stop_propagation();
-        }
-    }
-}
-
 fn localized_label(key: &str, fallback: &str) -> String {
     Gds::try_current().map_or_else(|| fallback.to_owned(), |g| g.i18n().text(key))
 }
@@ -283,7 +249,6 @@ fn control_button(
     window: Option<WindowHandle>,
     on_activate: impl Fn(Option<&WindowHandle>) + 'static,
 ) -> AnyView {
-    let no_drag = window.as_ref().map(WindowHandle::no_drag_handler);
     AnyView::new(view! {
         Tooltip(delay = crate::appearance::tokens::TOOLTIP_DELAY) {
             TooltipTrigger {
@@ -293,13 +258,6 @@ fn control_button(
                     class = extra_class,
                     a11y:role = Role::Button,
                     a11y:label = move || label.get(),
-                    on:pointer_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
-                        if let Some(ref handler) = no_drag {
-                            handler(ev);
-                        } else {
-                            ev.stop_propagation();
-                        }
-                    },
                     on:click = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::Click>| {
                         ev.stop_propagation();
                         on_activate(window.as_ref());
@@ -451,54 +409,39 @@ fn render_title_bar(
     class: Classes,
     hide_controls: bool,
 ) -> impl IntoView {
-    if let Some(gds) = Gds::try_current() {
-        let _ = gds.appearance().install_window_sheet();
-    }
-    install_window_stylesheets();
-    let window = zgui::prelude::try_use_window();
-    let no_drag_lead = window.as_ref().map(WindowHandle::no_drag_handler);
-    let no_drag_trail = window.as_ref().map(WindowHandle::no_drag_handler);
-    let drag_handler = drag_pointer_down_handler(window);
-
-    view! {
-        row(
-            class = "gds-titlebar gds-toolbar",
-            class = class,
-            on:pointer_down = drag_handler
-        ) {
-            {leading.map(|slot| AnyView::new(view! {
-                row(
-                    class = "gds-titlebar__slot",
-                    on:pointer_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
-                        if let Some(ref handler) = no_drag_lead {
-                            handler(ev);
-                        } else {
-                            ev.stop_propagation();
-                        }
-                    }
-                ) {
-                    {slot.into_view_once()}
-                }
-            }))}
-            text(class = "gds-titlebar__title") {{move || title.get()}}
-            spacer() {}
-            {trailing.map(|slot| AnyView::new(view! {
-                row(
-                    class = "gds-titlebar__slot",
-                    on:pointer_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
-                        if let Some(ref handler) = no_drag_trail {
-                            handler(ev);
-                        } else {
-                            ev.stop_propagation();
-                        }
-                    }
-                ) {
-                    {slot.into_view_once()}
-                }
-            }))}
-            {render_window_controls(Classes::default(), hide_controls, on_maximize, on_close_window)}
+    Scoped::new(move || {
+        if let Some(gds) = Gds::try_current() {
+            let _ = gds.appearance().install_window_sheet();
         }
-    }
+        install_window_stylesheets();
+        provide_window_drag_scope();
+        let bar_ref = NodeRef::new();
+        let window = zgui::prelude::try_use_window();
+        let drag_handler = attach_window_drag(bar_ref, window);
+
+        view! {
+            row(
+                node_ref = bar_ref,
+                class = "gds-titlebar gds-toolbar",
+                class = class,
+                on:pointer_down = drag_handler
+            ) {
+                {leading.map(|slot| AnyView::new(view! {
+                    row(class = "gds-titlebar__slot") {
+                        {slot.into_view_once()}
+                    }
+                }))}
+                text(class = "gds-titlebar__title") {{move || title.get()}}
+                spacer() {}
+                {trailing.map(|slot| AnyView::new(view! {
+                    row(class = "gds-titlebar__slot") {
+                        {slot.into_view_once()}
+                    }
+                }))}
+                {render_window_controls(Classes::default(), hide_controls, on_maximize, on_close_window)}
+            }
+        }
+    })
 }
 
 #[cfg(test)]

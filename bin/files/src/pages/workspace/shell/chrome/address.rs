@@ -13,7 +13,7 @@ use zgui::reactive::{RenderEffect, on_cleanup_local};
 use zgui::view::{
     Scoped, ScrollBehavior, ScrollTarget, events, install_stylesheet as install_sheet,
 };
-use zgui::vocab::{Key, Modifiers, NamedKey, PointerButton, Role, ScrollDelta};
+use zgui::vocab::{Key, Modifiers, NamedKey, Role, ScrollDelta};
 use zgui::{css, view};
 use zgui_ui::InputProps;
 use zgui_ui_primitives::Binding;
@@ -450,16 +450,13 @@ impl Chrome<'_> {
         let composing_end = Rc::clone(&composing);
         let address_sig = self.0.0.address;
         let address_node = self.0.0.address_node;
-        let no_drag = self.0.0.window.as_ref().map(WindowHandle::no_drag_handler);
 
         AnyView::new(view! {
             row(
                 class = "gds-files-address-bar",
                 attr:data-editing = move || is_editing.get().then(|| "true".to_owned()),
                 on:pointer_down = move |ev: &mut EventCx<'_, events::PointerDown>| {
-                    if let Some(ref handler) = no_drag {
-                        handler(ev);
-                    } else if ev.button == Some(PointerButton::Primary) {
+                    if matches!(editing.get_untracked(), AddressPresentation::Editing { .. }) {
                         ev.stop_propagation();
                     }
                 },

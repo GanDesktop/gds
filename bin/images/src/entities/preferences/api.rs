@@ -61,7 +61,7 @@ pub fn read_startup() -> Result<StartupRead, Error> {
     read_startup_from(path()?)
 }
 
-pub(super) fn read_startup_from(path: PathBuf) -> Result<StartupRead, Error> {
+pub(crate) fn read_startup_from(path: PathBuf) -> Result<StartupRead, Error> {
     let file = File::new(path.clone());
     let Some(bytes) = file.read()? else {
         return Ok(StartupRead {

@@ -1,4 +1,7 @@
 //! Window chrome, filmstrip, filename entry and confirmation surfaces.
+#[cfg(test)]
+mod tests;
+
 use gds::{
     appearance::tokens,
     ui::{
@@ -700,6 +703,9 @@ fn RenameInput(page: Page, value: RwSignal<String>, node: NodeRef) -> impl IntoV
             value = binding,
             label = text("action-edit-location"),
             placeholder = text("path-placeholder"),
+            on:pointer_down = |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
+                ev.stop_propagation();
+            },
             on:focus_out = move |_| page.close_rename(),
         )
     }

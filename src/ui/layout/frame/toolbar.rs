@@ -1,7 +1,7 @@
 use zgui::prelude::*;
 use zgui::{component, view};
 
-use super::{FrameContext, MENU_PADDING, TOOLBAR_HEIGHT, WindowDragAreaProps, vertical_divider};
+use super::{FrameContext, MENU_PADDING, TOOLBAR_HEIGHT, vertical_divider};
 use crate::appearance::tokens::{COLLAPSED_SIDEBAR_WIDTH, ICON_BUTTON_SIZE, SIDEBAR_WIDTH};
 use crate::ui::window::WindowControlsProps;
 
@@ -17,12 +17,15 @@ pub fn Toolbar(
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
     super::install_frame_stylesheets();
+    crate::ui::window::provide_window_drag_scope();
+    let toolbar_ref = NodeRef::new();
     let window = zgui::prelude::try_use_window();
-    let drag_handler = crate::ui::window::drag_pointer_down_handler(window.clone());
+    let drag_handler = crate::ui::window::attach_window_drag(toolbar_ref, window);
 
     if left.is_none() && menu.is_none() && controls.is_none() && window_controls.is_none() {
         return AnyView::new(view! {
             row(
+                node_ref = toolbar_ref,
                 class = "gds-toolbar gds-toolbar--legacy",
                 style:height = format!("{TOOLBAR_HEIGHT}px"),
                 on:pointer_down = drag_handler,
@@ -40,7 +43,6 @@ pub fn Toolbar(
     let collapsed_inset = (COLLAPSED_SIDEBAR_WIDTH - ICON_BUTTON_SIZE) * 0.5;
     let span = SIDEBAR_WIDTH - COLLAPSED_SIDEBAR_WIDTH;
 
-    let no_drag = window.as_ref().map(WindowHandle::no_drag_handler);
     let win_controls = window_controls.unwrap_or_else(|| AnyView::new(view! { WindowControls() }));
     let divider = vertical_divider(sidebar_width);
 
@@ -54,16 +56,7 @@ pub fn Toolbar(
         leading
     } else {
         AnyView::new(view! {
-            box(
-                class = "gds-toolbar__menu",
-                on:pointer_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
-                    if let Some(ref handler) = no_drag {
-                        handler(ev);
-                    } else {
-                        ev.stop_propagation();
-                    }
-                }
-            ) {
+            box(class = "gds-toolbar__menu") {
                 {menu}
             }
         })
@@ -71,15 +64,13 @@ pub fn Toolbar(
 
     AnyView::new(view! {
         row(
+            node_ref = toolbar_ref,
             class = "gds-toolbar",
             style:height = format!("{TOOLBAR_HEIGHT}px"),
             on:pointer_down = drag_handler,
             class = class,
             {..attrs}
         ) {
-            box(class = "gds-toolbar__drag", a11y:hidden = true) {
-                WindowDragArea()
-            }
             row(
                 class = left_class,
                 style:width = move || {

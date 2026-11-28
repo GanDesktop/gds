@@ -420,6 +420,163 @@ fn clicking_outside_address_bar_exits_edit_mode() {
 }
 
 #[test]
+fn dragging_across_files_top_bar_controls_suppresses_clicks_while_editing_stays_selectable() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let start = temp.path().join("workspace/sub");
+    std::fs::create_dir_all(&start).expect("create nested dir");
+
+    run_browser_harness(
+        &start,
+        (1240.0, 760.0),
+        volumes::Snapshot::default(),
+        |browser| AnyView::new(browser.view()),
+        |harness, browser| {
+            let surface = harness.platform().offscreens()[0].clone();
+            let buttons = collect_live_buttons(&surface);
+            let sidebar_btn =
+                find_button_by_label(&buttons, &gds::i18n::text_untracked("sidebar-toggle"))
+                    .expect("sidebar toggle button")
+                    .clone();
+            let edit_btn = find_button_by_label(&buttons, &gds::i18n::text_untracked("path-edit"))
+                .expect("edit location button")
+                .clone();
+            let parent_crumb = buttons
+                .iter()
+                .find(|btn| btn.y0 < 56.0 && btn.label == "workspace/")
+                .expect("parent breadcrumb")
+                .clone();
+
+            let drag_from =
+                |harness: &mut Harness<Box<dyn AppHandler>>, x: f32, y: f32, dx: f32, dy: f32| {
+                    use zgui::geom::{CssPx, Point};
+                    use zgui::vocab::{PointerAction, PointerButton, PointerEvent, Timestamp};
+
+                    let start_pt = Point::new(CssPx(x), CssPx(y));
+                    let end_pt = Point::new(CssPx(x + dx), CssPx(y + dy));
+                    harness.deliver_to_first(SurfaceEvent::Pointer {
+                        action: PointerAction::Moved,
+                        event: PointerEvent::mouse(start_pt),
+                        modifiers: Modifiers::NONE,
+                        timestamp: Timestamp::from_origin(Duration::from_millis(100)),
+                    });
+                    harness.deliver_to_first(SurfaceEvent::Pointer {
+                        action: PointerAction::Pressed,
+                        event: PointerEvent::mouse(start_pt).with_button(PointerButton::Primary),
+                        modifiers: Modifiers::NONE,
+                        timestamp: Timestamp::from_origin(Duration::from_millis(100)),
+                    });
+                    harness.settle(6);
+                    harness.deliver_to_first(SurfaceEvent::Pointer {
+                        action: PointerAction::Moved,
+                        event: PointerEvent::mouse(end_pt),
+                        modifiers: Modifiers::NONE,
+                        timestamp: Timestamp::from_origin(Duration::from_millis(120)),
+                    });
+                    harness.settle(6);
+                    harness.deliver_to_first(SurfaceEvent::Pointer {
+                        action: PointerAction::Released,
+                        event: PointerEvent::mouse(end_pt).with_button(PointerButton::Primary),
+                        modifiers: Modifiers::NONE,
+                        timestamp: Timestamp::from_origin(Duration::from_millis(140)),
+                    });
+                    harness.settle(12);
+                };
+
+            // 1. Dragging on the blank area of the non-editing address bar must NOT enter edit mode.
+            drag_from(
+                harness,
+                (edit_btn.x0 - 40.0) as f32,
+                edit_btn.center_y() as f32,
+                18.0,
+                0.0,
+            );
+            assert!(
+                matches!(
+                    browser.0.address_presentation.get_untracked(),
+                    crate::pages::workspace::state::model::AddressPresentation::Breadcrumbs
+                ),
+                "dragging non-editing address bar must move window instead of entering edit mode"
+            );
+
+            // 2. Dragging starting on the Edit button must NOT enter edit mode.
+            drag_from(
+                harness,
+                edit_btn.center_x() as f32,
+                edit_btn.center_y() as f32,
+                0.0,
+                20.0,
+            );
+            assert!(
+                matches!(
+                    browser.0.address_presentation.get_untracked(),
+                    crate::pages::workspace::state::model::AddressPresentation::Breadcrumbs
+                ),
+                "dragging from address edit button must suppress click"
+            );
+
+            // 3. Dragging starting on the sidebar toggle button must NOT collapse the sidebar.
+            let initial_sidebar = browser.sidebar_width().get_untracked();
+            drag_from(
+                harness,
+                sidebar_btn.center_x() as f32,
+                sidebar_btn.center_y() as f32,
+                0.0,
+                24.0,
+            );
+            assert_eq!(
+                browser.sidebar_width().get_untracked(),
+                initial_sidebar,
+                "dragging from sidebar toggle button must not toggle sidebar"
+            );
+
+            // 4. Dragging starting on a parent breadcrumb chip must NOT navigate away.
+            drag_from(
+                harness,
+                parent_crumb.center_x() as f32,
+                parent_crumb.center_y() as f32,
+                16.0,
+                0.0,
+            );
+            assert_eq!(
+                browser.read_untracked(|ws| ws.tab().navigation.path().map(Path::to_path_buf)),
+                Some(start.clone()),
+                "dragging from breadcrumb chip must not navigate"
+            );
+
+            // 5. Clicking the blank address bar still enters edit mode, and dragging inside the
+            //    editing text input keeps edit mode active.
+            click_at(
+                harness,
+                (edit_btn.x0 - 40.0) as f32,
+                edit_btn.center_y() as f32,
+                300,
+            );
+            assert!(
+                matches!(
+                    browser.0.address_presentation.get_untracked(),
+                    crate::pages::workspace::state::model::AddressPresentation::Editing { .. }
+                ),
+                "clicking non-editing address bar must still enter edit mode"
+            );
+            drag_from(
+                harness,
+                (edit_btn.x0 - 80.0) as f32,
+                edit_btn.center_y() as f32,
+                40.0,
+                0.0,
+            );
+            assert!(
+                matches!(
+                    browser.0.address_presentation.get_untracked(),
+                    crate::pages::workspace::state::model::AddressPresentation::Editing { .. }
+                ),
+                "dragging inside the editing address input must preserve text selection/edit mode"
+            );
+        },
+    );
+}
+
+#[test]
 fn orthogonal_responsive_tiers_and_proportional_list_scaling_contracts() {
     let temp = tempfile::tempdir().expect("tempdir");
     let start = temp.path().join("workspace");

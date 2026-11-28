@@ -9,7 +9,7 @@ use gds::ui::frame::WindowDragAreaProps;
 use gds::ui::settings::SubpageToolbarTitleProps;
 use gds::ui::window::{HeightTier, WidthTier};
 use zgui::prelude::*;
-use zgui::view::{events, install_stylesheet as install_sheet};
+use zgui::view::install_stylesheet as install_sheet;
 use zgui::{css, view};
 
 use super::{Chrome, install_chrome_stylesheets};
@@ -84,18 +84,8 @@ impl Chrome<'_> {
     pub(in crate::pages::workspace) fn menu_controls(&self) -> AnyView {
         install_chrome_stylesheets();
         let ctx = self.0.clone();
-        let no_drag = self.0.0.window.as_ref().map(WindowHandle::no_drag_handler);
         AnyView::new(view! {
-            row(
-                class = "gds-files-menu-controls",
-                on:pointer_down = move |ev: &mut zgui::view::EventCx<'_, zgui::view::events::PointerDown>| {
-                    if let Some(ref handler) = no_drag {
-                        handler(ev);
-                    } else {
-                        ev.stop_propagation();
-                    }
-                }
-            ) {
+            row(class = "gds-files-menu-controls") {
                 {{move || {
                     if ctx.pane() == Pane::Files {
                         MenuHost(&ctx).app_menu()
@@ -142,26 +132,17 @@ impl Chrome<'_> {
         let pane_sig = local_memo(move || pane_c.pane());
         let show_sidebar_toggle =
             Signal::derive_local(move || pane_sig.get() != Pane::Help && !micro_width.get());
-        let no_drag = self.0.0.window.as_ref().map(WindowHandle::no_drag_handler);
 
         AnyView::new(view! {
             row(class = "gds-files-toolbar") {
                 Show(when = move || show_sidebar_toggle.get()) {
                     {{
                         let click_c = toggle_c.clone();
-                        let no_drag_btn = no_drag;
                         view! {
                             IconButton(
                                 icon = IconName::PanelLeft,
                                 label = Signal::derive_local(|| i18n::text("sidebar-toggle")),
                                 shortcut = Some(Command::Sidebar.shortcut()),
-                                on:pointer_down = move |ev: &mut EventCx<'_, events::PointerDown>| {
-                                    if let Some(ref handler) = no_drag_btn {
-                                        handler(ev);
-                                    } else {
-                                        ev.stop_propagation();
-                                    }
-                                },
                                 on:click = move |_| {
                                     UiState(&click_c).toggle_sidebar();
                                 }
@@ -174,7 +155,6 @@ impl Chrome<'_> {
                         let nav_c = ctx.clone();
                         let addr_c = ctx.clone();
                         let menu_c = ctx.clone();
-                        let no_drag_menu = no_drag;
                         AnyView::new(view! {
                             row(class = "gds-files-toolbar-files") {
                                 Show(when = move || !micro_width.get()) {
@@ -185,16 +165,7 @@ impl Chrome<'_> {
                                     {{
                                         let mc = menu_c.clone();
                                         view! {
-                                            row(
-                                                class = "gds-files-menu-controls",
-                                                on:pointer_down = move |ev: &mut EventCx<'_, events::PointerDown>| {
-                                                    if let Some(ref handler) = no_drag_menu {
-                                                        handler(ev);
-                                                    } else {
-                                                        ev.stop_propagation();
-                                                    }
-                                                }
-                                            ) {
+                                            row(class = "gds-files-menu-controls") {
                                                 {MenuHost(&mc).page_menu()}
                                             }
                                         }

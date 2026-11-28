@@ -98,11 +98,6 @@ const FRAME_CSS: &str = css!(
         gap: 6px;
         background-color: var(--gds-content-bg, var(--gds-content));
     }
-    .gds-toolbar__drag {
-        position: absolute;
-        inset: 0px;
-        pointer-events: none;
-    }
     .gds-toolbar__left {
         display: flex;
         flex-direction: row;
