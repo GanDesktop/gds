@@ -1,4 +1,8 @@
 //! Runtime capabilities consumed by application code and UI adapters.
+#[cfg(any(feature = "desktop", feature = "remote"))]
+mod window_id;
+#[cfg(any(feature = "desktop", feature = "remote"))]
+pub use window_id::{ParentWindow, ParseParentWindowError};
 #[cfg(any(feature = "desktop", feature = "desktop-protocol", feature = "watch"))]
 pub mod desktop;
 #[cfg(feature = "file-inspection")]

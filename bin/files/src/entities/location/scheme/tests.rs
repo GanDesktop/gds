@@ -102,3 +102,27 @@ fn assert_display_round_trip(text: &str) {
         parse(&tag.uri()).expect("parse encoded tag URI")
     );
 }
+
+#[test]
+fn file_scheme_accepts_rfc8089_local_hostname_and_rejects_foreign_hosts() {
+    let host = Some("workstation");
+    assert_eq!(
+        FileScheme::parse_with_host("file:///tmp/docs", host).expect("empty host"),
+        Location::from("/tmp/docs")
+    );
+    assert_eq!(
+        FileScheme::parse_with_host("file://localhost/tmp/docs", host).expect("localhost"),
+        Location::from("/tmp/docs")
+    );
+    assert_eq!(
+        FileScheme::parse_with_host("file://WORKSTATION/tmp/docs", host)
+            .expect("matching local hostname"),
+        Location::from("/tmp/docs")
+    );
+    assert!(FileScheme::parse_with_host("file://other-host/tmp/docs", host).is_err());
+    assert!(FileScheme::parse_with_host("file://workstation/tmp/docs?a=1", host).is_err());
+    assert!(FileScheme::parse_with_host("file://workstation/tmp/docs#top", host).is_err());
+    assert!(FileScheme::parse_with_host("file://user@workstation/tmp/docs", host).is_err());
+    assert!(FileScheme::parse_with_host("file://workstation:8080/tmp/docs", host).is_err());
+    assert!(FileScheme::parse_with_host("file://workstation/tmp/a%00b", host).is_err());
+}

@@ -517,6 +517,51 @@ impl Context {
         });
     }
 
+    /// Subscribe this window to external place-store updates (such as live
+    /// `user-dirs.dirs` reloads) and rebase them onto any pending local edits.
+    pub(in crate::pages::workspace) fn bind_places_sync(&self) {
+        let Some(mut updates) =
+            self.read_untracked(|state| state.places.subscribe_external_updates())
+        else {
+            return;
+        };
+        let weak = self.downgrade();
+        let cancel = self.0.tasks.token();
+        self.0.owner.with(|| {
+            drop(spawn_local(async move {
+                enum Event {
+                    Cancelled,
+                    Updated,
+                    Closed,
+                }
+                loop {
+                    let event = tokio::select! {
+                        () = cancel.cancelled() => Event::Cancelled,
+                        result = updates.changed() => match result {
+                            Ok(()) => Event::Updated,
+                            Err(_) => Event::Closed,
+                        },
+                    };
+                    match event {
+                        Event::Cancelled | Event::Closed => break,
+                        Event::Updated => {
+                            let snapshot = updates.borrow_and_update().clone();
+                            let Some(snapshot) = snapshot else {
+                                continue;
+                            };
+                            let Some(ctx) = weak.upgrade() else {
+                                break;
+                            };
+                            ctx.update(|state| {
+                                state.places.accept(snapshot);
+                            });
+                        }
+                    }
+                }
+            }));
+        });
+    }
+
     pub(in crate::pages::workspace) fn save_places(&self) {
         let save = {
             let mut state = self.0.state.borrow_mut();

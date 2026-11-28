@@ -26,6 +26,9 @@ callPackage ../../package.nix {
     categories = [ "System" "FileTools" "FileManager" ];
     mimeTypes = [ "inode/directory" ];
     startupNotify = true;
+    extraConfig = {
+      DBusActivatable = "true";
+    };
     actions = {
       "new-window" = {
         name = "New Window";
@@ -36,5 +39,11 @@ callPackage ../../package.nix {
   postInstall = ''
     install -Dm644 assets/files/io.github.GanDesktop.GdsFiles.metainfo.xml "$out/share/metainfo/io.github.GanDesktop.GdsFiles.metainfo.xml"
     install -Dm644 ${./niri.kdl} "$out/share/gds-files/niri.kdl"
+    mkdir -p "$out/share/dbus-1/services"
+    cat > "$out/share/dbus-1/services/io.github.GanDesktop.GdsFiles.service" <<EOF
+    [D-BUS Service]
+    Name=io.github.GanDesktop.GdsFiles
+    Exec=$out/bin/gds-files --dbus-service
+    EOF
   '';
 }

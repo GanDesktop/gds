@@ -471,6 +471,8 @@ fn dot_hidden_file_hides_direct_children_and_marks_them_hidden_when_shown() {
 #[cfg(target_os = "linux")]
 #[test]
 fn user_mime_type_xattr_overrides_filename_detection() {
+    use std::os::unix::fs::symlink;
+
     let root = tempfile::tempdir().expect("create fixture directory");
     let path = root.path().join("notes.txt");
     fs::write(&path, "plain content").expect("write file");
@@ -482,6 +484,10 @@ fn user_mime_type_xattr_overrides_filename_detection() {
     )
     .expect("set user.mime_type xattr");
 
+    let link = root.path().join("notes-link.txt");
+    symlink(&path, &link).expect("symlink notes.txt");
+
+    // Single-file inspection respects `user.mime_type`.
     let entry = Entry::inspect(&path).expect("inspect file with user.mime_type");
     let content = entry
         .details
@@ -490,4 +496,38 @@ fn user_mime_type_xattr_overrides_filename_detection() {
         .expect("detected content type");
     assert_eq!(content.mime.as_deref(), Some("text/markdown"));
     assert_eq!(content.source, DetectionSource::Xattr);
+
+    // Regular directory browsing (`read_directory_base` + `probe_batch`) must also preserve it.
+    let cancel = CancellationToken::new();
+    let base = read_directory_base(root.path(), ReadOptions::default(), &cancel)
+        .expect("read base directory snapshot");
+    let listed = base.entry_for_path(&path).expect("listed notes.txt");
+    let listed_content = listed.details.content.as_ref().expect("base content type");
+    assert_eq!(listed_content.mime.as_deref(), Some("text/markdown"));
+    assert_eq!(listed_content.source, DetectionSource::Xattr);
+
+    let need = EnrichmentNeed {
+        content: true,
+        symlinks: true,
+        ..EnrichmentNeed::default()
+    };
+    let listed_link = base.entry_for_path(&link).expect("listed notes-link.txt");
+    let probed_link = probe_batch(std::slice::from_ref(listed_link), need, &cancel)
+        .expect("probe symlink target");
+    let link_content = probed_link[0]
+        .details
+        .display_content()
+        .expect("symlink display content");
+    assert_eq!(link_content.mime.as_deref(), Some("text/markdown"));
+    assert_eq!(link_content.source, DetectionSource::Xattr);
+
+    let (target, content_probed) = LinkTarget::from_path_base(&link);
+    assert!(content_probed);
+    assert!(matches!(
+        target,
+        LinkTarget::Resolved {
+            kind: EntryKind::File,
+            content: Some(ref c),
+        } if c.mime.as_deref() == Some("text/markdown") && c.source == DetectionSource::Xattr
+    ));
 }

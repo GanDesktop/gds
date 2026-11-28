@@ -14,5 +14,9 @@ mimes = [
 ]
 
 [[patches]]
+category = "text"
+mimes = ["application/x-zerosize"]
+
+[[patches]]
 category = "archive"
 mimes = ["application/x-apple-diskimage"]

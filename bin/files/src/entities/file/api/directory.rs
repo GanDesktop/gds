@@ -305,6 +305,7 @@ impl DirectorySnapshot {
         let mut collected = Vec::new();
         let mut warnings = Vec::new();
         let mut identities = IdentityCache::new();
+        let mut mime_xattr_supported = true;
         let dot_hidden = read_hidden_names(&path);
         let mut next_emit_at = stream
             .as_ref()
@@ -342,7 +343,12 @@ impl DirectorySnapshot {
                     let item = if full {
                         Entry::from_dir_entry(entry, &mut identities, &mut warnings)
                     } else {
-                        Entry::from_dir_entry_base(entry, &mut identities, &mut warnings)
+                        Entry::from_dir_entry_base(
+                            entry,
+                            &mut identities,
+                            &mut warnings,
+                            &mut mime_xattr_supported,
+                        )
                     }
                     .with_hidden(hidden);
                     collected.push(item);
@@ -474,15 +480,17 @@ impl Entry {
         identities: &mut IdentityCache,
         warnings: &mut Vec<EntryWarning>,
     ) -> Self {
-        Self::read_dir_entry(entry, identities, warnings, true)
+        let mut xattr_supported = true;
+        Self::read_dir_entry(entry, identities, warnings, true, &mut xattr_supported)
     }
 
     fn from_dir_entry_base(
         entry: DirEntry,
         identities: &mut IdentityCache,
         warnings: &mut Vec<EntryWarning>,
+        mime_xattr_supported: &mut bool,
     ) -> Self {
-        Self::read_dir_entry(entry, identities, warnings, false)
+        Self::read_dir_entry(entry, identities, warnings, false, mime_xattr_supported)
     }
 
     fn read_dir_entry(
@@ -490,6 +498,7 @@ impl Entry {
         identities: &mut IdentityCache,
         warnings: &mut Vec<EntryWarning>,
         full: bool,
+        mime_xattr_supported: &mut bool,
     ) -> Self {
         let path = entry.path();
         match fs::symlink_metadata(&path) {
@@ -508,7 +517,13 @@ impl Entry {
                 if full {
                     Self::from_metadata(&path, &metadata, modified, identities)
                 } else {
-                    Self::from_base_metadata(&path, &metadata, modified, identities)
+                    Self::from_base_metadata(
+                        &path,
+                        &metadata,
+                        modified,
+                        identities,
+                        mime_xattr_supported,
+                    )
                 }
             }
             Err(error) => {
@@ -576,11 +591,13 @@ impl Entry {
         identities: &mut IdentityCache,
     ) -> io::Result<Self> {
         let metadata = fs::symlink_metadata(path)?;
+        let mut mime_xattr_supported = true;
         Ok(Self::from_base_metadata(
             path,
             &metadata,
             metadata.modified().ok(),
             identities,
+            &mut mime_xattr_supported,
         ))
     }
 
@@ -670,12 +687,13 @@ impl Entry {
         metadata: &fs::Metadata,
         modified: Option<SystemTime>,
         identities: &mut IdentityCache,
+        mime_xattr_supported: &mut bool,
     ) -> Self {
         let name = path.file_name().unwrap_or(path.as_os_str()).to_owned();
         let kind = EntryKind::from(metadata.file_type());
         let mut details = EntryDetails::from_metadata(metadata, identities);
         let (content, content_probed) = if kind == EntryKind::File {
-            content::classify_filename(&name).into_parts()
+            content::classify_file_base(&name, path, mime_xattr_supported).into_parts()
         } else {
             (None, false)
         };
@@ -719,7 +737,9 @@ impl LinkTarget {
                         if sniff_header {
                             (content::detect(name, path), true)
                         } else {
-                            content::classify_filename(name).into_parts()
+                            let mut mime_xattr_supported = true;
+                            content::classify_file_base(name, path, &mut mime_xattr_supported)
+                                .into_parts()
                         }
                     }
                     _ => (None, true),

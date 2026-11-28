@@ -140,6 +140,7 @@ impl Batch {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
+            let invalidation = gds::service::file_inspection::ThumbnailInvalidation::capture(path);
             let result = if kind == Kind::Trash && super::recycle::supported() {
                 let original = tracker.delete(path, cancel).map_err(Error::Recycle)?;
                 trashed_originals.push(original);
@@ -148,7 +149,7 @@ impl Batch {
                 kind.execute(path)
             };
             if result.is_ok() {
-                gds::service::file_inspection::invalidate_thumbnail_cache(path);
+                invalidation.invalidate();
             }
             result
         });

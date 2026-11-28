@@ -217,3 +217,139 @@ async fn application_shutdown_flushes_each_live_windows_pending_edits() {
     assert!(!first.has_pending());
     assert!(!second.has_pending());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_sync_xdg_user_dirs_updates_open_store_and_emits_watch_snapshots() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let config_dir = root.path().join("config");
+    let config_path = config_dir.join("user-dirs.dirs");
+    let desktop = home.join("Desktop");
+    let downloads = home.join("Downloads");
+    let pictures = home.join("Pictures");
+    let videos = home.join("Videos");
+    let zh_downloads = home.join("下载");
+    let zh_videos = home.join("视频");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    std::fs::create_dir_all(&desktop).expect("create Desktop");
+    std::fs::create_dir_all(&downloads).expect("create Downloads");
+    std::fs::create_dir_all(&pictures).expect("create Pictures");
+    std::fs::create_dir_all(&videos).expect("create Videos");
+    std::fs::create_dir_all(&zh_downloads).expect("create zh downloads");
+    std::fs::create_dir_all(&zh_videos).expect("create zh videos");
+    std::fs::write(
+        &config_path,
+        concat!(
+            "XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n",
+            "XDG_DOWNLOAD_DIR=\"$HOME/Downloads\"\n",
+            "XDG_PICTURES_DIR=\"$HOME/Pictures\"\n",
+            "XDG_VIDEOS_DIR=\"$HOME/Videos\"\n",
+        ),
+    )
+    .expect("write initial user-dirs.dirs");
+
+    let tasks =
+        gds::service::task_manager::Scope::with_handle(tokio::runtime::Handle::current(), false);
+    let source = UserDirsSource {
+        home: home.clone(),
+        config_path: config_path.clone(),
+    };
+    let storage =
+        Storage::start_with_user_dirs(root.path().join("state.sqlite"), Some(source), &tasks);
+    let mut places = storage.load(&tasks).await.expect("load initial places");
+    assert_eq!(
+        places.quick_access,
+        vec![
+            Location::from(desktop.as_path()),
+            Location::from(downloads.as_path()),
+            Location::from(pictures.as_path()),
+            Location::from(videos.as_path()),
+        ]
+    );
+
+    let mut updates = places
+        .subscribe_external_updates()
+        .expect("loaded places expose external updates");
+    let mut storage_updates = storage.subscribe_updates();
+
+    // Queue a local unsaved favorite to verify accepting an external sync rebases pending edits.
+    places.set_favorite(Path::new("/pending-favorite").into(), true);
+
+    // Direct sync updates the open store and emits the updated snapshot on the watch channel.
+    let relocated_downloads = XdgUserDirs::resolve(
+        &home,
+        Some(concat!(
+            "XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n",
+            "XDG_DOWNLOAD_DIR=\"$HOME/下载\"\n",
+            "XDG_PICTURES_DIR=\"$HOME/Pictures\"\n",
+            "XDG_VIDEOS_DIR=\"$HOME/Videos\"\n",
+        )),
+    );
+    let changed = storage
+        .sync_xdg_user_dirs(Some(&home), &relocated_downloads)
+        .await
+        .expect("sync downloads relocation");
+    assert!(changed);
+    updates.changed().await.expect("receive direct sync update");
+    storage_updates
+        .changed()
+        .await
+        .expect("storage subscriber receives update");
+    let snapshot = updates
+        .borrow_and_update()
+        .clone()
+        .expect("snapshot payload");
+    let _ = storage_updates.borrow_and_update();
+    places.accept(snapshot);
+    assert_eq!(
+        places.quick_access,
+        vec![
+            Location::from(desktop.as_path()),
+            Location::from(zh_downloads.as_path()),
+            Location::from(pictures.as_path()),
+            Location::from(videos.as_path()),
+        ]
+    );
+    assert!(places.is_favorite(Path::new("/pending-favorite")));
+
+    // Repeating an identical sync is a no-op and does not emit a spurious update.
+    let unchanged = storage
+        .sync_xdg_user_dirs(Some(&home), &relocated_downloads)
+        .await
+        .expect("repeat identical sync");
+    assert!(!unchanged);
+    assert!(!updates.has_changed().expect("watch channel open"));
+
+    // Editing user-dirs.dirs on disk triggers the live watcher and emits the updated snapshot.
+    std::fs::write(
+        &config_path,
+        concat!(
+            "XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n",
+            "XDG_DOWNLOAD_DIR=\"$HOME/下载\"\n",
+            "XDG_PICTURES_DIR=\"$HOME/Pictures\"\n",
+            "XDG_VIDEOS_DIR=\"$HOME/视频\"\n",
+        ),
+    )
+    .expect("update user-dirs.dirs on disk");
+    tokio::time::timeout(Duration::from_secs(5), updates.changed())
+        .await
+        .expect("live watcher emits update within timeout")
+        .expect("watch channel remains open");
+    let live_snapshot = updates
+        .borrow_and_update()
+        .clone()
+        .expect("live snapshot payload");
+    places.accept(live_snapshot);
+    assert_eq!(
+        places.quick_access,
+        vec![
+            Location::from(desktop.as_path()),
+            Location::from(zh_downloads.as_path()),
+            Location::from(pictures.as_path()),
+            Location::from(zh_videos.as_path()),
+        ]
+    );
+    assert!(places.is_favorite(Path::new("/pending-favorite")));
+
+    tasks.shutdown().await;
+}

@@ -350,9 +350,11 @@ impl Step {
             }
             Self::Trash { path, .. } => {
                 self.verify_trash()?;
-                Ok(Self::Restore(
-                    recycle::trash_cancellable(path, cancel)?.entry?,
-                ))
+                let invalidation =
+                    gds::service::file_inspection::ThumbnailInvalidation::capture(path);
+                let receipt = recycle::trash_cancellable(path, cancel)?;
+                invalidation.invalidate();
+                Ok(Self::Restore(receipt.entry?))
             }
             Self::Restore(entry) => {
                 let outcome = recycle::perform_cancellable(
@@ -482,9 +484,13 @@ impl Entry {
                 continue;
             }
             if let Step::Trash { path, previous, .. } = &step {
-                let deleted = step
-                    .verify_trash()
-                    .and_then(|()| tracker.delete(path, cancel).map_err(Error::from));
+                let deleted = step.verify_trash().and_then(|()| {
+                    let invalidation =
+                        gds::service::file_inspection::ThumbnailInvalidation::capture(path);
+                    let original = tracker.delete(path, cancel).map_err(Error::from)?;
+                    invalidation.invalidate();
+                    Ok(original)
+                });
                 match deleted {
                     Ok(original) => pending_trash.push(PendingTrash {
                         previous: previous.clone(),

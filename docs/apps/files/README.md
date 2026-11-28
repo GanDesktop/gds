@@ -41,6 +41,7 @@ Every browsable target has a canonical URI and participates in per-tab back/forw
 
 ## Subsystem References
 
+- [FreeDesktop / XDG Compliance Review](freedesktop-compliance.md)
 - [File Picker CLI & Portal Protocol](picker.md)
 - [SFTP & SMB Network Locations](network.md)
 - [Volumes & Sidebar](devices-and-sidebar.md)

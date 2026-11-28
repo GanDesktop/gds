@@ -15,12 +15,18 @@ use zgui::reactive::{
     Mounted, RenderEffect, RwSignal, Signal, flush, install, on_cleanup_local, prelude::*,
 };
 
-use super::{Target, selection_has_dotfile};
+use super::{Browser, Target, selection_has_dotfile};
 use crate::{
-    entities::preferences::Preferences,
-    pages::workspace::state::context::{
-        DEFAULT_WINDOW_WIDTH, DragSources, observe_window_title, resolve_initial_widths,
-        sample_workspace_sidebar, should_notify_for_window_focus,
+    entities::{
+        location::{Location, places::Places, volumes},
+        preferences::{self, Preferences},
+    },
+    pages::workspace::state::{
+        context::{
+            DEFAULT_WINDOW_WIDTH, DragSources, LaunchOptions, observe_window_title,
+            resolve_initial_widths, sample_workspace_sidebar, should_notify_for_window_focus,
+        },
+        model::Pane,
     },
     shared::i18n,
 };
@@ -215,4 +221,289 @@ fn selection_has_dotfile_detects_hidden_targets_only_on_leaf_filename() {
         PathBuf::from("/tmp/report.txt"),
         PathBuf::from("/tmp/.gitignore"),
     ]));
+}
+
+fn with_headless_browser(start: PathBuf, body: impl FnOnce(&Browser) + 'static) {
+    use std::sync::Arc;
+
+    use gds::service::task_manager::Supervisor;
+    use zgui::{
+        app::Fonts,
+        atlas::{MemorySink, TextureSink},
+        bits::DamageSet,
+        geom::{DevicePx, Size},
+        platform::{AppHandler, PlatformError, Surface, SurfaceEvent},
+        render::{
+            ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities,
+            RenderTarget, Renderer, TextureHandle,
+        },
+        runtime::AppError,
+        scene::Scene,
+    };
+    use zgui_platform_headless::Harness;
+
+    #[derive(Default)]
+    struct NoopRenderer {
+        atlas: MemorySink,
+        target: Option<RenderTarget>,
+    }
+
+    impl Renderer for NoopRenderer {
+        fn capabilities(&self) -> RenderCapabilities {
+            RenderCapabilities::MINIMAL
+        }
+
+        fn configure(&mut self, target: RenderTarget) {
+            self.target = Some(target);
+        }
+
+        fn target(&self) -> Option<RenderTarget> {
+            self.target
+        }
+
+        fn register_external(&mut self, _: ExternalTexture) -> TextureHandle {
+            TextureHandle(0)
+        }
+
+        fn release_external(&mut self, _: TextureHandle) {}
+
+        fn memory(&self) -> MemoryReport {
+            MemoryReport::default()
+        }
+
+        fn draw(&mut self, _: &Scene, _: &DamageSet) -> FrameOutcome {
+            FrameOutcome::Presented(FrameStats::default())
+        }
+
+        fn texture_sink(&mut self) -> &mut dyn TextureSink {
+            &mut self.atlas
+        }
+    }
+
+    fn noop_renderer(
+        _: &Arc<dyn Surface>,
+        target: RenderTarget,
+    ) -> Result<Box<dyn Renderer>, AppError> {
+        let mut renderer = NoopRenderer::default();
+        renderer.configure(target);
+        Ok(Box::new(renderer))
+    }
+
+    let supervisor = Supervisor::new(false).expect("tokio supervisor");
+    let bg_scope = supervisor.scope();
+    let browser_slot: Rc<RefCell<Option<Browser>>> = Rc::new(RefCell::new(None));
+    let slot_for_view = Rc::clone(&browser_slot);
+    let body_slot = RefCell::new(Some(body));
+
+    let driver = move |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+        let mut harness = Harness::new(handler);
+        harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
+            DevicePx(1280.0),
+            DevicePx(800.0),
+        )));
+        harness.settle(8);
+
+        let browser = browser_slot.borrow().clone().expect("browser constructed");
+        if let Some(body) = body_slot.borrow_mut().take() {
+            browser.0.owner.with(|| body(&browser));
+        }
+        harness.settle(4);
+        harness.shut_down();
+        Ok(())
+    };
+
+    zgui::app()
+        .with_fonts(Fonts::shipped_only())
+        .with_renderer(Box::new(noop_renderer))
+        .with_size(1280.0, 800.0)
+        .run_on(driver, move || {
+            let scope = bg_scope.clone();
+            let app = Gds::install(scope.clone());
+            app.appearance().motion().set_enabled(false);
+            let _ = app.appearance().install_window_sheet();
+            app.i18n()
+                .install_catalog(i18n::prepare(Language::English).expect("English catalog"));
+            let _prefs =
+                preferences::Service::install(Preferences::default(), &scope).expect("preferences");
+            let browser = Browser::new(
+                LaunchOptions {
+                    places: Ok(Places::default()),
+                    start: start.clone(),
+                    home: start.clone(),
+                    picker: None,
+                },
+                volumes::Service::new(scope),
+                Rc::new(|_| {}),
+            );
+            *slot_for_view.borrow_mut() = Some(browser.clone());
+            browser.view()
+        })
+        .expect("headless browser harness");
+    supervisor.shutdown();
+}
+
+#[test]
+fn show_properties_command_has_no_browser_tab_page_or_details_side_effects() {
+    use gds::service::desktop::file_manager::{Command, Request};
+
+    let dir_a = tempfile::tempdir().expect("dir_a");
+    let dir_b = tempfile::tempdir().expect("dir_b");
+    let target_file = dir_b.path().join("report.txt");
+    std::fs::write(&target_file, b"demo").expect("write target file");
+    let dir_a_path = dir_a.path().to_path_buf();
+    let dir_b_path = dir_b.path().to_path_buf();
+
+    with_headless_browser(dir_a_path.clone(), move |browser| {
+        browser.0.pages.update(|pages| pages.open(Pane::Settings));
+        assert!(!browser.0.details.get_untracked());
+
+        browser.apply_desktop_command(Command {
+            request: Request::ShowProperties {
+                paths: vec![target_file.clone()],
+            },
+            startup_id: "wayland-activation-token".to_owned(),
+        });
+
+        let (tab_count, active_loc, dir_a_details, dir_b_details) =
+            browser.read_untracked(|state| {
+                (
+                    state.tabs.len(),
+                    state.tab().navigation.location().clone(),
+                    state
+                        .places
+                        .details_visible(Location::from(dir_a_path.as_path())),
+                    state
+                        .places
+                        .details_visible(Location::from(dir_b_path.as_path())),
+                )
+            });
+        assert_eq!(tab_count, 1, "ShowProperties must not open a new tab");
+        assert_eq!(
+            active_loc,
+            Location::from(dir_a_path.as_path()),
+            "ShowProperties must not change the active tab location"
+        );
+        assert!(
+            browser.0.pages.with_untracked(|pages| pages.current()) == Pane::Settings,
+            "ShowProperties must not call show_files or exit settings"
+        );
+        assert!(
+            !browser.0.details.get_untracked(),
+            "ShowProperties must not enable the main window details pane"
+        );
+        assert!(
+            !dir_a_details && !dir_b_details,
+            "ShowProperties must not persist details visibility in Places"
+        );
+    });
+}
+
+#[test]
+fn show_folders_command_opens_virtual_and_local_folder_uris() {
+    use gds::service::desktop::file_manager::{Command, Request};
+
+    let dir_a = tempfile::tempdir().expect("dir_a");
+    let dir_b = tempfile::tempdir().expect("dir_b");
+    let dir_b_path = dir_b.path().to_path_buf();
+    let dir_b_uri = gds::service::desktop::recent_files::encode_local_file_uri(&dir_b_path);
+
+    with_headless_browser(dir_a.path().to_path_buf(), move |browser| {
+        browser.apply_desktop_command(Command {
+            request: Request::ShowFolders {
+                uris: vec!["trash:///".to_owned(), dir_b_uri],
+            },
+            startup_id: String::new(),
+        });
+
+        let locations = browser.read_untracked(|state| {
+            state
+                .tabs
+                .iter()
+                .map(|tab| tab.navigation.location().clone())
+                .collect::<Vec<_>>()
+        });
+        assert!(locations.contains(&Location::Trash));
+        assert!(locations.contains(&Location::from(dir_b_path.as_path())));
+    });
+}
+
+#[test]
+fn activate_command_preserves_tabs_and_returns_to_files_view() {
+    use gds::service::desktop::file_manager::{Command, Request};
+
+    let dir_a = tempfile::tempdir().expect("dir_a");
+    let dir_b = tempfile::tempdir().expect("dir_b");
+    let dir_a_path = dir_a.path().to_path_buf();
+    let dir_b_path = dir_b.path().to_path_buf();
+    let dir_b_uri = gds::service::desktop::recent_files::encode_local_file_uri(&dir_b_path);
+
+    with_headless_browser(dir_a_path, move |browser| {
+        browser.apply_desktop_command(Command {
+            request: Request::ShowFolders {
+                uris: vec![dir_b_uri],
+            },
+            startup_id: String::new(),
+        });
+        let expected_tabs = browser.read_untracked(|state| {
+            (
+                state.active,
+                state
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.navigation.location().clone())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        assert_eq!(expected_tabs.1.len(), 2);
+
+        browser.0.pages.update(|pages| pages.open(Pane::Settings));
+        assert!(browser.pane_untracked() == Pane::Settings);
+
+        browser.apply_desktop_command(Command {
+            request: Request::Activate { new_window: false },
+            startup_id: "xdg-activation-token".to_owned(),
+        });
+        assert!(
+            browser.pane_untracked() == Pane::Files,
+            "Activate with token must return browser to files view"
+        );
+        let actual_tabs = browser.read_untracked(|state| {
+            (
+                state.active,
+                state
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.navigation.location().clone())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        assert_eq!(
+            actual_tabs, expected_tabs,
+            "Activate must not alter existing tabs or active selection"
+        );
+
+        browser.0.pages.update(|pages| pages.open(Pane::Settings));
+        browser.apply_desktop_command(Command {
+            request: Request::Activate { new_window: false },
+            startup_id: String::new(),
+        });
+        assert!(
+            browser.pane_untracked() == Pane::Files,
+            "Activate without token must return browser to files view"
+        );
+        let actual_tabs = browser.read_untracked(|state| {
+            (
+                state.active,
+                state
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.navigation.location().clone())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        assert_eq!(
+            actual_tabs, expected_tabs,
+            "Activate without token must leave existing tabs intact"
+        );
+    });
 }

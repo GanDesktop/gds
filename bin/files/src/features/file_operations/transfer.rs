@@ -318,14 +318,18 @@ impl Batch {
                     committed_snapshot: None,
                     result: Ok(()),
                 };
+                let source_invalidation =
+                    (mode == Mode::Move && !cancel.is_cancelled()).then(|| {
+                        gds::service::file_inspection::ThumbnailInvalidation::capture(&item.source)
+                    });
                 item.result = if cancel.is_cancelled() {
                     Err(Error::Cancelled)
                 } else {
                     item.transfer(mode, buffer_size, &cancel)
                 };
                 if item.result.is_ok() {
-                    if mode == Mode::Move {
-                        gds::service::file_inspection::invalidate_thumbnail_cache(&item.source);
+                    if let Some(invalidation) = source_invalidation {
+                        invalidation.invalidate();
                     }
                     if item.replaced {
                         gds::service::file_inspection::invalidate_thumbnail_cache(

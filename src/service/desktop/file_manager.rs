@@ -1,24 +1,50 @@
-//! Standard file-manager requests, independent of the graphical toolkit.
-use std::path::{Path, PathBuf};
+//! Standard file-manager and desktop-application requests, independent of the graphical toolkit.
+use std::{
+    collections::HashMap,
+    ops::Deref,
+    path::{Path, PathBuf},
+};
 use tokio::sync::mpsc;
 use zbus::{
     Connection,
     fdo::{RequestNameFlags, RequestNameReply},
+    names::WellKnownName,
+    zvariant::{ObjectPath, OwnedValue, Value},
 };
 
 pub const BUS_NAME: &str = "org.freedesktop.FileManager1";
 pub const OBJECT_PATH: &str = "/org/freedesktop/FileManager1";
 pub const LAUNCHER_INTERFACE: &str = "io.github.GanDesktop.Files";
+pub const APPLICATION_INTERFACE: &str = "org.freedesktop.Application";
+
+/// Convert a D-Bus well-known application name into its FreeDesktop `org.freedesktop.Application`
+/// object path (Desktop Entry Specification 1.5, D-Bus Activation).
+///
+/// # Errors
+/// Reports `Error::InvalidBusName` if `app_bus_name` is empty or not a valid D-Bus well-known name.
+pub fn application_object_path(app_bus_name: &str) -> Result<String, Error> {
+    WellKnownName::try_from(app_bus_name)
+        .map_err(|_| Error::InvalidBusName(app_bus_name.to_owned()))?;
+    // Per Desktop Entry Spec 1.5: dots become slashes with a leading slash, and hyphens become
+    // underscores so every path element remains valid in D-Bus object paths.
+    let path = format!("/{}", app_bus_name.replace('.', "/").replace('-', "_"));
+    ObjectPath::try_from(path.as_str())
+        .map_err(|_| Error::InvalidBusName(app_bus_name.to_owned()))?;
+    Ok(path)
+}
 
 /// Desktop requests carry the paths appropriate to each operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
+    /// Activate the application, optionally forcing a new window.
+    Activate { new_window: bool },
     /// Open one directory in a new window.
     NewWindow { directory: PathBuf },
     /// Open one or more target URIs (`file://`, `trash:///`, `sftp://`, etc.), optionally forcing a new window.
     OpenLocations { uris: Vec<String>, new_window: bool },
-    /// Open the directories themselves, reusing a window when possible.
-    ShowFolders { directories: Vec<PathBuf> },
+    /// Open one or more folder URIs (`file://`, `trash:///`, `smb://`, `sftp://`, etc.),
+    /// reusing a window when possible.
+    ShowFolders { uris: Vec<String> },
     /// Reveal and select these files or folders in their parent directories.
     ShowItems { paths: Vec<PathBuf> },
     /// Show properties for these files or folders.
@@ -37,20 +63,69 @@ pub enum Error {
     AlreadyRunning,
     #[error("file-manager bus operation failed: {0}")]
     Bus(#[from] zbus::Error),
-    #[error("unsupported or invalid local file URI: {0}")]
+    #[error("invalid D-Bus application name: {0}")]
+    InvalidBusName(String),
+    #[error("unsupported or invalid file-manager URI: {0}")]
     InvalidUri(String),
 }
 
+fn invalid_uri(uri: &str) -> zbus::fdo::Error {
+    zbus::fdo::Error::InvalidArgs(Error::InvalidUri(uri.into()).to_string())
+}
+
 fn local_path(uri: &str) -> zbus::fdo::Result<PathBuf> {
-    url::Url::parse(uri)
-        .ok()
-        .and_then(|uri| uri.to_file_path().ok())
-        .filter(|path| path.is_absolute())
-        .ok_or_else(|| zbus::fdo::Error::InvalidArgs(Error::InvalidUri(uri.into()).to_string()))
+    local_path_with_host(uri, super::recent_files::local_hostname())
+}
+
+fn local_path_with_host(uri: &str, local_hostname: Option<&str>) -> zbus::fdo::Result<PathBuf> {
+    super::recent_files::parse_strict_local_file_url_with_host(uri, local_hostname)
+        .ok_or_else(|| invalid_uri(uri))
 }
 
 fn local_paths(uris: &[String]) -> zbus::fdo::Result<Vec<PathBuf>> {
     uris.iter().map(|uri| local_path(uri)).collect()
+}
+
+fn folder_uri_with_host(uri: &str, local_hostname: Option<&str>) -> zbus::fdo::Result<String> {
+    if uri.is_empty() || uri.as_bytes().contains(&0) {
+        return Err(invalid_uri(uri));
+    }
+    let parsed = url::Url::parse(uri).map_err(|_| invalid_uri(uri))?;
+    match parsed.scheme() {
+        "file" => {
+            let _ = local_path_with_host(uri, local_hostname)?;
+            Ok(uri.to_owned())
+        }
+        "smb" | "sftp" => {
+            if parsed.host_str().is_some_and(|host| !host.is_empty()) {
+                Ok(uri.to_owned())
+            } else {
+                Err(invalid_uri(uri))
+            }
+        }
+        "trash" | "recent" | "recentlyused" | "network" | "remote" | "computer" | "starred"
+        | "tags" | "tag" | "location" => {
+            if parsed.host_str().is_none_or(str::is_empty) {
+                Ok(uri.to_owned())
+            } else {
+                Err(invalid_uri(uri))
+            }
+        }
+        _ => Err(invalid_uri(uri)),
+    }
+}
+
+fn folder_uris_with_host(
+    uris: &[String],
+    local_hostname: Option<&str>,
+) -> zbus::fdo::Result<Vec<String>> {
+    uris.iter()
+        .map(|uri| folder_uri_with_host(uri, local_hostname))
+        .collect()
+}
+
+fn folder_uris(uris: &[String]) -> zbus::fdo::Result<Vec<String>> {
+    folder_uris_with_host(uris, super::recent_files::local_hostname())
 }
 
 async fn dispatch(
@@ -77,7 +152,7 @@ impl Interface {
         dispatch(
             &self.sender,
             Request::ShowFolders {
-                directories: local_paths(&uris)?,
+                uris: folder_uris(&uris)?,
             },
             startup_id,
         )
@@ -146,6 +221,75 @@ impl Launcher {
     }
 }
 
+fn platform_string(platform_data: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
+    match platform_data.get(key).map(Deref::deref) {
+        Some(Value::Str(token)) if !token.is_empty() => Some(token.as_str().to_owned()),
+        _ => None,
+    }
+}
+
+fn platform_activation_token(platform_data: &HashMap<String, OwnedValue>) -> String {
+    platform_string(platform_data, "activation-token")
+        .or_else(|| platform_string(platform_data, "desktop-startup-id"))
+        .unwrap_or_default()
+}
+
+struct Application {
+    sender: mpsc::Sender<Command>,
+}
+
+#[zbus::interface(name = "org.freedesktop.Application")]
+impl Application {
+    async fn activate(&self, platform_data: HashMap<String, OwnedValue>) -> zbus::fdo::Result<()> {
+        let startup_id = platform_activation_token(&platform_data);
+        dispatch(
+            &self.sender,
+            Request::Activate { new_window: false },
+            startup_id,
+        )
+        .await
+    }
+
+    async fn open(
+        &self,
+        uris: Vec<String>,
+        platform_data: HashMap<String, OwnedValue>,
+    ) -> zbus::fdo::Result<()> {
+        let startup_id = platform_activation_token(&platform_data);
+        let request = if uris.is_empty() {
+            Request::Activate { new_window: false }
+        } else {
+            Request::OpenLocations {
+                uris: folder_uris(&uris)?,
+                new_window: false,
+            }
+        };
+        dispatch(&self.sender, request, startup_id).await
+    }
+
+    async fn activate_action(
+        &self,
+        action_name: String,
+        _parameter: Vec<OwnedValue>,
+        platform_data: HashMap<String, OwnedValue>,
+    ) -> zbus::fdo::Result<()> {
+        let startup_id = platform_activation_token(&platform_data);
+        match action_name.as_str() {
+            "new-window" => {
+                dispatch(
+                    &self.sender,
+                    Request::Activate { new_window: true },
+                    startup_id,
+                )
+                .await
+            }
+            _ => Err(zbus::fdo::Error::InvalidArgs(format!(
+                "unknown application action: {action_name}"
+            ))),
+        }
+    }
+}
+
 async fn resolve_provider_conflict<Req, ReqFut, Own, OwnFut>(
     mut request_name: Req,
     mut get_owner: Own,
@@ -183,12 +327,20 @@ impl Server {
     /// Claim the application's own single-instance bus name without yet registering `FileManager1`.
     ///
     /// # Errors
-    /// Reports another application instance or an unavailable session bus.
+    /// Reports invalid application bus names, another application instance, or an unavailable
+    /// session bus.
     pub async fn claim_app(
         app_bus_name: &str,
         sender: mpsc::Sender<Command>,
     ) -> Result<Self, Error> {
+        let app_path = application_object_path(app_bus_name)?;
         let connection = zbus::connection::Builder::session()?
+            .serve_at(
+                app_path,
+                Application {
+                    sender: sender.clone(),
+                },
+            )?
             .serve_at(
                 OBJECT_PATH,
                 Launcher {

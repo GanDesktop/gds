@@ -16,6 +16,23 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+mod directory_sizes;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+mod watch;
+
+#[cfg(all(test, any(target_os = "linux", target_os = "freebsd")))]
+mod tests;
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub use watch::{TrashWatch, watch_directories};
+
+/// Return active trash `info/` directories to watch for live changes.
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+pub fn watch_directories() -> Vec<PathBuf> {
+    Vec::new()
+}
+
 use crate::entities::file::directory::EntryKind;
 use crate::features::file_operations::transfer;
 
@@ -217,6 +234,7 @@ impl Tracker {
                     items.reverse();
                 }
             }
+            let mut sizes = directory_sizes::DirectorySizesCache::default();
             originals
                 .into_iter()
                 .map(|original| {
@@ -226,7 +244,7 @@ impl Tracker {
                         .ok_or_else(|| Error::MissingReceipt {
                             path: original.clone(),
                         })
-                        .and_then(Entry::from_item)
+                        .and_then(|item| Entry::from_item(item, &mut sizes))
                 })
                 .collect()
         }
@@ -332,6 +350,18 @@ struct Applied {
 }
 
 impl Entry {
+    /// Parent `info/` directory containing this record's `.trashinfo` file.
+    pub fn info_directory(&self) -> Option<&std::path::Path> {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            self.info.parent()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        {
+            None
+        }
+    }
+
     /// Build entries from raw records, keeping the readable ones and remembering
     /// the first rejection. Failing only because some records are corrupt would
     /// hide the usable ones; succeeding with none of them would fake an empty bin.
@@ -340,11 +370,20 @@ impl Entry {
     /// Reports [`Error::Unreadable`] when items exist but every single one is invalid.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn collect(items: impl IntoIterator<Item = trash::TrashItem>) -> Result<Vec<Self>, Error> {
+        let mut sizes = directory_sizes::DirectorySizesCache::default();
+        Self::collect_with_sizes(items, &mut sizes)
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn collect_with_sizes(
+        items: impl IntoIterator<Item = trash::TrashItem>,
+        sizes: &mut directory_sizes::DirectorySizesCache,
+    ) -> Result<Vec<Self>, Error> {
         let mut entries = Vec::new();
         let mut failures = 0;
         let mut first_failure = None;
         for item in items {
-            match Self::from_item(item) {
+            match Self::from_item(item, sizes) {
                 Ok(entry) => entries.push(entry),
                 Err(error) => {
                     tracing::warn!("Skipping unusable trash record: {error}");
@@ -438,6 +477,9 @@ impl Entry {
                 path: self.original_path.clone(),
                 source,
             });
+            if result.is_ok() && self.kind == EntryKind::Directory {
+                self.prune_directory_size();
+            }
             return Applied { restored, result };
         }
         let error = item
@@ -473,7 +515,28 @@ impl Entry {
         fs::remove_file(&self.info).map_err(|source| Error::PurgeIncomplete {
             path: self.original_path.clone(),
             source,
-        })
+        })?;
+        if metadata.is_dir() {
+            self.prune_directory_size();
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn prune_directory_size(&self) {
+        let Some(root) = self.info.parent().and_then(Path::parent) else {
+            return;
+        };
+        let Some(stem) = self.info.file_stem() else {
+            return;
+        };
+        if let Err(error) = directory_sizes::remove_entry(root, stem) {
+            tracing::debug!(
+                path = %root.join(directory_sizes::FILE_NAME).display(),
+                error = %error,
+                "Failed to remove restored/purged directory from trash directorysizes cache"
+            );
+        }
     }
 
     /// Reject a record whose info or payload was replaced since it was listed.
@@ -502,7 +565,10 @@ impl Entry {
     /// directory, a relative original parent, a missing payload or info file,
     /// and a non-file info leaf.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    fn from_item(item: trash::TrashItem) -> Result<Self, Error> {
+    fn from_item(
+        item: trash::TrashItem,
+        sizes: &mut directory_sizes::DirectorySizesCache,
+    ) -> Result<Self, Error> {
         let paths = RecordPaths::parse(&item.id)?;
         if !item.original_parent.is_absolute() || names::validate(&item.name).is_err() {
             return Err(Error::InvalidRecord { path: paths.info });
@@ -512,6 +578,15 @@ impl Entry {
         if !info_metadata.file_type().is_file() {
             return Err(Error::InvalidRecord { path: paths.info });
         }
+        let info_identity = Identity::of(&info_metadata);
+        let kind = EntryKind::from(payload_metadata.file_type());
+        let size = if payload_metadata.is_file() {
+            Some(payload_metadata.len())
+        } else if kind == EntryKind::Directory {
+            sizes.lookup(&paths.root, &paths.stem, info_identity.modified)
+        } else {
+            None
+        };
         let original_path = item.original_path();
         let deleted_at = Self::deleted_at(item.time_deleted);
         Ok(Self {
@@ -519,11 +594,11 @@ impl Entry {
             name: item.name,
             original_path,
             deleted_at,
-            size: payload_metadata.is_file().then_some(payload_metadata.len()),
+            size,
             items: None,
-            kind: EntryKind::from(payload_metadata.file_type()),
+            kind,
             snapshot: Snapshot {
-                info: Identity::of(&info_metadata),
+                info: info_identity,
                 payload: Identity::of(&payload_metadata),
             },
             info: paths.info,
@@ -561,6 +636,8 @@ impl Entry {
 /// Info and payload locations derived from one raw trash id.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 struct RecordPaths {
+    root: PathBuf,
+    stem: OsString,
     info: PathBuf,
     payload: PathBuf,
 }
@@ -598,7 +675,12 @@ impl RecordPaths {
             return Err(Self::invalid(&info));
         };
         let payload = root.join("files").join(stem);
-        Ok(Self { info, payload })
+        Ok(Self {
+            root: root.to_path_buf(),
+            stem: stem.to_os_string(),
+            info,
+            payload,
+        })
     }
 
     fn invalid(info: &Path) -> Error {

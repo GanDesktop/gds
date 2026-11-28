@@ -9,10 +9,14 @@ pub mod watch;
 mod client;
 #[cfg(feature = "desktop")]
 mod error;
+#[cfg(all(feature = "desktop", unix))]
+mod executable;
 #[cfg(feature = "desktop")]
 pub mod recent_files;
 #[cfg(feature = "desktop")]
 mod session;
+#[cfg(feature = "desktop")]
+pub use crate::service::ParentWindow;
 #[cfg(feature = "desktop")]
 pub use client::Desktop;
 #[cfg(feature = "desktop")]
@@ -25,6 +29,14 @@ pub enum OpenMode {
     ChooseApplication,
 }
 
+/// Optional parent-window and Wayland activation context forwarded to XDG portals.
+#[cfg(feature = "desktop")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenContext {
+    pub parent_window: Option<ParentWindow>,
+    pub activation_token: Option<String>,
+}
+
 #[cfg(feature = "desktop")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenOutcome {
@@ -34,14 +46,12 @@ pub enum OpenOutcome {
 #[cfg(feature = "desktop")]
 pub use session::{
     DEFAULT_INHIBIT_DELAY, DesktopNotification, InhibitRelease, NotificationUrgency,
-    hold_inhibit_after, send_notification,
+    hold_inhibit_after, hold_inhibit_after_with_window, send_notification,
 };
 #[cfg(all(feature = "desktop", feature = "task-manager"))]
 pub use session::{InhibitGuard, notify_background};
 #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
 pub mod file_manager;
-#[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
-pub mod mime_apps;
 #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]
 mod portal;
 #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "freebsd")))]

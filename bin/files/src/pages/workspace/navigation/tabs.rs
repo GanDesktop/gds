@@ -937,6 +937,7 @@ impl Navigator<'_> {
                             Err(error) => Loaded::Unavailable(error.to_string()),
                         };
                         Rows(&ctx).finish_collection_load(id, &request, loaded);
+                        Navigator(&ctx).start_trash_watch(id);
                     }));
                 });
             }
@@ -1376,6 +1377,149 @@ impl Navigator<'_> {
                 }
             }));
         });
+    }
+
+    fn start_trash_watch(&self, id: u64) {
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        {
+            let _ = id;
+        }
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            if !recycle::supported() {
+                return;
+            }
+            let extra_dirs = self.0.read_untracked(|state| {
+                let tab = state.tabs.iter().find(|tab| tab.id == id)?;
+                if !matches!(tab.navigation.location(), Location::Trash)
+                    || tab.navigation.is_loading()
+                {
+                    return None;
+                }
+                let dirs = match &tab.contents {
+                    Contents::Trash(entries) => entries
+                        .iter()
+                        .filter_map(|entry| entry.info_directory().map(Path::to_path_buf))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                Some(dirs)
+            });
+            let Some(extra_dirs) = extra_dirs else {
+                return;
+            };
+
+            ensure_watch_cleanup(self.0);
+            let key = (Rc::as_ptr(&self.0.0) as usize, id);
+            let owner = self.0.0.tasks.named_child("Watch Trash");
+            let scope = (*owner).clone();
+            let cancel = owner.token();
+            WATCHES.with(|slot| {
+                slot.borrow_mut().insert(key, owner);
+            });
+
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let blocking_scope = scope.clone();
+            drop(scope.spawn_named("Trash watcher", async move {
+                let Ok(mut dirs) = blocking_scope
+                    .spawn_blocking_named(
+                        "Discover Trash watch directories",
+                        recycle::watch_directories,
+                    )
+                    .await
+                else {
+                    return;
+                };
+                for dir in extra_dirs {
+                    if !dirs.contains(&dir) {
+                        dirs.push(dir);
+                    }
+                }
+                if dirs.is_empty() || cancel.is_cancelled() {
+                    return;
+                }
+
+                let (raw_tx, mut raw_rx) = mpsc::channel(4);
+                let mut watch = recycle::TrashWatch::new(raw_tx);
+                if let Err(error) = watch.set_directories(dirs) {
+                    tracing::debug!(%error, "Unable to start Trash watcher");
+                    return;
+                }
+
+                enum WaitEvent {
+                    Cancelled,
+                    Changed,
+                    Closed,
+                }
+                enum DebounceEvent {
+                    Cancelled,
+                    Elapsed,
+                    Changed,
+                    Closed,
+                }
+
+                loop {
+                    let wait = tokio::select! {
+                        () = cancel.cancelled() => WaitEvent::Cancelled,
+                        event = raw_rx.recv() => match event {
+                            Some(()) => WaitEvent::Changed,
+                            None => WaitEvent::Closed,
+                        },
+                    };
+                    match wait {
+                        WaitEvent::Cancelled | WaitEvent::Closed => return,
+                        WaitEvent::Changed => {}
+                    }
+
+                    let deadline = tokio::time::Instant::now() + Duration::from_millis(250);
+                    loop {
+                        let event = tokio::select! {
+                            () = cancel.cancelled() => DebounceEvent::Cancelled,
+                            () = tokio::time::sleep_until(deadline) => DebounceEvent::Elapsed,
+                            item = raw_rx.recv() => match item {
+                                Some(()) => DebounceEvent::Changed,
+                                None => DebounceEvent::Closed,
+                            },
+                        };
+                        match event {
+                            DebounceEvent::Cancelled | DebounceEvent::Closed => return,
+                            DebounceEvent::Elapsed => break,
+                            DebounceEvent::Changed => {}
+                        }
+                    }
+
+                    let _ = watch.refresh();
+                    if tx.send(()).is_err() {
+                        return;
+                    }
+                }
+            }));
+
+            let weak = self.0.downgrade();
+            self.0.0.owner.with(|| {
+                drop(spawn_local(async move {
+                    while rx.recv().await.is_some() {
+                        let Some(ctx) = weak.upgrade() else {
+                            break;
+                        };
+                        let still_trash = ctx.read_untracked(|state| {
+                            state
+                                .tabs
+                                .iter()
+                                .find(|tab| tab.id == id)
+                                .is_some_and(|tab| {
+                                    matches!(tab.navigation.location(), Location::Trash)
+                                })
+                        });
+                        if still_trash {
+                            Navigator(&ctx).refresh_tab(id);
+                        } else {
+                            break;
+                        }
+                    }
+                }));
+            });
+        }
     }
 }
 

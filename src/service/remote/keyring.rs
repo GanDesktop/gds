@@ -11,6 +11,7 @@ use std::{
 };
 
 use super::{Address, Credentials, Protocol};
+use crate::service::ParentWindow;
 
 /// Reverse-DNS application identifier attached to every Secret Service item.
 pub const APPLICATION_ID: &str = "io.github.GanDesktop.GdsFiles";
@@ -186,15 +187,28 @@ pub async fn has_saved(address: &Address) -> Result<bool, Error> {
 
 /// Looks up stored credentials for `address` in the desktop Secret Service.
 ///
-/// Unlocks a matched locked item via the desktop keyring prompt if necessary.
-/// Returns `Ok(None)` when the Secret Service is unavailable, no default
+/// Unlocks a locked default collection or matched item via the desktop keyring prompt if
+/// necessary. Returns `Ok(None)` when the Secret Service is unavailable, no default
 /// collection exists yet, or no matching item is stored.
 ///
 /// # Errors
 /// Returns [`Error::Dismissed`] if the user cancels a keyring unlock prompt,
 /// or [`Error::Backend`] on other Secret Service failures.
 pub async fn lookup(address: &Address) -> Result<Option<Credentials>, Error> {
-    platform::lookup(address).await
+    lookup_with_window(address, None).await
+}
+
+/// Looks up stored credentials for `address`, parenting any Secret Service unlock prompt to
+/// `parent_window` when supplied.
+///
+/// # Errors
+/// Returns [`Error::Dismissed`] if the user cancels a keyring unlock prompt,
+/// or [`Error::Backend`] on other Secret Service failures.
+pub async fn lookup_with_window(
+    address: &Address,
+    parent_window: Option<&ParentWindow>,
+) -> Result<Option<Credentials>, Error> {
+    platform::lookup(address, parent_window).await
 }
 
 /// Stores or replaces credentials for `address` in the desktop Secret Service.
@@ -209,10 +223,25 @@ pub async fn lookup(address: &Address) -> Result<Option<Credentials>, Error> {
 /// [`Error::Dismissed`] when the user dismisses an unlock or creation prompt,
 /// or [`Error::Backend`] on validation or backend failures.
 pub async fn store(address: &Address, credentials: &Credentials) -> Result<(), Error> {
+    store_with_window(address, credentials, None).await
+}
+
+/// Stores or replaces credentials for `address`, parenting any Secret Service prompt to
+/// `parent_window` when supplied.
+///
+/// # Errors
+/// Returns [`Error::Unavailable`] when no Secret Service is available,
+/// [`Error::Dismissed`] when the user dismisses an unlock or creation prompt,
+/// or [`Error::Backend`] on validation or backend failures.
+pub async fn store_with_window(
+    address: &Address,
+    credentials: &Credentials,
+    parent_window: Option<&ParentWindow>,
+) -> Result<(), Error> {
     let Some(encoded) = encode_item(address, credentials)? else {
         return Ok(());
     };
-    platform::store(address, encoded).await
+    platform::store(address, encoded, parent_window).await
 }
 
 /// Deletes all stored credentials matching `address`.
@@ -225,7 +254,20 @@ pub async fn store(address: &Address, credentials: &Credentials) -> Result<(), E
 /// Returns [`Error::Dismissed`] if the user cancels an unlock prompt, or
 /// [`Error::Backend`] on other Secret Service failures.
 pub async fn delete(address: &Address) -> Result<bool, Error> {
-    platform::delete(address).await
+    delete_with_window(address, None).await
+}
+
+/// Deletes all stored credentials matching `address`, parenting any Secret Service prompt to
+/// `parent_window` when supplied.
+///
+/// # Errors
+/// Returns [`Error::Dismissed`] if the user cancels an unlock prompt, or
+/// [`Error::Backend`] on other Secret Service failures.
+pub async fn delete_with_window(
+    address: &Address,
+    parent_window: Option<&ParentWindow>,
+) -> Result<bool, Error> {
+    platform::delete(address, parent_window).await
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -235,7 +277,7 @@ mod platform {
     use oo7::{Keyring, Secret, dbus};
     use zbus::names::BusName;
 
-    use super::{EncodedItem, Error, decode_credentials, lookup_attributes};
+    use super::{EncodedItem, Error, ParentWindow, decode_credentials, lookup_attributes};
     use crate::service::remote::{Address, Credentials};
 
     const SECRET_SERVICE_BUS_NAME: &str = "org.freedesktop.secrets";
@@ -353,7 +395,10 @@ mod platform {
         Ok(!items.is_empty())
     }
 
-    pub(super) async fn lookup(address: &Address) -> Result<Option<Credentials>, Error> {
+    pub(super) async fn lookup(
+        address: &Address,
+        parent_window: Option<&ParentWindow>,
+    ) -> Result<Option<Credentials>, Error> {
         let attrs = lookup_attributes(address);
         if oo7::ashpd::is_sandboxed() {
             if !is_available().await {
@@ -403,6 +448,17 @@ mod platform {
         else {
             return Ok(None);
         };
+        // Secret Service API 0.2 allows daemons (such as KWallet and KeePassXC) to return no
+        // items from `SearchItems` while the collection is locked; unlock before searching.
+        if collection.is_locked().await.map_err(map_dbus_error)? {
+            collection
+                .unlock(parent_window.map(ParentWindow::to_oo7))
+                .await
+                .map_err(map_dbus_error)?;
+            if collection.is_locked().await.map_err(map_dbus_error)? {
+                return Err(Error::Dismissed);
+            }
+        }
         let items = collection
             .search_items(&attrs)
             .await
@@ -420,7 +476,9 @@ mod platform {
 
         for (_, item) in ranked {
             if item.is_locked().await.map_err(map_dbus_error)? {
-                item.unlock(None).await.map_err(map_dbus_error)?;
+                item.unlock(parent_window.map(ParentWindow::to_oo7))
+                    .await
+                    .map_err(map_dbus_error)?;
                 if item.is_locked().await.map_err(map_dbus_error)? {
                     return Err(Error::Dismissed);
                 }
@@ -434,7 +492,11 @@ mod platform {
         Ok(None)
     }
 
-    pub(super) async fn store(address: &Address, encoded: EncodedItem) -> Result<(), Error> {
+    pub(super) async fn store(
+        address: &Address,
+        encoded: EncodedItem,
+        parent_window: Option<&ParentWindow>,
+    ) -> Result<(), Error> {
         let base_attrs = lookup_attributes(address);
         if oo7::ashpd::is_sandboxed() {
             if !is_available().await {
@@ -473,7 +535,10 @@ mod platform {
         let service = dbus::Service::new().await.map_err(map_dbus_error)?;
         let collection = service.default_collection().await.map_err(map_dbus_error)?;
         if collection.is_locked().await.map_err(map_dbus_error)? {
-            collection.unlock(None).await.map_err(map_dbus_error)?;
+            collection
+                .unlock(parent_window.map(ParentWindow::to_oo7))
+                .await
+                .map_err(map_dbus_error)?;
             if collection.is_locked().await.map_err(map_dbus_error)? {
                 return Err(Error::Dismissed);
             }
@@ -484,7 +549,7 @@ mod platform {
                 &encoded.attributes,
                 Secret::text(&encoded.secret),
                 true,
-                None,
+                parent_window.map(ParentWindow::to_oo7),
             )
             .await
             .map_err(map_dbus_error)?;
@@ -492,7 +557,7 @@ mod platform {
         if let Ok(existing) = collection.search_items(&base_attrs).await {
             for item in existing {
                 if item.path() != created.path()
-                    && let Err(err) = item.delete(None).await
+                    && let Err(err) = item.delete(parent_window.map(ParentWindow::to_oo7)).await
                 {
                     tracing::debug!("failed to clean up superseded keyring item: {err}");
                 }
@@ -501,7 +566,10 @@ mod platform {
         Ok(())
     }
 
-    pub(super) async fn delete(address: &Address) -> Result<bool, Error> {
+    pub(super) async fn delete(
+        address: &Address,
+        parent_window: Option<&ParentWindow>,
+    ) -> Result<bool, Error> {
         let base_attrs = lookup_attributes(address);
         if oo7::ashpd::is_sandboxed() {
             if !is_available().await {
@@ -548,7 +616,10 @@ mod platform {
             return Ok(false);
         };
         if collection.is_locked().await.map_err(map_dbus_error)? {
-            collection.unlock(None).await.map_err(map_dbus_error)?;
+            collection
+                .unlock(parent_window.map(ParentWindow::to_oo7))
+                .await
+                .map_err(map_dbus_error)?;
             if collection.is_locked().await.map_err(map_dbus_error)? {
                 return Err(Error::Dismissed);
             }
@@ -561,7 +632,9 @@ mod platform {
             return Ok(false);
         }
         for item in items {
-            item.delete(None).await.map_err(map_dbus_error)?;
+            item.delete(parent_window.map(ParentWindow::to_oo7))
+                .await
+                .map_err(map_dbus_error)?;
         }
         Ok(true)
     }
@@ -578,7 +651,7 @@ mod platform {
 
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 mod platform {
-    use super::{EncodedItem, Error};
+    use super::{EncodedItem, Error, ParentWindow};
     use crate::service::remote::{Address, Credentials};
 
     pub(super) async fn is_available() -> bool {
@@ -589,15 +662,25 @@ mod platform {
         Ok(false)
     }
 
-    pub(super) async fn lookup(_address: &Address) -> Result<Option<Credentials>, Error> {
+    pub(super) async fn lookup(
+        _address: &Address,
+        _parent_window: Option<&ParentWindow>,
+    ) -> Result<Option<Credentials>, Error> {
         Ok(None)
     }
 
-    pub(super) async fn store(_address: &Address, _encoded: EncodedItem) -> Result<(), Error> {
+    pub(super) async fn store(
+        _address: &Address,
+        _encoded: EncodedItem,
+        _parent_window: Option<&ParentWindow>,
+    ) -> Result<(), Error> {
         Err(Error::Unavailable)
     }
 
-    pub(super) async fn delete(_address: &Address) -> Result<bool, Error> {
+    pub(super) async fn delete(
+        _address: &Address,
+        _parent_window: Option<&ParentWindow>,
+    ) -> Result<bool, Error> {
         Ok(false)
     }
 }

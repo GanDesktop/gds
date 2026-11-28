@@ -579,67 +579,102 @@ impl Browser {
             }
         });
         on_cleanup_local(move || drop(lang_fx));
+        self.ctx.bind_places_sync();
+    }
+
+    pub(crate) fn open_properties(
+        paths: Vec<PathBuf>,
+        scope: gds::service::task_manager::Scope,
+        startup_id: &str,
+    ) {
+        let mut token = (!startup_id.is_empty()).then_some(startup_id);
+        let mut unique = Vec::with_capacity(paths.len());
+        for path in paths {
+            if !unique.contains(&path) {
+                unique.push(path);
+            }
+        }
+        for path in unique {
+            panes::inspection::Properties::open_with_activation(path, scope.clone(), token.take());
+        }
     }
 
     pub(crate) fn apply_desktop_command(&self, command: Command) {
         if self.read_untracked(|state| state.picker.is_some()) {
             return;
         }
-        let navigator = Navigator(&self.ctx);
-        if let Request::OpenLocations { uris, new_window } = command.request {
-            self.show_files();
-            let mut locations = Vec::with_capacity(uris.len());
-            for uri in uris {
-                match crate::entities::location::scheme::parse(&uri) {
-                    Ok(location) => {
-                        if !locations.contains(&location) {
-                            locations.push(location);
-                        }
+        match command.request {
+            Request::Activate { .. } => {
+                self.show_files();
+                self.focus_content();
+                if let Some(window) = &self.0.window {
+                    if !command.startup_id.is_empty() {
+                        gds::ui::window::activate_with_token(window, &command.startup_id);
+                    } else {
+                        window.focus();
                     }
-                    Err(error) => self.report_notice(error.to_string()),
                 }
             }
-            for (index, location) in locations.into_iter().enumerate() {
-                if new_window && index == 0 {
-                    navigator.open(location);
-                    continue;
-                }
-                let existing = self.read_untracked(|state| {
-                    state
-                        .tabs
-                        .iter()
-                        .position(|tab| tab.navigation.location() == &location)
-                });
-                if let Some(tab_index) = existing {
-                    navigator.select_tab(tab_index);
-                } else {
-                    navigator.new_tab(Some(location));
-                }
+            Request::ShowProperties { paths } => {
+                Self::open_properties(paths, self.scope(), &command.startup_id);
             }
-            self.focus_content();
-            if !command.startup_id.is_empty()
-                && let Some(window) = &self.0.window
-            {
-                gds::ui::window::activate_with_token(window, &command.startup_id);
+            Request::OpenLocations { uris, new_window } => {
+                self.open_locations(uris, new_window, &command.startup_id);
             }
-            return;
-        }
-        let properties = matches!(command.request, Request::ShowProperties { .. });
-        let targets = match command.request {
-            Request::NewWindow { directory } => Target::folders(vec![directory]),
-            Request::OpenLocations { .. } => unreachable!("handled above"),
-            Request::ShowFolders { directories } => Target::folders(directories),
-            Request::ShowItems { paths } | Request::ShowProperties { paths } => {
-                Target::items(paths)
+            Request::ShowFolders { uris } => {
+                self.open_locations(uris, false, &command.startup_id);
             }
-        };
-        if properties {
-            for path in targets.iter().flat_map(|target| target.selection.iter()) {
-                panes::inspection::Properties::open(path.clone(), self.scope());
+            Request::NewWindow { directory } => {
+                self.apply_local_targets(Target::folders(vec![directory]), &command.startup_id);
+            }
+            Request::ShowItems { paths } => {
+                self.apply_local_targets(Target::items(paths), &command.startup_id);
             }
         }
+    }
+
+    fn open_locations(&self, uris: Vec<String>, replace_first: bool, startup_id: &str) {
+        let navigator = Navigator(&self.ctx);
         self.show_files();
-        let mut details_saved = false;
+        let mut locations = Vec::with_capacity(uris.len());
+        for uri in uris {
+            match crate::entities::location::scheme::parse(&uri) {
+                Ok(location) => {
+                    if !locations.contains(&location) {
+                        locations.push(location);
+                    }
+                }
+                Err(error) => self.report_notice(error.to_string()),
+            }
+        }
+        for (index, location) in locations.into_iter().enumerate() {
+            if replace_first && index == 0 {
+                navigator.open(location);
+                continue;
+            }
+            let existing = self.read_untracked(|state| {
+                state
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.navigation.location() == &location)
+            });
+            if let Some(tab_index) = existing {
+                navigator.select_tab(tab_index);
+            } else {
+                navigator.new_tab(Some(location));
+            }
+        }
+        self.focus_content();
+        if !startup_id.is_empty()
+            && let Some(window) = &self.0.window
+        {
+            gds::ui::window::activate_with_token(window, startup_id);
+        }
+    }
+
+    fn apply_local_targets(&self, targets: Vec<Target>, startup_id: &str) {
+        let navigator = Navigator(&self.ctx);
+        self.show_files();
         let rows = Rows(&self.ctx);
         for target in targets {
             let existing = self.read_untracked(|state| {
@@ -658,28 +693,17 @@ impl Browser {
                 let tab = state.tab_mut();
                 tab.navigation.view_mut().filter.clear();
                 tab.reveal_hidden = reveal_dotfiles;
-                let loc = tab.navigation.location().clone();
-                if properties {
-                    state.places.set_details(loc, true);
-                    details_saved = true;
-                }
             });
             self.0.filter.set(String::new());
             navigator.reveal_paths(target.selection);
             rows.sync_address();
             navigator.refresh();
-            if properties {
-                self.0.details.set(true);
-            }
-        }
-        if details_saved {
-            self.save_places();
         }
         self.focus_content();
-        if !command.startup_id.is_empty()
+        if !startup_id.is_empty()
             && let Some(window) = &self.0.window
         {
-            gds::ui::window::activate_with_token(window, &command.startup_id);
+            gds::ui::window::activate_with_token(window, startup_id);
         }
     }
 }

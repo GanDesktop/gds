@@ -4,9 +4,12 @@ use std::{
     path::Path,
 };
 
-use ashpd::desktop::{ResponseError, open_uri::OpenFileRequest};
+use ashpd::{
+    ActivationToken,
+    desktop::{ResponseError, open_uri::OpenFileRequest},
+};
 
-use super::{OpenMode, OpenOutcome};
+use super::{OpenContext, OpenMode, OpenOutcome};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -56,12 +59,17 @@ impl Portal {
         &self,
         path: &Path,
         file: &File,
+        writable: bool,
         mode: OpenMode,
+        context: &OpenContext,
     ) -> Result<OpenOutcome, Error> {
         match mode {
-            OpenMode::ChooseApplication => self.request(path, file, true).await,
+            OpenMode::ChooseApplication => self.request(path, file, writable, true, context).await,
             OpenMode::DefaultApplication => {
-                Self::default_or_choose(path, file, |ask| self.request(path, file, ask)).await
+                Self::default_or_choose(path, file, |ask| {
+                    self.request(path, file, writable, ask, context)
+                })
+                .await
             }
         }
     }
@@ -106,16 +114,44 @@ impl Portal {
         }
     }
 
+    fn build_request(
+        connection: Option<zbus::Connection>,
+        writable: bool,
+        ask: bool,
+        context: &OpenContext,
+    ) -> OpenFileRequest {
+        let mut request = OpenFileRequest::default()
+            .connection(connection)
+            .writeable(writable)
+            .ask(ask);
+        if let Some(parent) = context.parent_window.as_ref() {
+            request = request.identifier(parent.to_ashpd());
+        }
+        if let Some(token) = context
+            .activation_token
+            .as_deref()
+            .filter(|token| !token.is_empty())
+        {
+            request = request.activation_token(ActivationToken::from(token));
+        }
+        request
+    }
+
     /// # Errors
     /// Reports unreadable files, portal availability and application launch failures.
-    async fn request(&self, path: &Path, file: &File, ask: bool) -> Result<OpenOutcome, Error> {
+    async fn request(
+        &self,
+        path: &Path,
+        file: &File,
+        writable: bool,
+        ask: bool,
+        context: &OpenContext,
+    ) -> Result<OpenOutcome, Error> {
         Self::rewind(path, file)?;
         // OpenFile passes an fd, preserving non-UTF-8 names and asking the desktop
         // to open a document instead of executing the selected file.
         // https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.OpenURI.html
-        let response = OpenFileRequest::default()
-            .connection(Some(self.connection.clone()))
-            .ask(ask)
+        let response = Self::build_request(Some(self.connection.clone()), writable, ask, context)
             .send_file(file)
             .await
             .and_then(|request| request.response());

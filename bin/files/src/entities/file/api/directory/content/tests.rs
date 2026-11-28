@@ -201,12 +201,20 @@ fn unknown_names_fall_back_to_magic_and_heuristics() {
     assert_eq!(png.mime.as_deref(), Some("image/png"));
     assert_eq!(png.source, DetectionSource::Magic);
 
-    // Empty file -> text/plain heuristic.
+    // Empty unmatched file -> application/x-zerosize heuristic.
     fs::write(&path, b"").expect("write empty file");
     let empty = detect_with_database(&db, OsStr::new("unknown"), &path).expect("detect empty");
     assert_eq!(empty.category, ContentCategory::Text);
-    assert_eq!(empty.mime.as_deref(), Some("text/plain"));
+    assert_eq!(empty.mime.as_deref(), Some("application/x-zerosize"));
     assert_eq!(empty.source, DetectionSource::Heuristic);
+    assert!(empty.text_previewable);
+
+    // Empty file with recognized extension still uses its filename MIME.
+    let empty_rs =
+        detect_with_database(&db, OsStr::new("empty.rs"), &path).expect("detect empty rust");
+    assert_eq!(empty_rs.category, ContentCategory::Code);
+    assert_eq!(empty_rs.mime.as_deref(), Some("text/rust"));
+    assert_eq!(empty_rs.source, DetectionSource::Filename);
 
     // Plain text -> text/plain heuristic.
     fs::write(&path, b"plain text").expect("write text file");
@@ -543,4 +551,518 @@ fn subclass_excludes_non_streamable_inodes_and_picker_shares_case_sensitive_rule
     ));
     // Fallback directory without `magic` returns `None` from `sniff_data` without re-opening text indexes.
     assert_eq!(db.sniff_data(b"hello world"), None);
+}
+
+#[derive(Default)]
+struct MimeCacheFixture<'a> {
+    aliases: &'a [(&'a str, &'a str)],
+    literals: &'a [(&'a str, &'a str, u32)],
+    namespaces: &'a [(&'a str, &'a str, &'a str)],
+    icons: &'a [(&'a str, &'a str)],
+    generic_icons: &'a [(&'a str, &'a str)],
+}
+
+/// Build a valid big-endian FreeDesktop `mime.cache` v1.2 binary fixture without
+/// requiring `update-mime-database` on the test host.
+fn build_mime_cache_v1_2(fixture: &MimeCacheFixture<'_>) -> Vec<u8> {
+    use std::collections::HashMap;
+
+    fn pad4(buf: &mut Vec<u8>) {
+        while !buf.len().is_multiple_of(4) {
+            buf.push(0);
+        }
+    }
+
+    fn write_u32(buf: &mut [u8], offset: usize, value: u32) {
+        buf[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+    }
+
+    fn intern(buf: &mut Vec<u8>, pool: &mut HashMap<String, u32>, text: &str) -> u32 {
+        if let Some(&off) = pool.get(text) {
+            return off;
+        }
+        let off = u32::try_from(buf.len()).expect("fixture buffer fits in u32");
+        buf.extend_from_slice(text.as_bytes());
+        buf.push(0);
+        pad4(buf);
+        pool.insert(text.to_owned(), off);
+        off
+    }
+
+    // Reserve 40-byte v1.2 header.
+    let mut buf = vec![0u8; 40];
+    buf[0..2].copy_from_slice(&1u16.to_be_bytes());
+    buf[2..4].copy_from_slice(&2u16.to_be_bytes());
+
+    let mut pool = HashMap::new();
+
+    let mut aliases: Vec<(u32, u32, &str)> = fixture
+        .aliases
+        .iter()
+        .map(|&(alias, canonical)| {
+            (
+                intern(&mut buf, &mut pool, alias),
+                intern(&mut buf, &mut pool, canonical),
+                alias,
+            )
+        })
+        .collect();
+    aliases.sort_by_key(|&(_, _, key)| key);
+
+    let mut literals: Vec<(u32, u32, u32, &str)> = fixture
+        .literals
+        .iter()
+        .map(|&(lit, mime, wf)| {
+            (
+                intern(&mut buf, &mut pool, lit),
+                intern(&mut buf, &mut pool, mime),
+                wf,
+                lit,
+            )
+        })
+        .collect();
+    literals.sort_by_key(|&(_, _, _, lit)| lit);
+
+    let mut namespaces: Vec<(u32, u32, u32, &str, &str)> = fixture
+        .namespaces
+        .iter()
+        .map(|&(ns, local, mime)| {
+            (
+                intern(&mut buf, &mut pool, ns),
+                intern(&mut buf, &mut pool, local),
+                intern(&mut buf, &mut pool, mime),
+                ns,
+                local,
+            )
+        })
+        .collect();
+    namespaces.sort_by_key(|&(_, _, _, ns, local)| (ns, local));
+
+    let mut icons: Vec<(u32, u32, &str)> = fixture
+        .icons
+        .iter()
+        .map(|&(mime, icon)| {
+            (
+                intern(&mut buf, &mut pool, mime),
+                intern(&mut buf, &mut pool, icon),
+                mime,
+            )
+        })
+        .collect();
+    icons.sort_by_key(|&(_, _, mime)| mime);
+
+    let mut generic_icons: Vec<(u32, u32, &str)> = fixture
+        .generic_icons
+        .iter()
+        .map(|&(mime, icon)| {
+            (
+                intern(&mut buf, &mut pool, mime),
+                intern(&mut buf, &mut pool, icon),
+                mime,
+            )
+        })
+        .collect();
+    generic_icons.sort_by_key(|&(_, _, mime)| mime);
+
+    // AliasList (header offset 4)
+    let alias_offset = u32::try_from(buf.len()).expect("alias offset");
+    buf.extend_from_slice(
+        &u32::try_from(aliases.len())
+            .expect("alias count")
+            .to_be_bytes(),
+    );
+    for (alias_off, canonical_off, _) in aliases {
+        buf.extend_from_slice(&alias_off.to_be_bytes());
+        buf.extend_from_slice(&canonical_off.to_be_bytes());
+    }
+
+    // ParentList (header offset 8) — empty
+    let parent_offset = u32::try_from(buf.len()).expect("parent offset");
+    buf.extend_from_slice(&0u32.to_be_bytes());
+
+    // LiteralList (header offset 12)
+    let literal_offset = u32::try_from(buf.len()).expect("literal offset");
+    buf.extend_from_slice(
+        &u32::try_from(literals.len())
+            .expect("literal count")
+            .to_be_bytes(),
+    );
+    for (lit_off, mime_off, wf, _) in literals {
+        buf.extend_from_slice(&lit_off.to_be_bytes());
+        buf.extend_from_slice(&mime_off.to_be_bytes());
+        buf.extend_from_slice(&wf.to_be_bytes());
+    }
+
+    // ReverseSuffixTree (header offset 16) — empty
+    let suffix_offset = u32::try_from(buf.len()).expect("suffix offset");
+    buf.extend_from_slice(&0u32.to_be_bytes());
+    buf.extend_from_slice(&(suffix_offset + 8).to_be_bytes());
+
+    // GlobList (header offset 20) — empty
+    let glob_offset = u32::try_from(buf.len()).expect("glob offset");
+    buf.extend_from_slice(&0u32.to_be_bytes());
+
+    // MagicList (header offset 24) — empty
+    let magic_offset = u32::try_from(buf.len()).expect("magic offset");
+    buf.extend_from_slice(&0u32.to_be_bytes());
+    buf.extend_from_slice(&0u32.to_be_bytes());
+    buf.extend_from_slice(&(magic_offset + 12).to_be_bytes());
+
+    // NamespaceList (header offset 28)
+    let namespace_offset = u32::try_from(buf.len()).expect("namespace offset");
+    buf.extend_from_slice(
+        &u32::try_from(namespaces.len())
+            .expect("namespace count")
+            .to_be_bytes(),
+    );
+    for (ns_off, local_off, mime_off, _, _) in namespaces {
+        buf.extend_from_slice(&ns_off.to_be_bytes());
+        buf.extend_from_slice(&local_off.to_be_bytes());
+        buf.extend_from_slice(&mime_off.to_be_bytes());
+    }
+
+    // IconsList (header offset 32)
+    let icons_offset = u32::try_from(buf.len()).expect("icons offset");
+    buf.extend_from_slice(
+        &u32::try_from(icons.len())
+            .expect("icons count")
+            .to_be_bytes(),
+    );
+    for (mime_off, icon_off, _) in icons {
+        buf.extend_from_slice(&mime_off.to_be_bytes());
+        buf.extend_from_slice(&icon_off.to_be_bytes());
+    }
+
+    // GenericIconsList (header offset 36)
+    let generic_icons_offset = u32::try_from(buf.len()).expect("generic icons offset");
+    buf.extend_from_slice(
+        &u32::try_from(generic_icons.len())
+            .expect("generic icons count")
+            .to_be_bytes(),
+    );
+    for (mime_off, icon_off, _) in generic_icons {
+        buf.extend_from_slice(&mime_off.to_be_bytes());
+        buf.extend_from_slice(&icon_off.to_be_bytes());
+    }
+
+    write_u32(&mut buf, 4, alias_offset);
+    write_u32(&mut buf, 8, parent_offset);
+    write_u32(&mut buf, 12, literal_offset);
+    write_u32(&mut buf, 16, suffix_offset);
+    write_u32(&mut buf, 20, glob_offset);
+    write_u32(&mut buf, 24, magic_offset);
+    write_u32(&mut buf, 28, namespace_offset);
+    write_u32(&mut buf, 32, icons_offset);
+    write_u32(&mut buf, 36, generic_icons_offset);
+    buf
+}
+
+#[test]
+fn xdg_base_dir_resolution_ignores_relative_paths_and_applies_spec_fallbacks() {
+    use std::path::PathBuf;
+
+    let default_home = Some(PathBuf::from("/home/alice/.local/share"));
+
+    // Empty or relative XDG_DATA_HOME falls back to BaseDirs default; relative-only XDG_DATA_DIRS
+    // falls back to `/usr/local/share:/usr/share`.
+    assert_eq!(
+        mime_db::resolve_xdg_base_dirs(
+            Some(OsStr::new("relative/data")),
+            Some(OsStr::new("rel/one:./rel/two:")),
+            default_home.clone(),
+        ),
+        vec![
+            PathBuf::from("/home/alice/.local/share"),
+            PathBuf::from("/usr/local/share"),
+            PathBuf::from("/usr/share"),
+        ]
+    );
+    assert_eq!(
+        mime_db::resolve_xdg_base_dirs(
+            Some(OsStr::new("")),
+            Some(OsStr::new("")),
+            default_home.clone(),
+        ),
+        vec![
+            PathBuf::from("/home/alice/.local/share"),
+            PathBuf::from("/usr/local/share"),
+            PathBuf::from("/usr/share"),
+        ]
+    );
+
+    // Mixed absolute + relative XDG_DATA_DIRS keeps only absolute paths in order.
+    assert_eq!(
+        mime_db::resolve_xdg_base_dirs(
+            Some(OsStr::new("/custom/data")),
+            Some(OsStr::new("relative:/opt/share:./ignored:/srv/share")),
+            default_home,
+        ),
+        vec![
+            PathBuf::from("/custom/data"),
+            PathBuf::from("/opt/share"),
+            PathBuf::from("/srv/share"),
+        ]
+    );
+
+    // Missing home default still produces system XDG_DATA_DIRS fallback.
+    assert_eq!(
+        mime_db::resolve_xdg_base_dirs(Some(OsStr::new("relative")), None, None),
+        vec![
+            PathBuf::from("/usr/local/share"),
+            PathBuf::from("/usr/share"),
+        ]
+    );
+}
+
+#[test]
+fn xml_namespace_refinement_and_icons_work_for_text_and_binary_mime_cache() {
+    let text_root = tempfile::tempdir().expect("create text MIME dir");
+    let text_mime = text_root.path().join("mime");
+    fs::create_dir(&text_mime).expect("create text mime dir");
+    fs::write(
+        text_mime.join("XMLnamespaces"),
+        "http://www.w3.org/2000/svg svg image/svg+xml\n\
+         \x20xbel application/x-xbel\n\
+         http://www.w3.org/1999/02/22-rdf-syntax-ns# RDF application/rdf+xml\n\
+         http://example.com/ns  application/x-any-local\n",
+    )
+    .expect("write XMLnamespaces");
+    fs::write(
+        text_mime.join("icons"),
+        "application/x-xbel:custom-xbel-icon\n\
+         application/x-custom-doc:x-office-document\n",
+    )
+    .expect("write icons");
+    fs::write(
+        text_mime.join("aliases"),
+        "application/x-xbel-alias application/x-xbel\n",
+    )
+    .expect("write aliases");
+    fs::write(
+        text_mime.join("magic"),
+        b"MIME-Magic\0\n[40:application/xml]\n>0=\0\x05<?xml\n",
+    )
+    .expect("write xml magic");
+
+    let text_db = MimeDatabase::from_directory(text_root.path());
+    assert!(!text_db.uses_binary_cache());
+    assert_eq!(
+        text_db.explicit_icon("application/x-xbel").as_deref(),
+        Some("custom-xbel-icon")
+    );
+    assert_eq!(
+        text_db.explicit_icon("application/x-xbel-alias").as_deref(),
+        Some("custom-xbel-icon")
+    );
+    assert_eq!(
+        text_db
+            .match_xml_namespace("http://www.w3.org/2000/svg", "svg")
+            .as_deref(),
+        Some("image/svg+xml")
+    );
+    assert_eq!(
+        text_db.match_xml_namespace("", "xbel").as_deref(),
+        Some("application/x-xbel")
+    );
+    assert_eq!(
+        text_db
+            .match_xml_namespace("http://example.com/ns", "anything")
+            .as_deref(),
+        Some("application/x-any-local")
+    );
+
+    // Explicit freedesktop category icon in `icons` contributes to category derivation.
+    let custom_doc = build_from_mime(
+        &text_db,
+        "application/x-custom-doc",
+        None,
+        DetectionSource::Magic,
+    );
+    assert_eq!(custom_doc.category, ContentCategory::Document);
+
+    let samples = tempfile::tempdir().expect("create sample files dir");
+
+    // Extensionless SVG sniffed as `application/xml` refines to `image/svg+xml`.
+    let svg_path = samples.path().join("logo");
+    fs::write(
+        &svg_path,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!-- leading comment -->\n\
+         <svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><circle r=\"8\"/></svg>\n",
+    )
+    .expect("write svg sample");
+    let svg = detect_with_database(&text_db, OsStr::new("logo"), &svg_path).expect("detect svg");
+    assert_eq!(svg.mime.as_deref(), Some("image/svg+xml"));
+    assert_eq!(svg.category, ContentCategory::Image);
+    assert_eq!(svg.source, DetectionSource::Magic);
+
+    // Extensionless XBEL with DOCTYPE internal subset and no xmlns refines to `application/x-xbel`.
+    let xbel_path = samples.path().join("bookmarks");
+    fs::write(
+        &xbel_path,
+        "<?xml version=\"1.0\"?>\n\
+         <!DOCTYPE xbel [ <!ENTITY arrow \"a > b\"> <!-- > --> ]>\n\
+         <xbel version=\"1.0\"><bookmark href=\"https://example.org\"/></xbel>\n",
+    )
+    .expect("write xbel sample");
+    let xbel =
+        detect_with_database(&text_db, OsStr::new("bookmarks"), &xbel_path).expect("detect xbel");
+    assert_eq!(xbel.mime.as_deref(), Some("application/x-xbel"));
+    assert_eq!(xbel.source, DetectionSource::Magic);
+
+    // Prefixed XML root tag without XML declaration still refines via namespace binding.
+    let rdf_path = samples.path().join("graph");
+    fs::write(
+        &rdf_path,
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'><rdf:Description/></rdf:RDF>",
+    )
+    .expect("write rdf sample");
+    let rdf = detect_with_database(&text_db, OsStr::new("graph"), &rdf_path).expect("detect rdf");
+    assert_eq!(rdf.mime.as_deref(), Some("application/rdf+xml"));
+
+    // Truncated > 8 KiB SVG file (unclosed root element within the 8 KiB read window) still refines.
+    let big_svg_path = samples.path().join("huge-vector");
+    let mut big_svg = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><path d=\"",
+    );
+    big_svg.push_str(&"M0 0 ".repeat(2048));
+    big_svg.push_str("\"/></svg>");
+    fs::write(&big_svg_path, &big_svg).expect("write truncated svg sample");
+    let huge = detect_with_database(&text_db, OsStr::new("huge-vector"), &big_svg_path)
+        .expect("detect huge svg");
+    assert_eq!(huge.mime.as_deref(), Some("image/svg+xml"));
+    assert_eq!(huge.category, ContentCategory::Image);
+
+    // Binary `mime.cache` v1.2 fixture with `NamespaceList` (offset 28) and `IconsList` (offset 32).
+    let cache_root = tempfile::tempdir().expect("create binary cache dir");
+    let cache_mime = cache_root.path().join("mime");
+    fs::create_dir(&cache_mime).expect("create binary cache mime dir");
+    let cache_bytes = build_mime_cache_v1_2(&MimeCacheFixture {
+        aliases: &[("application/x-xbel-alias", "application/x-xbel")],
+        literals: &[],
+        namespaces: &[
+            ("", "xbel", "application/x-xbel"),
+            ("http://example.com/ns", "", "application/x-any-local"),
+            ("http://www.w3.org/2000/svg", "svg", "image/svg+xml"),
+        ],
+        icons: &[("application/x-xbel", "binary-xbel-icon")],
+        generic_icons: &[],
+    });
+    fs::write(cache_mime.join("mime.cache"), cache_bytes).expect("write binary mime.cache");
+
+    let cache_db = MimeDatabase::from_directory(cache_root.path());
+    assert!(cache_db.uses_binary_cache());
+    assert_eq!(
+        cache_db.explicit_icon("application/x-xbel").as_deref(),
+        Some("binary-xbel-icon")
+    );
+    assert_eq!(
+        cache_db
+            .explicit_icon("application/x-xbel-alias")
+            .as_deref(),
+        Some("binary-xbel-icon")
+    );
+    assert_eq!(
+        cache_db
+            .match_xml_namespace("http://www.w3.org/2000/svg", "svg")
+            .as_deref(),
+        Some("image/svg+xml")
+    );
+    assert_eq!(
+        cache_db.match_xml_namespace("", "xbel").as_deref(),
+        Some("application/x-xbel")
+    );
+    assert_eq!(
+        cache_db
+            .match_xml_namespace("http://example.com/ns", "other")
+            .as_deref(),
+        Some("application/x-any-local")
+    );
+
+    let cache_svg = detect_with_database(&cache_db, OsStr::new("huge-vector"), &big_svg_path)
+        .expect("detect cache svg");
+    assert_eq!(cache_svg.mime.as_deref(), Some("image/svg+xml"));
+    let cache_xbel = detect_with_database(&cache_db, OsStr::new("bookmarks"), &xbel_path)
+        .expect("detect cache xbel");
+    assert_eq!(cache_xbel.mime.as_deref(), Some("application/x-xbel"));
+}
+
+#[test]
+fn noglobs_suppresses_lower_priority_globs_without_matching_literal_sentinel() {
+    let lower = tempfile::tempdir().expect("create lower XDG dir");
+    let lower_mime = lower.path().join("mime");
+    fs::create_dir(&lower_mime).expect("create lower mime dir");
+    fs::write(
+        lower_mime.join("globs2"),
+        "50:text/plain:*.txt\n\
+         50:text/x-plain-alias:*.alias\n\
+         50:text/markdown:*.md\n",
+    )
+    .expect("write lower globs2");
+    fs::write(
+        lower_mime.join("aliases"),
+        "text/x-plain-alias text/plain\n",
+    )
+    .expect("write lower aliases");
+
+    // 1. Plain-text higher-priority layer with `0:text/plain:__NOGLOBS__` + replacement glob.
+    let upper_text = tempfile::tempdir().expect("create upper text XDG dir");
+    let upper_text_mime = upper_text.path().join("mime");
+    fs::create_dir(&upper_text_mime).expect("create upper text mime dir");
+    fs::write(
+        upper_text_mime.join("globs2"),
+        "0:text/plain:__NOGLOBS__\n\
+         50:text/plain:*.custom\n",
+    )
+    .expect("write upper globs2");
+
+    let text_layered = MimeDatabase::from_base_directories(&[
+        upper_text.path().to_path_buf(),
+        lower.path().to_path_buf(),
+    ]);
+    assert!(text_layered.filename_candidates("notes.txt").is_empty());
+    assert!(text_layered.filename_candidates("notes.alias").is_empty());
+    assert!(text_layered.filename_candidates("__NOGLOBS__").is_empty());
+    assert_eq!(
+        text_layered.filename_candidates("notes.custom"),
+        vec!["text/plain".to_owned()]
+    );
+    assert_eq!(
+        text_layered.filename_candidates("readme.md"),
+        vec!["text/markdown".to_owned()]
+    );
+
+    // 2. Binary `mime.cache` v1.2 higher-priority layer with `__NOGLOBS__` in `LiteralList`.
+    let upper_cache = tempfile::tempdir().expect("create upper cache XDG dir");
+    let upper_cache_mime = upper_cache.path().join("mime");
+    fs::create_dir(&upper_cache_mime).expect("create upper cache mime dir");
+    let cache_bytes = build_mime_cache_v1_2(&MimeCacheFixture {
+        aliases: &[],
+        literals: &[
+            ("CustomPlain", "text/plain", 50),
+            ("__NOGLOBS__", "text/plain", 0),
+        ],
+        namespaces: &[],
+        icons: &[],
+        generic_icons: &[],
+    });
+    fs::write(upper_cache_mime.join("mime.cache"), cache_bytes).expect("write upper mime.cache");
+
+    let cache_layered = MimeDatabase::from_base_directories(&[
+        upper_cache.path().to_path_buf(),
+        lower.path().to_path_buf(),
+    ]);
+    assert!(cache_layered.uses_binary_cache());
+    assert!(cache_layered.filename_candidates("notes.txt").is_empty());
+    assert!(cache_layered.filename_candidates("notes.alias").is_empty());
+    assert!(cache_layered.filename_candidates("__NOGLOBS__").is_empty());
+    assert_eq!(
+        cache_layered.filename_candidates("CustomPlain"),
+        vec!["text/plain".to_owned()]
+    );
+    assert_eq!(
+        cache_layered.filename_candidates("readme.md"),
+        vec!["text/markdown".to_owned()]
+    );
 }

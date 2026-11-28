@@ -3,7 +3,8 @@
 //! Loads XDG MIME directories in specification precedence order
 //! (`$XDG_DATA_HOME/mime`, then `$XDG_DATA_DIRS/*/mime`), using `mmap`ed
 //! `mime.cache` v1.2 when available and falling back to plain-text index files
-//! (`globs2`, `aliases`, `subclasses`, `generic-icons`, `magic`) otherwise.
+//! (`globs2`, `aliases`, `subclasses`, `XMLnamespaces`, `icons`, `generic-icons`,
+//! `magic`) otherwise.
 
 mod cache;
 mod text;
@@ -14,6 +15,7 @@ use std::{
     borrow::Cow,
     collections::{HashSet, VecDeque},
     env,
+    ffi::OsStr,
     path::PathBuf,
 };
 
@@ -21,6 +23,47 @@ use directories::BaseDirs;
 
 use cache::MimeCache;
 use text::TextIndex;
+
+/// Sentinel pattern emitted by `update-mime-database` for `<glob-deleteall/>`.
+pub(super) const NOGLOBS_SENTINEL: &str = "__NOGLOBS__";
+
+const DEFAULT_XDG_DATA_DIRS: [&str; 2] = ["/usr/local/share", "/usr/share"];
+
+/// Resolve XDG data base directories per the XDG Base Directory Specification,
+/// ignoring relative paths and falling back to specification defaults.
+pub(super) fn resolve_xdg_base_dirs(
+    xdg_data_home: Option<&OsStr>,
+    xdg_data_dirs: Option<&OsStr>,
+    default_data_home: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut base_dirs = Vec::new();
+    let home_data = xdg_data_home
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or(default_data_home);
+    if let Some(home_data) = home_data {
+        base_dirs.push(home_data);
+    }
+
+    let system_dirs: Vec<PathBuf> = xdg_data_dirs
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            env::split_paths(value)
+                .filter(|path| path.is_absolute())
+                .collect::<Vec<_>>()
+        })
+        .filter(|dirs| !dirs.is_empty())
+        .unwrap_or_else(|| {
+            DEFAULT_XDG_DATA_DIRS
+                .into_iter()
+                .map(PathBuf::from)
+                .collect()
+        });
+    base_dirs.extend(system_dirs);
+
+    base_dirs
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct GlobMatch {
@@ -46,25 +89,14 @@ pub(super) struct MimeDatabase {
 impl MimeDatabase {
     /// Load all available XDG shared MIME databases in precedence order.
     pub(super) fn from_xdg() -> Self {
-        let mut base_dirs = Vec::new();
-        if let Some(home_data) = env::var_os("XDG_DATA_HOME")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| BaseDirs::new().map(|dirs| dirs.data_dir().to_path_buf()))
-        {
-            base_dirs.push(home_data);
-        }
-
-        let system_dirs: Vec<PathBuf> = match env::var_os("XDG_DATA_DIRS").filter(|v| !v.is_empty())
-        {
-            Some(value) => env::split_paths(&value).collect(),
-            None => vec![
-                PathBuf::from("/usr/local/share"),
-                PathBuf::from("/usr/share"),
-            ],
-        };
-        base_dirs.extend(system_dirs);
-
+        let xdg_data_home = env::var_os("XDG_DATA_HOME");
+        let xdg_data_dirs = env::var_os("XDG_DATA_DIRS");
+        let default_data_home = BaseDirs::new().map(|dirs| dirs.data_dir().to_path_buf());
+        let base_dirs = resolve_xdg_base_dirs(
+            xdg_data_home.as_deref(),
+            xdg_data_dirs.as_deref(),
+            default_data_home,
+        );
         Self::from_base_directories(&base_dirs)
     }
 
@@ -127,14 +159,34 @@ impl MimeDatabase {
     }
 
     /// Match `file_name` against installed filename rules, keeping highest weight
-    /// then longest pattern, normalizing aliases, deduplicating, and dropping
+    /// then longest pattern, normalizing aliases, honoring `<glob-deleteall/>`
+    /// (`__NOGLOBS__`) suppression across XDG layers, deduplicating, and dropping
     /// `application/octet-stream`. The returned vector is deterministically sorted.
     pub(super) fn filename_candidates(&self, file_name: &str) -> Vec<String> {
         let mut raw = Vec::new();
+        let mut suppressed: HashSet<String> = HashSet::new();
         for dir in &self.directories {
+            let start_len = raw.len();
             match &dir.index {
                 DirectoryIndex::Cache(cache) => cache.match_filename(file_name, &mut raw),
                 DirectoryIndex::Text(text) => text.match_filename(file_name, &mut raw),
+            }
+            if !suppressed.is_empty() && raw.len() > start_len {
+                let mut idx = start_len;
+                while idx < raw.len() {
+                    if suppressed.contains(self.unalias(&raw[idx].mime).as_ref()) {
+                        raw.swap_remove(idx);
+                    } else {
+                        idx += 1;
+                    }
+                }
+            }
+            let noglobs = match &dir.index {
+                DirectoryIndex::Cache(cache) => cache.noglobs(),
+                DirectoryIndex::Text(text) => text.noglobs(),
+            };
+            for mime in noglobs {
+                suppressed.insert(self.unalias(mime).into_owned());
             }
         }
         let Some(max_weight) = raw.iter().map(|m| m.weight).max() else {
@@ -220,6 +272,58 @@ impl MimeDatabase {
             }
         }
         false
+    }
+
+    /// Explicit `icons` entry declared directly for `mime` (never synthesized).
+    pub(super) fn explicit_icon(&self, mime: &str) -> Option<String> {
+        let canonical = self.unalias(mime);
+        for dir in &self.directories {
+            let found = match &dir.index {
+                DirectoryIndex::Cache(cache) => cache.icon(canonical.as_ref()),
+                DirectoryIndex::Text(text) => text.icon(canonical.as_ref()),
+            };
+            if let Some(icon) = found {
+                return Some(icon.to_owned());
+            }
+        }
+        None
+    }
+
+    /// Match an XML root element's `(namespace_uri, local_name)` against installed
+    /// `XMLnamespaces` / `mime.cache` `NamespaceList` entries in XDG precedence order.
+    pub(super) fn match_xml_namespace(
+        &self,
+        namespace_uri: &str,
+        local_name: &str,
+    ) -> Option<String> {
+        if namespace_uri.is_empty() && local_name.is_empty() {
+            return None;
+        }
+        if let Some(mime) = self.lookup_xml_namespace_exact(namespace_uri, local_name) {
+            return Some(mime);
+        }
+        if !namespace_uri.is_empty() && !local_name.is_empty() {
+            if let Some(mime) = self.lookup_xml_namespace_exact(namespace_uri, "") {
+                return Some(mime);
+            }
+            if let Some(mime) = self.lookup_xml_namespace_exact("", local_name) {
+                return Some(mime);
+            }
+        }
+        None
+    }
+
+    fn lookup_xml_namespace_exact(&self, namespace_uri: &str, local_name: &str) -> Option<String> {
+        for dir in &self.directories {
+            let found = match &dir.index {
+                DirectoryIndex::Cache(cache) => cache.xml_namespace(namespace_uri, local_name),
+                DirectoryIndex::Text(text) => text.xml_namespace(namespace_uri, local_name),
+            };
+            if let Some(mime) = found {
+                return Some(self.unalias(mime).into_owned());
+            }
+        }
+        None
     }
 
     /// Explicit `generic-icons` entry declared directly for `mime` (never synthesized).

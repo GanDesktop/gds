@@ -480,7 +480,17 @@ fn find_in_path(program: impl AsRef<OsStr>) -> Option<PathBuf> {
     None
 }
 
-fn xdg_thumbnailer_dirs() -> Vec<(PathBuf, bool)> {
+/// Resolve FreeDesktop `.thumbnailer` search directories in priority order,
+/// tagging user-owned directories with `true`.
+///
+/// Relative paths in `XDG_DATA_HOME` and `XDG_DATA_DIRS` are ignored per the
+/// XDG Base Directory Specification, falling back to `fallback_data_home` and
+/// `/usr/local/share:/usr/share` respectively when no valid absolute path remains.
+fn resolve_thumbnailer_dirs(
+    xdg_data_home: Option<&OsStr>,
+    xdg_data_dirs: Option<&OsStr>,
+    fallback_data_home: Option<&Path>,
+) -> Vec<(PathBuf, bool)> {
     let mut dirs = Vec::new();
     let mut seen = HashSet::new();
     let mut push = |dir: PathBuf, user: bool| {
@@ -489,21 +499,43 @@ fn xdg_thumbnailer_dirs() -> Vec<(PathBuf, bool)> {
         }
     };
 
-    if let Some(data_home) = env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        push(PathBuf::from(data_home).join("thumbnailers"), true);
-    } else if let Some(base) = BaseDirs::new() {
-        push(base.data_local_dir().join("thumbnailers"), true);
+    if let Some(data_home) = xdg_data_home
+        .filter(|v| !v.is_empty())
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+    {
+        push(data_home.join("thumbnailers"), true);
+    } else if let Some(fallback) = fallback_data_home.filter(|path| path.is_absolute()) {
+        push(fallback.join("thumbnailers"), true);
     }
 
-    let data_dirs = env::var_os("XDG_DATA_DIRS")
+    let mut system_dirs: Vec<PathBuf> = xdg_data_dirs
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| OsString::from("/usr/local/share:/usr/share"));
-    for dir in env::split_paths(&data_dirs) {
-        if !dir.as_os_str().is_empty() {
-            push(dir.join("thumbnailers"), false);
-        }
+        .map(|raw| {
+            env::split_paths(raw)
+                .filter(|dir| !dir.as_os_str().is_empty() && dir.is_absolute())
+                .collect()
+        })
+        .unwrap_or_default();
+    if system_dirs.is_empty() {
+        system_dirs.push(PathBuf::from("/usr/local/share"));
+        system_dirs.push(PathBuf::from("/usr/share"));
+    }
+    for dir in system_dirs {
+        push(dir.join("thumbnailers"), false);
     }
     dirs
+}
+
+fn xdg_thumbnailer_dirs() -> Vec<(PathBuf, bool)> {
+    let data_home = env::var_os("XDG_DATA_HOME");
+    let data_dirs = env::var_os("XDG_DATA_DIRS");
+    let fallback = BaseDirs::new().map(|base| base.data_local_dir().to_path_buf());
+    resolve_thumbnailer_dirs(
+        data_home.as_deref(),
+        data_dirs.as_deref(),
+        fallback.as_deref(),
+    )
 }
 
 fn discover_thumbnailers(search_dirs: &[(PathBuf, bool)]) -> Vec<ThumbnailerSpec> {
@@ -1361,5 +1393,62 @@ exec "$PROG" "$OUT"
             .expect("generate video thumbnail directly without shell");
         assert_eq!((img.width(), img.height()), (512, 256));
         assert!(!root.path().join("pwned").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_thumbnailer_dirs_ignores_relative_xdg_paths_and_falls_back() {
+        let fallback = Path::new("/home/tester/.local/share");
+
+        // Relative XDG_DATA_HOME and relative-only XDG_DATA_DIRS fall back to spec defaults.
+        let dirs = resolve_thumbnailer_dirs(
+            Some(OsStr::new("relative/data")),
+            Some(OsStr::new("rel/one:./rel/two")),
+            Some(fallback),
+        );
+        assert_eq!(
+            dirs,
+            vec![
+                (
+                    PathBuf::from("/home/tester/.local/share/thumbnailers"),
+                    true
+                ),
+                (PathBuf::from("/usr/local/share/thumbnailers"), false),
+                (PathBuf::from("/usr/share/thumbnailers"), false),
+            ]
+        );
+
+        // Empty XDG_DATA_HOME / XDG_DATA_DIRS also fall back cleanly.
+        let dirs =
+            resolve_thumbnailer_dirs(Some(OsStr::new("")), Some(OsStr::new("")), Some(fallback));
+        assert_eq!(
+            dirs,
+            vec![
+                (
+                    PathBuf::from("/home/tester/.local/share/thumbnailers"),
+                    true
+                ),
+                (PathBuf::from("/usr/local/share/thumbnailers"), false),
+                (PathBuf::from("/usr/share/thumbnailers"), false),
+            ]
+        );
+
+        // Mixed XDG_DATA_DIRS drops relative segments while retaining absolute ones in order,
+        // and deduplicates a system entry already claimed by XDG_DATA_HOME.
+        let dirs = resolve_thumbnailer_dirs(
+            Some(OsStr::new("/custom/data")),
+            Some(OsStr::new(
+                "relative/ignored:/opt/share:./also-relative:/custom/data:/usr/share",
+            )),
+            Some(fallback),
+        );
+        assert_eq!(
+            dirs,
+            vec![
+                (PathBuf::from("/custom/data/thumbnailers"), true),
+                (PathBuf::from("/opt/share/thumbnailers"), false),
+                (PathBuf::from("/usr/share/thumbnailers"), false),
+            ]
+        );
     }
 }

@@ -163,6 +163,8 @@ mod dbus_integration {
     struct MockStore {
         has_default: bool,
         collection_locked: bool,
+        hide_items_when_collection_locked: bool,
+        reject_unlock: bool,
         next_session: AtomicU64,
         next_item: AtomicU64,
         clock: AtomicU64,
@@ -250,6 +252,12 @@ mod dbus_integration {
             objects: Vec<OwnedObjectPath>,
         ) -> (Vec<OwnedObjectPath>, OwnedObjectPath) {
             let mut guard = self.store.lock().expect("store");
+            if guard.reject_unlock {
+                return (
+                    Vec::new(),
+                    OwnedObjectPath::try_from("/").expect("no prompt"),
+                );
+            }
             for path in &objects {
                 if path.as_str() == COLLECTION_PATH {
                     guard.collection_locked = false;
@@ -285,6 +293,9 @@ mod dbus_integration {
 
         async fn search_items(&self, attributes: HashMap<String, String>) -> Vec<OwnedObjectPath> {
             let guard = self.store.lock().expect("store");
+            if guard.collection_locked && guard.hide_items_when_collection_locked {
+                return Vec::new();
+            }
             guard
                 .items
                 .values()
@@ -563,6 +574,43 @@ mod dbus_integration {
                     .expect("lookup locked")
                     .expect("unlocked password");
                 assert_eq!(unlocked.password, "initial-password");
+
+                // 4b. When the whole collection is locked and SearchItems hides locked collections
+                // (KWallet / KeePassXC behavior), has_saved stays passive while lookup unlocks first.
+                {
+                    let mut guard = store_state.lock().expect("store");
+                    guard.collection_locked = true;
+                    guard.hide_items_when_collection_locked = true;
+                }
+                assert!(
+                    !has_saved(&sftp_srv)
+                        .await
+                        .expect("has_saved stays passive when collection locked")
+                );
+                assert!(
+                    store_state.lock().expect("store").collection_locked,
+                    "has_saved must not unlock the collection"
+                );
+                let unlocked_collection = lookup(&sftp_srv)
+                    .await
+                    .expect("lookup unlocks locked collection")
+                    .expect("saved password after collection unlock");
+                assert_eq!(unlocked_collection.password, "initial-password");
+                assert!(!store_state.lock().expect("store").collection_locked);
+
+                // 4c. Dismissing collection unlock surfaces Error::Dismissed.
+                {
+                    let mut guard = store_state.lock().expect("store");
+                    guard.collection_locked = true;
+                    guard.reject_unlock = true;
+                }
+                assert!(matches!(lookup(&sftp_srv).await, Err(Error::Dismissed)));
+                {
+                    let mut guard = store_state.lock().expect("store");
+                    guard.collection_locked = false;
+                    guard.hide_items_when_collection_locked = false;
+                    guard.reject_unlock = false;
+                }
 
                 // 5. Switching from password to private key replaces the item cleanly without orphans.
                 store(

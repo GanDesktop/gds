@@ -3,15 +3,17 @@ use std::path::Path;
 use gds::service::storage::{self, Database, MigrationFile, MigrationSet, Options};
 use toasty::models;
 
-use super::super::model::{
-    address::Location,
-    places::{Change, Places},
-};
+#[cfg(test)]
+use super::super::model::address::Location;
+use super::super::model::places::{Change, Places};
 use accessor::Accessor;
 use record::{PlacesMeta, QuickAccessLocation, SavedLocation, ViewSettings};
 
+pub(crate) use user_dirs::{UserDirsSource, XdgUserDirs};
+
 mod accessor;
 mod record;
+mod user_dirs;
 
 const MIGRATIONS: MigrationSet = MigrationSet::new(&[
     MigrationFile::new(
@@ -34,53 +36,11 @@ const MIGRATIONS: MigrationSet = MigrationSet::new(&[
     ),
 ]);
 
-fn resolve_default_quick_access(
-    home: &Path,
-    configured: [Option<&Path>; 4],
-    use_default_names: bool,
-) -> Vec<Location> {
-    const FALLBACK_NAMES: [&str; 4] = ["Desktop", "Downloads", "Pictures", "Videos"];
-    let mut out = Vec::new();
-    for (dir, fallback_name) in configured.into_iter().zip(FALLBACK_NAMES) {
-        let path = match dir {
-            Some(dir) => dir.to_path_buf(),
-            None if use_default_names => home.join(fallback_name),
-            None => continue,
-        };
-        if path == home || !path.is_dir() {
-            continue;
-        }
-        let location = Location::from(path.as_path());
-        if !out.contains(&location) {
-            out.push(location);
-        }
-    }
-    out
-}
-
-fn default_quick_access_locations() -> Vec<Location> {
-    let use_default_names = directories::BaseDirs::new().is_some_and(|base| {
-        base.config_dir()
-            .join("user-dirs.dirs")
-            .try_exists()
-            .is_ok_and(|exists| !exists)
-    });
-    if let Some(dirs) = directories::UserDirs::new() {
-        return resolve_default_quick_access(
-            dirs.home_dir(),
-            [
-                dirs.desktop_dir(),
-                dirs.download_dir(),
-                dirs.picture_dir(),
-                dirs.video_dir(),
-            ],
-            use_default_names,
-        );
-    }
-    let Some(base) = directories::BaseDirs::new() else {
-        return Vec::new();
-    };
-    resolve_default_quick_access(base.home_dir(), [None, None, None, None], use_default_names)
+/// Result of syncing persisted Quick Access entries with XDG user directories.
+#[derive(Clone, Debug)]
+pub(crate) struct SyncResult {
+    pub(crate) places: Places,
+    pub(crate) changed: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -109,26 +69,60 @@ impl Store {
         tasks: &gds::service::task_manager::Scope,
         path: &Path,
     ) -> Result<Self, Error> {
-        let defaults = default_quick_access_locations();
-        Self::open_at_with_quick_access(tasks, path, &defaults).await
+        let Some(source) = UserDirsSource::current() else {
+            return Self::open_at_with_xdg_dirs(tasks, path, None, &XdgUserDirs::default()).await;
+        };
+        let xdg_dirs = match source.load() {
+            Ok(dirs) => dirs,
+            Err(error) => {
+                tracing::warn!(
+                    path = %source.config_path.display(),
+                    %error,
+                    "cannot read XDG user-dirs.dirs; falling back to default names"
+                );
+                XdgUserDirs::resolve(&source.home, None)
+            }
+        };
+        Self::open_at_with_xdg_dirs(tasks, path, Some(source.home.as_path()), &xdg_dirs).await
+    }
+
+    /// Open a store and seed or reconcile Quick Access entries using an
+    /// explicit XDG user directory snapshot.
+    ///
+    /// # Errors
+    /// Reports database, migration, or serialization failures.
+    pub(crate) async fn open_at_with_xdg_dirs(
+        tasks: &gds::service::task_manager::Scope,
+        path: &Path,
+        home: Option<&Path>,
+        xdg_dirs: &XdgUserDirs,
+    ) -> Result<Self, Error> {
+        let mut db = Self::open_database(tasks, path).await?;
+        let mut tx = db
+            .transaction_builder()
+            .mode(storage::TransactionMode::Immediate)
+            .begin()
+            .await?;
+        if let Err(error) = Accessor::new(&mut tx)
+            .initialize_with_xdg_dirs(home, xdg_dirs)
+            .await
+        {
+            tx.rollback().await?;
+            return Err(error);
+        }
+        tx.commit().await?;
+        Ok(Self { db })
     }
 
     /// # Errors
     /// Reports database or migration failures.
+    #[cfg(test)]
     pub(crate) async fn open_at_with_quick_access(
         tasks: &gds::service::task_manager::Scope,
         path: &Path,
         default_quick_access: &[Location],
     ) -> Result<Self, Error> {
-        let mut db = Options::new(MIGRATIONS)
-            .models(models!(
-                SavedLocation,
-                QuickAccessLocation,
-                PlacesMeta,
-                ViewSettings
-            ))
-            .open(tasks, path)
-            .await?;
+        let mut db = Self::open_database(tasks, path).await?;
         let mut tx = db
             .transaction_builder()
             .mode(storage::TransactionMode::Immediate)
@@ -143,6 +137,52 @@ impl Store {
         }
         tx.commit().await?;
         Ok(Self { db })
+    }
+
+    async fn open_database(
+        tasks: &gds::service::task_manager::Scope,
+        path: &Path,
+    ) -> Result<Database, Error> {
+        let db = Options::new(MIGRATIONS)
+            .models(models!(
+                SavedLocation,
+                QuickAccessLocation,
+                PlacesMeta,
+                ViewSettings
+            ))
+            .open(tasks, path)
+            .await?;
+        Ok(db)
+    }
+
+    /// Reconcile tracked XDG user directories against `xdg_dirs` in place.
+    ///
+    /// # Errors
+    /// Reports database or serialization failures; failed edits roll back.
+    pub(crate) async fn sync_xdg_user_dirs(
+        &self,
+        home: Option<&Path>,
+        xdg_dirs: &XdgUserDirs,
+    ) -> Result<SyncResult, Error> {
+        let mut db = self.db.clone();
+        let mut tx = db
+            .transaction_builder()
+            .mode(storage::TransactionMode::Immediate)
+            .begin()
+            .await?;
+        let result = Accessor::new(&mut tx)
+            .sync_xdg_user_dirs(home, xdg_dirs)
+            .await;
+        match result {
+            Ok(outcome) => {
+                tx.commit().await?;
+                Ok(outcome)
+            }
+            Err(error) => {
+                tx.rollback().await?;
+                Err(error)
+            }
+        }
     }
 
     /// # Errors

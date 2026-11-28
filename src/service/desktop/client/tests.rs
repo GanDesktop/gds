@@ -57,9 +57,12 @@ fn executable_media_opens_one_rewound_descriptor_without_reopening_path() {
     fs::write(&path, &payload).expect("write MP4 payload");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable bits");
 
-    let (resolved, mut file) =
-        Desktop::open_document(&path, OpenMode::DefaultApplication).expect("open media");
-    assert_eq!(resolved, fs::canonicalize(&path).expect("canonical path"));
+    let opened = Desktop::open_document(&path, OpenMode::DefaultApplication).expect("open media");
+    assert_eq!(
+        opened.path,
+        fs::canonicalize(&path).expect("canonical path")
+    );
+    let mut file = opened.file;
     assert_eq!(
         file.stream_position().expect("descriptor offset"),
         0,
@@ -128,11 +131,77 @@ fn opened_document_does_not_retain_nonblock_flag() {
     fs::write(&path, b"hello\n").expect("write document");
 
     for mode in [OpenMode::DefaultApplication, OpenMode::ChooseApplication] {
-        let (_, file) = Desktop::open_document(&path, mode).expect("open document");
-        let flags = fcntl_getfl(&file).expect("read descriptor status flags");
+        let opened = Desktop::open_document(&path, mode).expect("open document");
+        let flags = fcntl_getfl(&opened.file).expect("read descriptor status flags");
         assert!(
             !flags.contains(OFlags::NONBLOCK),
             "opened document descriptor must not retain O_NONBLOCK"
+        );
+        assert!(opened.writable, "writable document should open read-write");
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).expect("make read-only");
+    let readonly =
+        Desktop::open_document(&path, OpenMode::DefaultApplication).expect("open read-only doc");
+    assert!(
+        !readonly.writable,
+        "read-only document must not advertise writable portal access"
+    );
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("restore writable");
+}
+
+#[cfg(unix)]
+#[test]
+fn non_executable_documents_with_execute_bits_open_while_elf_and_scripts_are_gated() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let documents = [
+        ("report.pdf", b"%PDF-1.7\n1 0 obj\n".as_slice()),
+        ("notes.txt", b"hello from a FAT32 drive\n"),
+        ("readme.md", b"# Readme\n"),
+        (
+            "diagram.svg",
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+        ),
+        ("sheet.docx", b"PK\x03\x04dummy-docx"),
+        ("index.html", b"<!doctype html><p>hi</p>"),
+    ];
+    for (name, bytes) in documents {
+        let path = directory.path().join(name);
+        fs::write(&path, bytes).expect("write document");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod +x");
+        assert!(
+            Desktop::document_path(&path, OpenMode::DefaultApplication).is_ok(),
+            "expected {name} with 0755 to open directly"
+        );
+    }
+
+    let executables = [
+        (
+            "binary",
+            b"\x7fELF\x02\x01\x01\x00\0\0\0\0\0\0\0\0".as_slice(),
+        ),
+        ("disguised.pdf", b"\x7fELF\x02\x01\x01\x00\0\0\0\0\0\0\0\0"),
+        ("run.sh", b"#!/bin/sh\nexit 0\n"),
+        ("no-shebang.sh", b"echo hello\n"),
+        ("disguised.txt", b"#!/usr/bin/env sh\nexit 0\n"),
+    ];
+    for (name, bytes) in executables {
+        let path = directory.path().join(name);
+        fs::write(&path, bytes).expect("write executable");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod +x");
+        assert!(
+            matches!(
+                Desktop::document_path(&path, OpenMode::DefaultApplication),
+                Err(Error::RequiresApplication(_))
+            ),
+            "expected {name} with 0755 to require chooser"
+        );
+        assert!(
+            Desktop::document_path(&path, OpenMode::ChooseApplication).is_ok(),
+            "expected {name} to remain openable via explicit chooser"
         );
     }
 }

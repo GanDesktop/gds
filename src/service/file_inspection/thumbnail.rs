@@ -6,6 +6,7 @@ mod image;
 use std::{path::Path, sync::Arc};
 
 use super::{Error, Kind, Source};
+pub use cache::{DEFAULT_MAX_THUMBNAIL_INVALIDATION_PATHS, ThumbnailInvalidation};
 pub use external::{
     ExternalProbeReport, ExternalThumbnailers, SandboxError, SandboxMode, ThumbnailerInfo,
 };
@@ -152,6 +153,11 @@ pub(super) fn load_with(
     generate: impl FnOnce() -> Result<Generated, Error>,
 ) -> Result<Thumbnail, Error> {
     cache::load_with(target, cache::Cache::for_user().as_ref(), generate)
+}
+
+/// Best-effort read-only lookup in a FreeDesktop shared `.sh_thumbnails/` repository.
+pub(super) fn lookup_shared(target: Target<'_>) -> Option<Thumbnail> {
+    cache::lookup_shared_for_target(target)
 }
 
 /// # Errors

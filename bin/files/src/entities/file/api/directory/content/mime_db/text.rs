@@ -1,8 +1,9 @@
 //! Plain-text `shared-mime-info` directory fallback when `mime.cache` is absent.
 //!
-//! Reads `globs2`/`globs`, `aliases`, `subclasses`, `generic-icons`, and `magic`
-//! directly from a single `<base>/mime` directory so fixtures and uncompiled XDG
-//! directories share the exact same query semantics as `mime.cache`.
+//! Reads `globs2`/`globs`, `aliases`, `subclasses`, `XMLnamespaces`, `icons`,
+//! `generic-icons`, and `magic` directly from a single `<base>/mime` directory
+//! so fixtures and uncompiled XDG directories share the exact same query
+//! semantics as `mime.cache`.
 
 use std::{
     collections::HashMap,
@@ -15,7 +16,7 @@ use std::{
 use globset::{Glob, GlobMatcher};
 use xdg_mime::SharedMimeInfo;
 
-use super::GlobMatch;
+use super::{GlobMatch, NOGLOBS_SENTINEL};
 
 enum GlobPattern {
     Literal {
@@ -44,8 +45,11 @@ pub(super) struct TextIndex {
     has_magic: bool,
     aliases: HashMap<String, String>,
     parents: HashMap<String, Vec<String>>,
+    icons: HashMap<String, String>,
     generic_icons: HashMap<String, String>,
+    xml_namespaces: HashMap<String, Vec<(String, String)>>,
     globs: Vec<TextGlob>,
+    noglobs: Vec<String>,
     /// Delegate binary `magic` file parsing/matching to `xdg-mime` lazily so
     /// directories without `magic` (or filename-only lookups) never re-read the text indexes.
     magic_db: OnceLock<SharedMimeInfo>,
@@ -57,15 +61,20 @@ impl TextIndex {
         let has_magic = mime_dir.join("magic").is_file();
         let aliases = read_aliases(&mime_dir.join("aliases"));
         let parents = read_subclasses(&mime_dir.join("subclasses"));
-        let generic_icons = read_generic_icons(&mime_dir.join("generic-icons"));
-        let globs = read_globs(&mime_dir);
+        let icons = read_icon_map(&mime_dir.join("icons"));
+        let generic_icons = read_icon_map(&mime_dir.join("generic-icons"));
+        let xml_namespaces = read_xml_namespaces(&mime_dir.join("XMLnamespaces"));
+        let (globs, noglobs) = read_globs(&mime_dir);
         Self {
             base_dir: base_dir.to_path_buf(),
             has_magic,
             aliases,
             parents,
+            icons,
             generic_icons,
+            xml_namespaces,
             globs,
+            noglobs,
             magic_db: OnceLock::new(),
         }
     }
@@ -74,8 +83,24 @@ impl TextIndex {
         self.aliases.get(mime).map(String::as_str)
     }
 
+    pub(super) fn icon(&self, mime: &str) -> Option<&str> {
+        self.icons.get(mime).map(String::as_str)
+    }
+
     pub(super) fn generic_icon(&self, mime: &str) -> Option<&str> {
         self.generic_icons.get(mime).map(String::as_str)
+    }
+
+    pub(super) fn xml_namespace(&self, namespace_uri: &str, local_name: &str) -> Option<&str> {
+        self.xml_namespaces
+            .get(namespace_uri)?
+            .iter()
+            .find(|(local, _)| local == local_name)
+            .map(|(_, mime)| mime.as_str())
+    }
+
+    pub(super) fn noglobs(&self) -> &[String] {
+        &self.noglobs
     }
 
     pub(super) fn parents(&self, mime: &str) -> Vec<&str> {
@@ -193,7 +218,7 @@ fn read_subclasses(path: &Path) -> HashMap<String, Vec<String>> {
     map
 }
 
-fn read_generic_icons(path: &Path) -> HashMap<String, String> {
+fn read_icon_map(path: &Path) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let Some(lines) = read_lines(path) else {
         return map;
@@ -212,9 +237,36 @@ fn read_generic_icons(path: &Path) -> HashMap<String, String> {
     map
 }
 
-fn read_globs(mime_dir: &Path) -> Vec<TextGlob> {
+fn read_xml_namespaces(path: &Path) -> HashMap<String, Vec<(String, String)>> {
+    let mut map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let Some(lines) = read_lines(path) else {
+        return map;
+    };
+    for line in lines {
+        let line = line.trim_end_matches('\r');
+        // `XMLnamespaces` separates `<namespaceURI> <localName> <mime>` by single ASCII
+        // spaces so either `namespaceURI` or `localName` may be empty.
+        let mut parts = line.split(' ');
+        let (Some(namespace_uri), Some(local_name), Some(mime), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if mime.is_empty() || (namespace_uri.is_empty() && local_name.is_empty()) {
+            continue;
+        }
+        let entries = map.entry(namespace_uri.to_owned()).or_default();
+        if !entries.iter().any(|(existing, _)| existing == local_name) {
+            entries.push((local_name.to_owned(), mime.to_owned()));
+        }
+    }
+    map
+}
+
+fn read_globs(mime_dir: &Path) -> (Vec<TextGlob>, Vec<String>) {
     if let Some(lines) = read_lines(&mime_dir.join("globs2")) {
         let mut globs = Vec::new();
+        let mut noglobs = Vec::new();
         for line in lines {
             let mut parts = line.split(':');
             let (Some(weight), Some(mime), Some(pattern)) =
@@ -225,37 +277,55 @@ fn read_globs(mime_dir: &Path) -> Vec<TextGlob> {
             let Ok(weight) = weight.trim().parse::<u32>() else {
                 continue;
             };
+            let mime = mime.trim();
+            if pattern == NOGLOBS_SENTINEL {
+                if weight == 0
+                    && !mime.is_empty()
+                    && !noglobs.iter().any(|existing| existing == mime)
+                {
+                    noglobs.push(mime.to_owned());
+                }
+                continue;
+            }
             let case_sensitive = parts
                 .next()
                 .is_some_and(|flags| flags.split(',').any(|flag| flag.trim() == "cs"));
             if let Some(parsed) = parse_glob_pattern(pattern, case_sensitive) {
                 globs.push(TextGlob {
                     pattern: parsed,
-                    mime: mime.trim().to_owned(),
+                    mime: mime.to_owned(),
                     weight,
                 });
             }
         }
-        return globs;
+        return (globs, noglobs);
     }
 
     let Some(lines) = read_lines(&mime_dir.join("globs")) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let mut globs = Vec::new();
+    let mut noglobs = Vec::new();
     for line in lines {
         let Some((mime, pattern)) = line.split_once(':') else {
             continue;
         };
+        let mime = mime.trim();
+        if pattern == NOGLOBS_SENTINEL {
+            if !mime.is_empty() && !noglobs.iter().any(|existing| existing == mime) {
+                noglobs.push(mime.to_owned());
+            }
+            continue;
+        }
         if let Some(parsed) = parse_glob_pattern(pattern, false) {
             globs.push(TextGlob {
                 pattern: parsed,
-                mime: mime.trim().to_owned(),
+                mime: mime.to_owned(),
                 weight: 50,
             });
         }
     }
-    globs
+    (globs, noglobs)
 }
 
 fn parse_glob_pattern(pattern: &str, case_sensitive: bool) -> Option<GlobPattern> {

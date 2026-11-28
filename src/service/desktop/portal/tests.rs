@@ -121,3 +121,37 @@ fn fallback_chooser_rewinds_and_reuses_the_same_open_file() {
     assert_eq!(outcome, OpenOutcome::Opened);
     assert_eq!(observed_fds, [file.as_raw_fd(), file.as_raw_fd()]);
 }
+
+#[test]
+fn build_request_forwards_writable_parent_window_and_activation_token() {
+    use super::super::{OpenContext, ParentWindow};
+
+    let context = OpenContext {
+        parent_window: Some(
+            "wayland:exported-handle"
+                .parse::<ParentWindow>()
+                .expect("wayland"),
+        ),
+        activation_token: Some("tok-123".to_owned()),
+    };
+    let debug = format!("{:?}", Portal::build_request(None, true, false, &context));
+    assert!(debug.contains("writeable: Some(true)"), "{debug}");
+    assert!(debug.contains("ask: Some(false)"), "{debug}");
+    assert!(debug.contains("exported-handle"), "{debug}");
+    assert!(debug.contains("tok-123"), "{debug}");
+
+    let empty = OpenContext {
+        parent_window: None,
+        activation_token: Some(String::new()),
+    };
+    let debug_empty = format!("{:?}", Portal::build_request(None, false, true, &empty));
+    assert!(
+        debug_empty.contains("writeable: Some(false)"),
+        "{debug_empty}"
+    );
+    assert!(debug_empty.contains("ask: Some(true)"), "{debug_empty}");
+    assert!(
+        debug_empty.contains("activation_token: None"),
+        "{debug_empty}"
+    );
+}

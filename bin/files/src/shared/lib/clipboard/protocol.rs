@@ -217,33 +217,34 @@ impl Formats {
     }
 
     pub fn copyable_uris(uris: &[String]) -> bool {
+        Self::copyable_uris_with_host(uris, gds::service::desktop::recent_files::local_hostname())
+    }
+
+    fn copyable_uris_with_host(uris: &[String], local_hostname: Option<&str>) -> bool {
         !uris.is_empty()
             && uris.iter().all(|uri| {
                 gds::service::remote::Address::parse(uri).is_ok()
-                    || Url::parse(uri).is_ok_and(|uri| uri.to_file_path().is_ok())
+                    || Self::local_file_uri_with_host(uri, local_hostname).is_ok()
             })
     }
 
     /// # Errors
     /// Rejects non-local, relative or parameterized file URLs.
     fn local_file_uri(text: &str) -> Result<PathBuf, Error> {
-        let uri = Url::parse(text).map_err(|_| Error::InvalidUri(text.into()))?;
-        let absolute = text
-            .split_once(':')
-            .is_some_and(|(_, rest)| rest.starts_with('/'));
-        if text.as_bytes().contains(&0)
-            || !absolute
-            || uri.scheme() != "file"
-            || uri.host_str().is_some_and(|host| host != "localhost")
-            || !uri.username().is_empty()
-            || uri.password().is_some()
-            || uri.port().is_some()
-            || uri.query().is_some()
-            || uri.fragment().is_some()
-        {
-            return Err(Error::InvalidUri(text.into()));
-        }
-        uri.to_file_path()
-            .map_err(|_| Error::InvalidUri(text.into()))
+        Self::local_file_uri_with_host(text, gds::service::desktop::recent_files::local_hostname())
+    }
+
+    fn local_file_uri_with_host(
+        text: &str,
+        local_hostname: Option<&str>,
+    ) -> Result<PathBuf, Error> {
+        gds::service::desktop::recent_files::parse_strict_local_file_url_with_host(
+            text,
+            local_hostname,
+        )
+        .ok_or_else(|| Error::InvalidUri(text.into()))
     }
 }
+
+#[cfg(test)]
+mod tests;

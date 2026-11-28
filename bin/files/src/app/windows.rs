@@ -254,9 +254,16 @@ impl Host {
     }
 
     pub fn dispatch_desktop(&self, command: Command) {
+        if let Request::ShowProperties { paths } = command.request {
+            // Standalone properties windows are self-contained and must not spawn, focus, or
+            // mutate tabs/details state in any main browser window.
+            Browser::open_properties(paths, self.0.tasks.clone(), &command.startup_id);
+            return;
+        }
         let force_new_window = matches!(
             command.request,
-            Request::NewWindow { .. }
+            Request::Activate { new_window: true }
+                | Request::NewWindow { .. }
                 | Request::OpenLocations {
                     new_window: true,
                     ..
@@ -280,20 +287,30 @@ impl Host {
             }
         }
         let mut command = command;
-        if let Request::OpenLocations {
-            ref mut new_window, ..
-        } = command.request
-        {
-            *new_window = true;
+        match command.request {
+            Request::OpenLocations {
+                ref mut new_window, ..
+            } => {
+                *new_window = true;
+            }
+            Request::ShowFolders { uris } => {
+                command.request = Request::OpenLocations {
+                    uris,
+                    new_window: true,
+                };
+            }
+            _ => {}
         }
         let start = match &command.request {
+            Request::Activate { .. } => None,
             Request::NewWindow { directory } => Some(directory.clone()),
-            Request::OpenLocations { uris, .. } => uris.iter().find_map(|uri| {
-                crate::entities::location::scheme::parse(uri)
-                    .ok()
-                    .and_then(|loc| loc.local_path().map(std::path::Path::to_path_buf))
-            }),
-            Request::ShowFolders { directories } => directories.first().cloned(),
+            Request::OpenLocations { uris, .. } | Request::ShowFolders { uris } => {
+                uris.iter().find_map(|uri| {
+                    crate::entities::location::scheme::parse(uri)
+                        .ok()
+                        .and_then(|loc| loc.local_path().map(std::path::Path::to_path_buf))
+                })
+            }
             Request::ShowItems { paths } | Request::ShowProperties { paths } => paths
                 .first()
                 .map(|path| path.parent().unwrap_or(path).to_path_buf()),

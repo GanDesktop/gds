@@ -60,8 +60,13 @@ def main():
                         f"Categories={categories}", f"MimeType={mime_types}", "StartupNotify=true",
                         f"StartupWMClass={app_id}", "Terminal=false"])
         if app == "files":
-            desktop.extend(["Actions=new-window;", "", "[Desktop Action new-window]", "Name=New Window",
+            desktop.extend(["DBusActivatable=true", "Actions=new-window;", "",
+                            "[Desktop Action new-window]", "Name=New Window",
                             "Name[zh_CN]=新建窗口", "Exec=gds-files --new-window"])
+            write(f"usr/share/dbus-1/services/{app_id}.service", f"""[D-BUS Service]
+Name={app_id}
+Exec=/usr/bin/gds-files --dbus-service
+""")
         write(f"usr/share/applications/{app_id}.desktop", "\n".join([*desktop, ""]))
     if args.component not in ("all", "portal"):
         return

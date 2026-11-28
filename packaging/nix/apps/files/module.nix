@@ -14,6 +14,7 @@ in {
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
       environment.systemPackages = [ cfg.package ];
+      services.dbus.packages = [ cfg.package ];
       services.udisks2.enable = lib.mkDefault true;
     }
     (lib.mkIf cfg.defaultFileManager {

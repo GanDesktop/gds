@@ -245,19 +245,27 @@ impl Scheme for RootVirtualScheme {
     }
 }
 
+impl FileScheme {
+    fn parse_with_host(
+        input: &str,
+        local_hostname: Option<&str>,
+    ) -> Result<Location, AddressError> {
+        gds::service::desktop::recent_files::parse_strict_local_file_url_with_host(
+            input,
+            local_hostname,
+        )
+        .map(|path| Location::from(&path))
+        .ok_or_else(|| AddressError::Invalid(input.to_owned()))
+    }
+}
+
 impl Scheme for FileScheme {
     fn name(&self) -> &'static str {
         "file"
     }
 
     fn parse(&self, input: &str) -> Result<Location, AddressError> {
-        let url = Url::parse(input)?;
-        if url.scheme() != "file" || url.query().is_some() || url.fragment().is_some() {
-            return Err(AddressError::Invalid(input.to_owned()));
-        }
-        url.to_file_path()
-            .map(|path| Location::from(&path))
-            .map_err(|()| AddressError::Invalid(input.to_owned()))
+        Self::parse_with_host(input, gds::service::desktop::recent_files::local_hostname())
     }
 
     fn parent(&self, address: &Location) -> Option<Location> {

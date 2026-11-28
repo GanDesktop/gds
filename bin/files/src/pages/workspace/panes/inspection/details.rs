@@ -1073,7 +1073,17 @@ impl Properties {
         props
     }
 
+    #[cfg(feature = "files-e2e")]
     pub(crate) fn open(path: PathBuf, scope: Scope) {
+        Self::open_with_activation(path, scope, None);
+    }
+
+    pub(crate) fn open_with_activation(
+        path: PathBuf,
+        scope: Scope,
+        activation_token: Option<&str>,
+    ) {
+        let token = activation_token.filter(|token| !token.is_empty());
         let existing = PROPERTIES_WINDOWS.with(|windows| {
             let mut map = windows.borrow_mut();
             if let Some(handle) = map.get(&path)
@@ -1085,6 +1095,9 @@ impl Properties {
             None
         });
         if let Some(handle) = existing {
+            if let Some(token) = token {
+                gds::ui::window::activate_with_token(&handle, token);
+            }
             handle.focus();
             return;
         }
@@ -1099,9 +1112,12 @@ impl Properties {
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| path.display().to_string());
         let window_path = path.clone();
-        let options = workspace_options(title.clone(), None)
+        let mut options = workspace_options(title.clone(), None)
             .with_size(420.0, 640.0)
             .with_min_size(360.0, 420.0);
+        if let Some(token) = token {
+            options = options.with_activation_token(token.to_owned());
+        }
 
         let handle = windows.open(options, move || {
             let _ = Gds::current().appearance().install_window_sheet();

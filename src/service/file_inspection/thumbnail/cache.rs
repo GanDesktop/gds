@@ -1,7 +1,7 @@
-//! The per-user freedesktop thumbnail cache.
+//! The per-user freedesktop thumbnail cache and read-only shared thumbnail repositories.
 //! https://specifications.freedesktop.org/thumbnail/latest-single/
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs::{self, File, Metadata},
     io::{self, Cursor, Read, Write},
     path::{Path, PathBuf},
@@ -14,18 +14,80 @@ use md5::{Digest, Md5};
 
 use super::{EDGE, Error, Generated, Target, Thumbnail};
 
+/// Default upper bound on descendant paths collected when cascading thumbnail
+/// invalidation across a directory tree.
+pub const DEFAULT_MAX_THUMBNAIL_INVALIDATION_PATHS: usize = 4096;
+
 const FLAVORS: [(&str, u32); 4] = [
     ("normal", 128),
     ("large", 256),
     ("x-large", 512),
     ("xx-large", 1024),
 ];
+const SHARED_FLAVORS: [(&str, u32); 4] = [
+    ("x-large", 512),
+    ("xx-large", 1024),
+    ("large", 256),
+    ("normal", 128),
+];
 const WRITE_FLAVOR: &str = "x-large";
+const SHARED_DIR_NAME: &str = ".sh_thumbnails";
 const APPLICATION: &str = concat!("gds-", env!("CARGO_PKG_VERSION"));
 const SOFTWARE: &str = concat!("GDS ", env!("CARGO_PKG_VERSION"));
 const MAX_PNG_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
+
+/// Pre-collected paths whose desktop thumbnail cache entries should be
+/// invalidated once a destructive or relocating filesystem operation succeeds.
+///
+/// Capturing paths before the operation preserves the original `file://` URIs
+/// for regular-file descendants inside moved, renamed, trashed, or deleted
+/// directories without following directory symlinks.
+#[derive(Clone, Debug, Default)]
+pub struct ThumbnailInvalidation {
+    paths: Vec<PathBuf>,
+}
+
+impl ThumbnailInvalidation {
+    /// Capture `path` and, when `path` is a real directory (not a symlink),
+    /// up to [`DEFAULT_MAX_THUMBNAIL_INVALIDATION_PATHS`] descendant paths
+    /// without following directory symlinks.
+    #[must_use]
+    pub fn capture(path: &Path) -> Self {
+        Self::capture_with_limit(path, DEFAULT_MAX_THUMBNAIL_INVALIDATION_PATHS)
+    }
+
+    /// Capture `path` and up to `limit` descendant paths for later invalidation.
+    #[must_use]
+    pub fn capture_with_limit(path: &Path, limit: usize) -> Self {
+        Self {
+            paths: collect_invalidation_paths(path, limit),
+        }
+    }
+
+    /// Captured paths scheduled for invalidation.
+    #[must_use]
+    pub fn paths(&self) -> &[PathBuf] {
+        &self.paths
+    }
+
+    /// Remove cached desktop thumbnails and failure markers for all captured
+    /// paths in the current user's cache (best effort).
+    pub fn invalidate(self) {
+        if self.paths.is_empty() {
+            return;
+        }
+        if let Some(cache) = Cache::for_user() {
+            self.invalidate_in(&cache);
+        }
+    }
+
+    /// Remove cached thumbnails and failure markers for all captured paths in `cache`.
+    pub(super) fn invalidate_in(&self, cache: &Cache) {
+        cache.invalidate_paths(&self.paths);
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct Cache {
@@ -34,16 +96,12 @@ pub(super) struct Cache {
 
 struct Identity {
     uri: String,
+    shared_dir: Option<PathBuf>,
+    encoded_name: Option<String>,
     size: u64,
     modified: SystemTime,
     mtime: i128,
     nanos: i128,
-}
-
-enum Lookup {
-    Miss,
-    Ready(Thumbnail),
-    Failed(Error),
 }
 
 struct CachedPng {
@@ -92,12 +150,30 @@ pub(super) fn load_with(
             None
         }
     };
-    let cache = cache.filter(|cache| !cache.contains(target.path));
-    if let (Some(cache), Some(identity)) = (cache, identity.as_ref()) {
-        match cache.lookup(identity) {
-            Lookup::Ready(thumbnail) => return Ok(thumbnail),
-            Lookup::Failed(error) => return Err(error),
-            Lookup::Miss => {}
+    let is_thumbnail_file =
+        is_in_shared_thumbnail_dir(target.path) || cache.is_some_and(|c| c.contains(target.path));
+    let cache = if is_thumbnail_file { None } else { cache };
+    if !is_thumbnail_file && let Some(identity) = identity.as_ref() {
+        // 1. Prefer high-resolution user cache entries (>= EDGE) so GDS never
+        // upscales a low-res user-cache preview when it can generate a crisp one.
+        if let Some(cache) = cache
+            && let Some(thumbnail) = cache.lookup_primary(identity)
+        {
+            return Ok(thumbnail);
+        }
+        // 2. Check read-only FreeDesktop shared repositories (<dir>/.sh_thumbnails/).
+        if let Some(thumbnail) = lookup_shared(identity) {
+            return Ok(thumbnail);
+        }
+        // 3. Respect per-application content/decoder failure markers unless another
+        // application already populated a valid smaller interoperable user-cache flavor.
+        if let Some(cache) = cache
+            && cache.has_failure_marker(identity)
+        {
+            if let Some(thumbnail) = cache.lookup_fallback(identity) {
+                return Ok(thumbnail);
+            }
+            return Err(Error::CachedFailure);
         }
     }
     match generate() {
@@ -121,28 +197,47 @@ pub(super) fn load_with(
             Ok(Thumbnail::new(generated.image))
         }
         Err(error) => {
-            // Missing tools, timeouts and I/O failures can resolve without the
-            // document changing. Size limits are policy, not corrupt content.
-            // Persist only content/format failures.
-            if matches!(
-                error,
-                Error::Image(_) | Error::Svg(_) | Error::ExternalFailed(_) | Error::NoCover
-            ) && let (Some(cache), Some(identity)) = (cache, identity.as_ref())
-                && identity.unchanged(target.path)
-                && let Err(cache_error) = cache.store_failure_kind(
-                    identity,
-                    if matches!(error, Error::NoCover) {
-                        "no-cover"
-                    } else {
-                        "decode"
-                    },
-                )
-            {
-                tracing::warn!(%cache_error, "cannot save thumbnail failure marker");
+            if let (Some(cache), Some(identity)) = (cache, identity.as_ref()) {
+                // When generation fails or no thumbnailer is installed, reuse any valid
+                // smaller interoperable user-cache flavor (large/normal) before failing.
+                if let Some(thumbnail) = cache.lookup_fallback(identity) {
+                    return Ok(thumbnail);
+                }
+                // Missing tools, missing external thumbnailers, absent embedded cover art,
+                // timeouts, and I/O failures can resolve without the document changing.
+                // Size limits are policy, not corrupt content. Persist only content/decoder
+                // failures per the FreeDesktop Thumbnail Managing Standard.
+                if matches!(
+                    error,
+                    Error::Image(_) | Error::Svg(_) | Error::ExternalFailed(_)
+                ) && identity.unchanged(target.path)
+                    && let Err(cache_error) = cache.store_failure(identity)
+                {
+                    tracing::warn!(%cache_error, "cannot save thumbnail failure marker");
+                }
             }
             Err(error)
         }
     }
+}
+
+/// Best-effort read-only lookup in a FreeDesktop shared `.sh_thumbnails/` repository
+/// next to `target.path`, enforcing read permissions on the original file.
+pub(super) fn lookup_shared_for_target(target: Target<'_>) -> Option<Thumbnail> {
+    if is_in_shared_thumbnail_dir(target.path) {
+        return None;
+    }
+    let abs = std::path::absolute(target.path).ok()?;
+    if !abs.parent()?.join(SHARED_DIR_NAME).is_dir() {
+        return None;
+    }
+    let file = File::open(target.path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let identity = Identity::new(target.path, &metadata).ok()?;
+    lookup_shared(&identity)
 }
 
 impl Identity {
@@ -154,8 +249,17 @@ impl Identity {
             Ok(duration) => duration.as_nanos() as i128,
             Err(error) => -(error.duration().as_nanos() as i128),
         };
+        let absolute = std::path::absolute(path)?;
+        let uri = file_uri_from_absolute(&absolute)?;
+        let shared_dir = absolute.parent().map(|parent| parent.join(SHARED_DIR_NAME));
+        let encoded_name = uri
+            .rsplit_once('/')
+            .map(|(_, name)| name.to_owned())
+            .filter(|name| !name.is_empty());
         Ok(Self {
-            uri: file_uri(path)?,
+            uri,
+            shared_dir,
+            encoded_name,
             size: metadata.len(),
             modified,
             mtime: nanos.div_euclid(NANOS_PER_SECOND),
@@ -167,13 +271,43 @@ impl Identity {
         format!("{:x}.png", Md5::digest(self.uri.as_bytes()))
     }
 
+    fn shared_filename(&self) -> Option<String> {
+        self.encoded_name
+            .as_deref()
+            .map(|name| format!("{:x}.png", Md5::digest(name.as_bytes())))
+    }
+
     fn matches(&self, attributes: &HashMap<String, String>) -> bool {
         attributes.get("Thumb::URI") == Some(&self.uri)
-            && attributes.get("Thumb::MTime").and_then(|value| value.parse().ok()) == Some(self.mtime)
-            && attributes.get("Thumb::Size").is_none_or(|value| value.parse().ok() == Some(self.size))
+            && self.matches_timestamps_and_size(attributes)
+    }
+
+    fn matches_shared(&self, attributes: &HashMap<String, String>) -> bool {
+        let Some(expected_name) = self.encoded_name.as_deref() else {
+            return false;
+        };
+        // In FreeDesktop shared repositories (.sh_thumbnails/), Thumb::URI is omitted
+        // or holds the percent-encoded relative filename without a directory prefix.
+        let uri_ok = match attributes.get("Thumb::URI") {
+            None => true,
+            Some(uri) => uri == expected_name || uri.strip_prefix("./") == Some(expected_name),
+        };
+        uri_ok && self.matches_timestamps_and_size(attributes)
+    }
+
+    fn matches_timestamps_and_size(&self, attributes: &HashMap<String, String>) -> bool {
+        attributes
+            .get("Thumb::MTime")
+            .and_then(|value| value.parse().ok())
+            == Some(self.mtime)
+            && attributes
+                .get("Thumb::Size")
+                .is_none_or(|value| value.parse().ok() == Some(self.size))
             // The standard's seconds resolution cannot distinguish quick edits
             // of equally sized files. Verify our optional extension if present.
-            && attributes.get("X-GDS::MTimeNS").is_none_or(|value| value.parse().ok() == Some(self.nanos))
+            && attributes
+                .get("X-GDS::MTimeNS")
+                .is_none_or(|value| value.parse().ok() == Some(self.nanos))
     }
 
     fn unchanged(&self, path: &Path) -> bool {
@@ -193,7 +327,25 @@ impl Cache {
     }
 
     fn contains(&self, path: &Path) -> bool {
-        std::path::absolute(path).is_ok_and(|path| path.starts_with(&self.root))
+        let abs_root = std::path::absolute(&self.root).ok();
+        let canon_root = resolve_prefix(&self.root);
+        Self::contains_with_roots(path, abs_root.as_deref(), canon_root.as_deref())
+    }
+
+    fn contains_with_roots(
+        path: &Path,
+        abs_root: Option<&Path>,
+        canon_root: Option<&Path>,
+    ) -> bool {
+        if let Some(root) = abs_root
+            && std::path::absolute(path).is_ok_and(|abs_path| abs_path.starts_with(root))
+        {
+            return true;
+        }
+        let Some(root) = canon_root else {
+            return false;
+        };
+        resolve_prefix(path).is_some_and(|canon_path| canon_path.starts_with(root))
     }
 
     fn failure_path(&self, identity: &Identity) -> PathBuf {
@@ -203,46 +355,41 @@ impl Cache {
             .join(identity.filename())
     }
 
-    fn lookup(&self, identity: &Identity) -> Lookup {
+    fn lookup_primary(&self, identity: &Identity) -> Option<Thumbnail> {
         // Prefer the requested size, then larger interoperable cache entries.
-        // Smaller entries are regenerated to avoid enlarging a low-res preview.
+        // Smaller entries are regenerated when possible to avoid enlarging a low-res preview.
+        let filename = identity.filename();
         for (flavor, edge) in FLAVORS.into_iter().filter(|(_, edge)| *edge >= EDGE) {
-            if let Some(png) = self.read(&self.root.join(flavor).join(identity.filename()), edge)
+            if let Some(png) = read_cached_png(&self.root.join(flavor).join(&filename), edge)
                 && identity.matches(&png.attributes)
             {
-                return Lookup::Ready(Thumbnail::new(png.image));
+                return Some(Thumbnail::new(png.image));
             }
         }
-        if let Some(png) = self.read(&self.failure_path(identity), 1)
-            && identity.matches(&png.attributes)
+        None
+    }
+
+    fn lookup_fallback(&self, identity: &Identity) -> Option<Thumbnail> {
+        let filename = identity.filename();
+        for (flavor, edge) in FLAVORS.into_iter().rev().filter(|(_, edge)| *edge < EDGE) {
+            if let Some(png) = read_cached_png(&self.root.join(flavor).join(&filename), edge)
+                && identity.matches(&png.attributes)
+            {
+                return Some(Thumbnail::new(png.image));
+            }
+        }
+        None
+    }
+
+    fn has_failure_marker(&self, identity: &Identity) -> bool {
+        let Some(png) = read_cached_png(&self.failure_path(identity), 1) else {
+            return false;
+        };
+        identity.matches(&png.attributes)
             && png
                 .attributes
                 .get("X-GDS::Failure")
-                .is_none_or(|value| value != "too-large")
-        {
-            return Lookup::Failed(
-                if png
-                    .attributes
-                    .get("X-GDS::Failure")
-                    .is_some_and(|kind| kind == "no-cover")
-                {
-                    Error::NoCover
-                } else {
-                    Error::CachedFailure
-                },
-            );
-        }
-        Lookup::Miss
-    }
-
-    fn read(&self, path: &Path, edge: u32) -> Option<CachedPng> {
-        match read_png(path, edge) {
-            Ok(png) => png,
-            Err(error) => {
-                tracing::debug!(path = %path.display(), %error, "ignoring unusable thumbnail cache entry");
-                None
-            }
-        }
+                .is_none_or(|value| !matches!(value.as_str(), "too-large" | "no-cover"))
     }
 
     /// # Errors
@@ -260,7 +407,26 @@ impl Cache {
     /// Remove cached thumbnail PNGs and failure markers for `path` across all standard sizes
     /// after deletion, trashing, moving, or renaming (FreeDesktop Thumbnail Managing Standard).
     pub(super) fn invalidate_path(&self, path: &Path) {
-        if self.contains(path) {
+        let abs_root = std::path::absolute(&self.root).ok();
+        let canon_root = resolve_prefix(&self.root);
+        self.invalidate_path_with_roots(path, abs_root.as_deref(), canon_root.as_deref());
+    }
+
+    fn invalidate_paths(&self, paths: &[PathBuf]) {
+        let abs_root = std::path::absolute(&self.root).ok();
+        let canon_root = resolve_prefix(&self.root);
+        for path in paths {
+            self.invalidate_path_with_roots(path, abs_root.as_deref(), canon_root.as_deref());
+        }
+    }
+
+    fn invalidate_path_with_roots(
+        &self,
+        path: &Path,
+        abs_root: Option<&Path>,
+        canon_root: Option<&Path>,
+    ) {
+        if Self::contains_with_roots(path, abs_root, canon_root) {
             return;
         }
         let Ok(uri) = file_uri(path) else {
@@ -285,12 +451,12 @@ impl Cache {
 
     /// # Errors
     /// Reports marker encoding and atomic write failures.
-    fn store_failure_kind(&self, identity: &Identity, kind: &str) -> Result<(), CacheError> {
+    fn store_failure(&self, identity: &Identity) -> Result<(), CacheError> {
         let bytes = encode(
             &RgbaImage::new(1, 1),
             Some(identity),
             ExtraMeta::default(),
-            Some(kind),
+            Some("decode"),
         )?;
         private_directory(&self.root)?;
         private_directory(&self.root.join("fail"))?;
@@ -319,10 +485,114 @@ impl Cache {
     }
 }
 
+fn lookup_shared(identity: &Identity) -> Option<Thumbnail> {
+    let shared_dir = identity.shared_dir.as_deref()?;
+    if !shared_dir.is_dir() {
+        return None;
+    }
+    let filename = identity.shared_filename()?;
+    for (flavor, edge) in SHARED_FLAVORS {
+        let path = shared_dir.join(flavor).join(&filename);
+        if let Some(png) = read_cached_png(&path, edge)
+            && identity.matches_shared(&png.attributes)
+        {
+            return Some(Thumbnail::new(png.image));
+        }
+    }
+    None
+}
+
+fn read_cached_png(path: &Path, edge: u32) -> Option<CachedPng> {
+    match read_png(path, edge) {
+        Ok(png) => png,
+        Err(error) => {
+            tracing::debug!(path = %path.display(), %error, "ignoring unusable thumbnail cache entry");
+            None
+        }
+    }
+}
+
+fn is_in_shared_thumbnail_dir(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == SHARED_DIR_NAME)
+}
+
+/// Resolve symlinks on `path` (or its deepest existing ancestor when `path`
+/// does not exist yet or was already deleted), falling back to `std::path::absolute`.
+fn resolve_prefix(path: &Path) -> Option<PathBuf> {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return Some(canonical);
+    }
+    let absolute = std::path::absolute(path).ok()?;
+    let mut current = absolute.as_path();
+    let mut tail = Vec::new();
+    while let Some(name) = current.file_name() {
+        tail.push(name);
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        if let Ok(mut canonical) = fs::canonicalize(parent) {
+            for component in tail.into_iter().rev() {
+                canonical.push(component);
+            }
+            return Some(canonical);
+        }
+        current = parent;
+    }
+    Some(absolute)
+}
+
+fn collect_invalidation_paths(path: &Path, limit: usize) -> Vec<PathBuf> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return vec![path.to_path_buf()];
+    };
+    if !metadata.file_type().is_dir() {
+        return vec![path.to_path_buf()];
+    }
+    let mut paths = Vec::new();
+    let mut dirs = VecDeque::from([path.to_path_buf()]);
+    let mut visited_dirs = 0usize;
+    while let Some(dir) = dirs.pop_front() {
+        if visited_dirs >= limit {
+            break;
+        }
+        visited_dirs += 1;
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let entry_path = entry.path();
+            if file_type.is_symlink() {
+                // Symlinks to files may have cached URIs of their own; directory symlinks
+                // are never traversed so cycles and external trees stay untouched.
+                paths.push(entry_path);
+            } else if file_type.is_dir() {
+                dirs.push_back(entry_path);
+            } else if file_type.is_file() {
+                paths.push(entry_path);
+            }
+            if paths.len() >= limit {
+                return paths;
+            }
+        }
+    }
+    paths
+}
+
 /// # Errors
 /// Reports invalid paths; file URIs preserve raw Unix filename bytes.
 pub(super) fn file_uri(path: &Path) -> Result<String, CacheError> {
-    url::Url::from_file_path(std::path::absolute(path)?)
+    file_uri_from_absolute(&std::path::absolute(path)?)
+}
+
+fn file_uri_from_absolute(path: &Path) -> Result<String, CacheError> {
+    url::Url::from_file_path(path)
         .map(String::from)
         .map_err(|_| CacheError::Uri)
 }

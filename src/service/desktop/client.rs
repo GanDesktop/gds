@@ -1,8 +1,10 @@
 //! Native desktop document and terminal operations.
 
+#[cfg(unix)]
+use super::executable;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use super::portal;
-use super::{Error, OpenMode, OpenOutcome};
+use super::{Error, OpenContext, OpenMode, OpenOutcome};
 
 use std::{
     env,
@@ -99,22 +101,45 @@ pub struct Desktop {
     portal: std::sync::Arc<tokio::sync::OnceCell<portal::Portal>>,
 }
 
+struct OpenedDocument {
+    path: PathBuf,
+    file: fs::File,
+    writable: bool,
+}
+
 impl Desktop {
     /// Open a regular document, optionally asking the desktop to choose an application.
     ///
-    /// Executable permissions on recognised media do not turn them into programs.
-    /// Other executable files and desktop launchers require the application chooser.
-    /// Symbolic links are resolved before checking the target. On Linux and FreeBSD,
-    /// execute this future on Tokio so the Portal connection uses its I/O backend.
+    /// Executable permissions on non-executable documents (for example on FAT/NTFS/SMB
+    /// mounts) do not turn them into programs; executable binaries, scripts, and desktop
+    /// launchers require the application chooser. Symbolic links are resolved before
+    /// checking the target. On Linux and FreeBSD, execute this future on Tokio so the
+    /// Portal connection uses its I/O backend.
     ///
     /// # Errors
     /// Returns an error for inaccessible/non-regular files, executables opened without
     /// a chooser, an unavailable chooser, or failures reported by the desktop opener.
     pub async fn open_file(&self, path: &Path, mode: OpenMode) -> Result<OpenOutcome, Error> {
+        self.open_file_with_context(path, mode, OpenContext::default())
+            .await
+    }
+
+    /// Open a regular document with optional XDG portal parent-window and activation-token
+    /// context.
+    ///
+    /// # Errors
+    /// Returns an error for inaccessible/non-regular files, executables opened without
+    /// a chooser, an unavailable chooser, or failures reported by the desktop opener.
+    pub async fn open_file_with_context(
+        &self,
+        path: &Path,
+        mode: OpenMode,
+        context: OpenContext,
+    ) -> Result<OpenOutcome, Error> {
         let path_owned = path.to_owned();
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
-            let (resolved, file) =
+            let opened =
                 tokio::task::spawn_blocking(move || Self::open_document(&path_owned, mode))
                     .await
                     .map_err(|source| Error::Io {
@@ -124,20 +149,21 @@ impl Desktop {
             self.portal
                 .get_or_try_init(portal::Portal::connect)
                 .await?
-                .open_file(&resolved, &file, mode)
+                .open_file(&opened.path, &opened.file, opened.writable, mode, &context)
                 .await
                 .map_err(Error::from)
         }
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
+            let _ = context;
             tokio::task::spawn_blocking(move || {
-                let (resolved, file) = Self::open_document(&path_owned, mode)?;
-                drop(file);
+                let opened = Self::open_document(&path_owned, mode)?;
+                drop(opened.file);
                 if mode == OpenMode::ChooseApplication {
                     return Err(Error::UnsupportedChooser);
                 }
-                open::that_detached(&resolved).map_err(|source| Error::OpenFile {
-                    path: resolved,
+                open::that_detached(&opened.path).map_err(|source| Error::OpenFile {
+                    path: opened.path,
                     source,
                 })?;
                 Ok(OpenOutcome::Opened)
@@ -152,18 +178,19 @@ impl Desktop {
 
     #[cfg(test)]
     fn document_path(path: &Path, mode: OpenMode) -> Result<PathBuf, Error> {
-        Self::open_document(path, mode).map(|(resolved, _)| resolved)
+        Self::open_document(path, mode).map(|opened| opened.path)
     }
 
     /// # Errors
     /// Reports unavailable files and targets that require an explicit application.
-    fn open_document(path: &Path, mode: OpenMode) -> Result<(PathBuf, fs::File), Error> {
+    fn open_document(path: &Path, mode: OpenMode) -> Result<OpenedDocument, Error> {
         let resolved = Self::resolve(path)?;
         #[cfg_attr(not(unix), allow(unused_mut))]
-        let mut file = Self::open_readonly(&resolved).map_err(|source| Error::Io {
-            path: resolved.clone(),
-            source,
-        })?;
+        let (mut file, opened_rw) =
+            Self::open_for_portal(&resolved).map_err(|source| Error::Io {
+                path: resolved.clone(),
+                source,
+            })?;
         let metadata = file.metadata().map_err(|source| Error::Io {
             path: resolved.clone(),
             source,
@@ -176,8 +203,24 @@ impl Desktop {
             path: resolved.clone(),
             source,
         })?;
+        let writable = {
+            let base = opened_rw && !metadata.permissions().readonly();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                base && (metadata.permissions().mode() & 0o222 != 0)
+            }
+            #[cfg(not(unix))]
+            {
+                base
+            }
+        };
         if mode == OpenMode::ChooseApplication {
-            return Ok((resolved, file));
+            return Ok(OpenedDocument {
+                path: resolved,
+                file,
+                writable,
+            });
         }
         if Self::is_desktop_launcher(path) || Self::is_desktop_launcher(&resolved) {
             return Err(Error::RequiresApplication(path.to_owned()));
@@ -185,29 +228,44 @@ impl Desktop {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o111 != 0 && !Self::is_media(&mut file, &resolved)?
-            {
-                return Err(Error::RequiresApplication(path.to_owned()));
+            if metadata.permissions().mode() & 0o111 != 0 {
+                let header = Self::read_header_and_rewind(&mut file, &resolved)?;
+                if executable::requires_application_for_executable(path, &resolved, &header) {
+                    return Err(Error::RequiresApplication(path.to_owned()));
+                }
             }
         }
-        Ok((resolved, file))
+        Ok(OpenedDocument {
+            path: resolved,
+            file,
+            writable,
+        })
     }
 
-    fn open_readonly(path: &Path) -> std::io::Result<fs::File> {
+    /// Open `path` read-write when possible so XDG `OpenURI.OpenFile` can pass a writable
+    /// document descriptor to sandboxed editors, falling back to read-only otherwise.
+    fn open_for_portal(path: &Path) -> std::io::Result<(fs::File, bool)> {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             use rustix::{
                 fs::{CWD, Mode, OFlags, openat},
                 io::Errno,
             };
+            let flags_rw = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NONBLOCK;
+            let flags_ro = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK;
             loop {
-                match openat(
-                    CWD,
-                    path,
-                    OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
-                    Mode::empty(),
-                ) {
-                    Ok(fd) => return Ok(fs::File::from(fd)),
+                match openat(CWD, path, flags_rw, Mode::empty()) {
+                    Ok(fd) => return Ok((fs::File::from(fd), true)),
+                    Err(Errno::INTR) => continue,
+                    Err(
+                        Errno::ACCESS | Errno::ROFS | Errno::TXTBSY | Errno::PERM | Errno::ISDIR,
+                    ) => break,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            loop {
+                match openat(CWD, path, flags_ro, Mode::empty()) {
+                    Ok(fd) => return Ok((fs::File::from(fd), false)),
                     Err(Errno::INTR) => continue,
                     Err(error) => return Err(error.into()),
                 }
@@ -216,7 +274,7 @@ impl Desktop {
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
             // std::fs::File::open sets O_CLOEXEC on Unix platforms.
-            fs::File::open(path)
+            fs::File::open(path).map(|file| (file, false))
         }
     }
 
@@ -234,7 +292,7 @@ impl Desktop {
     /// # Errors
     /// Reports errors reading or rewinding the file header.
     #[cfg(unix)]
-    fn is_media(file: &mut fs::File, path: &Path) -> Result<bool, Error> {
+    fn read_header_and_rewind(file: &mut fs::File, path: &Path) -> Result<Vec<u8>, Error> {
         use std::io::{Read, Seek, SeekFrom};
 
         const HEADER_LIMIT: u64 = 8 * 1024;
@@ -247,12 +305,7 @@ impl Desktop {
                 path: path.to_owned(),
                 source,
             })?;
-        Ok(infer::get(&header).is_some_and(|kind| {
-            matches!(
-                kind.matcher_type(),
-                infer::MatcherType::Video | infer::MatcherType::Audio | infer::MatcherType::Image
-            )
-        }))
+        Ok(header)
     }
 
     /// Open an external terminal at an existing local directory.

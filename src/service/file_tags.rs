@@ -318,11 +318,55 @@ pub fn read_origin_url(path: &Path) -> Option<String> {
     Some(text.to_owned())
 }
 
+/// Outcome of probing a filesystem extended attribute on one path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum XattrLookup<T> {
+    /// Attribute was present and syntactically valid.
+    Present(T),
+    /// Attribute was absent, invalid, or inaccessible on a filesystem that supports xattrs.
+    Absent,
+    /// The underlying filesystem or platform does not support extended attributes.
+    Unsupported,
+}
+
+/// Read an explicit FreeDesktop MIME override (`user.mime_type`) using a stack buffer so
+/// directory scans can probe without heap allocations and short-circuit on filesystems without
+/// extended-attribute support.
+pub fn lookup_mime_type(path: &Path) -> XattrLookup<String> {
+    #[cfg(target_os = "linux")]
+    {
+        // RFC 6838 restricts MIME type/subtype tokens to 127 octets each (255 bytes max).
+        let mut buf = [0u8; 256];
+        match rustix::fs::getxattr(path, MIME_TYPE_ATTRIBUTE, &mut buf) {
+            Ok(count) => match parse_mime_type(&buf[..count]) {
+                Some(mime) => XattrLookup::Present(mime),
+                None => XattrLookup::Absent,
+            },
+            Err(rustix::io::Errno::OPNOTSUPP | rustix::io::Errno::NOSYS) => {
+                XattrLookup::Unsupported
+            }
+            Err(_) => XattrLookup::Absent,
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        XattrLookup::Unsupported
+    }
+}
+
 /// Read an explicit FreeDesktop MIME override (`user.mime_type`), when present and syntactically
 /// valid (`type/subtype`).
 pub fn read_mime_type(path: &Path) -> Option<String> {
-    let raw = read_named_raw(path, MIME_TYPE_ATTRIBUTE)?;
-    let text = std::str::from_utf8(&raw).ok()?.trim();
+    match lookup_mime_type(path) {
+        XattrLookup::Present(mime) => Some(mime),
+        XattrLookup::Absent | XattrLookup::Unsupported => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_mime_type(raw: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(raw).ok()?.trim();
     let (top, sub) = text.split_once('/')?;
     if top.is_empty() || sub.is_empty() || sub.contains('/') {
         return None;

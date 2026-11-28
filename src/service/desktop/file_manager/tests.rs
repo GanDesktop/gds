@@ -23,10 +23,116 @@ fn local_uri_parsing_preserves_names_directories_and_root() {
     .collect::<Vec<_>>();
     assert_eq!(
         local_paths(&uris).expect("local paths"),
-        [raw, PathBuf::from("/tmp/folder"), PathBuf::from("/")]
+        [
+            raw.clone(),
+            PathBuf::from("/tmp/folder"),
+            PathBuf::from("/")
+        ]
+    );
+    assert_eq!(
+        local_path_with_host("file://workstation/tmp/a%20%23%FF", Some("Workstation"))
+            .expect("RFC 8089 local hostname preserving raw Unix bytes"),
+        raw
+    );
+    assert_eq!(
+        local_path_with_host("file://LOCALHOST/tmp/folder", None)
+            .expect("case-insensitive localhost"),
+        PathBuf::from("/tmp/folder")
     );
     assert!(local_path("smb://server/share").is_err());
     assert!(local_path("file://remote/tmp").is_err());
+    assert!(local_path_with_host("file://other-host/tmp", Some("workstation")).is_err());
+    assert!(local_path_with_host("file://user@workstation/tmp", Some("workstation")).is_err());
+    assert!(local_path_with_host("file://workstation:8080/tmp", Some("workstation")).is_err());
+    assert!(local_path_with_host("file:///tmp/a%00b", Some("workstation")).is_err());
+}
+
+#[test]
+fn show_folders_validates_local_host_network_and_virtual_uris() {
+    let accepted = vec![
+        "file:///tmp/folder".to_owned(),
+        "file://localhost/tmp/folder".to_owned(),
+        "file://WORKSTATION/tmp/folder".to_owned(),
+        "trash:///".to_owned(),
+        "recent:///".to_owned(),
+        "starred:///".to_owned(),
+        "network:///".to_owned(),
+        "computer:///".to_owned(),
+        "tags:/work".to_owned(),
+        "location:/favorites".to_owned(),
+        "smb://files.local/shared".to_owned(),
+        "sftp://alice@files.local:2222/srv".to_owned(),
+    ];
+    assert_eq!(
+        folder_uris_with_host(&accepted, Some("workstation")).expect("supported folder URIs"),
+        accepted
+    );
+
+    for rejected in [
+        "",
+        "not a uri",
+        "/tmp/plain/path",
+        "file://other-host/tmp/folder",
+        "file://workstation/tmp/folder?q=1",
+        "file://workstation/tmp/folder#frag",
+        "smb://",
+        "sftp://",
+        "trash://host/item",
+        "https://example.org/folder",
+    ] {
+        assert!(
+            folder_uri_with_host(rejected, Some("workstation")).is_err(),
+            "ShowFolders must reject invalid URI `{rejected}`"
+        );
+    }
+}
+
+#[test]
+fn application_object_path_converts_valid_names_and_rejects_invalid_inputs() {
+    assert_eq!(
+        application_object_path(APP_BUS_NAME).expect("standard application bus name"),
+        "/io/github/GanDesktop/GdsFiles"
+    );
+    assert_eq!(
+        application_object_path("org.example.my-app").expect("hyphenated application bus name"),
+        "/org/example/my_app"
+    );
+    assert!(matches!(
+        application_object_path(""),
+        Err(Error::InvalidBusName(_))
+    ));
+    assert!(matches!(
+        application_object_path("single"),
+        Err(Error::InvalidBusName(_))
+    ));
+    assert!(matches!(
+        application_object_path(":1.42"),
+        Err(Error::InvalidBusName(_))
+    ));
+    assert!(matches!(
+        application_object_path(".leading.dot"),
+        Err(Error::InvalidBusName(_))
+    ));
+    assert!(matches!(
+        application_object_path("trailing.dot."),
+        Err(Error::InvalidBusName(_))
+    ));
+    assert!(matches!(
+        application_object_path("double..dot"),
+        Err(Error::InvalidBusName(_))
+    ));
+    assert!(matches!(
+        application_object_path("org.1digit"),
+        Err(Error::InvalidBusName(_))
+    ));
+    assert!(matches!(
+        application_object_path("org.example/bad"),
+        Err(Error::InvalidBusName(_))
+    ));
+    assert!(matches!(
+        application_object_path("org.example bad"),
+        Err(Error::InvalidBusName(_))
+    ));
 }
 
 #[test]
@@ -73,11 +179,15 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
             ));
             let client = Connection::session().await.expect("client");
             let paths = vec![PathBuf::from("/tmp/a name"), PathBuf::from("/tmp/another")];
+            let file_uris = vec![
+                "file:///tmp/a%20name".to_owned(),
+                "file:///tmp/another".to_owned(),
+            ];
             for (method, request) in [
                 (
                     "ShowFolders",
                     Request::ShowFolders {
-                        directories: paths.clone(),
+                        uris: file_uris.clone(),
                     },
                 ),
                 (
@@ -94,10 +204,7 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
                         OBJECT_PATH,
                         Some(BUS_NAME),
                         method,
-                        &(
-                            vec!["file:///tmp/a%20name", "file:///tmp/another"],
-                            "caller-token",
-                        ),
+                        &(file_uris.clone(), "caller-token"),
                     )
                     .await
                     .expect("standard call");
@@ -105,6 +212,36 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
                 assert_eq!(command.request, request);
                 assert_eq!(command.startup_id, "caller-token");
             }
+            let non_file_folders =
+                vec!["trash:///".to_owned(), "smb://files.local/share".to_owned()];
+            client
+                .call_method(
+                    Some(BUS_NAME),
+                    OBJECT_PATH,
+                    Some(BUS_NAME),
+                    "ShowFolders",
+                    &(non_file_folders.clone(), "folder-token"),
+                )
+                .await
+                .expect("ShowFolders accepts virtual and network URIs");
+            let command = receiver.recv().await.expect("delivered ShowFolders");
+            assert_eq!(
+                command.request,
+                Request::ShowFolders {
+                    uris: non_file_folders,
+                }
+            );
+            assert_eq!(command.startup_id, "folder-token");
+            let invalid_folder = client
+                .call_method(
+                    Some(BUS_NAME),
+                    OBJECT_PATH,
+                    Some(BUS_NAME),
+                    "ShowFolders",
+                    &(vec!["https://example.org/file"], ""),
+                )
+                .await;
+            assert!(invalid_folder.is_err());
             let invalid = client
                 .call_method(
                     Some(BUS_NAME),
@@ -115,6 +252,144 @@ fn private_bus_dispatches_all_methods_and_respects_other_providers() {
                 )
                 .await;
             assert!(invalid.is_err());
+
+            let app_path = application_object_path(APP_BUS_NAME).expect("application object path");
+            let mut activate_data: HashMap<&str, Value<'_>> = HashMap::new();
+            activate_data.insert("activation-token", Value::from("xdg-activation-token"));
+            activate_data.insert("desktop-startup-id", Value::from("fallback-startup-id"));
+            client
+                .call_method(
+                    Some(APP_BUS_NAME),
+                    app_path.as_str(),
+                    Some(APPLICATION_INTERFACE),
+                    "Activate",
+                    &activate_data,
+                )
+                .await
+                .expect("Application.Activate with activation-token");
+            let command = receiver.recv().await.expect("delivered Activate");
+            assert_eq!(command.request, Request::Activate { new_window: false });
+            assert_eq!(command.startup_id, "xdg-activation-token");
+
+            let fallback_data =
+                HashMap::from([("desktop-startup-id", Value::from("legacy-startup-id"))]);
+            client
+                .call_method(
+                    Some(APP_BUS_NAME),
+                    app_path.as_str(),
+                    Some(APPLICATION_INTERFACE),
+                    "Activate",
+                    &fallback_data,
+                )
+                .await
+                .expect("Application.Activate with desktop-startup-id fallback");
+            let command = receiver.recv().await.expect("delivered Activate fallback");
+            assert_eq!(command.request, Request::Activate { new_window: false });
+            assert_eq!(command.startup_id, "legacy-startup-id");
+
+            let empty_data: HashMap<&str, Value<'_>> = HashMap::new();
+            client
+                .call_method(
+                    Some(APP_BUS_NAME),
+                    app_path.as_str(),
+                    Some(APPLICATION_INTERFACE),
+                    "Activate",
+                    &empty_data,
+                )
+                .await
+                .expect("Application.Activate without platform_data");
+            let command = receiver.recv().await.expect("delivered empty Activate");
+            assert_eq!(command.request, Request::Activate { new_window: false });
+            assert_eq!(command.startup_id, "");
+
+            let open_uris = vec![
+                "file:///tmp/a%20name".to_owned(),
+                "trash:///".to_owned(),
+                "smb://files.local/share".to_owned(),
+            ];
+            let open_data = HashMap::from([("activation-token", Value::from("open-token"))]);
+            client
+                .call_method(
+                    Some(APP_BUS_NAME),
+                    app_path.as_str(),
+                    Some(APPLICATION_INTERFACE),
+                    "Open",
+                    &(open_uris.clone(), open_data),
+                )
+                .await
+                .expect("Application.Open with local, virtual, and network URIs");
+            let command = receiver.recv().await.expect("delivered Open");
+            assert_eq!(
+                command.request,
+                Request::OpenLocations {
+                    uris: open_uris,
+                    new_window: false,
+                }
+            );
+            assert_eq!(command.startup_id, "open-token");
+
+            let invalid_open = client
+                .call_method(
+                    Some(APP_BUS_NAME),
+                    app_path.as_str(),
+                    Some(APPLICATION_INTERFACE),
+                    "Open",
+                    &(vec!["https://example.org/file"], empty_data.clone()),
+                )
+                .await;
+            assert!(invalid_open.is_err());
+
+            let empty_open_data =
+                HashMap::from([("desktop-startup-id", Value::from("empty-open-id"))]);
+            client
+                .call_method(
+                    Some(APP_BUS_NAME),
+                    app_path.as_str(),
+                    Some(APPLICATION_INTERFACE),
+                    "Open",
+                    &(Vec::<String>::new(), empty_open_data),
+                )
+                .await
+                .expect("Application.Open with empty URI list");
+            let command = receiver.recv().await.expect("delivered empty Open");
+            assert_eq!(command.request, Request::Activate { new_window: false });
+            assert_eq!(command.startup_id, "empty-open-id");
+
+            let action_data =
+                HashMap::from([("activation-token", Value::from("new-window-action-token"))]);
+            client
+                .call_method(
+                    Some(APP_BUS_NAME),
+                    app_path.as_str(),
+                    Some(APPLICATION_INTERFACE),
+                    "ActivateAction",
+                    &("new-window", Vec::<Value<'_>>::new(), action_data),
+                )
+                .await
+                .expect("Application.ActivateAction(new-window)");
+            let command = receiver.recv().await.expect("delivered ActivateAction");
+            assert_eq!(command.request, Request::Activate { new_window: true });
+            assert_eq!(command.startup_id, "new-window-action-token");
+
+            let unknown_action = client
+                .call_method(
+                    Some(APP_BUS_NAME),
+                    app_path.as_str(),
+                    Some(APPLICATION_INTERFACE),
+                    "ActivateAction",
+                    &("unknown", Vec::<Value<'_>>::new(), empty_data),
+                )
+                .await
+                .expect_err("unknown ActivateAction must return InvalidArgs");
+            assert!(
+                matches!(
+                    unknown_action,
+                    zbus::Error::MethodError(ref name, _, _)
+                        if name.as_str() == "org.freedesktop.DBus.Error.InvalidArgs"
+                ),
+                "expected InvalidArgs, got {unknown_action}"
+            );
+
             server.connection.close().await.expect("release provider");
             client
                 .request_name(BUS_NAME)
@@ -188,6 +463,10 @@ fn launcher_interface_constant_and_name_has_no_owner_retry() {
     assert_eq!(
         <Interface as zbus::object_server::Interface>::name().as_str(),
         BUS_NAME
+    );
+    assert_eq!(
+        <Application as zbus::object_server::Interface>::name().as_str(),
+        APPLICATION_INTERFACE
     );
 
     tokio::runtime::Runtime::new()

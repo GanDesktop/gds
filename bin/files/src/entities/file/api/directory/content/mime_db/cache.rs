@@ -10,7 +10,7 @@ use std::{cmp::Ordering, fs::File, path::Path};
 use globset::{Glob, GlobMatcher};
 use memmap2::Mmap;
 
-use super::GlobMatch;
+use super::{GlobMatch, NOGLOBS_SENTINEL};
 
 const HEADER_LEN: usize = 40;
 const SUPPORTED_MAJOR: u16 = 1;
@@ -46,8 +46,11 @@ pub(super) struct MimeCache {
     literal_list_offset: usize,
     reverse_suffix_tree_offset: usize,
     magic_list_offset: usize,
+    namespace_list_offset: usize,
+    icons_list_offset: usize,
     generic_icons_list_offset: usize,
     globs: Vec<CompiledGlob>,
+    noglobs: Vec<String>,
 }
 
 impl MimeCache {
@@ -84,9 +87,13 @@ impl MimeCache {
         let reverse_suffix_tree_offset = read_u32(data, 16)? as usize;
         let glob_list_offset = read_u32(data, 20)? as usize;
         let magic_list_offset = read_u32(data, 24)? as usize;
+        let namespace_list_offset = read_u32(data, 28)? as usize;
+        let icons_list_offset = read_u32(data, 32)? as usize;
         let generic_icons_list_offset = read_u32(data, 36)? as usize;
 
-        let globs = compile_globs(data, glob_list_offset);
+        let mut noglobs = Vec::new();
+        collect_literal_noglobs(data, literal_list_offset, &mut noglobs);
+        let globs = compile_globs(data, glob_list_offset, &mut noglobs);
         Some(Self {
             bytes,
             alias_list_offset,
@@ -94,8 +101,11 @@ impl MimeCache {
             literal_list_offset,
             reverse_suffix_tree_offset,
             magic_list_offset,
+            namespace_list_offset,
+            icons_list_offset,
             generic_icons_list_offset,
             globs,
+            noglobs,
         })
     }
 
@@ -107,8 +117,56 @@ impl MimeCache {
         binary_search_pair(self.data(), self.alias_list_offset, mime)
     }
 
+    pub(super) fn icon(&self, mime: &str) -> Option<&str> {
+        binary_search_pair(self.data(), self.icons_list_offset, mime)
+    }
+
     pub(super) fn generic_icon(&self, mime: &str) -> Option<&str> {
         binary_search_pair(self.data(), self.generic_icons_list_offset, mime)
+    }
+
+    pub(super) fn noglobs(&self) -> &[String] {
+        &self.noglobs
+    }
+
+    pub(super) fn xml_namespace(&self, namespace_uri: &str, local_name: &str) -> Option<&str> {
+        if self.namespace_list_offset < HEADER_LEN {
+            return None;
+        }
+        let data = self.data();
+        let count = read_u32(data, self.namespace_list_offset)? as usize;
+        let base = self.namespace_list_offset + 4;
+        if count == 0 || count > data.len().saturating_sub(base) / 12 {
+            return None;
+        }
+        let mut low = 0usize;
+        let mut high = count;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let entry = base + mid * 12;
+            let ns_off = read_u32(data, entry)?;
+            let candidate_ns = read_optional_cstr(data, ns_off)?;
+            if candidate_ns < namespace_uri {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        for idx in low..count {
+            let entry = base + idx * 12;
+            let ns_off = read_u32(data, entry)?;
+            let candidate_ns = read_optional_cstr(data, ns_off)?;
+            if candidate_ns != namespace_uri {
+                break;
+            }
+            let local_off = read_u32(data, entry + 4)?;
+            let candidate_local = read_optional_cstr(data, local_off)?;
+            if candidate_local == local_name {
+                let mime_off = read_u32(data, entry + 8)? as usize;
+                return read_cstr(data, mime_off);
+            }
+        }
+        None
     }
 
     pub(super) fn parents(&self, mime: &str) -> Vec<&str> {
@@ -174,14 +232,17 @@ impl MimeCache {
         require_case_insensitive: bool,
         out: &mut Vec<GlobMatch>,
     ) {
+        if query == NOGLOBS_SENTINEL || self.literal_list_offset < HEADER_LEN {
+            return;
+        }
         let data = self.data();
         let Some(count) = read_u32(data, self.literal_list_offset).map(|v| v as usize) else {
             return;
         };
-        if count == 0 {
+        let base = self.literal_list_offset + 4;
+        if count == 0 || count > data.len().saturating_sub(base) / 12 {
             return;
         }
-        let base = self.literal_list_offset + 4;
         let mut low = 0usize;
         let mut high = count;
         let mut found = None;
@@ -227,6 +288,9 @@ impl MimeCache {
             };
             if lit != query {
                 break;
+            }
+            if lit == NOGLOBS_SENTINEL {
+                continue;
             }
             let Some(mime_off) = read_u32(data, entry + 4) else {
                 continue;
@@ -380,12 +444,70 @@ impl MimeCache {
     }
 }
 
-fn compile_globs(data: &[u8], glob_list_offset: usize) -> Vec<CompiledGlob> {
+fn collect_literal_noglobs(data: &[u8], literal_list_offset: usize, noglobs: &mut Vec<String>) {
+    if literal_list_offset < HEADER_LEN {
+        return;
+    }
+    let Some(count) = read_u32(data, literal_list_offset).map(|v| v as usize) else {
+        return;
+    };
+    let base = literal_list_offset + 4;
+    if count == 0 || count > data.len().saturating_sub(base) / 12 {
+        return;
+    }
+    let mut low = 0usize;
+    let mut high = count;
+    while low < high {
+        let mid = low + (high - low) / 2;
+        let Some(lit_off) = read_u32(data, base + mid * 12) else {
+            return;
+        };
+        let Some(lit) = read_cstr(data, lit_off as usize) else {
+            return;
+        };
+        if lit < NOGLOBS_SENTINEL {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    for idx in low..count {
+        let entry = base + idx * 12;
+        let Some(lit) = read_u32(data, entry).and_then(|off| read_cstr(data, off as usize)) else {
+            break;
+        };
+        if lit != NOGLOBS_SENTINEL {
+            break;
+        }
+        let Some(wf) = read_u32(data, entry + 8) else {
+            continue;
+        };
+        if (wf & 0xff) == 0
+            && let Some(mime) =
+                read_u32(data, entry + 4).and_then(|off| read_cstr(data, off as usize))
+            && !noglobs.iter().any(|existing| existing == mime)
+        {
+            noglobs.push(mime.to_owned());
+        }
+    }
+}
+
+fn compile_globs(
+    data: &[u8],
+    glob_list_offset: usize,
+    noglobs: &mut Vec<String>,
+) -> Vec<CompiledGlob> {
+    if glob_list_offset < HEADER_LEN {
+        return Vec::new();
+    }
     let Some(count) = read_u32(data, glob_list_offset).map(|v| v as usize) else {
         return Vec::new();
     };
-    let mut compiled = Vec::with_capacity(count);
     let base = glob_list_offset + 4;
+    if count > data.len().saturating_sub(base) / 12 {
+        return Vec::new();
+    }
+    let mut compiled = Vec::with_capacity(count);
     for index in 0..count {
         let entry = base + index * 12;
         let (Some(glob_off), Some(mime_off), Some(wf)) = (
@@ -398,6 +520,15 @@ fn compile_globs(data: &[u8], glob_list_offset: usize) -> Vec<CompiledGlob> {
         let Some(pattern) = read_cstr(data, glob_off as usize) else {
             continue;
         };
+        if pattern == NOGLOBS_SENTINEL {
+            if (wf & 0xff) == 0
+                && let Some(mime) = read_cstr(data, mime_off as usize)
+                && !noglobs.iter().any(|existing| existing == mime)
+            {
+                noglobs.push(mime.to_owned());
+            }
+            continue;
+        }
         let case_sensitive = (wf & CASE_SENSITIVE_FLAG) != 0;
         let effective_pattern = if case_sensitive {
             pattern.to_owned()
@@ -450,8 +581,14 @@ fn binary_search_pair<'a>(data: &'a [u8], list_offset: usize, key: &str) -> Opti
 }
 
 fn binary_search_u32(data: &[u8], list_offset: usize, key: &str) -> Option<u32> {
+    if list_offset < HEADER_LEN {
+        return None;
+    }
     let count = read_u32(data, list_offset)? as usize;
     let base = list_offset + 4;
+    if count > data.len().saturating_sub(base) / 8 {
+        return None;
+    }
     let mut low = 0usize;
     let mut high = count;
     while low < high {
@@ -586,4 +723,12 @@ fn read_cstr(data: &[u8], offset: usize) -> Option<&str> {
     let tail = data.get(offset..)?;
     let nul = tail.iter().position(|&b| b == 0)?;
     std::str::from_utf8(&tail[..nul]).ok()
+}
+
+fn read_optional_cstr(data: &[u8], offset: u32) -> Option<&str> {
+    if offset == 0 {
+        Some("")
+    } else {
+        read_cstr(data, offset as usize)
+    }
 }

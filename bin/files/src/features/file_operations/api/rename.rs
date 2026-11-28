@@ -119,8 +119,10 @@ impl Request {
             return Err(Error::Name(NameError::Unchanged));
         }
         Self::ensure_absent(&destination)?;
+        let invalidation =
+            gds::service::file_inspection::ThumbnailInvalidation::capture(&self.source);
         Self::rename_no_replace(&self.source, &destination)?;
-        gds::service::file_inspection::invalidate_thumbnail_cache(&self.source);
+        invalidation.invalidate();
         let snapshot = super::super::snapshot::Snapshot::capture(&destination).ok();
         Ok(Renamed {
             destination,

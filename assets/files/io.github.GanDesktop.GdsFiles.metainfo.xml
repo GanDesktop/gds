@@ -18,7 +18,31 @@
     </p>
   </description>
   <launchable type="desktop-id">io.github.GanDesktop.GdsFiles.desktop</launchable>
-  <developer id="io.github.GanDesktop">
+  <categories>
+    <category>System</category>
+    <category>FileTools</category>
+    <category>FileManager</category>
+  </categories>
+  <keywords>
+    <keyword>folder</keyword>
+    <keyword>manager</keyword>
+    <keyword>explore</keyword>
+    <keyword>disk</keyword>
+    <keyword>filesystem</keyword>
+    <keyword>files</keyword>
+    <keyword xml:lang="zh-CN">文件夹</keyword>
+    <keyword xml:lang="zh-CN">管理器</keyword>
+    <keyword xml:lang="zh-CN">浏览</keyword>
+    <keyword xml:lang="zh-CN">磁盘</keyword>
+    <keyword xml:lang="zh-CN">文件系统</keyword>
+    <keyword xml:lang="zh-CN">文件</keyword>
+  </keywords>
+  <provides>
+    <binary>gds-files</binary>
+    <dbus type="user">io.github.GanDesktop.GdsFiles</dbus>
+    <dbus type="user">org.freedesktop.FileManager1</dbus>
+  </provides>
+  <developer id="io.github.gandesktop">
     <name>GanDesktop</name>
   </developer>
   <url type="homepage">https://github.com/GanDesktop/gds</url>

@@ -1,5 +1,6 @@
 usr/bin/gds-files
 usr/share/applications/io.github.GanDesktop.GdsFiles.desktop
+usr/share/dbus-1/services/io.github.GanDesktop.GdsFiles.service
 usr/share/gds-files/noctalia/gds.json
 usr/share/icons/hicolor/scalable/apps/io.github.GanDesktop.GdsFiles.svg
 usr/share/metainfo/io.github.GanDesktop.GdsFiles.metainfo.xml

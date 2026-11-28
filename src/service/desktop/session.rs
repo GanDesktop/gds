@@ -4,6 +4,8 @@ use std::{future::Future, time::Duration};
 
 use tokio::sync::oneshot;
 
+use crate::service::ParentWindow;
+
 /// Minimum operation duration before requesting a desktop suspend/idle inhibit lock.
 pub const DEFAULT_INHIBIT_DELAY: Duration = Duration::from_secs(2);
 
@@ -53,10 +55,22 @@ impl InhibitGuard {
         delay: Duration,
         reason: impl Into<String>,
     ) -> Self {
+        Self::delayed_with_window(scope, delay, reason, None)
+    }
+
+    /// Prevent session suspend and idle after `delay`, optionally associating the portal
+    /// request with `parent_window`.
+    #[must_use]
+    pub fn delayed_with_window(
+        scope: &crate::service::task_manager::Scope,
+        delay: Duration,
+        reason: impl Into<String>,
+        parent_window: Option<ParentWindow>,
+    ) -> Self {
         let (tx, rx) = oneshot::channel();
         let reason = reason.into();
         drop(scope.spawn_named("Desktop suspend inhibit", async move {
-            hold_inhibit_after(delay, reason, rx).await;
+            hold_inhibit_after_with_window(delay, reason, parent_window, rx).await;
         }));
         Self {
             _release: InhibitRelease(Some(tx)),
@@ -67,12 +81,23 @@ impl InhibitGuard {
 /// Wait `delay` before acquiring an `org.freedesktop.portal.Inhibit` lock, then hold it until
 /// `release` resolves (or its sender drops).
 pub async fn hold_inhibit_after(delay: Duration, reason: String, release: oneshot::Receiver<()>) {
+    hold_inhibit_after_with_window(delay, reason, None, release).await;
+}
+
+/// Wait `delay` before acquiring an `org.freedesktop.portal.Inhibit` lock associated with
+/// `parent_window`, then hold it until `release` resolves (or its sender drops).
+pub async fn hold_inhibit_after_with_window(
+    delay: Duration,
+    reason: String,
+    parent_window: Option<ParentWindow>,
+    release: oneshot::Receiver<()>,
+) {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         hold_inhibit_after_with(
             delay,
             release,
-            || acquire_portal_inhibit(reason),
+            || acquire_portal_inhibit(reason, parent_window),
             |request| async move {
                 if let Err(error) = request.close().await {
                     tracing::debug!(%error, "failed to close desktop inhibit request");
@@ -83,13 +108,16 @@ pub async fn hold_inhibit_after(delay: Duration, reason: String, release: onesho
     }
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     {
-        let _ = (delay, reason);
+        let _ = (delay, reason, parent_window);
         let _ = release.await;
     }
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-async fn acquire_portal_inhibit(reason: String) -> Option<ashpd::desktop::Request<()>> {
+async fn acquire_portal_inhibit(
+    reason: String,
+    parent_window: Option<ParentWindow>,
+) -> Option<ashpd::desktop::Request<()>> {
     use ashpd::desktop::inhibit::{InhibitFlags, InhibitOptions, InhibitProxy};
 
     let proxy = match InhibitProxy::new().await {
@@ -99,9 +127,14 @@ async fn acquire_portal_inhibit(reason: String) -> Option<ashpd::desktop::Reques
             return None;
         }
     };
+    let identifier = parent_window.as_ref().map(ParentWindow::to_ashpd);
     let options = InhibitOptions::default().set_reason(reason.as_str());
     match proxy
-        .inhibit(None, InhibitFlags::Suspend | InhibitFlags::Idle, options)
+        .inhibit(
+            identifier.as_ref(),
+            InhibitFlags::Suspend | InhibitFlags::Idle,
+            options,
+        )
         .await
     {
         Ok(request) => Some(request),

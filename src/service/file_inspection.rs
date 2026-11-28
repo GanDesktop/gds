@@ -17,8 +17,9 @@ pub use metadata::{
     PixelSize, SymlinkFacts, TextEncoding, TextFacts, VideoFacts, VideoKind,
 };
 pub use thumbnail::{
-    EDGE, ExternalProbeReport, ExternalThumbnailers, SandboxError, SandboxMode, Thumbnail,
-    ThumbnailerInfo, invalidate_thumbnail_cache,
+    DEFAULT_MAX_THUMBNAIL_INVALIDATION_PATHS, EDGE, ExternalProbeReport, ExternalThumbnailers,
+    SandboxError, SandboxMode, Thumbnail, ThumbnailInvalidation, ThumbnailerInfo,
+    invalidate_thumbnail_cache,
 };
 
 pub const DEFAULT_MAX_THUMBNAIL_SOURCE_MIB: u64 = 32;
@@ -145,7 +146,13 @@ impl Source {
         let mut result = Inspection::default();
         if request.thumbnail() {
             result.thumbnail = if !self.supports_thumbnail(&options) {
-                Field::Unavailable
+                if !matches!(self.kind, Kind::Directory | Kind::Symlink)
+                    && let Some(thumbnail) = thumbnail::lookup_shared(self.thumbnail_target())
+                {
+                    Field::Available(thumbnail)
+                } else {
+                    Field::Unavailable
+                }
             } else {
                 let thumbnail = if self.kind == Kind::Audio
                     && request.metadata()
