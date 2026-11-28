@@ -12,6 +12,8 @@ mod error;
 #[cfg(all(feature = "desktop", unix))]
 mod executable;
 #[cfg(feature = "desktop")]
+pub mod file_transfer;
+#[cfg(feature = "desktop")]
 pub mod recent_files;
 #[cfg(feature = "desktop")]
 mod session;

@@ -351,17 +351,71 @@ pub fn drop_hit_test(node: &NodeRef, position: (f32, f32)) -> bool {
         && position.1 <= top + height
 }
 
+/// MIME type used by `org.freedesktop.portal.FileTransfer` for sandboxed file transfers.
+pub const PORTAL_FILE_TRANSFER_MIME: &str = "application/vnd.portal.filetransfer";
+
+fn is_sandboxed_process() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::path::Path::new("/.flatpak-info").exists() || std::env::var_os("SNAP").is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+fn preferred_file_drop_mime(ev: &zgui::vocab::DropEvent) -> Option<&'static str> {
+    if is_sandboxed_process() && ev.offers_portal_file_transfer() {
+        Some(PORTAL_FILE_TRANSFER_MIME)
+    } else if !ev.paths.is_empty() || ev.offers_mime("text/uri-list") {
+        Some("text/uri-list")
+    } else if ev.offers_portal_file_transfer() {
+        Some(PORTAL_FILE_TRANSFER_MIME)
+    } else {
+        None
+    }
+}
+
 /// One external OS file drop delivered onto a drop target, carrying the negotiated action and
 /// protocol completion handle.
 pub struct ExternalFileDrop {
     /// Local file paths decoded from `text/uri-list`.
     pub paths: Vec<PathBuf>,
+    /// Media types advertised by the drag source.
+    pub mime_types: Vec<String>,
+    /// Raw bytes transferred for the negotiated MIME type, when available.
+    pub payload: Option<DragMime>,
     /// Final action settled by the compositor (`Copy`, `Move`, or `None` when unspecified).
     pub action: Option<DragAction>,
     /// Pointer coordinates in CSS pixels at release.
     pub position: (f32, f32),
     /// Protocol completion token; call [`DropHandle::complete`] only once the operation succeeds.
     pub handle: Option<DropHandle>,
+}
+
+impl ExternalFileDrop {
+    /// Whether the drag source advertised `application/vnd.portal.filetransfer`.
+    #[must_use]
+    pub fn offers_portal_file_transfer(&self) -> bool {
+        self.mime_types
+            .iter()
+            .any(|mime| mime.eq_ignore_ascii_case(PORTAL_FILE_TRANSFER_MIME))
+            || self.portal_transfer_payload().is_some()
+    }
+
+    /// Raw bytes when the negotiated drop payload is `application/vnd.portal.filetransfer`.
+    #[must_use]
+    pub fn portal_transfer_payload(&self) -> Option<&[u8]> {
+        self.payload
+            .as_ref()
+            .filter(|entry| {
+                entry
+                    .mime_type
+                    .eq_ignore_ascii_case(PORTAL_FILE_TRANSFER_MIME)
+            })
+            .map(|entry| entry.bytes.as_slice())
+    }
 }
 
 /// Negotiation policy advertised by a file drop target during hover.
@@ -457,12 +511,12 @@ pub fn file_drop_target_attrs(target: FileDropTarget) -> Attrs {
             events::DRAG_ENTER,
             ListenerOptions::DEFAULT,
             move |ev: &mut EventCx<'_, events::DragEnter>| {
-                let allowed =
-                    ev.offers_files() && enter_can_accept.as_ref().is_none_or(|gate| gate());
-                if allowed {
+                let negotiated = preferred_file_drop_mime(ev)
+                    .filter(|_| enter_can_accept.as_ref().is_none_or(|gate| gate()));
+                if let Some(mime) = negotiated {
                     set_hover(true);
                     ev.accept_drag(DragDecision::accept(
-                        "text/uri-list",
+                        mime,
                         options.supported_actions,
                         options.preferred_action,
                     ));
@@ -477,12 +531,12 @@ pub fn file_drop_target_attrs(target: FileDropTarget) -> Attrs {
             events::DRAG_OVER,
             ListenerOptions::DEFAULT,
             move |ev: &mut EventCx<'_, events::DragOver>| {
-                let allowed =
-                    ev.offers_files() && over_can_accept.as_ref().is_none_or(|gate| gate());
-                if allowed {
+                let negotiated = preferred_file_drop_mime(ev)
+                    .filter(|_| over_can_accept.as_ref().is_none_or(|gate| gate()));
+                if let Some(mime) = negotiated {
                     set_hover(true);
                     ev.accept_drag(DragDecision::accept(
-                        "text/uri-list",
+                        mime,
                         options.supported_actions,
                         options.preferred_action,
                     ));
@@ -517,7 +571,9 @@ pub fn file_drop_target_attrs(target: FileDropTarget) -> Attrs {
                     return;
                 };
                 let handle = ev.take_drop_handle();
-                if ev.paths.is_empty() {
+                let has_portal = ev.offers_portal_file_transfer()
+                    || ev.payload_for(PORTAL_FILE_TRANSFER_MIME).is_some();
+                if ev.paths.is_empty() && !has_portal {
                     if let Some(handle) = handle {
                         handle.reject();
                     }
@@ -530,6 +586,8 @@ pub fn file_drop_target_attrs(target: FileDropTarget) -> Attrs {
                 let pos = (ev.position.x.0, ev.position.y.0);
                 on_drop.run(ExternalFileDrop {
                     paths: ev.paths.clone(),
+                    mime_types: ev.mime_types.clone(),
+                    payload: ev.payload.clone(),
                     action: ev.action,
                     position: pos,
                     handle,
@@ -549,6 +607,12 @@ pub fn drop_target_attrs(
 ) -> Attrs {
     let on_drop = on_external_drop.map(|cb| {
         UnsyncCallback::new(move |drop: ExternalFileDrop| {
+            if drop.paths.is_empty() {
+                if let Some(handle) = drop.handle {
+                    handle.reject();
+                }
+                return;
+            }
             cb.run((drop.paths, drop.position));
             if let Some(handle) = drop.handle {
                 handle.complete();
@@ -932,6 +996,63 @@ mod tests {
             assert_eq!(received.paths, vec![PathBuf::from("/tmp/moved.txt")]);
             received.handle.expect("DropHandle forwarded").complete();
             assert_eq!(settled.load(Ordering::Relaxed), 1);
+
+            // Pure `application/vnd.portal.filetransfer` offer negotiates the portal MIME and
+            // forwards its raw payload without prematurely rejecting on empty `paths`.
+            let portal_offer = DragOfferId::new(2);
+            harness.deliver_to_first(SurfaceEvent::Drag(DragEvent::Entered {
+                offer: portal_offer,
+                mime_types: vec![super::PORTAL_FILE_TRANSFER_MIME.to_owned()],
+                source_actions: DragActions::COPY,
+                action: Some(DragAction::Copy),
+                paths: Vec::new(),
+                position: Point::new(CssPx(40.0), CssPx(40.0)),
+            }));
+            harness.settle(4);
+            assert_eq!(
+                surface.take_drag_responses(),
+                vec![(
+                    portal_offer,
+                    DragDecision::accept(
+                        super::PORTAL_FILE_TRANSFER_MIME,
+                        DragActions::COPY | DragActions::MOVE,
+                        Some(DragAction::Move),
+                    ),
+                )]
+            );
+            let portal_settled = Arc::new(AtomicU8::new(0));
+            let portal_cb = Arc::clone(&portal_settled);
+            harness.deliver_to_first(SurfaceEvent::Drag(DragEvent::Dropped {
+                offer: portal_offer,
+                mime_types: vec![super::PORTAL_FILE_TRANSFER_MIME.to_owned()],
+                source_actions: DragActions::COPY,
+                action: Some(DragAction::Copy),
+                paths: Vec::new(),
+                payload: Some(DragMime::new(
+                    super::PORTAL_FILE_TRANSFER_MIME,
+                    b"portal-key-99",
+                )),
+                position: Point::new(CssPx(45.0), CssPx(40.0)),
+                handle: DropHandle::new(move |ok| {
+                    portal_cb.store(if ok { 1 } else { 2 }, Ordering::Relaxed);
+                }),
+            }));
+            harness.settle(4);
+            let portal_received = drop_driver
+                .borrow_mut()
+                .take()
+                .expect("portal drop delivered");
+            assert!(portal_received.paths.is_empty());
+            assert!(portal_received.offers_portal_file_transfer());
+            assert_eq!(
+                portal_received.portal_transfer_payload(),
+                Some(b"portal-key-99".as_slice())
+            );
+            portal_received
+                .handle
+                .expect("portal DropHandle forwarded")
+                .complete();
+            assert_eq!(portal_settled.load(Ordering::Relaxed), 1);
 
             harness.shut_down();
             Ok(())

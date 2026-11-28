@@ -191,6 +191,7 @@ transfer-partial = 已完成 { $succeeded } 个项目，{ $failed } 个失败。
 clipboard-no-files = 剪贴板中没有可粘贴的文件。
 clipboard-update-failed = 文件操作已完成，但剪贴板未能更新：{ $error }
 clipboard-cancel-failed = 无法取消剪切：{ $error }
+portal-file-transfer-failed = 无法从沙盒门户获取文件：{ $error }
 location-changed = 当前位置已变化，请重新打开菜单。
 open-directories-only = 只有文件夹可以在新标签页打开。
 copy-selected-paths = 复制所选路径（{ $count } 项）

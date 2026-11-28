@@ -52,6 +52,7 @@ fn gnome_copied_files_requires_copy_or_cut_intent_header() {
 fn offer_extraction_filters_supported_formats_and_detects_actual_mime() {
     let offer = ClipboardMimeOffer {
         revision: 1,
+        offered_mime_types: vec![GNOME_FILES.into(), URI_LIST.into()],
         entries: vec![
             ClipboardMime {
                 mime_type: GNOME_FILES.into(),
@@ -70,6 +71,7 @@ fn offer_extraction_filters_supported_formats_and_detects_actual_mime() {
 
     let invalid_gnome = ClipboardMimeOffer {
         revision: 2,
+        offered_mime_types: vec![GNOME_FILES.into(), URI_LIST.into()],
         entries: vec![
             ClipboardMime {
                 mime_type: GNOME_FILES.into(),
@@ -85,6 +87,7 @@ fn offer_extraction_filters_supported_formats_and_detects_actual_mime() {
 
     let raw_webp = ClipboardMimeOffer {
         revision: 3,
+        offered_mime_types: vec!["image/png".into(), "image/webp".into()],
         entries: vec![
             ClipboardMime {
                 mime_type: "image/png".into(),
@@ -100,6 +103,7 @@ fn offer_extraction_filters_supported_formats_and_detects_actual_mime() {
 
     let prioritized = ClipboardMimeOffer {
         revision: 4,
+        offered_mime_types: vec!["image/webp".into(), "image/png".into()],
         entries: vec![
             ClipboardMime {
                 mime_type: "image/webp".into(),
@@ -127,6 +131,7 @@ fn offer_and_origin_resolution_prefers_existing_local_file_and_falls_back_to_raw
 
     let with_local = ClipboardMimeOffer {
         revision: 10,
+        offered_mime_types: vec![URI_LIST.into(), "image/webp".into()],
         entries: vec![
             ClipboardMime {
                 mime_type: URI_LIST.into(),
@@ -158,6 +163,7 @@ fn offer_and_origin_resolution_prefers_existing_local_file_and_falls_back_to_raw
         .to_string();
     let fallback_raw = ClipboardMimeOffer {
         revision: 11,
+        offered_mime_types: vec![URI_LIST.into(), "image/webp".into()],
         entries: vec![
             ClipboardMime {
                 mime_type: URI_LIST.into(),
@@ -190,6 +196,7 @@ fn offer_and_origin_resolution_prefers_existing_local_file_and_falls_back_to_raw
 
     let empty_offer = ClipboardMimeOffer {
         revision: 12,
+        offered_mime_types: vec!["image/png".into()],
         entries: vec![ClipboardMime {
             mime_type: "image/png".into(),
             bytes: Vec::new(),

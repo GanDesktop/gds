@@ -1,7 +1,10 @@
 use super::{
-    Error, Identity, Mode, Snapshot,
+    Clipboard, Error, Identity, Mode, Snapshot,
     native::NativeClipboard,
-    protocol::{CLIPBOARD_ID, GNOME_FILES, KDE_CUT, TEXT_PLAIN_MIMES, TEXT_PLAIN_UTF8, URI_LIST},
+    protocol::{
+        CLIPBOARD_ID, GNOME_FILES, KDE_CUT, PORTAL_FILE_TRANSFER, TEXT_PLAIN_MIMES,
+        TEXT_PLAIN_UTF8, URI_LIST,
+    },
     state::Cache,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -25,13 +28,13 @@ fn stale_cut_validation_cannot_override_a_newer_intent() {
         .begin_refresh()
         .expect("the newer intent validates at once");
 
-    assert!(!cache.reconcile(generation, Ok(Some(cut)), false));
+    assert!(!cache.reconcile(generation, Ok(Some(cut)), false, false));
     assert!(cache.is_cut(&b) && !cache.is_cut(&a));
     assert!(
         cache.begin_refresh().is_none(),
         "a stale completion must not release the newer read"
     );
-    assert!(!cache.reconcile(validating_generation, Ok(Some(newer)), false));
+    assert!(!cache.reconcile(validating_generation, Ok(Some(newer)), false, false));
     assert!(cache.is_cut(&b));
 }
 
@@ -102,8 +105,13 @@ fn multi_mime_offers_preserve_intent_identity_and_ignore_plain_uri_text() {
         assert_eq!(plain.bytes, b"/tmp/a b#%.txt");
     }
 
+    let offered_mime_types = entries
+        .iter()
+        .map(|entry| entry.mime_type.clone())
+        .collect();
     let mut offer = ClipboardMimeOffer {
         revision: 7,
+        offered_mime_types,
         entries,
     };
     assert_eq!(
@@ -138,6 +146,7 @@ fn multi_mime_offers_preserve_intent_identity_and_ignore_plain_uri_text() {
 fn remote_file_offers_preserve_cut_intent_without_becoming_local_paths() {
     let offer = ClipboardMimeOffer {
         revision: 4,
+        offered_mime_types: vec![GNOME_FILES.to_owned()],
         entries: vec![ClipboardMime::new(
             GNOME_FILES,
             b"cut\nsftp://example.com/home/user/a%20b",
@@ -169,7 +178,36 @@ fn local_unfocused_fallback_tracks_baseline_revision_until_platform_changes() {
     assert!(cache.can_paste());
 
     let gen1 = cache.begin_refresh().expect("refresh starts");
-    assert!(cache.reconcile(gen1, Ok(None), false));
+    assert!(cache.reconcile(gen1, Ok(None), false, false));
     assert!(!cache.is_local_fallback());
+    assert!(!cache.can_paste());
+}
+
+#[test]
+fn portal_file_transfer_offer_enables_paste_without_consuming_payload() {
+    let offer = ClipboardMimeOffer {
+        revision: 9,
+        offered_mime_types: vec![PORTAL_FILE_TRANSFER.to_owned()],
+        entries: Vec::new(),
+    };
+    let (snapshot, remote, portal) = Clipboard::interpret_offer(&offer).expect("portal offer");
+    assert!(snapshot.is_none());
+    assert!(!remote);
+    assert!(portal);
+
+    let mut cache = Cache::default();
+    let gen1 = cache.begin_refresh().expect("refresh starts");
+    assert!(cache.reconcile(gen1, Ok(snapshot), remote, portal));
+    assert!(cache.can_paste());
+    assert!(cache.current().is_none());
+
+    // Repeated unchanged refresh stays idempotent.
+    let gen2 = cache.begin_refresh().expect("second refresh starts");
+    assert!(!cache.reconcile(gen2, Ok(None), false, true));
+    assert!(cache.can_paste());
+
+    // Clearing the clipboard clears portal paste readiness.
+    let gen3 = cache.begin_refresh().expect("third refresh starts");
+    assert!(cache.reconcile(gen3, Ok(None), false, false));
     assert!(!cache.can_paste());
 }

@@ -7,6 +7,7 @@ pub(super) const URI_LIST: &str = "text/uri-list";
 pub(super) const GNOME_FILES: &str = "x-special/gnome-copied-files";
 pub(super) const KDE_CUT: &str = "application/x-kde-cutselection";
 pub(super) const CLIPBOARD_ID: &str = "application/x-gds-clipboard-id";
+pub(super) const PORTAL_FILE_TRANSFER: &str = gds::service::desktop::file_transfer::MIME_TYPE;
 pub(super) const TEXT_PLAIN_UTF8: &str = "text/plain;charset=utf-8";
 /// Plain-text MIME aliases offered alongside file URIs so native Wayland, XWayland, and X11 text
 /// fields all recognize the copied path string (matching `zgui-platform-wayland`'s text offer set).

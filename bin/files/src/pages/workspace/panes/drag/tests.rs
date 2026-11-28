@@ -251,6 +251,8 @@ fn external_drop_failures_report_localized_notices_and_skip_same_dir_noop() {
             folder_a.clone(),
             ExternalFileDrop {
                 paths: vec![folder_a.clone()],
+                mime_types: vec!["text/uri-list".to_owned()],
+                payload: None,
                 action: Some(DragAction::Move),
                 position: (0.0, 0.0),
                 handle: Some(handle),
@@ -269,6 +271,8 @@ fn external_drop_failures_report_localized_notices_and_skip_same_dir_noop() {
             folder_sub.clone(),
             ExternalFileDrop {
                 paths: vec![folder_a.clone()],
+                mime_types: vec!["text/uri-list".to_owned()],
+                payload: None,
                 action: Some(DragAction::Copy),
                 position: (0.0, 0.0),
                 handle: Some(handle),
@@ -284,6 +288,8 @@ fn external_drop_failures_report_localized_notices_and_skip_same_dir_noop() {
             folder_a.clone(),
             ExternalFileDrop {
                 paths: Vec::new(),
+                mime_types: vec!["text/uri-list".to_owned()],
+                payload: None,
                 action: Some(DragAction::Copy),
                 position: (0.0, 0.0),
                 handle: Some(handle),
@@ -299,6 +305,8 @@ fn external_drop_failures_report_localized_notices_and_skip_same_dir_noop() {
             home.clone(),
             ExternalFileDrop {
                 paths: vec![note.clone()],
+                mime_types: vec!["text/uri-list".to_owned()],
+                payload: None,
                 action: Some(DragAction::Move),
                 position: (0.0, 0.0),
                 handle: Some(handle),
@@ -317,6 +325,8 @@ fn external_drop_failures_report_localized_notices_and_skip_same_dir_noop() {
             folder_a.clone(),
             ExternalFileDrop {
                 paths: vec![note.clone()],
+                mime_types: vec!["text/uri-list".to_owned()],
+                payload: None,
                 action: Some(DragAction::Move),
                 position: (0.0, 0.0),
                 handle: Some(handle),

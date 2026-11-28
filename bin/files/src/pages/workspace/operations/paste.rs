@@ -3,6 +3,7 @@
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gds::i18n as gds_i18n;
+use gds::service::desktop::file_transfer;
 use gds::ui::drag::ExternalFileDrop;
 use tokio_util::sync::CancellationToken;
 use zgui::prelude::{DragAction, DropHandle};
@@ -95,12 +96,133 @@ impl PasteOps<'_> {
         destination: PathBuf,
         drop: ExternalFileDrop,
     ) {
+        let offers_portal = drop.offers_portal_file_transfer();
+        let portal_payload_key = drop
+            .portal_transfer_payload()
+            .and_then(file_transfer::decode_transfer_key);
         let ExternalFileDrop {
             paths,
             action,
             handle,
             ..
         } = drop;
+        let use_local_paths = !paths.is_empty()
+            && (!offers_portal
+                || (!file_transfer::is_sandboxed() && file_transfer::all_paths_accessible(&paths)));
+        if use_local_paths {
+            self.start_local_external_drop(destination, paths, action, handle);
+            return;
+        }
+        if let Some(key) = portal_payload_key {
+            self.retrieve_and_start_portal_drop(destination, key, handle);
+            return;
+        }
+        if offers_portal && let Some(handle) = handle {
+            if handle.can_read_mime() {
+                self.read_secondary_portal_drop(destination, handle);
+                return;
+            }
+            handle.reject();
+            self.0
+                .report_notice(i18n::text_untracked("drop-no-local-files"));
+            return;
+        }
+        if let Some(handle) = handle {
+            handle.reject();
+        }
+        self.0
+            .report_notice(i18n::text_untracked("drop-no-local-files"));
+    }
+
+    fn read_secondary_portal_drop(&self, destination: PathBuf, handle: DropHandle) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        handle.read_mime(file_transfer::MIME_TYPE, 4096, move |payload| {
+            let _ = tx.send(payload);
+        });
+        let weak = self.0.downgrade();
+        self.0.0.owner.with(|| {
+            drop(spawn_local(async move {
+                let maybe_payload = rx.await.ok().flatten();
+                let Some(ctx) = weak.upgrade() else {
+                    handle.reject();
+                    return;
+                };
+                let Some(key) = maybe_payload
+                    .as_ref()
+                    .and_then(|entry| file_transfer::decode_transfer_key(&entry.bytes))
+                else {
+                    handle.reject();
+                    ctx.report_notice(i18n::text_untracked("drop-no-local-files"));
+                    return;
+                };
+                PasteOps(&ctx).retrieve_and_start_portal_drop(destination, key, Some(handle));
+            }));
+        });
+    }
+
+    fn retrieve_and_start_portal_drop(
+        &self,
+        destination: PathBuf,
+        key: String,
+        handle: Option<DropHandle>,
+    ) {
+        let task = self
+            .0
+            .scope()
+            .spawn_named("Retrieve dropped portal files", async move {
+                file_transfer::retrieve_files(&key).await
+            });
+        let weak = self.0.downgrade();
+        self.0.0.owner.with(|| {
+            drop(spawn_local(async move {
+                let result = task.await;
+                let Some(ctx) = weak.upgrade() else {
+                    if let Some(handle) = handle {
+                        handle.reject();
+                    }
+                    return;
+                };
+                match result {
+                    Ok(Ok(paths)) => {
+                        // Portal-exported paths live behind xdg-document-portal; always copy
+                        // rather than attempting cross-sandbox moves.
+                        PasteOps(&ctx).start_local_external_drop(
+                            destination,
+                            paths,
+                            Some(DragAction::Copy),
+                            handle,
+                        );
+                    }
+                    Ok(Err(error)) => {
+                        if let Some(handle) = handle {
+                            handle.reject();
+                        }
+                        ctx.report_notice(gds::t_untracked!(
+                            "portal-file-transfer-failed",
+                            error = error.to_string()
+                        ));
+                    }
+                    Err(error) => {
+                        if let Some(handle) = handle {
+                            handle.reject();
+                        }
+                        ctx.report_notice(gds::t_untracked!(
+                            "portal-file-transfer-failed",
+                            error = error.to_string()
+                        ));
+                    }
+                }
+            }));
+        });
+    }
+
+    fn start_local_external_drop(
+        &self,
+        destination: PathBuf,
+        paths: Vec<PathBuf>,
+        action: Option<DragAction>,
+        handle: Option<DropHandle>,
+    ) {
         if paths.is_empty() {
             if let Some(handle) = handle {
                 handle.reject();

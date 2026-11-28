@@ -1,18 +1,21 @@
 //! Atomic multi-MIME clipboard transport over `zgui`'s `Clipboards::{read_mime, write_mime}`.
 
-use std::future::Future;
+use std::{future::Future, path::PathBuf, sync::Arc};
 
-use zgui::platform::{ClipboardError, ClipboardMime, ClipboardMimeOffer};
+use gds::{app::Gds, service::desktop::file_transfer};
+use zgui::platform::{ClipboardError, ClipboardMime, ClipboardMimeOffer, LazyMimeProvider};
 use zgui::prelude::{ClipboardKind, Clipboards};
 
 use super::{
     Error, Identity, Mode, Snapshot,
     protocol::{
-        CLIPBOARD_ID, Formats, GNOME_FILES, KDE_CUT, MAX_PAYLOAD_BYTES, TEXT_PLAIN_MIMES, URI_LIST,
+        CLIPBOARD_ID, Formats, GNOME_FILES, KDE_CUT, MAX_PAYLOAD_BYTES, PORTAL_FILE_TRANSFER,
+        TEXT_PLAIN_MIMES, URI_LIST,
     },
 };
 
 const FILE_TYPES: [&str; 4] = [GNOME_FILES, URI_LIST, KDE_CUT, CLIPBOARD_ID];
+const MAX_PORTAL_KEY_BYTES: usize = 4096;
 
 pub(super) struct NativeClipboard;
 
@@ -25,6 +28,57 @@ impl NativeClipboard {
             FILE_TYPES.map(str::to_owned).into(),
             MAX_PAYLOAD_BYTES,
         )
+    }
+
+    pub(super) fn offers_portal_transfer(offer: &ClipboardMimeOffer) -> bool {
+        offer.offers_mime(PORTAL_FILE_TRANSFER)
+    }
+
+    pub(super) fn read_portal_transfer_key(
+        clip: &Clipboards,
+    ) -> impl Future<Output = Result<Option<String>, ClipboardError>> + 'static {
+        let fut = clip.read_mime(
+            ClipboardKind::Standard,
+            vec![PORTAL_FILE_TRANSFER.to_owned()],
+            MAX_PORTAL_KEY_BYTES,
+        );
+        async move {
+            let Some(offer) = fut.await? else {
+                return Ok(None);
+            };
+            let key = Self::bytes(&offer, PORTAL_FILE_TRANSFER)
+                .and_then(file_transfer::decode_transfer_key);
+            Ok(key)
+        }
+    }
+
+    pub(super) fn portal_lazy_providers(paths: Vec<PathBuf>) -> Vec<(String, LazyMimeProvider)> {
+        let Some(runtime) =
+            Gds::try_current().and_then(|gds| gds.tasks().scope().runtime_handle().cloned())
+        else {
+            return Vec::new();
+        };
+        Self::portal_lazy_provider(runtime, paths)
+            .into_iter()
+            .collect()
+    }
+
+    pub(super) fn portal_lazy_provider(
+        runtime: tokio::runtime::Handle,
+        paths: Vec<PathBuf>,
+    ) -> Option<(String, LazyMimeProvider)> {
+        if paths.is_empty() {
+            return None;
+        }
+        let provider: LazyMimeProvider = Arc::new(move |_| {
+            file_transfer::export_files_blocking(
+                &runtime,
+                &paths,
+                true,
+                file_transfer::DEFAULT_EXPORT_TIMEOUT,
+            )
+        });
+        Some((PORTAL_FILE_TRANSFER.to_owned(), provider))
     }
 
     pub(super) async fn probe_revision(clip: &Clipboards) -> Option<u64> {

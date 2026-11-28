@@ -191,6 +191,7 @@ transfer-partial = Completed { $succeeded } items; { $failed } failed.
 clipboard-no-files = The clipboard contains no files to paste.
 clipboard-update-failed = File operations finished, but the clipboard could not be updated: { $error }
 clipboard-cancel-failed = Could not cancel cut: { $error }
+portal-file-transfer-failed = Could not retrieve sandboxed files: { $error }
 location-changed = The current location changed. Open the menu again.
 open-directories-only = Only folders can be opened in new tabs.
 copy-selected-paths = Copy selected paths ({ $count } items)

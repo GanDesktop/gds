@@ -8,6 +8,7 @@ use super::{Error, Mode, Snapshot};
 pub(super) struct Cache {
     snapshot: Option<Arc<Snapshot>>,
     remote_copy: bool,
+    portal_transfer: bool,
     cut_paths: HashSet<PathBuf>,
     generation: u64,
     refreshing: bool,
@@ -22,7 +23,7 @@ impl Cache {
     }
 
     pub(super) fn can_paste(&self) -> bool {
-        self.snapshot.is_some() || self.remote_copy
+        self.snapshot.is_some() || self.remote_copy || self.portal_transfer
     }
 
     pub(super) fn is_cut(&self, path: &Path) -> bool {
@@ -83,6 +84,7 @@ impl Cache {
 
     fn replace(&mut self, snapshot: Option<Snapshot>) {
         self.remote_copy = false;
+        self.portal_transfer = false;
         self.local_fallback = false;
         self.local_uris = None;
         self.fallback_revision = None;
@@ -141,6 +143,7 @@ impl Cache {
         generation: u64,
         current: Result<Option<Snapshot>, Error>,
         remote_copy: bool,
+        portal_transfer: bool,
     ) -> bool {
         if generation != self.generation {
             return false;
@@ -151,12 +154,14 @@ impl Cache {
         };
         if self.snapshot.as_deref() == current.as_ref()
             && self.remote_copy == remote_copy
+            && self.portal_transfer == portal_transfer
             && !self.local_fallback
         {
             return false;
         }
         self.replace(current);
         self.remote_copy = remote_copy;
+        self.portal_transfer = portal_transfer;
         true
     }
 }

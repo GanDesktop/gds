@@ -17,7 +17,7 @@ use std::{
     time::SystemTime,
 };
 
-use gds::app::Gds;
+use gds::{app::Gds, service::desktop::file_transfer};
 use native::NativeClipboard;
 use protocol::Formats;
 use serde::{Deserialize, Serialize};
@@ -167,6 +167,8 @@ pub enum Error {
     #[error("file clipboard data could not be encoded or decoded: {0}")]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
+    PortalTransfer(#[from] file_transfer::Error),
+    #[error(transparent)]
     Platform(#[from] ClipboardError),
 }
 
@@ -311,19 +313,23 @@ impl Clipboard {
                 Ok(opt_offer) => {
                     let observed_rev = opt_offer.as_ref().map(|offer| offer.revision);
                     match opt_offer.as_ref().map(Self::interpret_offer) {
-                        Some(Ok((snapshot, remote))) if snapshot.is_some() || remote => clipboard
-                            .0
-                            .cache
-                            .borrow_mut()
-                            .reconcile(generation, Ok(snapshot), remote),
-                        Some(Err(error)) => {
-                            clipboard
-                                .0
-                                .cache
-                                .borrow_mut()
-                                .reconcile(generation, Err(error), false)
+                        Some(Ok((snapshot, remote, portal)))
+                            if snapshot.is_some() || remote || portal =>
+                        {
+                            clipboard.0.cache.borrow_mut().reconcile(
+                                generation,
+                                Ok(snapshot),
+                                remote,
+                                portal,
+                            )
                         }
-                        None | Some(Ok((None, false))) => {
+                        Some(Err(error)) => clipboard.0.cache.borrow_mut().reconcile(
+                            generation,
+                            Err(error),
+                            false,
+                            false,
+                        ),
+                        None | Some(Ok((None, false, false))) => {
                             let preserve = clipboard
                                 .0
                                 .cache
@@ -341,6 +347,7 @@ impl Clipboard {
                                     generation,
                                     Ok(None),
                                     false,
+                                    false,
                                 )
                             }
                         }
@@ -350,6 +357,7 @@ impl Clipboard {
                 Err(error) => clipboard.0.cache.borrow_mut().reconcile(
                     generation,
                     Err(Error::Platform(error)),
+                    false,
                     false,
                 ),
             };
@@ -364,12 +372,19 @@ impl Clipboard {
         };
     }
 
-    fn interpret_offer(offer: &ClipboardMimeOffer) -> Result<(Option<Snapshot>, bool), Error> {
+    fn interpret_offer(
+        offer: &ClipboardMimeOffer,
+    ) -> Result<(Option<Snapshot>, bool, bool), Error> {
+        let portal = NativeClipboard::offers_portal_transfer(offer);
         let remote = NativeClipboard::decode_uris(offer)?
             .is_some_and(|(mode, uris)| mode == Mode::Copy && Formats::copyable_uris(&uris));
         match NativeClipboard::decode_snapshot(offer) {
-            Ok(snapshot) => Ok((snapshot, remote)),
-            Err(Error::InvalidUri(_)) => Ok((None, remote)),
+            Ok(snapshot) => Ok((snapshot, remote, portal)),
+            Err(Error::InvalidUri(_)) => Ok((None, remote, portal)),
+            Err(error) if portal => {
+                tracing::debug!(%error, "ignoring non-local file offer while portal file transfer is available");
+                Ok((None, remote, true))
+            }
             Err(error) => Err(error),
         }
     }
@@ -379,10 +394,11 @@ impl Clipboard {
     pub async fn write(&self, mode: Mode, paths: Vec<PathBuf>) -> Result<Snapshot, Error> {
         let snapshot = Snapshot::new(mode, paths)?;
         let (written, entries) = NativeClipboard::encode_snapshot(&snapshot)?;
+        let lazy = NativeClipboard::portal_lazy_providers(written.paths.clone());
         let seq = self.next_write_seq();
         if let Some(clip) = try_use_clipboard() {
             match clip
-                .write_mime(ClipboardKind::Standard, entries, None)
+                .write_mime_with_providers(ClipboardKind::Standard, entries, lazy, None)
                 .await
             {
                 Ok(()) => {
@@ -414,22 +430,71 @@ impl Clipboard {
         Ok(written)
     }
 
+    async fn retrieve_portal_snapshot(key: String) -> Result<Snapshot, Error> {
+        let retrieved = if let Some(gds) = Gds::try_current() {
+            let task = gds
+                .tasks()
+                .scope()
+                .spawn_named("Retrieve portal clipboard files", async move {
+                    file_transfer::retrieve_files(&key).await
+                });
+            match task.await {
+                Ok(result) => result?,
+                Err(error) => {
+                    return Err(Error::InvalidPayload(format!(
+                        "portal file transfer task failed: {error}"
+                    )));
+                }
+            }
+        } else {
+            file_transfer::retrieve_files(&key).await?
+        };
+        Ok(Snapshot {
+            mode: Mode::Copy,
+            paths: Snapshot::validate_paths(retrieved)?,
+            identity: Identity(None),
+        })
+    }
+
     /// # Errors
     /// Reports invalid file or remote URI payloads.
     pub async fn read_payload(&self) -> Result<Payload, Error> {
         if let Some(clip) = try_use_clipboard() {
             match NativeClipboard::read_offer(&clip).await {
                 Ok(Some(offer)) => {
+                    let offers_portal = NativeClipboard::offers_portal_transfer(&offer);
+                    let mut deferred_error: Option<Error> = None;
                     match NativeClipboard::decode_snapshot(&offer) {
-                        Ok(Some(snapshot)) => return Ok(Payload::Local(snapshot)),
+                        Ok(Some(snapshot)) => {
+                            let directly_usable = snapshot.identity.is_owned()
+                                || !offers_portal
+                                || (!file_transfer::is_sandboxed()
+                                    && file_transfer::all_paths_accessible(&snapshot.paths));
+                            if directly_usable {
+                                return Ok(Payload::Local(snapshot));
+                            }
+                        }
                         Ok(None) => {}
                         Err(Error::InvalidUri(_)) => {
-                            if let Some((mode, uris)) = NativeClipboard::decode_uris(&offer)? {
+                            if let Some((mode, uris)) = NativeClipboard::decode_uris(&offer)?
+                                && (!offers_portal || Formats::copyable_uris(&uris))
+                            {
                                 return Ok(Payload::Uris { mode, uris });
                             }
-                            return Ok(Payload::Empty);
+                        }
+                        Err(error) if offers_portal => {
+                            deferred_error = Some(error);
                         }
                         Err(error) => return Err(error),
+                    }
+                    if offers_portal {
+                        if let Some(key) = NativeClipboard::read_portal_transfer_key(&clip).await? {
+                            let snapshot = Self::retrieve_portal_snapshot(key).await?;
+                            return Ok(Payload::Local(snapshot));
+                        }
+                        if let Some(error) = deferred_error {
+                            return Err(error);
+                        }
                     }
                     let cache = self.0.cache.borrow();
                     if cache.fallback_matches_platform(Some(offer.revision)) {
@@ -561,16 +626,22 @@ impl Clipboard {
                     else {
                         return Ok(());
                     };
-                    let (next_snapshot, entries) = if remaining.is_empty() {
-                        (None, Vec::new())
+                    let (next_snapshot, entries, lazy) = if remaining.is_empty() {
+                        (None, Vec::new(), Vec::new())
                     } else {
                         let next = Snapshot::new(expected.mode, remaining)?;
                         let (written, entries) = NativeClipboard::encode_snapshot(&next)?;
-                        (Some(written), entries)
+                        let lazy = NativeClipboard::portal_lazy_providers(written.paths.clone());
+                        (Some(written), entries, lazy)
                     };
                     let seq = self.next_write_seq();
                     match clip
-                        .write_mime(ClipboardKind::Standard, entries, Some(offer.revision))
+                        .write_mime_with_providers(
+                            ClipboardKind::Standard,
+                            entries,
+                            lazy,
+                            Some(offer.revision),
+                        )
                         .await
                     {
                         Ok(()) => {

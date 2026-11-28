@@ -561,6 +561,18 @@ fn try_start_native_file_drag(
         ],
         DragActions::COPY | DragActions::MOVE,
     );
+    if let Some(runtime) = ctx.scope().runtime_handle().cloned() {
+        let export_paths = paths.to_vec();
+        request =
+            request.with_lazy_mime(gds::service::desktop::file_transfer::MIME_TYPE, move |_| {
+                gds::service::desktop::file_transfer::export_files_blocking(
+                    &runtime,
+                    &export_paths,
+                    true,
+                    gds::service::desktop::file_transfer::DEFAULT_EXPORT_TIMEOUT,
+                )
+            });
+    }
     let count = drag.count();
     let preview_items = drag.preview_items();
     if let Some(icon) = render_drag_card_icon(window, move || {
